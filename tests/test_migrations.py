@@ -37,13 +37,25 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     data_db, events_db = _make_dbs(tmp_path)
     applied = _run(tmp_path, data_db, events_db)
 
-    assert {(a.db, a.version) for a in applied} == {("data", 1), ("data", 2), ("events", 1)}
+    assert {(a.db, a.version) for a in applied} == {
+        ("data", 1),
+        ("data", 2),
+        ("data", 3),
+        ("events", 1),
+    }
     assert _table_exists(data_db, "meta")
     assert _table_exists(data_db, "items")
     assert _table_exists(data_db, "floors")
     assert _table_exists(data_db, "passes")
+    assert _table_exists(data_db, "threads")
+    assert _table_exists(data_db, "wants")
+    assert _table_exists(data_db, "budgets")
     assert _table_exists(events_db, "events")
-    assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {1, 2}
+    assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
+        1,
+        2,
+        3,
+    }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
 

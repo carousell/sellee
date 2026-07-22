@@ -31,6 +31,10 @@ _RESULT_EVENT_CAP = 4096  # chars of a result's JSON kept in the event payload (
 class Session:
     tier: str
     pass_id: str | None = None
+    # None = full scope (attended sessions, and the publish pass that touches only its own item).
+    # A Scope (selly_agent.store.Scope) binds a headless pass to the entities it was spawned for;
+    # the ScopedStore built for the request enforces it at every row load.
+    scope: object = None
 
 
 @dataclass

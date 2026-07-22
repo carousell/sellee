@@ -23,7 +23,7 @@ from .events import EventBus, EventStore
 from .http_server import HttpServer
 from .rail.client import RailClient, RailUnprovisioned
 from .scheduler import Scheduler, Task
-from .store import Store
+from .store import ScopedStore, Store
 from .tools.registry import ToolContext
 
 log = logging.getLogger(__name__)
@@ -110,9 +110,12 @@ def run_daemon(*, once: bool) -> int:
         )
 
     def context_factory(session):
+        # The store a handler sees is scoped to the session: attended (scope None) is a
+        # transparent pass-through; a headless pass is held to its spawn-time entity scope at
+        # every row load, so a thread never leaves the store without passing the scope check.
         return ToolContext(
             session=session,
-            store=store,
+            store=ScopedStore(store, getattr(session, "scope", None)),
             bus=bus,
             config=cfg,
             rail_factory=rail_factory,

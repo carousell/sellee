@@ -22,6 +22,7 @@ stale-running sweep, never silently re-run.
 
 from __future__ import annotations
 
+import inspect
 import json
 import time
 import uuid
@@ -31,12 +32,24 @@ from .db import Database
 
 # Fields a caller may set on an item. listing_urls is deliberately absent — it is written only
 # after a live listing verify, by the publish path. Sale-state transitions are not here either.
-_ITEM_WRITABLE = ("title", "description", "condition", "list_price", "currency", "status")
+_ITEM_WRITABLE = (
+    "title",
+    "description",
+    "condition",
+    "list_price",
+    "currency",
+    "status",
+    "size_bucket",
+)
 _ITEM_STATUSES = ("draft", "ready")
 
 _FLOOR_SOURCES = ("seller", "default")
 
 _PASS_TERMINAL = ("done", "error")
+
+_THREAD_SIDES = ("sell", "buy")
+# Thread transcript reads are capped so a huge thread can't blow a pass's context.
+_TRANSCRIPT_DEFAULT_CAP = 100
 
 
 class StoreError(Exception):
@@ -47,6 +60,14 @@ class StoreError(Exception):
 
 
 class ItemNotFound(StoreError):
+    pass
+
+
+class ThreadNotFound(StoreError):
+    pass
+
+
+class WantNotFound(StoreError):
     pass
 
 
@@ -75,10 +96,68 @@ def _item_from_row(row) -> dict:
         "list_price": row["list_price"],
         "currency": row["currency"],
         "status": row["status"],
+        "size_bucket": row["size_bucket"],
         "listing_urls": json.loads(row["listing_urls"]),
         "created_ts": row["created_ts"],
         "updated_ts": row["updated_ts"],
     }
+
+
+_THREAD_FIELDS = (
+    "thread_id",
+    "side",
+    "market",
+    "item_id",
+    "want_id",
+    "counterpart_handle",
+    "status",
+    "held_reason",
+    "held_from_status",
+    "buyer_location",
+    "agent_note",
+    "listing_url",
+    "listed_price",
+    "close_method",
+    "closed_ts",
+    "closed_reason",
+    "cursor_last_msg_id",
+    "cursor_last_ts",
+    "last_followup_ts",
+    "followup_disposition",
+    "source",
+    "created_ts",
+    "updated_ts",
+)
+
+
+def _thread_from_row(row) -> dict:
+    """The thread record — identity, status, cursor, side-specific fields. Never a floor/budget."""
+    return {name: row[name] for name in _THREAD_FIELDS}
+
+
+_WANT_FIELDS = (
+    "want_id",
+    "query",
+    "category",
+    "condition_pref",
+    "region",
+    "currency",
+    "target_price",
+    "status",
+    "source",
+    "cancelled_ts",
+    "cancel_reason",
+    "created_ts",
+    "updated_ts",
+)
+
+
+def _want_from_row(row) -> dict:
+    """The buyer-safe want view — never the max budget (that lives only behind the engine)."""
+    record = {name: row[name] for name in _WANT_FIELDS}
+    record["candidates"] = json.loads(row["candidates"])
+    record["shortlist"] = json.loads(row["shortlist"])
+    return record
 
 
 class Store:
@@ -196,10 +275,21 @@ class Store:
             "floor": row["floor"],
             "currency": row["currency"],
             "source": row["source"],
+            "auto_counter_step": row["auto_counter_step"],
+            "auto_counter_rounds": row["auto_counter_rounds"],
             "updated_ts": row["updated_ts"],
         }
 
-    def set_floor(self, item_id: str, floor: float, source: str, force: bool = False) -> dict:
+    def set_floor(
+        self,
+        item_id: str,
+        floor: float,
+        source: str,
+        force: bool = False,
+        *,
+        auto_counter_step: int | None = None,
+        auto_counter_rounds: int | None = None,
+    ) -> dict:
         """The one hardened floor writer. Returns an ack carrying provenance only — never the
         value. Raises StoreError on invalid input or a refused overwrite."""
         if source not in _FLOOR_SOURCES:
@@ -230,14 +320,247 @@ class Store:
                     "(an explicit seller correction with force is required to change it)"
                 )
             conn.execute(
-                "INSERT INTO floors (item_id, floor, currency, source, updated_ts) "
-                "VALUES (?, ?, ?, ?, ?) "
+                "INSERT INTO floors "
+                "(item_id, floor, currency, source, auto_counter_step, auto_counter_rounds, "
+                " updated_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (item_id) DO UPDATE SET "
                 "floor = excluded.floor, currency = excluded.currency, "
-                "source = excluded.source, updated_ts = excluded.updated_ts",
-                (item_id, floor, item["currency"], source, _now()),
+                "source = excluded.source, auto_counter_step = excluded.auto_counter_step, "
+                "auto_counter_rounds = excluded.auto_counter_rounds, "
+                "updated_ts = excluded.updated_ts",
+                (
+                    item_id,
+                    floor,
+                    item["currency"],
+                    source,
+                    auto_counter_step,
+                    auto_counter_rounds,
+                    _now(),
+                ),
             )
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
+
+    # --- threads ----------------------------------------------------------------------------
+
+    def create_thread(
+        self,
+        *,
+        thread_id: str,
+        side: str,
+        market: str,
+        counterpart_handle: str,
+        item_id: str | None = None,
+        want_id: str | None = None,
+        listing_url: str | None = None,
+        listed_price: float | None = None,
+        buyer_location: str | None = None,
+        source: str | None = None,
+    ) -> dict:
+        """Create an identity-complete thread. The natural key is the caller-supplied
+        `<market>:<local id>`; identity (side, market, counterpart, and the owning item/want) is
+        required at creation so the suppression layers that key off it can never be disabled by a
+        skeleton thread."""
+        if side not in _THREAD_SIDES:
+            raise StoreError(f"side must be one of {_THREAD_SIDES}, got {side!r}")
+        if not market or not market.strip():
+            raise StoreError("market must be non-empty")
+        if not thread_id or not thread_id.startswith(f"{market}:"):
+            raise StoreError(f"thread_id must start with {market!r} + ':' (got {thread_id!r})")
+        if not counterpart_handle or not counterpart_handle.strip():
+            raise StoreError("counterpart_handle must be non-empty")
+        if side == "sell" and not item_id:
+            raise StoreError("a sell thread requires item_id")
+        if side == "buy" and not want_id:
+            raise StoreError("a buy thread requires want_id")
+        ts = _now()
+        with self._db.transaction() as conn:
+            if conn.execute("SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)).fetchone():
+                raise StoreError(f"thread {thread_id!r} already exists")
+            if (
+                item_id
+                and not conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone()
+            ):
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            if (
+                want_id
+                and not conn.execute("SELECT 1 FROM wants WHERE want_id = ?", (want_id,)).fetchone()
+            ):
+                raise WantNotFound(f"no want with id {want_id!r}")
+            conn.execute(
+                "INSERT INTO threads (thread_id, side, market, item_id, want_id, "
+                "counterpart_handle, status, listing_url, listed_price, buyer_location, source, "
+                "created_ts, updated_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    side,
+                    market.strip(),
+                    item_id,
+                    want_id,
+                    counterpart_handle.strip(),
+                    listing_url,
+                    listed_price,
+                    buyer_location,
+                    source,
+                    ts,
+                    ts,
+                ),
+            )
+        return self.get_thread(thread_id)  # type: ignore[return-value]
+
+    def get_thread(
+        self, thread_id: str, *, message_cap: int = _TRANSCRIPT_DEFAULT_CAP
+    ) -> dict | None:
+        rows = self._db.query("SELECT * FROM threads WHERE thread_id = ?", (thread_id,))
+        if not rows:
+            return None
+        record = _thread_from_row(rows[0])
+        record["messages"] = self.get_thread_messages(thread_id, limit=message_cap)
+        record["message_count"] = self._db.query(
+            "SELECT COUNT(*) AS n FROM thread_messages WHERE thread_id = ?", (thread_id,)
+        )[0]["n"]
+        return record
+
+    def list_threads(self, side: str | None = None, status: str | None = None) -> list[dict]:
+        clauses, params = [], []
+        if side is not None:
+            clauses.append("side = ?")
+            params.append(side)
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        sql = "SELECT * FROM threads"
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY updated_ts DESC"
+        rows = self._db.query(sql, tuple(params))
+        return [_thread_from_row(r) for r in rows]
+
+    def append_thread_message(
+        self,
+        thread_id: str,
+        *,
+        msg_id: str,
+        direction: str,
+        text: str,
+        ts: float | None = None,
+        source: str | None = None,
+    ) -> bool:
+        """Fold one transcript row into a thread, deduped by (thread_id, msg_id). Returns True if
+        it was newly inserted, False if the constraint dropped a duplicate — dedup by the schema,
+        never by a read-then-write race."""
+        if direction not in ("in", "out"):
+            raise StoreError("direction must be 'in' or 'out'")
+        with self._db.transaction() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone():
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO thread_messages "
+                "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, ?, ?, ?, ?)",
+                (thread_id, msg_id, direction, text, ts if ts is not None else _now(), source),
+            )
+            return cur.rowcount > 0
+
+    def get_thread_messages(self, thread_id: str, *, limit: int | None = None) -> list[dict]:
+        """The transcript in chronological order, capped to the most recent `limit` rows."""
+        if limit is None:
+            rows = self._db.query(
+                "SELECT msg_id, dir, text, ts, source FROM thread_messages "
+                "WHERE thread_id = ? ORDER BY ts ASC, rowid ASC",
+                (thread_id,),
+            )
+        else:
+            rows = self._db.query(
+                "SELECT msg_id, dir, text, ts, source FROM thread_messages "
+                "WHERE thread_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?",
+                (thread_id, limit),
+            )
+            rows = list(reversed(rows))
+        return [
+            {
+                "msg_id": r["msg_id"],
+                "dir": r["dir"],
+                "text": r["text"],
+                "ts": r["ts"],
+                "source": r["source"],
+            }
+            for r in rows
+        ]
+
+    # --- wants ------------------------------------------------------------------------------
+
+    def create_want(
+        self,
+        *,
+        query: str,
+        category: str | None = None,
+        condition_pref: str | None = None,
+        region: str | None = None,
+        currency: str | None = None,
+        target_price: float | None = None,
+        source: str | None = None,
+    ) -> dict:
+        if not query or not query.strip():
+            raise StoreError("query must be non-empty")
+        want_id = _new_id("want")
+        ts = _now()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO wants (want_id, query, category, condition_pref, region, currency, "
+                "target_price, status, source, candidates, shortlist, created_ts, updated_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 'searching', ?, '[]', '[]', ?, ?)",
+                (
+                    want_id,
+                    query.strip(),
+                    category,
+                    condition_pref,
+                    region,
+                    currency,
+                    target_price,
+                    source,
+                    ts,
+                    ts,
+                ),
+            )
+        return self.get_want(want_id)  # type: ignore[return-value]
+
+    def get_want(self, want_id: str) -> dict | None:
+        rows = self._db.query("SELECT * FROM wants WHERE want_id = ?", (want_id,))
+        return _want_from_row(rows[0]) if rows else None
+
+    def list_wants(self, status: str | None = None) -> list[dict]:
+        if status is None:
+            rows = self._db.query("SELECT * FROM wants ORDER BY created_ts DESC")
+        else:
+            rows = self._db.query(
+                "SELECT * FROM wants WHERE status = ? ORDER BY created_ts DESC", (status,)
+            )
+        return [_want_from_row(r) for r in rows]
+
+    # --- budgets ----------------------------------------------------------------------------
+
+    def get_budget(self, want_id: str) -> dict | None:
+        """Internal only: the confidential budget record. No LLM-facing tool calls this — only
+        the buyer engine loads it, exactly as get_floor serves the sell engine."""
+        rows = self._db.query("SELECT * FROM budgets WHERE want_id = ?", (want_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "want_id": row["want_id"],
+            "max_budget": row["max_budget"],
+            "target_price": row["target_price"],
+            "currency": row["currency"],
+            "opening_ratio": row["opening_ratio"],
+            "auto_counter_step": row["auto_counter_step"],
+            "auto_counter_rounds": row["auto_counter_rounds"],
+            "give_up_polls": row["give_up_polls"],
+            "source": row["source"],
+            "updated_ts": row["updated_ts"],
+        }
 
     # --- passes -----------------------------------------------------------------------------
 
@@ -327,3 +650,121 @@ class Store:
                     (_now(), *pass_ids),
                 )
         return pass_ids
+
+
+@dataclass(frozen=True)
+class Scope:
+    """The entity scope a headless pass was spawned with: the threads it may touch plus their
+    owning items and wants. Attended sessions run unscoped (Session.scope is None)."""
+
+    thread_ids: frozenset = frozenset()
+    item_ids: frozenset = frozenset()
+    want_ids: frozenset = frozenset()
+
+    @classmethod
+    def of(cls, *, threads=(), items=(), wants=()) -> Scope:
+        return cls(frozenset(threads), frozenset(items), frozenset(wants))
+
+    def allows(self, kind: str, value) -> bool:
+        # An absent optional id (None) is not an out-of-scope reference — it is simply not set.
+        if value is None:
+            return True
+        return (
+            value
+            in {
+                "thread": self.thread_ids,
+                "item": self.item_ids,
+                "want": self.want_ids,
+            }[kind]
+        )
+
+    def to_json(self) -> dict:
+        return {
+            "thread_ids": sorted(self.thread_ids),
+            "item_ids": sorted(self.item_ids),
+            "want_ids": sorted(self.want_ids),
+        }
+
+    @classmethod
+    def from_json(cls, data: dict) -> Scope:
+        return cls.of(
+            threads=data.get("thread_ids", ()),
+            items=data.get("item_ids", ()),
+            wants=data.get("want_ids", ()),
+        )
+
+
+# Accessors that take a scoped id. For a scoped session every listed id argument must be in
+# scope, or the call answers exactly as it would for a row that does not exist — an out-of-scope
+# id must be indistinguishable from an absent one, so scope never leaks existence. Each entry is
+# (name -> ((param, kind), ...)); later plans extend it as engine/mutation accessors land.
+_SCOPE_GUARDED = {
+    "get_item": (("item_id", "item"),),
+    "get_thread": (("thread_id", "thread"),),
+    "get_thread_messages": (("thread_id", "thread"),),
+    "append_thread_message": (("thread_id", "thread"),),
+    "get_want": (("want_id", "want"),),
+}
+
+# What a guarded accessor does when an id is out of scope: mirror the accessor's own
+# missing-row behavior so the two are indistinguishable. Reads that return None on a missing
+# row return None; the transcript read returns []; row-required writers raise the same NotFound.
+_SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
+_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages"})
+_SCOPE_MISS_NOTFOUND = {"append_thread_message": ("thread", ThreadNotFound)}
+
+
+class ScopedStore:
+    """A scope-aware view over a Store. Unscoped (scope=None) it is a transparent pass-through —
+    attended sessions hold full scope. Scoped, it enforces the entity scope at every guarded
+    accessor, answering an out-of-scope id exactly as a missing row. List accessors are filtered
+    to the scope rather than rejected."""
+
+    def __init__(self, store: Store, scope: Scope | None = None):
+        self._store = store
+        self._scope = scope
+
+    # List reads are filtered to the scope (a scoped pass enumerates only its own entities).
+    def list_threads(self, side: str | None = None, status: str | None = None) -> list[dict]:
+        rows = self._store.list_threads(side=side, status=status)
+        if self._scope is None:
+            return rows
+        return [r for r in rows if r["thread_id"] in self._scope.thread_ids]
+
+    def list_items(self, status: str | None = None) -> list[dict]:
+        rows = self._store.list_items(status=status)
+        if self._scope is None:
+            return rows
+        return [r for r in rows if r["id"] in self._scope.item_ids]
+
+    def list_wants(self, status: str | None = None) -> list[dict]:
+        rows = self._store.list_wants(status=status)
+        if self._scope is None:
+            return rows
+        return [r for r in rows if r["want_id"] in self._scope.want_ids]
+
+    def __getattr__(self, name: str):
+        target = getattr(self._store, name)
+        spec = _SCOPE_GUARDED.get(name)
+        if self._scope is None or spec is None:
+            return target
+        sig = inspect.signature(target)
+
+        def guarded(*args, **kwargs):
+            bound = sig.bind(*args, **kwargs)
+            bound.apply_defaults()
+            for param, kind in spec:
+                if not self._scope.allows(kind, bound.arguments.get(param)):
+                    return self._deny(name, bound.arguments)
+            return target(*args, **kwargs)
+
+        return guarded
+
+    def _deny(self, name: str, arguments: dict):
+        if name in _SCOPE_MISS_NONE:
+            return None
+        if name in _SCOPE_MISS_EMPTY:
+            return []
+        kind, exc = _SCOPE_MISS_NOTFOUND[name]
+        param = _SCOPE_GUARDED[name][0][0]
+        raise exc(f"no {kind} with id {arguments.get(param)!r}")

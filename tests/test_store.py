@@ -7,13 +7,24 @@ import concurrent.futures
 
 import pytest
 
-from selly_agent.store import ItemNotFound, Store, StoreError
+from selly_agent.store import (
+    ItemNotFound,
+    Store,
+    StoreError,
+    ThreadNotFound,
+)
 
 
 def _item(store: Store, **kw) -> dict:
     base = {"title": "Vintage lamp", "list_price": 80.0, "currency": "SGD"}
     base.update(kw)
     return store.create_item(**base)
+
+
+def _want(store: Store, **kw) -> dict:
+    base = {"query": "iPhone 15"}
+    base.update(kw)
+    return store.create_want(**base)
 
 
 # --- items ------------------------------------------------------------------------------------
@@ -170,6 +181,167 @@ def test_concurrent_seller_vs_default_never_loses_seller_floor(store: Store) -> 
             fs.result(), fd.result()
         rec = store.get_floor(item["id"])
         assert rec["source"] == "seller" and rec["floor"] == 60.0
+
+
+# --- items: size_bucket -----------------------------------------------------------------------
+
+
+def test_item_size_bucket_is_writable_and_returned(store: Store) -> None:
+    item = _item(store)
+    assert item["size_bucket"] is None
+    updated = store.update_item(item["id"], {"size_bucket": "large"})
+    assert updated["size_bucket"] == "large"
+
+
+# --- floors: step/rounds knobs ----------------------------------------------------------------
+
+
+def test_floor_carries_optional_counter_knobs(store: Store) -> None:
+    item = _item(store, list_price=80.0)
+    ack = store.set_floor(item["id"], 60.0, "seller", auto_counter_step=15, auto_counter_rounds=3)
+    assert "floor" not in ack
+    rec = store.get_floor(item["id"])
+    assert rec["auto_counter_step"] == 15 and rec["auto_counter_rounds"] == 3
+
+
+# --- threads ----------------------------------------------------------------------------------
+
+
+def test_create_sell_thread_requires_item_and_prefix(store: Store) -> None:
+    item = _item(store)
+    with pytest.raises(StoreError, match="item_id"):
+        store.create_thread(thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob")
+    with pytest.raises(StoreError, match="start with"):
+        store.create_thread(
+            thread_id="wrong:1",
+            side="sell",
+            market="fb",
+            counterpart_handle="bob",
+            item_id=item["id"],
+        )
+    t = store.create_thread(
+        thread_id="fb:1",
+        side="sell",
+        market="fb",
+        counterpart_handle="bob",
+        item_id=item["id"],
+    )
+    assert t["thread_id"] == "fb:1" and t["status"] == "active" and t["messages"] == []
+
+
+def test_create_buy_thread_requires_want(store: Store) -> None:
+    want = _want(store)
+    with pytest.raises(StoreError, match="want_id"):
+        store.create_thread(thread_id="cl:9", side="buy", market="cl", counterpart_handle="sue")
+    t = store.create_thread(
+        thread_id="cl:9",
+        side="buy",
+        market="cl",
+        counterpart_handle="sue",
+        want_id=want["want_id"],
+    )
+    assert t["side"] == "buy" and t["want_id"] == want["want_id"]
+
+
+def test_create_thread_refuses_dangling_owner_and_duplicate(store: Store) -> None:
+    with pytest.raises(ItemNotFound):
+        store.create_thread(
+            thread_id="fb:1",
+            side="sell",
+            market="fb",
+            counterpart_handle="bob",
+            item_id="item_nope",
+        )
+    item = _item(store)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob", item_id=item["id"]
+    )
+    with pytest.raises(StoreError, match="already exists"):
+        store.create_thread(
+            thread_id="fb:1",
+            side="sell",
+            market="fb",
+            counterpart_handle="bob",
+            item_id=item["id"],
+        )
+
+
+def test_append_thread_message_dedup_by_constraint(store: Store) -> None:
+    item = _item(store)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob", item_id=item["id"]
+    )
+    assert store.append_thread_message("fb:1", msg_id="m1", direction="in", text="hi", ts=1.0)
+    # same msg_id folds to a no-op (dedup by the UNIQUE constraint, not a read-then-write race)
+    assert not store.append_thread_message("fb:1", msg_id="m1", direction="in", text="hi", ts=1.0)
+    store.append_thread_message("fb:1", msg_id="m2", direction="out", text="yo", ts=2.0)
+    thread = store.get_thread("fb:1")
+    assert [m["msg_id"] for m in thread["messages"]] == ["m1", "m2"]
+    assert thread["message_count"] == 2
+
+
+def test_append_thread_message_missing_thread_raises(store: Store) -> None:
+    with pytest.raises(ThreadNotFound):
+        store.append_thread_message("fb:none", msg_id="m1", direction="in", text="hi")
+
+
+def test_get_thread_caps_transcript_to_most_recent(store: Store) -> None:
+    item = _item(store)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob", item_id=item["id"]
+    )
+    for i in range(5):
+        store.append_thread_message(
+            "fb:1", msg_id=f"m{i}", direction="in", text=str(i), ts=float(i)
+        )
+    thread = store.get_thread("fb:1", message_cap=2)
+    assert [m["msg_id"] for m in thread["messages"]] == ["m3", "m4"]  # most recent, chronological
+    assert thread["message_count"] == 5
+
+
+def test_list_threads_filters(store: Store) -> None:
+    item = _item(store)
+    want = _want(store)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="b", item_id=item["id"]
+    )
+    store.create_thread(
+        thread_id="cl:2", side="buy", market="cl", counterpart_handle="s", want_id=want["want_id"]
+    )
+    assert {t["thread_id"] for t in store.list_threads(side="sell")} == {"fb:1"}
+    assert len(store.list_threads()) == 2
+
+
+# --- wants ------------------------------------------------------------------------------------
+
+
+def test_create_and_get_want_never_returns_budget(store: Store) -> None:
+    want = _want(store, target_price=500.0, region="SG")
+    assert want["want_id"].startswith("want_")
+    assert want["status"] == "searching"
+    fetched = store.get_want(want["want_id"])
+    assert "max_budget" not in fetched and "budget" not in fetched
+    assert fetched["target_price"] == 500.0
+
+
+def test_create_want_rejects_blank_query(store: Store) -> None:
+    with pytest.raises(StoreError):
+        store.create_want(query="   ")
+
+
+def test_list_wants_filters_by_status(store: Store) -> None:
+    _want(store, query="a")
+    _want(store, query="b")
+    assert len(store.list_wants()) == 2
+    assert store.list_wants(status="bought") == []
+
+
+# --- budgets: engine-only reader --------------------------------------------------------------
+
+
+def test_get_budget_absent_returns_none(store: Store) -> None:
+    want = _want(store)
+    assert store.get_budget(want["want_id"]) is None
 
 
 # --- passes -----------------------------------------------------------------------------------

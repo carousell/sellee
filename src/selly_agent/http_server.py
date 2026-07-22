@@ -53,10 +53,13 @@ class Auth:
         self._pass_tokens: dict = {}  # token -> (Session, expiry_ts)
         self._lock = threading.Lock()
 
-    def mint_pass_token(self, tier: str, pass_id: str, expiry_ts: float) -> str:
+    def mint_pass_token(self, tier: str, pass_id: str, expiry_ts: float, scope=None) -> str:
         token = _stdlib_secrets.token_urlsafe(32)
         with self._lock:
-            self._pass_tokens[token] = (Session(tier=tier, pass_id=pass_id), expiry_ts)
+            self._pass_tokens[token] = (
+                Session(tier=tier, pass_id=pass_id, scope=scope),
+                expiry_ts,
+            )
         return token
 
     def revoke_pass_token(self, token: str) -> None:
