@@ -47,10 +47,38 @@ State — two SQLite databases, kept apart:
 - **`data/selly.db`** is business data (migrated, snapshotted).
   **`state/events.db`** is the event/transcript store (prunable; recreated from
   migrations if deleted). The two are never joined.
-- **`store.py`** — typed accessors over `selly.db` (items, floors, the pass
-  queue), the one writer for business state. The floor lives in its own table and
-  is never returned by a read an LLM-facing tool can call; the pass queue is
-  claimed single-flight.
+- **`store.py`** — typed accessors over `selly.db`, the one writer for business
+  state: items/floors, threads + their transcript, wants/budgets, the sell/buy
+  negotiation ledgers, pacing actions, scam signatures, escalations, checkouts,
+  seller config, and the pass queue. Two confidentials — the floor and the buyer
+  budget — live in their own tables and are never returned by a read an LLM-facing
+  tool can call (only the engines load them). Every money/safety decision runs as
+  one `BEGIN IMMEDIATE` transaction (load → decide → write), the single-writer
+  serialization that gives FCFS single-inventory and atomic pacing. A `ScopedStore`
+  wraps the store per request: for a headless pass bound to a `Scope`, every
+  thread/want/item row-load must be in scope or it answers exactly as a missing
+  row (scope never leaks existence); attended sessions run unscoped.
+
+The engines — pure decision modules, no I/O, no network. A tool composes an
+engine with the store; the engine just decides. Ported from the legacy CLIs with
+their tests:
+
+- **`engines/hosts.py`** — the one host-boundary matcher (strict marketplace
+  suffix match, link extraction, defang, the config-derived checkout carve-out),
+  shared by scam scanning and listing-URL verification. URLs are parsed with pure
+  string ops, never `urllib`.
+- **`engines/scam.py`** — scam scan scoring + the merged registry∪bank signature
+  view (the shipped registry is package data under `data/`; the local bank is a
+  store table).
+- **`engines/pacing.py`** — the account-safety gate (go/wait/quiet; quiet hours
+  and the per-marketplace hourly cap checked before jitter; FAST mode; ceilings as
+  code constants). The store's `reserve_action` records at reserve in one
+  transaction; the caller sleeps the go-jitter after, never under the lock.
+- **`engines/shipping.py`** — the deterministic delivery-fee computation; the
+  origin address is never an input.
+- **`engines/negotiate.py`** / **`engines/buyer_negotiate.py`** — the sell/buy
+  decision ladders, with the never-below-floor / never-above-budget asserts as
+  backstops.
 
 Observability:
 
@@ -69,7 +97,13 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   web tail, and the pass-control route, on `127.0.0.1` with Host/Origin and
   bearer-token checks.
 - **`tools/`** — the typed MCP tool registry: one dispatch path with input
-  validation, secret-param masking, and per-session tier filtering.
+  validation, secret-param masking, and per-session tier filtering. The money and
+  safety tools compose the engines with the store; `send_reply` runs the whole
+  send bracket (pacing reserve + durable intent in one transaction, the sink send
+  outside it, then fold + cursor advance + commit) behind a `ReplySink` seam —
+  04 ships no live sink, so a real market returns a structured `no_send_path`. A
+  killed send is folded by the `stale_intent_sweep` scheduler task as unconfirmed
+  + an escalation, never re-sent.
 - **`mcp_proxy.py`** — a stdio↔HTTP shim so stdio-only harnesses reach the same
   server.
 - **`rail/`** — the carousell.ai rail (a stdlib MCP client + guest-key
@@ -102,8 +136,8 @@ Lifecycle:
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
 5. Ensure the attended MCP token; start the localhost HTTP server (a bind
    failure is fatal — fail loud so launchd's throttle paces respawns).
-6. Register tasks (retention, the pass lane, the stray reaper) and run the
-   scheduler, writing the heartbeat each tick.
+6. Register tasks (retention, the pass lane, the stray reaper, the stale-intent
+   sweep) and run the scheduler, writing the heartbeat each tick.
 7. On SIGTERM/SIGINT: drain, stop the HTTP server, emit `daemon.stop`, clear the
    lock, exit 0.
 

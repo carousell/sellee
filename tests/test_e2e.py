@@ -78,7 +78,7 @@ def wired(bus, store, xdg_tmp):
             session=session,
             store=store,
             bus=bus,
-            config=Config(),
+            config=Config(quiet_hours=(0, 0)),
             rail_factory=lambda: FakeRail(),
             started_ts=1.0,
         )
@@ -134,7 +134,7 @@ def test_fake_harness_publishes_end_to_end(wired, tmp_path) -> None:
     deps = passes.PassDeps(
         bus=bus,
         store=store,
-        config=Config(),
+        config=Config(quiet_hours=(0, 0)),
         auth=server.auth,
         http_endpoint=f"http://127.0.0.1:{server.port}/mcp",
         stop_event=threading.Event(),

@@ -69,6 +69,25 @@ data loss, never backed up). Never open a cross-DB transaction — events are
 observability, not ledger. All writes go through the single write connection
 per DB; the LLM never writes state directly.
 
+## Engines stay pure
+
+Modules under `src/selly_agent/engines/` are pure decision layers. They must not
+import tool or server modules, must not touch the store or the network, and must
+not read the clock except through a `now` parameter. A tool composes an engine
+with the store (one transaction per decision); the engine only decides. This is
+what keeps the money/safety logic unit-testable in isolation and the network-free
+guarantee structural (the stdlib-only guard would flag a stray `urllib`).
+
+## Secrets never cross the tool-read boundary
+
+The floor and the buyer max budget are confidential. They live in their own
+tables, are loaded only inside the engines, and are never returned by any read an
+LLM-facing tool can call — engine outputs are secret-free by construction (the
+never-below-floor / never-above-budget asserts are the backstops), and error
+text carries no value. A tool parameter that carries a secret (floor, budget,
+origin address) is listed in its `ToolSpec.secret_params` so dispatch masks it
+before any event sink. When you add a tool that takes such a value, mark it.
+
 ## Comments
 
 The codebase must read on its own for someone who does not have the plans.
