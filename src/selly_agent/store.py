@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from . import marketplaces
 from .db import Database
+from .engines import pacing as pacing_engine
 from .engines import scam as scam_engine
 
 # Fields a caller may set on an item. listing_urls is deliberately absent — it is written only
@@ -577,6 +578,44 @@ class Store:
             "source": row["source"],
             "updated_ts": row["updated_ts"],
         }
+
+    # --- pacing -----------------------------------------------------------------------------
+
+    def reserve_action(
+        self,
+        *,
+        marketplace: str,
+        kind: str,
+        cfg,
+        now: float | None = None,
+        interactive: bool = False,
+    ) -> dict:
+        """Atomic check-and-record: count this marketplace's in-window actions, decide, and — only
+        on `go` — insert the action and compact the ledger, all in one transaction (the
+        serialization the legacy flock gave). On `go` the caller sleeps the returned jitter AFTER
+        this returns; the DB lock is never held across that sleep."""
+        now = now if now is not None else _now()
+        cutoff = now - pacing_engine.WINDOW_SECONDS
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT ts FROM pacing_actions WHERE marketplace = ? AND ts > ?",
+                (marketplace, cutoff),
+            ).fetchall()
+            timestamps = [r["ts"] for r in rows]
+            result = pacing_engine.evaluate(
+                timestamps, now=now, cfg=cfg, kind=kind, interactive=interactive
+            )
+            if result["record"]:
+                conn.execute(
+                    "INSERT INTO pacing_actions (marketplace, kind, ts) VALUES (?, ?, ?)",
+                    (marketplace, kind, now),
+                )
+                conn.execute(
+                    "DELETE FROM pacing_actions WHERE marketplace = ? AND ts <= ?",
+                    (marketplace, cutoff),
+                )
+        result["marketplace"] = marketplace
+        return result
 
     # --- scam signatures --------------------------------------------------------------------
 

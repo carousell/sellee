@@ -9,6 +9,7 @@ any store transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+from ..engines import pacing as pacing_engine
 from ..money import to_price_cents
 from ..rail.client import RailUnprovisioned
 from ..store import StoreError
@@ -42,6 +43,23 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
+
+    # Every outbound marketplace action reserves through the pacing gate first — a publish is a
+    # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
+    # counts against the per-marketplace hourly cap and quiet hours.
+    cfg = pacing_engine.resolve(ctx.config)
+    paced = ctx.store.reserve_action(
+        marketplace=_MARKET,
+        kind="publish",
+        cfg=cfg,
+        interactive=ctx.session.tier == TIER_ATTENDED,
+    )
+    if paced["verdict"] != "go":
+        raise ToolError(
+            f"paced: {paced['verdict']} on {_MARKET} "
+            f"({paced['count']}/{paced['cap']} this hour) — retry in "
+            f"{int(paced['delay_sec'])}s"
+        )
 
     args = {
         "title": item["title"],

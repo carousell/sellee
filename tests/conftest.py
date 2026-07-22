@@ -38,14 +38,18 @@ def make_ctx(bus, store, xdg_tmp):
 
     Depends on xdg_tmp so secret and heartbeat reads inside handlers stay hermetic.
     """
+    from selly_agent.store import ScopedStore
     from selly_agent.tools.registry import Session, ToolContext
 
-    def _make(tier, *, pass_id=None, rail_factory=None, config=None, started_ts=1000.0):
+    def _make(tier, *, pass_id=None, scope=None, rail_factory=None, config=None, started_ts=1000.0):
+        # A scoped session sees a ScopedStore (as the daemon builds per request); unscoped uses the
+        # raw store. Default quiet hours off so a pacing-gated tool (publish, send_reply) is not
+        # blocked by the wall-clock hour a test happens to run in — quiet-verdict tests pass config.
         return ToolContext(
-            session=Session(tier=tier, pass_id=pass_id),
-            store=store,
+            session=Session(tier=tier, pass_id=pass_id, scope=scope),
+            store=ScopedStore(store, scope) if scope is not None else store,
             bus=bus,
-            config=config or Config(),
+            config=config or Config(quiet_hours=(0, 0)),
             rail_factory=rail_factory,
             started_ts=started_ts,
         )
