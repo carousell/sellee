@@ -509,6 +509,94 @@ class Store:
             for r in rows
         ]
 
+    _THREAD_WRITABLE = ("buyer_location", "agent_note", "listed_price", "listing_url")
+    # The only status flips this generic writer owns. held is owned by hold/release, escalated by
+    # escalate, and the sale states by the confirm-sold / buyer-accept flows.
+    _THREAD_STATUS_TRANSITIONS = frozenset({("escalated", "active"), ("active", "closed")})
+
+    def update_thread(self, thread_id: str, fields: dict) -> dict:
+        status = fields.get("status")
+        other = {k: v for k, v in fields.items() if k != "status"}
+        unknown = [k for k in other if k not in self._THREAD_WRITABLE]
+        if unknown:
+            raise StoreError(
+                f"unknown or non-writable thread field(s): {', '.join(sorted(unknown))}; "
+                f"writable: {', '.join(self._THREAD_WRITABLE)} (transcript/cursor advance via "
+                "send_reply/record_manual_reply; held via hold_thread; sale states via the "
+                "confirm flows)"
+            )
+        if not fields:
+            raise StoreError("no fields to update")
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not row:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            assignments = dict(other)
+            if status is not None:
+                if (row["status"], status) not in self._THREAD_STATUS_TRANSITIONS:
+                    raise StoreError(
+                        f"status {row['status']!r}->{status!r} is not allowed here; held is owned "
+                        "by hold_thread/release_thread, escalated by escalate, and sale states by "
+                        "negotiate_confirm_sold / buyer_negotiate_accept"
+                    )
+                assignments["status"] = status
+                if status == "closed":
+                    assignments["closed_ts"] = _now()
+            if not assignments:
+                raise StoreError("no fields to update")
+            clause = ", ".join(f"{name} = ?" for name in assignments)
+            conn.execute(
+                f"UPDATE threads SET {clause}, updated_ts = ? WHERE thread_id = ?",
+                (*assignments.values(), _now(), thread_id),
+            )
+        return self.get_thread(thread_id)  # type: ignore[return-value]
+
+    def hold_thread(self, thread_id: str, reason: str, mark_handled_msg: str | None = None) -> dict:
+        """Flip a thread to held, preserving the pre-hold status so release can restore it. A
+        re-hold keeps the original held_from_status; mark_handled advances the cursor (the hold IS
+        the handling — no reply is sent)."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, held_from_status FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not row:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            if row["status"] == "held":
+                held_from = row["held_from_status"] or "active"
+            else:
+                held_from = row["status"] or "active"
+            if mark_handled_msg:
+                conn.execute(
+                    "UPDATE threads SET status = 'held', held_reason = ?, held_from_status = ?, "
+                    "cursor_last_msg_id = ?, cursor_last_ts = ?, updated_ts = ? "
+                    "WHERE thread_id = ?",
+                    (reason, held_from, mark_handled_msg, _now(), _now(), thread_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE threads SET status = 'held', held_reason = ?, held_from_status = ?, "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (reason, held_from, _now(), thread_id),
+                )
+        return self.get_thread(thread_id)  # type: ignore[return-value]
+
+    def release_thread(self, thread_id: str) -> dict:
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, held_from_status FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not row:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            restored = row["held_from_status"] or "active"
+            conn.execute(
+                "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
+                "updated_ts = ? WHERE thread_id = ?",
+                (restored, _now(), thread_id),
+            )
+        return self.get_thread(thread_id)  # type: ignore[return-value]
+
     # --- wants ------------------------------------------------------------------------------
 
     def create_want(
@@ -558,6 +646,76 @@ class Store:
                 "SELECT * FROM wants WHERE status = ? ORDER BY created_ts DESC", (status,)
             )
         return [_want_from_row(r) for r in rows]
+
+    _WANT_WRITABLE = (
+        "query",
+        "category",
+        "condition_pref",
+        "region",
+        "currency",
+        "target_price",
+        "candidates",
+        "shortlist",
+    )
+    _WANT_JSON_FIELDS = ("candidates", "shortlist")
+    # Thread states a want-cancel closes; closed/escalated threads are left as they are.
+    _WANT_OPEN_THREAD_STATUSES = ("active", "liaising", "agreed", "held")
+
+    def update_want(self, want_id: str, fields: dict) -> dict:
+        unknown = [k for k in fields if k not in self._WANT_WRITABLE]
+        if unknown:
+            raise StoreError(
+                f"unknown or non-writable want field(s): {', '.join(sorted(unknown))}; "
+                f"writable: {', '.join(self._WANT_WRITABLE)} (cancelled is owned by cancel_want, "
+                "bought by the buy close flow)"
+            )
+        if not fields:
+            raise StoreError("no fields to update")
+        assignments = {
+            k: (json.dumps(v) if k in self._WANT_JSON_FIELDS else v) for k, v in fields.items()
+        }
+        clause = ", ".join(f"{name} = ?" for name in assignments)
+        with self._db.transaction() as conn:
+            if not conn.execute("SELECT 1 FROM wants WHERE want_id = ?", (want_id,)).fetchone():
+                raise WantNotFound(f"no want with id {want_id!r}")
+            conn.execute(
+                f"UPDATE wants SET {clause}, updated_ts = ? WHERE want_id = ?",
+                (*assignments.values(), _now(), want_id),
+            )
+        return self.get_want(want_id)  # type: ignore[return-value]
+
+    def cancel_want(self, want_id: str, reason: str | None = None) -> dict:
+        """Cancel a want and close its open buy threads in one transaction. Idempotent: an
+        already-terminal want is left as-is (but stray open threads are still swept). Refuses a
+        bought want — that is a completed purchase, not something to cancel. Never touches the
+        budget."""
+        with self._db.transaction() as conn:
+            row = conn.execute("SELECT status FROM wants WHERE want_id = ?", (want_id,)).fetchone()
+            if not row:
+                raise WantNotFound(f"no want with id {want_id!r}")
+            if row["status"] == "bought":
+                raise StoreError(f"want {want_id!r} is already bought — nothing to cancel")
+            ts = _now()
+            if row["status"] not in ("cancelled", "abandoned"):
+                conn.execute(
+                    "UPDATE wants SET status = 'cancelled', cancelled_ts = ?, cancel_reason = ?, "
+                    "updated_ts = ? WHERE want_id = ?",
+                    (ts, reason, ts, want_id),
+                )
+            placeholders = ",".join("?" for _ in self._WANT_OPEN_THREAD_STATUSES)
+            open_threads = conn.execute(
+                f"SELECT thread_id FROM threads WHERE want_id = ? AND side = 'buy' "
+                f"AND status IN ({placeholders})",
+                (want_id, *self._WANT_OPEN_THREAD_STATUSES),
+            ).fetchall()
+            closed = [t["thread_id"] for t in open_threads]
+            for thread_id in closed:
+                conn.execute(
+                    "UPDATE threads SET status = 'closed', closed_ts = ?, "
+                    "closed_reason = ?, updated_ts = ? WHERE thread_id = ?",
+                    (ts, "want cancelled", ts, thread_id),
+                )
+        return {"want_id": want_id, "status": "cancelled", "threads_closed": closed}
 
     # --- budgets ----------------------------------------------------------------------------
 
@@ -1483,7 +1641,12 @@ _SCOPE_GUARDED = {
     "get_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
+    "update_thread": (("thread_id", "thread"),),
+    "hold_thread": (("thread_id", "thread"),),
+    "release_thread": (("thread_id", "thread"),),
     "get_want": (("want_id", "want"),),
+    "update_want": (("want_id", "want"),),
+    "cancel_want": (("want_id", "want"),),
     "negotiate_offer": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_status": (("item_id", "item"),),
     "negotiate_confirm_bid": (("item_id", "item"), ("thread_id", "thread")),
@@ -1504,6 +1667,11 @@ _SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages"})
 _SCOPE_MISS_NOTFOUND = {
     "append_thread_message": ("thread", ThreadNotFound),
+    "update_thread": ("thread", ThreadNotFound),
+    "hold_thread": ("thread", ThreadNotFound),
+    "release_thread": ("thread", ThreadNotFound),
+    "update_want": ("want", WantNotFound),
+    "cancel_want": ("want", WantNotFound),
     "negotiate_offer": ("item", ItemNotFound),
     "negotiate_status": ("item", ItemNotFound),
     "negotiate_confirm_bid": ("item", ItemNotFound),

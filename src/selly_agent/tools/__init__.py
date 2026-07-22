@@ -15,7 +15,9 @@ from . import (  # noqa: F401  imported for registration
     reads,
     scam,
     seller,
+    threads,
     verify,
+    wants,
     writes,
 )
 from .registry import (  # noqa: F401  re-exported as the package's public surface

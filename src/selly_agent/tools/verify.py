@@ -26,10 +26,12 @@ _CAROUSELL_AI = "carousell-ai"
 
 
 def _verify_listing_url(ctx: ToolContext, params: dict) -> dict:
-    market = params["market"]
-    url = params["url"]
-    region = params.get("region")
+    return verify_market_url(ctx, params["market"], params["url"], params.get("region"))
 
+
+def verify_market_url(ctx: ToolContext, market: str, url: str, region: str | None = None) -> dict:
+    """Verify a listing URL for a market — the shared gate used by the verify_listing_url tool and
+    by every listing_url write seam (e.g. update_thread). Returns {ok, market, url|reason}."""
     if market == _CAROUSELL_AI:
         return _verify_carousell_ai_live(ctx, market, url)
 
