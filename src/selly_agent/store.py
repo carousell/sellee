@@ -1312,6 +1312,68 @@ class Store:
             self._persist_buyer_negotiation(conn, want_id, led)
             return {"thread": thread_id, "want_state": led["state"]}
 
+    # --- checkout ---------------------------------------------------------------------------
+
+    def checkout_floor_gate(self, item_id: str, price: float) -> dict:
+        """The floor gate for a checkout close, returning only a status — never the floor value.
+        Floorless orchestration lives here: at/above list persists the documented default floor;
+        below list returns no_floor (ask the seller); below the floor returns below_floor."""
+        with self._db.transaction() as conn:
+            item = conn.execute(
+                "SELECT list_price, currency FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not item:
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            list_price, currency = item["list_price"], item["currency"]
+            floor_row = conn.execute(
+                "SELECT floor FROM floors WHERE item_id = ?", (item_id,)
+            ).fetchone()
+            if floor_row is None:
+                if not isinstance(list_price, (int, float)) or list_price <= 0:
+                    raise StoreError(f"item {item_id!r} has no valid list price")
+                if price < list_price:
+                    return {"status": "no_floor", "currency": currency}
+                conn.execute(
+                    "INSERT INTO floors (item_id, floor, currency, source, updated_ts) "
+                    "VALUES (?, ?, ?, 'default', ?)",
+                    (item_id, list_price, currency, _now()),
+                )
+                floor = list_price
+            else:
+                floor = floor_row["floor"]
+            if price < floor:
+                return {"status": "below_floor", "currency": currency}
+            return {"status": "ok", "currency": currency}
+
+    def get_checkout(self, sale_id: str) -> dict | None:
+        rows = self._db.query("SELECT * FROM checkouts WHERE sale_id = ?", (sale_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "sale_id": row["sale_id"],
+            "item_id": row["item_id"],
+            "thread_id": row["thread_id"],
+            "checkout_url": row["checkout_url"],
+            "price": row["price"],
+            "currency": row["currency"],
+            "issued_ts": row["issued_ts"],
+        }
+
+    def record_checkout(
+        self, *, sale_id: str, item_id: str, thread_id: str, checkout_url: str, price, currency
+    ) -> dict:
+        """Persist the checkout record idempotently — the deterministic sale_id maps to one record;
+        a re-record returns the existing one, never a second link."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO checkouts "
+                "(sale_id, item_id, thread_id, checkout_url, price, currency, issued_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
+            )
+        return self.get_checkout(sale_id)  # type: ignore[return-value]
+
     # --- seller config ----------------------------------------------------------------------
 
     # The origin section holds the exact street address — stored, never returned by a read tool.
@@ -1883,6 +1945,7 @@ _SCOPE_GUARDED = {
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
     "escalate": (("thread_id", "thread"),),
+    "checkout_floor_gate": (("item_id", "item"),),
     "reserve_reply": (("thread_id", "thread"),),
     "commit_reply": (("thread_id", "thread"),),
     "record_manual_reply": (("thread_id", "thread"),),
@@ -1913,6 +1976,7 @@ _SCOPE_MISS_NOTFOUND = {
     "hold_thread": ("thread", ThreadNotFound),
     "release_thread": ("thread", ThreadNotFound),
     "escalate": ("thread", ThreadNotFound),
+    "checkout_floor_gate": ("item", ItemNotFound),
     "reserve_reply": ("thread", ThreadNotFound),
     "commit_reply": ("thread", ThreadNotFound),
     "record_manual_reply": ("thread", ThreadNotFound),

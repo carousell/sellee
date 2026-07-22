@@ -136,6 +136,15 @@ class RailClient:
             raise RailToolError("create_listing returned no listing URL")
         return {"listing_id": listing_id, "url": url}
 
+    def create_checkout(self, args: dict) -> dict:
+        """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
+        RailToolError if the rail returns no URL (we never fabricate one)."""
+        result = self.call_tool("create_checkout", args)
+        url = result.get("checkout_url") or result.get("url")
+        if not url:
+            raise RailToolError("create_checkout returned no checkout URL")
+        return {"checkout_url": url}
+
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
         200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""
