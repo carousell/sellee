@@ -122,6 +122,9 @@ CREATE TABLE negotiations (
     item_id      TEXT PRIMARY KEY REFERENCES items (id) ON DELETE CASCADE,
     state        TEXT NOT NULL CHECK (state IN (
                      'open', 'bidding', 'reserved_provisional', 'sold')),
+    -- a sticky flag: once a leading bid arrives the item is a bidding item, and that survives a
+    -- confirm-bid / release so the below-list path stays blocked and release returns to bidding.
+    is_bidding   INTEGER NOT NULL DEFAULT 0,
     front_runner TEXT,
     sold_to      TEXT,
     updated_ts   REAL NOT NULL

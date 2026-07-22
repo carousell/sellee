@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from . import marketplaces
 from .db import Database
+from .engines import negotiate as negotiate_engine
 from .engines import pacing as pacing_engine
 from .engines import scam as scam_engine
 
@@ -579,6 +580,262 @@ class Store:
             "updated_ts": row["updated_ts"],
         }
 
+    # --- sell-side negotiation --------------------------------------------------------------
+
+    def _load_negotiation(self, conn, item_id: str) -> dict:
+        row = conn.execute("SELECT * FROM negotiations WHERE item_id = ?", (item_id,)).fetchone()
+        if row:
+            front_runner = json.loads(row["front_runner"]) if row["front_runner"] else None
+            state, sold_to, is_bidding = row["state"], row["sold_to"], bool(row["is_bidding"])
+        else:
+            front_runner, state, sold_to, is_bidding = None, "open", None, False
+        buyers = {}
+        for b in conn.execute(
+            "SELECT * FROM negotiation_buyers WHERE item_id = ?", (item_id,)
+        ).fetchall():
+            buyers[b["thread_id"]] = {
+                "buyer_handle": b["buyer_handle"],
+                "offers": json.loads(b["offers"]),
+                "highest_offer": b["highest_offer"],
+                "rounds_used": b["rounds_used"],
+                "last_counter": b["last_counter"],
+                "lowball_count": b["lowball_count"],
+                "status": b["status"],
+            }
+        return {
+            "state": state,
+            "is_bidding": is_bidding,
+            "front_runner": front_runner,
+            "sold_to": sold_to,
+            "buyers": buyers,
+        }
+
+    def _persist_negotiation(self, conn, item_id: str, led: dict) -> None:
+        conn.execute(
+            "INSERT INTO negotiations "
+            "(item_id, state, is_bidding, front_runner, sold_to, updated_ts) "
+            "VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (item_id) DO UPDATE SET "
+            "state = excluded.state, is_bidding = excluded.is_bidding, "
+            "front_runner = excluded.front_runner, sold_to = excluded.sold_to, "
+            "updated_ts = excluded.updated_ts",
+            (
+                item_id,
+                led["state"],
+                1 if led["is_bidding"] else 0,
+                json.dumps(led["front_runner"], sort_keys=True) if led["front_runner"] else None,
+                led["sold_to"],
+                _now(),
+            ),
+        )
+        for thread_id, b in led["buyers"].items():
+            conn.execute(
+                "INSERT INTO negotiation_buyers "
+                "(item_id, thread_id, buyer_handle, offers, highest_offer, rounds_used, "
+                " last_counter, lowball_count, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (item_id, thread_id) DO UPDATE SET "
+                "buyer_handle = excluded.buyer_handle, offers = excluded.offers, "
+                "highest_offer = excluded.highest_offer, rounds_used = excluded.rounds_used, "
+                "last_counter = excluded.last_counter, lowball_count = excluded.lowball_count, "
+                "status = excluded.status",
+                (
+                    item_id,
+                    thread_id,
+                    b["buyer_handle"],
+                    json.dumps(b["offers"]),
+                    b["highest_offer"],
+                    b["rounds_used"],
+                    b["last_counter"],
+                    b["lowball_count"],
+                    b["status"],
+                ),
+            )
+
+    def _item_for_negotiation(self, conn, item_id: str) -> tuple:
+        item = conn.execute(
+            "SELECT list_price, currency FROM items WHERE id = ?", (item_id,)
+        ).fetchone()
+        if not item:
+            raise ItemNotFound(f"no item with id {item_id!r}")
+        return item["list_price"], item["currency"]
+
+    def negotiate_offer(
+        self, item_id: str, thread_id: str, handle: str, offer: float, *, config
+    ) -> dict:
+        """One offer, decided and persisted in a single transaction — the serialization that makes
+        FCFS single-inventory hold. Floorless orchestration lives here (not the engine): at/above
+        list persists the default floor, below list holds for the seller's floor ask, no list price
+        is a data error; the engine is then handed a complete floor."""
+        with self._db.transaction() as conn:
+            list_price, currency = self._item_for_negotiation(conn, item_id)
+            floor_row = conn.execute(
+                "SELECT * FROM floors WHERE item_id = ?", (item_id,)
+            ).fetchone()
+
+            if floor_row is None:
+                if not isinstance(list_price, (int, float)) or list_price <= 0:
+                    raise StoreError(f"item {item_id!r} has no valid list price to negotiate")
+                if offer < list_price:
+                    return self._hold_for_floor(conn, item_id, thread_id, handle, offer, currency)
+                # at/above list needs no real floor: persist the documented default (= list price)
+                conn.execute(
+                    "INSERT INTO floors (item_id, floor, currency, source, updated_ts) "
+                    "VALUES (?, ?, ?, 'default', ?)",
+                    (item_id, list_price, currency, _now()),
+                )
+                floor_row = conn.execute(
+                    "SELECT * FROM floors WHERE item_id = ?", (item_id,)
+                ).fetchone()
+
+            floor = floor_row["floor"]
+            floor_record = {
+                "auto_counter_step": floor_row["auto_counter_step"],
+                "auto_counter_rounds": floor_row["auto_counter_rounds"],
+            }
+            knobs = negotiate_engine.resolve_knobs(config, floor_record)
+
+            led = self._load_negotiation(conn, item_id)
+            buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
+            buyer["buyer_handle"] = handle
+            negotiate_engine.record_offer(buyer, offer)
+
+            res = negotiate_engine.decide(
+                offer, thread_id, buyer, led, floor, list_price, knobs["step"], knobs
+            )
+            self._apply_offer_transition(led, thread_id, buyer, res)
+            led["buyers"][thread_id] = buyer
+            self._persist_negotiation(conn, item_id, led)
+            res["item_state"] = led["state"]
+            res["currency"] = currency
+            return res
+
+    def _hold_for_floor(self, conn, item_id, thread_id, handle, offer, currency) -> dict:
+        """No floor and a below-list offer: record the offer and hold, so the caller asks the
+        seller for the floor once. Nothing is decided (no rounds/front-runner consumed), and the
+        held offer still bars rivals via other_best once the floor lands."""
+        led = self._load_negotiation(conn, item_id)
+        if led["state"] == "sold":
+            return {
+                "decision": "sold",
+                "needs_seller_confirm": False,
+                "message_intent": "item_sold",
+                "item_state": "sold",
+                "currency": currency,
+            }
+        buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
+        buyer["buyer_handle"] = handle
+        negotiate_engine.record_offer(buyer, offer, held_for_floor=True)
+        led["buyers"][thread_id] = buyer
+        self._persist_negotiation(conn, item_id, led)
+        return {
+            "decision": "needs_floor",
+            "counter_price": None,
+            "hold_firm": False,
+            "needs_seller_confirm": True,
+            "message_intent": "hold_for_floor",
+            "item_state": led["state"],
+            "currency": currency,
+        }
+
+    @staticmethod
+    def _apply_offer_transition(led, thread_id, buyer, res) -> None:
+        decision = res["decision"]
+        if decision == "counter":
+            buyer["rounds_used"] += 1
+            buyer["last_counter"] = res["counter_price"]
+        elif decision == "deflect_lowball":
+            buyer["lowball_count"] += 1
+        elif decision == "hold_firm" and res["message_intent"] == "disengage":
+            buyer["status"] = "passed"
+        elif decision == "accept_fcfs":
+            buyer["status"] = "front_runner"
+            led["front_runner"] = {
+                "thread_id": thread_id,
+                "amount": res["accept_price"],
+                "kind": "fcfs",
+            }
+            led["state"] = "reserved_provisional"
+        elif decision == "bid_lead":
+            buyer["status"] = "leading_bid"
+            led["is_bidding"] = True
+            led["state"] = "bidding"
+            led["front_runner"] = {
+                "thread_id": thread_id,
+                "amount": res["leading_amount"],
+                "kind": "bid",
+            }
+        elif decision == "bid_outbid":
+            led["is_bidding"] = True
+            led["state"] = "bidding"
+
+    def negotiate_status(self, item_id: str) -> dict:
+        with self._db.transaction() as conn:
+            self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+        return {
+            "item_state": led["state"],
+            "is_bidding": led["is_bidding"],
+            "front_runner": led["front_runner"],
+            "buyers": {
+                t: {"status": b["status"], "highest_offer": b["highest_offer"]}
+                for t, b in led["buyers"].items()
+            },
+        }
+
+    def negotiate_confirm_bid(self, item_id: str, thread_id: str) -> dict:
+        with self._db.transaction() as conn:
+            self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+            fr = led["front_runner"]
+            if not fr or fr.get("thread_id") != thread_id:
+                raise StoreError("thread is not the current leading bid")
+            led["state"] = "reserved_provisional"
+            led["buyers"][thread_id]["status"] = "won"
+            for tid, b in led["buyers"].items():
+                if tid != thread_id and b.get("status") != "passed":
+                    b["status"] = "outbid"
+            self._persist_negotiation(conn, item_id, led)
+            return {
+                "reserved_for": thread_id,
+                "amount": fr["amount"],
+                "item_state": led["state"],
+                "tell_others": "outbid",
+            }
+
+    def negotiate_confirm_sold(self, item_id: str, thread_id: str) -> dict:
+        with self._db.transaction() as conn:
+            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            led = self._load_negotiation(conn, item_id)
+            led["state"] = "sold"
+            led["sold_to"] = thread_id
+            urls = json.loads(row["listing_urls"])
+            won_platform = thread_id.split(":", 1)[0] if ":" in thread_id else None
+            take_down = [
+                {"platform": p, "url": u} for p, u in urls.items() if u and p != won_platform
+            ]
+            close = [
+                t
+                for t, b in led["buyers"].items()
+                if t != thread_id and b.get("status") not in ("lost", "passed")
+            ]
+            for t in close:
+                led["buyers"][t]["status"] = "lost"
+            self._persist_negotiation(conn, item_id, led)
+            return {"item_state": "sold", "take_down": take_down, "close_threads": close}
+
+    def negotiate_release(self, item_id: str) -> dict:
+        with self._db.transaction() as conn:
+            self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+            led["state"] = "bidding" if led["is_bidding"] else "open"
+            led["front_runner"] = None
+            for b in led["buyers"].values():
+                if b.get("status") in ("front_runner", "won"):
+                    b["status"] = "active"
+            self._persist_negotiation(conn, item_id, led)
+            return {"item_state": led["state"]}
+
     # --- seller config ----------------------------------------------------------------------
 
     # The origin section holds the exact street address — stored, never returned by a read tool.
@@ -910,6 +1167,11 @@ _SCOPE_GUARDED = {
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "get_want": (("want_id", "want"),),
+    "negotiate_offer": (("item_id", "item"), ("thread_id", "thread")),
+    "negotiate_status": (("item_id", "item"),),
+    "negotiate_confirm_bid": (("item_id", "item"), ("thread_id", "thread")),
+    "negotiate_confirm_sold": (("item_id", "item"), ("thread_id", "thread")),
+    "negotiate_release": (("item_id", "item"),),
 }
 
 # What a guarded accessor does when an id is out of scope: mirror the accessor's own
@@ -917,7 +1179,14 @@ _SCOPE_GUARDED = {
 # row return None; the transcript read returns []; row-required writers raise the same NotFound.
 _SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages"})
-_SCOPE_MISS_NOTFOUND = {"append_thread_message": ("thread", ThreadNotFound)}
+_SCOPE_MISS_NOTFOUND = {
+    "append_thread_message": ("thread", ThreadNotFound),
+    "negotiate_offer": ("item", ItemNotFound),
+    "negotiate_status": ("item", ItemNotFound),
+    "negotiate_confirm_bid": ("item", ItemNotFound),
+    "negotiate_confirm_sold": ("item", ItemNotFound),
+    "negotiate_release": ("item", ItemNotFound),
+}
 
 
 class ScopedStore:
