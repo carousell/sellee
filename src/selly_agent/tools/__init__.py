@@ -12,6 +12,7 @@ from . import (  # noqa: F401  imported for registration
     publish,
     reads,
     scam,
+    seller,
     verify,
     writes,
 )

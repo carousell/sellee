@@ -579,6 +579,36 @@ class Store:
             "updated_ts": row["updated_ts"],
         }
 
+    # --- seller config ----------------------------------------------------------------------
+
+    # The origin section holds the exact street address — stored, never returned by a read tool.
+    _SELLER_CONFIG_PRIVATE = frozenset({"origin"})
+
+    def set_seller_config_section(self, section: str, value: dict) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO seller_config (section, value, updated_ts) VALUES (?, ?, ?) "
+                "ON CONFLICT (section) DO UPDATE SET value = excluded.value, "
+                "updated_ts = excluded.updated_ts",
+                (section, json.dumps(value, sort_keys=True), _now()),
+            )
+
+    def get_seller_config_section(self, section: str) -> dict | None:
+        """Internal read of one section. quote_shipping uses it for basics/shipping; nothing reads
+        the origin section back — it is write-only from the tool layer."""
+        rows = self._db.query("SELECT value FROM seller_config WHERE section = ?", (section,))
+        return json.loads(rows[0]["value"]) if rows else None
+
+    def get_seller_config_public(self) -> dict:
+        """Every section except the private origin address — the buyer-safe view a read tool may
+        return."""
+        rows = self._db.query("SELECT section, value FROM seller_config")
+        return {
+            r["section"]: json.loads(r["value"])
+            for r in rows
+            if r["section"] not in self._SELLER_CONFIG_PRIVATE
+        }
+
     # --- pacing -----------------------------------------------------------------------------
 
     def reserve_action(
