@@ -48,6 +48,9 @@ class ToolContext:
     # A factory so the publish tool can surface an "unprovisioned" error itself rather than the
     # server failing to build a rail client up front. May be None where no tool needs a rail.
     rail_factory: Callable[[], object] | None = None
+    # The marketplace reply sink (a daemon-owned browser send in a later plan). None here: 04 ships
+    # no live sink, so send_reply returns a structured no_send_path for real markets.
+    reply_sink: object | None = None
     started_ts: float = 0.0
 
 

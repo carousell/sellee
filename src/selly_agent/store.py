@@ -22,6 +22,7 @@ stale-running sweep, never silently re-run.
 
 from __future__ import annotations
 
+import hashlib
 import inspect
 import json
 import time
@@ -1341,6 +1342,154 @@ class Store:
             if r["section"] not in self._SELLER_CONFIG_PRIVATE
         }
 
+    # --- send bracket -----------------------------------------------------------------------
+
+    def reserve_reply(
+        self,
+        *,
+        thread_id: str,
+        kind: str,
+        text: str,
+        in_msg_id: str | None,
+        cfg,
+        now: float | None = None,
+        interactive: bool = False,
+    ) -> dict:
+        """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
+        one transaction. A wait/quiet verdict records no pacing action and no intent — a blocked
+        reply leaves nothing behind for a sweep to re-drive. Returns the verdict and, on go, the
+        intent id; the caller performs the sink send outside this transaction."""
+        now = now if now is not None else _now()
+        with self._db.transaction() as conn:
+            thread = conn.execute(
+                "SELECT market FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not thread:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            marketplace = thread["market"]
+            cutoff = now - pacing_engine.WINDOW_SECONDS
+            rows = conn.execute(
+                "SELECT ts FROM pacing_actions WHERE marketplace = ? AND ts > ?",
+                (marketplace, cutoff),
+            ).fetchall()
+            verdict = pacing_engine.evaluate(
+                [r["ts"] for r in rows], now=now, cfg=cfg, kind=kind, interactive=interactive
+            )
+            if not verdict["record"]:
+                return {"verdict": verdict["verdict"], "delay_sec": verdict["delay_sec"]}
+            conn.execute(
+                "INSERT INTO pacing_actions (marketplace, kind, ts) VALUES (?, ?, ?)",
+                (marketplace, kind, now),
+            )
+            conn.execute(
+                "DELETE FROM pacing_actions WHERE marketplace = ? AND ts <= ?",
+                (marketplace, cutoff),
+            )
+            intent_id = _new_id("intent")
+            conn.execute(
+                "INSERT INTO send_intents "
+                "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
+                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+                (intent_id, thread_id, in_msg_id, text, kind, now),
+            )
+            return {
+                "verdict": "go",
+                "delay_sec": verdict["delay_sec"],
+                "intent_id": intent_id,
+            }
+
+    def commit_reply(
+        self,
+        *,
+        intent_id: str,
+        thread_id: str,
+        in_msg_id: str | None,
+        text: str,
+        kind: str,
+        now: float | None = None,
+    ) -> dict:
+        """Transaction B: fold the outbound row (a deterministic msg_id from the intent id makes a
+        retried commit a UNIQUE no-op), advance the cursor over the handled inbound, mark the intent
+        committed, and stamp follow-up state — all in one transaction."""
+        now = now if now is not None else _now()
+        out_msg_id = f"out|{intent_id}"
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO thread_messages "
+                "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
+                (thread_id, out_msg_id, text, now),
+            )
+            conn.execute(
+                "UPDATE send_intents SET status = 'committed', sent_ts = ?, committed_ts = ? "
+                "WHERE intent_id = ?",
+                (now, now, intent_id),
+            )
+            if in_msg_id is not None:
+                conn.execute(
+                    "UPDATE threads SET cursor_last_msg_id = ?, cursor_last_ts = ?, "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (in_msg_id, now, now, thread_id),
+                )
+            if kind == "followup":
+                conn.execute(
+                    "UPDATE threads SET last_followup_ts = ?, followup_disposition = 'sent', "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (now, now, thread_id),
+                )
+        return {"msg_id": out_msg_id}
+
+    def record_manual_reply(self, thread_id: str, text: str, *, handle: str | None = None) -> dict:
+        """Journal a reply the seller sent themselves in the marketplace app: an outbound row,
+        deduped by normalized text, with NO cursor advance and no status change (the manual send
+        means our account spoke last, so follow-ups stop treating the buyer as unanswered)."""
+        normalized = " ".join((text or "").split()).lower()
+        msg_id = "manual|" + hashlib.sha256(normalized.encode()).hexdigest()[:12]
+        with self._db.transaction() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone():
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            cur = conn.execute(
+                "INSERT OR IGNORE INTO thread_messages "
+                "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'manual')",
+                (thread_id, msg_id, text, _now()),
+            )
+            return {"recorded": cur.rowcount > 0, "deduped": cur.rowcount == 0}
+
+    def stale_intent_sweep(self, grace_sec: float, now: float | None = None) -> list[dict]:
+        """Fold intents stuck un-committed past the grace window as `unconfirmed` and open an
+        escalation to verify whether the send fired — never a re-send. The deterministic msg_id
+        means a genuinely-retried commit is still a no-op, so this only ever heals a real stall."""
+        now = now if now is not None else _now()
+        cutoff = now - grace_sec
+        folded: list[dict] = []
+        with self._db.transaction() as conn:
+            stale = conn.execute(
+                "SELECT intent_id, thread_id FROM send_intents "
+                "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ?",
+                (cutoff,),
+            ).fetchall()
+            for row in stale:
+                conn.execute(
+                    "UPDATE send_intents SET status = 'unconfirmed' WHERE intent_id = ?",
+                    (row["intent_id"],),
+                )
+                esc_id, new = self._open_escalation_in_txn(
+                    conn,
+                    row["thread_id"],
+                    open_question="verify whether this reply was actually sent",
+                    kind="unconfirmed_send",
+                )
+                folded.append(
+                    {
+                        "intent_id": row["intent_id"],
+                        "thread_id": row["thread_id"],
+                        "escalation_id": esc_id,
+                        "escalation_new": new,
+                    }
+                )
+        return folded
+
     # --- escalations ------------------------------------------------------------------------
 
     def escalate(
@@ -1355,38 +1504,55 @@ class Store:
         it records the open question, flips the thread to escalated, and is idempotent — a second
         escalate on a thread with an open escalation returns the existing id, changing nothing."""
         with self._db.transaction() as conn:
-            thread = conn.execute(
-                "SELECT side, item_id, want_id FROM threads WHERE thread_id = ?", (thread_id,)
-            ).fetchone()
-            if not thread:
+            if not conn.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone():
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
-            existing = conn.execute(
-                "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open'", (thread_id,)
-            ).fetchone()
-            if existing:
-                return {"id": existing["id"], "idempotent": True}
-            esc_id = _new_id("esc")
-            conn.execute(
-                "INSERT INTO escalations "
-                "(id, thread_id, side, item_id, want_id, kind, open_question, context_summary, "
-                " status, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
-                (
-                    esc_id,
-                    thread_id,
-                    thread["side"],
-                    thread["item_id"],
-                    thread["want_id"],
-                    kind,
-                    open_question,
-                    context_summary,
-                    _now(),
-                ),
+            esc_id, new = self._open_escalation_in_txn(
+                conn,
+                thread_id,
+                open_question=open_question,
+                kind=kind,
+                context_summary=context_summary,
             )
-            conn.execute(
-                "UPDATE threads SET status = 'escalated', updated_ts = ? WHERE thread_id = ?",
-                (_now(), thread_id),
-            )
-            return {"id": esc_id, "idempotent": False}
+            return {"id": esc_id, "idempotent": not new}
+
+    def _open_escalation_in_txn(
+        self, conn, thread_id: str, *, open_question: str, kind=None, context_summary=None
+    ) -> tuple:
+        """Open an escalation for a thread within an existing transaction (shared by escalate and
+        the stale-intent sweep). Idempotent: an existing open escalation is returned unchanged.
+        Returns (escalation_id, is_new)."""
+        thread = conn.execute(
+            "SELECT side, item_id, want_id FROM threads WHERE thread_id = ?", (thread_id,)
+        ).fetchone()
+        existing = conn.execute(
+            "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open'", (thread_id,)
+        ).fetchone()
+        if existing:
+            return existing["id"], False
+        esc_id = _new_id("esc")
+        conn.execute(
+            "INSERT INTO escalations "
+            "(id, thread_id, side, item_id, want_id, kind, open_question, context_summary, "
+            " status, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+            (
+                esc_id,
+                thread_id,
+                thread["side"],
+                thread["item_id"],
+                thread["want_id"],
+                kind,
+                open_question,
+                context_summary,
+                _now(),
+            ),
+        )
+        conn.execute(
+            "UPDATE threads SET status = 'escalated', updated_ts = ? WHERE thread_id = ?",
+            (_now(), thread_id),
+        )
+        return esc_id, True
 
     def resolve_escalation(self, escalation_id: str, resolution: str) -> dict:
         """Stamp an escalation resolved. Thread reactivation stays the caller's update_thread —
@@ -1717,6 +1883,9 @@ _SCOPE_GUARDED = {
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
     "escalate": (("thread_id", "thread"),),
+    "reserve_reply": (("thread_id", "thread"),),
+    "commit_reply": (("thread_id", "thread"),),
+    "record_manual_reply": (("thread_id", "thread"),),
     "get_want": (("want_id", "want"),),
     "update_want": (("want_id", "want"),),
     "cancel_want": (("want_id", "want"),),
@@ -1744,6 +1913,9 @@ _SCOPE_MISS_NOTFOUND = {
     "hold_thread": ("thread", ThreadNotFound),
     "release_thread": ("thread", ThreadNotFound),
     "escalate": ("thread", ThreadNotFound),
+    "reserve_reply": ("thread", ThreadNotFound),
+    "commit_reply": ("thread", ThreadNotFound),
+    "record_manual_reply": ("thread", ThreadNotFound),
     "update_want": ("want", WantNotFound),
     "cancel_want": ("want", WantNotFound),
     "negotiate_offer": ("item", ItemNotFound),

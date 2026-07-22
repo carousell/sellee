@@ -17,7 +17,18 @@ import sys
 import threading
 import time
 
-from . import __version__, config, heartbeat, lock, migrations, passes, paths, retention, secrets
+from . import (
+    __version__,
+    config,
+    heartbeat,
+    intent_sweep,
+    lock,
+    migrations,
+    passes,
+    paths,
+    retention,
+    secrets,
+)
 from .db import Database
 from .events import EventBus, EventStore
 from .http_server import HttpServer
@@ -32,6 +43,7 @@ log = logging.getLogger(__name__)
 # so a short interval only affects pickup latency, never concurrency.
 _PASS_LANE_INTERVAL_SEC = 2.0
 _STRAY_REAPER_INTERVAL_SEC = 60.0
+_INTENT_SWEEP_INTERVAL_SEC = 120.0
 
 
 def _setup_logging(level_name: str) -> None:
@@ -182,6 +194,13 @@ def run_daemon(*, once: bool) -> int:
             name="stray_reaper",
             interval_sec=_STRAY_REAPER_INTERVAL_SEC,
             func=lambda: passes.stray_reaper(pass_deps),
+        )
+    )
+    scheduler.register(
+        Task(
+            name="stale_intent_sweep",
+            interval_sec=_INTENT_SWEEP_INTERVAL_SEC,
+            func=lambda: intent_sweep.run_stale_intent_sweep(bus=bus, store=store),
         )
     )
 

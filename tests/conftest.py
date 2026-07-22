@@ -41,7 +41,16 @@ def make_ctx(bus, store, xdg_tmp):
     from selly_agent.store import ScopedStore
     from selly_agent.tools.registry import Session, ToolContext
 
-    def _make(tier, *, pass_id=None, scope=None, rail_factory=None, config=None, started_ts=1000.0):
+    def _make(
+        tier,
+        *,
+        pass_id=None,
+        scope=None,
+        rail_factory=None,
+        reply_sink=None,
+        config=None,
+        started_ts=1000.0,
+    ):
         # A scoped session sees a ScopedStore (as the daemon builds per request); unscoped uses the
         # raw store. Default quiet hours off so a pacing-gated tool (publish, send_reply) is not
         # blocked by the wall-clock hour a test happens to run in — quiet-verdict tests pass config.
@@ -51,6 +60,7 @@ def make_ctx(bus, store, xdg_tmp):
             bus=bus,
             config=config or Config(quiet_hours=(0, 0)),
             rail_factory=rail_factory,
+            reply_sink=reply_sink,
             started_ts=started_ts,
         )
 
