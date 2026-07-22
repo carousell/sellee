@@ -1,0 +1,60 @@
+{
+  "schema_version": 1,
+  "updated": "2026-07-06",
+  "signatures": [
+    {
+      "id": "sig-0001",
+      "kind": "playbook",
+      "value": "courier_payment_link",
+      "signals": [
+        "arrange the delivery",
+        "arrange delivery for you",
+        "the courier will contact",
+        "courier will pick",
+        "receive the payment",
+        "receive the money",
+        "click the link"
+      ],
+      "min_signals": 2,
+      "severity": "high",
+      "play": "courier_payment_link",
+      "description": "Buyer agrees fast, offers to arrange delivery, then sends a link to receive payment. A seller is never paid through a buyer-sent link.",
+      "marketplaces": ["*"],
+      "added": "2026-07-06",
+      "source": "maintainer"
+    },
+    {
+      "id": "sig-0002",
+      "kind": "message_pattern",
+      "value": "click the link to receive",
+      "severity": "high",
+      "play": "courier_payment_link",
+      "description": "Receive-money-via-link phrasing. A genuine sale never needs you to click a link to get paid.",
+      "marketplaces": ["*"],
+      "added": "2026-07-06",
+      "source": "maintainer"
+    },
+    {
+      "id": "sig-0003",
+      "kind": "message_pattern",
+      "value": "confirm your card to receive",
+      "severity": "high",
+      "play": "courier_payment_link",
+      "description": "Card-confirmation phishing bait dressed up as a payout step.",
+      "marketplaces": ["*"],
+      "added": "2026-07-06",
+      "source": "maintainer"
+    },
+    {
+      "id": "sig-0004",
+      "kind": "message_pattern",
+      "value": "verify your account to complete the delivery",
+      "severity": "high",
+      "play": "courier_payment_link",
+      "description": "Account-verification bait tied to a fake delivery flow.",
+      "marketplaces": ["*"],
+      "added": "2026-07-06",
+      "source": "maintainer"
+    }
+  ]
+}

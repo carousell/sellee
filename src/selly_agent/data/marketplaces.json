@@ -1,0 +1,259 @@
+{
+  "schema_version": 2,
+  "marketplaces": [
+    {
+      "id": "fb",
+      "display_name": "Facebook Marketplace",
+      "regions": [
+        "*"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only",
+        "local"
+      ],
+      "listing_flow": "skills/listing-flows/fb.md",
+      "listing_url": {
+        "host": "facebook.com",
+        "path": "/marketplace/item/"
+      },
+      "domains": {
+        "*": "www.facebook.com"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "active",
+      "urls": {
+        "inbox": "/marketplace/inbox/",
+        "selling": "/marketplace/you/selling"
+      }
+    },
+    {
+      "id": "carousell",
+      "display_name": "Carousell",
+      "regions": [
+        "SG",
+        "MY",
+        "HK",
+        "TW",
+        "PH",
+        "AU",
+        "ID"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only"
+      ],
+      "listing_flow": "skills/listing-flows/carousell.md",
+      "listing_url": {
+        "host": "carousell.",
+        "path": "/p/"
+      },
+      "domains": {
+        "SG": "www.carousell.sg",
+        "MY": "www.carousell.com.my",
+        "HK": "www.carousell.com.hk",
+        "TW": "www.carousell.tw",
+        "PH": "www.carousell.ph",
+        "AU": "www.carousell.com.au",
+        "ID": "www.carousell.co.id"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "active",
+      "urls": {
+        "inbox": "/inbox/",
+        "thread": "/inbox/{thread_id}/",
+        "my_listings": "/manage-listings/"
+      },
+      "scripted_publish": true,
+      "scripted_scan": true,
+      "scripted_inbox": true
+    },
+    {
+      "id": "carousell-ai",
+      "display_name": "Carousell.ai",
+      "regions": [
+        "*"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only"
+      ],
+      "listing_flow": "skills/listing-flows/carousell-ai.md",
+      "listing_url": {
+        "host": "www.carousell.ai",
+        "path": "/listing/"
+      },
+      "connector": {
+        "type": "mcp",
+        "auth": "api_key"
+      },
+      "status": "active",
+      "default_enabled": true
+    },
+    {
+      "id": "ebay",
+      "display_name": "eBay",
+      "regions": [
+        "US",
+        "UK",
+        "AU",
+        "DE",
+        "CA",
+        "*"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only"
+      ],
+      "listing_flow": "skills/listing-flows/ebay.md",
+      "listing_url": {
+        "host": "ebay.",
+        "path": "/itm/"
+      },
+      "domains": {
+        "US": "www.ebay.com",
+        "UK": "www.ebay.co.uk",
+        "AU": "www.ebay.com.au",
+        "DE": "www.ebay.de",
+        "CA": "www.ebay.ca",
+        "SG": "www.ebay.com.sg",
+        "*": "www.ebay.com"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "stub"
+    },
+    {
+      "id": "mercari",
+      "display_name": "Mercari",
+      "regions": [
+        "US",
+        "JP"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only"
+      ],
+      "listing_flow": "skills/listing-flows/mercari.md",
+      "listing_url": {
+        "host": "mercari.",
+        "path": "/item/"
+      },
+      "domains": {
+        "US": "www.mercari.com",
+        "JP": "jp.mercari.com"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "active"
+    },
+    {
+      "id": "offerup",
+      "display_name": "OfferUp",
+      "regions": [
+        "US"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only",
+        "local"
+      ],
+      "listing_flow": "skills/listing-flows/offerup.md",
+      "listing_url": {
+        "host": "offerup.com",
+        "path": "/item/"
+      },
+      "domains": {
+        "US": "offerup.com",
+        "*": "offerup.com"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "active"
+    },
+    {
+      "id": "poshmark",
+      "display_name": "Poshmark",
+      "regions": [
+        "US",
+        "CA",
+        "AU"
+      ],
+      "categories": [
+        "fashion",
+        "apparel",
+        "shoes",
+        "accessories",
+        "beauty",
+        "home_decor"
+      ],
+      "fulfillment": [
+        "ship_only"
+      ],
+      "listing_flow": "skills/listing-flows/poshmark.md",
+      "listing_url": {
+        "host": "poshmark.",
+        "path": "/listing/"
+      },
+      "domains": {
+        "US": "poshmark.com",
+        "CA": "poshmark.ca",
+        "AU": "poshmark.com.au"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "chrome_session"
+      },
+      "status": "active"
+    },
+    {
+      "id": "craigslist",
+      "display_name": "Craigslist",
+      "regions": [
+        "US",
+        "CA"
+      ],
+      "categories": [
+        "*"
+      ],
+      "fulfillment": [
+        "ship_only",
+        "local"
+      ],
+      "listing_flow": "skills/listing-flows/craigslist.md",
+      "listing_url": {
+        "host": "craigslist.org",
+        "path": "/d/"
+      },
+      "connector": {
+        "type": "browser",
+        "auth": "none"
+      },
+      "status": "active"
+    }
+  ]
+}
