@@ -10,6 +10,7 @@ from .. import __version__, heartbeat, paths, secrets
 from .registry import (
     TIER_ATTENDED,
     TIER_PASS_PUBLISH,
+    TIER_PASS_REPLY,
     ToolContext,
     ToolError,
     ToolSpec,
@@ -80,7 +81,7 @@ register(
             "additionalProperties": False,
         },
         handler=_get_item,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY}),
     )
 )
 register(

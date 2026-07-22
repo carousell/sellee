@@ -164,6 +164,10 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
     return result
 
 
-# Tier labels used in 03. Open strings; later plans add tiers without registry surgery.
+# Tier labels. Open strings; later plans add tiers without registry surgery.
 TIER_ATTENDED = "attended"
 TIER_PASS_PUBLISH = "pass:publish"
+# Provisional: the reply-loop tool subset carries this tier so entity-scope enforcement is
+# exercisable end to end by tests. No reply pass *type* exists yet — the skills rewrite finalizes
+# pass-tier membership; this label only makes the scoped-token path testable now.
+TIER_PASS_REPLY = "pass:reply"

@@ -7,10 +7,18 @@ list complete — an unimported tool module is a tool that silently doesn't exis
 
 from __future__ import annotations
 
-from . import messaging, publish, reads, writes  # noqa: F401  imported for registration
+from . import (  # noqa: F401  imported for registration
+    messaging,
+    publish,
+    reads,
+    scam,
+    verify,
+    writes,
+)
 from .registry import (  # noqa: F401  re-exported as the package's public surface
     TIER_ATTENDED,
     TIER_PASS_PUBLISH,
+    TIER_PASS_REPLY,
     Session,
     ToolContext,
     ToolError,
