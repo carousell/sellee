@@ -1341,6 +1341,78 @@ class Store:
             if r["section"] not in self._SELLER_CONFIG_PRIVATE
         }
 
+    # --- escalations ------------------------------------------------------------------------
+
+    def escalate(
+        self,
+        thread_id: str,
+        *,
+        open_question: str,
+        kind: str | None = None,
+        context_summary: str | None = None,
+    ) -> dict:
+        """Open an escalation against a REAL thread (no synthetic ids — the 2026-06-29 incident):
+        it records the open question, flips the thread to escalated, and is idempotent — a second
+        escalate on a thread with an open escalation returns the existing id, changing nothing."""
+        with self._db.transaction() as conn:
+            thread = conn.execute(
+                "SELECT side, item_id, want_id FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not thread:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            existing = conn.execute(
+                "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open'", (thread_id,)
+            ).fetchone()
+            if existing:
+                return {"id": existing["id"], "idempotent": True}
+            esc_id = _new_id("esc")
+            conn.execute(
+                "INSERT INTO escalations "
+                "(id, thread_id, side, item_id, want_id, kind, open_question, context_summary, "
+                " status, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+                (
+                    esc_id,
+                    thread_id,
+                    thread["side"],
+                    thread["item_id"],
+                    thread["want_id"],
+                    kind,
+                    open_question,
+                    context_summary,
+                    _now(),
+                ),
+            )
+            conn.execute(
+                "UPDATE threads SET status = 'escalated', updated_ts = ? WHERE thread_id = ?",
+                (_now(), thread_id),
+            )
+            return {"id": esc_id, "idempotent": False}
+
+    def resolve_escalation(self, escalation_id: str, resolution: str) -> dict:
+        """Stamp an escalation resolved. Thread reactivation stays the caller's update_thread —
+        this only closes the escalation record (the substrate any alarm path checks first)."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status FROM escalations WHERE id = ?", (escalation_id,)
+            ).fetchone()
+            if not row:
+                raise StoreError(f"no escalation with id {escalation_id!r}")
+            conn.execute(
+                "UPDATE escalations SET status = 'resolved', resolution = ?, resolved_ts = ? "
+                "WHERE id = ?",
+                (resolution, _now(), escalation_id),
+            )
+        return {"id": escalation_id, "status": "resolved"}
+
+    def count_open_escalations(self) -> int:
+        rows = self._db.query("SELECT COUNT(*) AS n FROM escalations WHERE status = 'open'")
+        return rows[0]["n"]
+
+    def open_escalation_thread_ids(self) -> set:
+        """Threads with an open escalation — excluded from follow-up eligibility."""
+        rows = self._db.query("SELECT DISTINCT thread_id FROM escalations WHERE status = 'open'")
+        return {r["thread_id"] for r in rows}
+
     # --- pacing -----------------------------------------------------------------------------
 
     def reserve_action(
@@ -1644,6 +1716,7 @@ _SCOPE_GUARDED = {
     "update_thread": (("thread_id", "thread"),),
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
+    "escalate": (("thread_id", "thread"),),
     "get_want": (("want_id", "want"),),
     "update_want": (("want_id", "want"),),
     "cancel_want": (("want_id", "want"),),
@@ -1670,6 +1743,7 @@ _SCOPE_MISS_NOTFOUND = {
     "update_thread": ("thread", ThreadNotFound),
     "hold_thread": ("thread", ThreadNotFound),
     "release_thread": ("thread", ThreadNotFound),
+    "escalate": ("thread", ThreadNotFound),
     "update_want": ("want", WantNotFound),
     "cancel_want": ("want", WantNotFound),
     "negotiate_offer": ("item", ItemNotFound),

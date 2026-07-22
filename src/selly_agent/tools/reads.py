@@ -37,6 +37,7 @@ def _get_status(ctx: ToolContext, params: dict) -> dict:
         "heartbeat_age_sec": heartbeat_age,
         "carousell_ai_provisioned": secrets.read_carousell_ai_api_key() is not None,
         "queue_depth": ctx.store.count_queued_passes(),
+        "open_escalations": ctx.store.count_open_escalations(),
     }
 
 
