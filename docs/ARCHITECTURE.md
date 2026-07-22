@@ -57,10 +57,8 @@ State — two SQLite databases, kept apart:
   serialization that gives FCFS single-inventory and atomic pacing. A `ScopedStore`
   wraps the store per request: for a headless pass bound to a `Scope`, every
   thread/want/item row-load must be in scope or it answers exactly as a missing
-  row (scope never leaks existence); attended sessions run unscoped. The stable
-  record and ack returns are `TypedDict`s (a dict at runtime, a checked shape under
-  `make typecheck`); the two acks are structurally value-free — `FloorAck`/`BudgetAck`
-  have no value field, so the checker proves an ack cannot carry the secret out.
+  row (scope never leaks existence); attended sessions run unscoped. Its stable
+  returns are typed (`TypedDict`, checked under `make typecheck`).
 
 The engines — pure decision modules, no I/O, no network. A tool composes an
 engine with the store; the engine just decides. Ported from the legacy CLIs with
