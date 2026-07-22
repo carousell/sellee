@@ -37,13 +37,31 @@ on it — run `make test-3.9`. Syntax discipline:
 `ruff` with `target-version = "py39"` is a second mechanical enforcer of the
 floor — it flags 3.10+ syntax at lint time.
 
+## Types are checked, not just written
+
+A static type checker runs via `make typecheck` (pyright, dev-only — it never
+ships, the runtime stays stdlib-only). It is scoped to the annotated store surface;
+widening it to the rest of the tree is a separate decision. The store's stable
+record and ack returns are `TypedDict`s (a dict at runtime, a checked shape under
+the checker) — new store returns of that shape should be too. Two conventions the
+checker now enforces rather than documents:
+
+- **Secret-free acks are value-free by construction.** `FloorAck`/`BudgetAck` have
+  no floor/budget field, so an accidental value key is a `make typecheck` failure,
+  not something only a test can catch.
+- **The JSON boundary stays `dict`.** Tool `params` are validated by each
+  `ToolSpec.input_schema` (the schema is the contract, not a second Python type),
+  and discriminated-union returns whose key set depends on the decision
+  (`negotiate_*`, the send bracket, the gate checks) stay a bare `dict`.
+
 ## Before finishing up
 
-Run both, green:
+Run these, green:
 
 ```sh
-make lint     # ruff check + ruff format --check
-make test     # and make test-3.9 if a 3.9 interpreter is available
+make lint       # ruff check + ruff format --check
+make typecheck  # pyright over the annotated store surface
+make test       # and make test-3.9 if a 3.9 interpreter is available
 ```
 
 Do **not** add GitHub Actions / CI workflows — CI is owner-managed to org
