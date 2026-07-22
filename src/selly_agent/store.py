@@ -30,6 +30,7 @@ from dataclasses import dataclass
 
 from . import marketplaces
 from .db import Database
+from .engines import buyer_negotiate as buyer_engine
 from .engines import negotiate as negotiate_engine
 from .engines import pacing as pacing_engine
 from .engines import scam as scam_engine
@@ -560,6 +561,77 @@ class Store:
 
     # --- budgets ----------------------------------------------------------------------------
 
+    _BUDGET_SOURCES = ("buyer", "default")
+
+    def set_budget(
+        self,
+        want_id: str,
+        max_budget: float,
+        source: str,
+        *,
+        target_price: float | None = None,
+        currency: str | None = None,
+        force: bool = False,
+        opening_ratio: float | None = None,
+        auto_counter_step: int | None = None,
+        auto_counter_rounds: int | None = None,
+        give_up_polls: int | None = None,
+    ) -> dict:
+        """The one hardened budget writer — the buy-side mirror of set_floor, closing the legacy
+        free-write hole. Validates 0 < target <= max, records provenance, refuses a `default` write
+        over a `buyer` value (force replaces a buyer value), and never echoes a value."""
+        if source not in self._BUDGET_SOURCES:
+            raise StoreError(f"source must be one of {self._BUDGET_SOURCES}, got {source!r}")
+        if (
+            not isinstance(max_budget, (int, float))
+            or isinstance(max_budget, bool)
+            or max_budget <= 0
+        ):
+            raise StoreError("max_budget must be a positive number")
+        target = target_price if target_price is not None else max_budget
+        if not isinstance(target, (int, float)) or isinstance(target, bool) or target <= 0:
+            raise StoreError("target_price must be a positive number")
+        if target > max_budget:
+            raise StoreError("target_price must be at or below max_budget")
+        with self._db.transaction() as conn:
+            if not conn.execute("SELECT 1 FROM wants WHERE want_id = ?", (want_id,)).fetchone():
+                raise WantNotFound(f"no want with id {want_id!r}")
+            existing = conn.execute(
+                "SELECT source FROM budgets WHERE want_id = ?", (want_id,)
+            ).fetchone()
+            replaced = existing["source"] if existing else None
+            if replaced == "buyer" and not (source == "buyer" and force):
+                raise StoreError(
+                    "a buyer-set budget already exists for this want — refusing to overwrite "
+                    "(an explicit buyer correction with force is required to change it)"
+                )
+            conn.execute(
+                "INSERT INTO budgets "
+                "(want_id, max_budget, target_price, currency, opening_ratio, auto_counter_step, "
+                " auto_counter_rounds, give_up_polls, source, updated_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (want_id) DO UPDATE SET "
+                "max_budget = excluded.max_budget, target_price = excluded.target_price, "
+                "currency = excluded.currency, opening_ratio = excluded.opening_ratio, "
+                "auto_counter_step = excluded.auto_counter_step, "
+                "auto_counter_rounds = excluded.auto_counter_rounds, "
+                "give_up_polls = excluded.give_up_polls, source = excluded.source, "
+                "updated_ts = excluded.updated_ts",
+                (
+                    want_id,
+                    max_budget,
+                    target,
+                    currency,
+                    opening_ratio,
+                    auto_counter_step,
+                    auto_counter_rounds,
+                    give_up_polls,
+                    source,
+                    _now(),
+                ),
+            )
+        return {"status": "written", "want_id": want_id, "source": source, "replaced": replaced}
+
     def get_budget(self, want_id: str) -> dict | None:
         """Internal only: the confidential budget record. No LLM-facing tool calls this — only
         the buyer engine loads it, exactly as get_floor serves the sell engine."""
@@ -835,6 +907,251 @@ class Store:
                     b["status"] = "active"
             self._persist_negotiation(conn, item_id, led)
             return {"item_state": led["state"]}
+
+    # --- buy-side negotiation ---------------------------------------------------------------
+
+    def _budget_for_engine(self, want_id: str) -> dict:
+        rec = self.get_budget(want_id)
+        if rec is None:
+            raise StoreError(f"no budget set for want {want_id!r} — set one before negotiating")
+        return {
+            "target": rec["target_price"],
+            "max_budget": rec["max_budget"],
+            "currency": rec["currency"] or "",
+            "step": rec["auto_counter_step"] or buyer_engine.DEFAULT_STEP,
+            "max_rounds": rec["auto_counter_rounds"] or buyer_engine.DEFAULT_MAX_ROUNDS,
+            "opening_ratio": rec["opening_ratio"] or buyer_engine.DEFAULT_OPENING_RATIO,
+        }
+
+    def _load_buyer_negotiation(self, conn, want_id: str) -> dict:
+        row = conn.execute(
+            "SELECT * FROM buyer_negotiations WHERE want_id = ?", (want_id,)
+        ).fetchone()
+        state = row["state"] if row else "shopping"
+        committed_thread = row["committed_thread"] if row else None
+        sellers = {}
+        for s in conn.execute(
+            "SELECT * FROM buyer_negotiation_sellers WHERE want_id = ?", (want_id,)
+        ).fetchall():
+            sellers[s["thread_id"]] = {
+                "seller_handle": s["seller_handle"],
+                "listed_price": s["listed_price"],
+                "our_offers": json.loads(s["our_offers"]),
+                "our_highest_offer": s["our_highest_offer"],
+                "seller_lowest_ask": s["seller_lowest_ask"],
+                "rounds_used": s["rounds_used"],
+                "last_offer": s["last_offer"],
+                "agreed_price": s["agreed_price"],
+                "status": s["status"],
+            }
+        return {"state": state, "committed_thread": committed_thread, "sellers": sellers}
+
+    def _persist_buyer_negotiation(self, conn, want_id: str, led: dict) -> None:
+        conn.execute(
+            "INSERT INTO buyer_negotiations (want_id, state, committed_thread, updated_ts) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT (want_id) DO UPDATE SET "
+            "state = excluded.state, committed_thread = excluded.committed_thread, "
+            "updated_ts = excluded.updated_ts",
+            (want_id, led["state"], led["committed_thread"], _now()),
+        )
+        for thread_id, s in led["sellers"].items():
+            conn.execute(
+                "INSERT INTO buyer_negotiation_sellers "
+                "(want_id, thread_id, seller_handle, listed_price, our_offers, our_highest_offer, "
+                " seller_lowest_ask, rounds_used, last_offer, agreed_price, status) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT (want_id, thread_id) DO UPDATE SET "
+                "seller_handle = excluded.seller_handle, listed_price = excluded.listed_price, "
+                "our_offers = excluded.our_offers, "
+                "our_highest_offer = excluded.our_highest_offer, "
+                "seller_lowest_ask = excluded.seller_lowest_ask, "
+                "rounds_used = excluded.rounds_used, "
+                "last_offer = excluded.last_offer, agreed_price = excluded.agreed_price, "
+                "status = excluded.status",
+                (
+                    want_id,
+                    thread_id,
+                    s["seller_handle"],
+                    s["listed_price"],
+                    json.dumps(s["our_offers"]),
+                    s["our_highest_offer"],
+                    s["seller_lowest_ask"],
+                    s["rounds_used"],
+                    s["last_offer"],
+                    s["agreed_price"],
+                    s["status"],
+                ),
+            )
+
+    def _require_want(self, conn, want_id: str) -> None:
+        if not conn.execute("SELECT 1 FROM wants WHERE want_id = ?", (want_id,)).fetchone():
+            raise WantNotFound(f"no want with id {want_id!r}")
+
+    def buyer_negotiate_seed(
+        self,
+        want_id: str,
+        thread_id: str,
+        seller_handle: str,
+        *,
+        listed_price=None,
+        our_last=None,
+        seller_ask=None,
+        rounds=None,
+    ) -> dict:
+        """Seed a seller entry for a thread the user started by hand, without emitting an offer or
+        reading the budget — records the user's prior offer so the next reply climbs from it."""
+        with self._db.transaction() as conn:
+            self._require_want(conn, want_id)
+            led = self._load_buyer_negotiation(conn, want_id)
+            seller = led["sellers"].get(thread_id) or buyer_engine.blank_seller(
+                seller_handle, listed_price
+            )
+            if seller_handle:
+                seller["seller_handle"] = seller_handle
+            if listed_price is not None:
+                seller["listed_price"] = listed_price
+            if seller_ask is not None:
+                seller["seller_lowest_ask"] = (
+                    seller_ask
+                    if seller["seller_lowest_ask"] is None
+                    else min(seller["seller_lowest_ask"], seller_ask)
+                )
+            if our_last is not None:
+                amt = int(our_last)
+                seller["our_offers"].append({"amount": amt, "source": "user_prior"})
+                seller["our_highest_offer"] = max(seller["our_highest_offer"], amt)
+                seller["last_offer"] = amt
+            if rounds is not None:
+                seller["rounds_used"] = max(seller["rounds_used"], int(rounds))
+            seller["status"] = "negotiating"
+            led["sellers"][thread_id] = seller
+            self._persist_buyer_negotiation(conn, want_id, led)
+            return {
+                "decision": "seeded",
+                "thread": thread_id,
+                "our_last": seller["last_offer"],
+                "seller_lowest_ask": seller["seller_lowest_ask"],
+                "rounds_used": seller["rounds_used"],
+                "want_state": led["state"],
+            }
+
+    def buyer_negotiate_open(
+        self, want_id: str, thread_id: str, seller_handle: str, listed: float, ask=None
+    ) -> dict:
+        budget = self._budget_for_engine(want_id)
+        with self._db.transaction() as conn:
+            self._require_want(conn, want_id)
+            led = self._load_buyer_negotiation(conn, want_id)
+            seller = led["sellers"].get(thread_id) or buyer_engine.blank_seller(
+                seller_handle, listed
+            )
+            seller["seller_handle"] = seller_handle
+            seller["listed_price"] = listed
+            if ask is not None:
+                seller["seller_lowest_ask"] = (
+                    ask
+                    if seller["seller_lowest_ask"] is None
+                    else min(seller["seller_lowest_ask"], ask)
+                )
+            res = buyer_engine.guard(
+                buyer_engine.decide_open(
+                    listed, budget["target"], budget["max_budget"], budget["opening_ratio"]
+                ),
+                budget["max_budget"],
+            )
+            if res["decision"] == "opening_offer":
+                amt = res["offer_price"]
+                seller["our_offers"].append({"amount": amt})
+                seller["our_highest_offer"] = max(seller["our_highest_offer"], amt)
+                seller["last_offer"] = amt
+            elif res["decision"] == "accept":
+                seller["status"] = "deal_pending"
+                seller["agreed_price"] = res["accept_price"]
+            led["sellers"][thread_id] = seller
+            self._persist_buyer_negotiation(conn, want_id, led)
+            res["want_state"] = led["state"]
+            res["currency"] = budget["currency"]
+            return res
+
+    def buyer_negotiate_reply(self, want_id: str, thread_id: str, seller_price: float) -> dict:
+        budget = self._budget_for_engine(want_id)
+        with self._db.transaction() as conn:
+            self._require_want(conn, want_id)
+            led = self._load_buyer_negotiation(conn, want_id)
+            seller = led["sellers"].get(thread_id) or buyer_engine.blank_seller("", seller_price)
+            seller["seller_lowest_ask"] = (
+                seller_price
+                if seller["seller_lowest_ask"] is None
+                else min(seller["seller_lowest_ask"], seller_price)
+            )
+            res = buyer_engine.guard(
+                buyer_engine.decide_reply(
+                    seller_price,
+                    seller,
+                    led,
+                    thread_id,
+                    budget["target"],
+                    budget["max_budget"],
+                    budget["step"],
+                    budget["max_rounds"],
+                ),
+                budget["max_budget"],
+            )
+            decision = res["decision"]
+            if decision == "counter":
+                amt = res["offer_price"]
+                seller["our_offers"].append({"amount": amt})
+                seller["our_highest_offer"] = max(seller["our_highest_offer"], amt)
+                seller["last_offer"] = amt
+                seller["rounds_used"] += 1
+            elif decision == "accept":
+                seller["status"] = "deal_pending"
+                seller["agreed_price"] = res["accept_price"]
+            elif decision == "walk_away":
+                seller["status"] = "walked"
+            led["sellers"][thread_id] = seller
+            self._persist_buyer_negotiation(conn, want_id, led)
+            res["want_state"] = led["state"]
+            res["currency"] = budget["currency"]
+            return res
+
+    def buyer_negotiate_accept(self, want_id: str, thread_id: str) -> dict:
+        budget = self._budget_for_engine(want_id)
+        with self._db.transaction() as conn:
+            self._require_want(conn, want_id)
+            led = self._load_buyer_negotiation(conn, want_id)
+            seller = led["sellers"].get(thread_id)
+            if not seller:
+                raise StoreError("no such thread on this want")
+            led["state"] = "committed"
+            led["committed_thread"] = thread_id
+            seller["status"] = "committed"
+            close = [
+                t
+                for t, s in led["sellers"].items()
+                if t != thread_id and s.get("status") not in ("walked", "lost", "unavailable")
+            ]
+            for t in close:
+                led["sellers"][t]["status"] = "lost"
+            self._persist_buyer_negotiation(conn, want_id, led)
+            return {
+                "committed_thread": thread_id,
+                "deal_price": seller.get("agreed_price") or seller.get("last_offer"),
+                "close_threads": close,
+                "want_state": "committed",
+                "currency": budget["currency"],
+            }
+
+    def buyer_negotiate_walk(self, want_id: str, thread_id: str) -> dict:
+        with self._db.transaction() as conn:
+            self._require_want(conn, want_id)
+            led = self._load_buyer_negotiation(conn, want_id)
+            seller = led["sellers"].get(thread_id)
+            if not seller:
+                raise StoreError("no such thread on this want")
+            seller["status"] = "walked"
+            self._persist_buyer_negotiation(conn, want_id, led)
+            return {"thread": thread_id, "want_state": led["state"]}
 
     # --- seller config ----------------------------------------------------------------------
 
@@ -1172,6 +1489,12 @@ _SCOPE_GUARDED = {
     "negotiate_confirm_bid": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_confirm_sold": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_release": (("item_id", "item"),),
+    "set_budget": (("want_id", "want"),),
+    "buyer_negotiate_seed": (("want_id", "want"), ("thread_id", "thread")),
+    "buyer_negotiate_open": (("want_id", "want"), ("thread_id", "thread")),
+    "buyer_negotiate_reply": (("want_id", "want"), ("thread_id", "thread")),
+    "buyer_negotiate_accept": (("want_id", "want"), ("thread_id", "thread")),
+    "buyer_negotiate_walk": (("want_id", "want"), ("thread_id", "thread")),
 }
 
 # What a guarded accessor does when an id is out of scope: mirror the accessor's own
@@ -1186,6 +1509,12 @@ _SCOPE_MISS_NOTFOUND = {
     "negotiate_confirm_bid": ("item", ItemNotFound),
     "negotiate_confirm_sold": ("item", ItemNotFound),
     "negotiate_release": ("item", ItemNotFound),
+    "set_budget": ("want", WantNotFound),
+    "buyer_negotiate_seed": ("want", WantNotFound),
+    "buyer_negotiate_open": ("want", WantNotFound),
+    "buyer_negotiate_reply": ("want", WantNotFound),
+    "buyer_negotiate_accept": ("want", WantNotFound),
+    "buyer_negotiate_walk": ("want", WantNotFound),
 }
 
 
