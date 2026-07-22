@@ -15,6 +15,9 @@ dependencies = []
 dev = [
     "pytest",
     "ruff",
+    # dev-only static type checker (never shipped): enforces the store's declared record/ack
+    # shapes via `make typecheck`. Basic mode, so only annotated code is checked.
+    "pyright",
     # dev-only: the official MCP SDK drives our server in the conformance suite (never shipped;
     # it needs 3.10+, so those tests skip on the 3.9 runtime floor).
     "mcp; python_version >= '3.10'",
@@ -47,3 +50,12 @@ select = [
     "UP", # pyupgrade (respects target-version)
     "B",  # bugbear
 ]
+
+[tool.pyright]
+# Basic mode checks only what is annotated, so its blast radius is the annotated
+# store surface — the JSON-boundary tool handlers (params: dict), the engines, and
+# everything else stay unchecked and green. Scoped tight so the first run is not
+# drowned by the rest of the still-untyped tree; widening is a separate decision.
+include = ["src/selly_agent/store.py"]
+typeCheckingMode = "basic"
+pythonVersion = "3.9"

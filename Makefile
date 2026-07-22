@@ -2,8 +2,9 @@
 PY ?= python3
 PY39 ?= python3.9
 RUFF ?= ruff
+PYRIGHT ?= pyright
 
-.PHONY: test test-3.9 lint fmt
+.PHONY: test test-3.9 lint fmt typecheck
 
 test:
 	$(PY) -m pytest
@@ -21,6 +22,12 @@ test-3.9:
 lint:
 	$(RUFF) check .
 	$(RUFF) format --check .
+
+# Static type check (dev-only; the runtime stays stdlib-only). Scoped to the annotated
+# store surface via [tool.pyright] in pyproject.toml. Point PYRIGHT at a binary if it is
+# not on PATH.
+typecheck:
+	$(PYRIGHT)
 
 fmt:
 	$(RUFF) format .

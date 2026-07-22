@@ -25,9 +25,11 @@ from __future__ import annotations
 import hashlib
 import inspect
 import json
+import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
+from typing import TypedDict
 
 from . import marketplaces
 from .db import Database
@@ -106,7 +108,184 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def _item_from_row(row) -> dict:
+# --- record & ack shapes ---------------------------------------------------------------------
+#
+# The store's stable returns are TypedDicts: a plain dict at runtime (bodies, call sites, and
+# JSON serialization are all unchanged), but a declared shape the type checker enforces. Every
+# key is always present — a nullable column surfaces as a `… | None` *value*, never an absent
+# key — so the whole record being absent is the only optionality, carried by the
+# `-> Record | None` return type. Discriminated-union returns (negotiate_*, the send bracket,
+# the gate checks) stay a bare `dict`: which keys are present depends on the decision, which a
+# single TypedDict cannot express.
+#
+# Two shapes encode the money-path secret discipline structurally: FloorAck and BudgetAck carry
+# provenance only and have no value field, so a checker — not just a test — proves an ack cannot
+# carry the floor/budget out. The value-bearing FloorRecord/BudgetRecord are returned only by the
+# engine-facing get_floor/get_budget, which no LLM-facing tool reaches.
+
+
+class ItemRecord(TypedDict):
+    """The buyer-safe item view (see `_item_from_row`) — never a floor."""
+
+    id: str
+    title: str
+    description: str
+    condition: str | None
+    list_price: float | None
+    currency: str | None
+    status: str
+    size_bucket: str | None
+    listing_urls: dict[str, str]
+    created_ts: float
+    updated_ts: float
+
+
+class FloorAck(TypedDict):
+    """The provenance-only receipt `set_floor` returns — structurally no floor value."""
+
+    status: str
+    item_id: str
+    source: str
+    replaced: str | None
+
+
+class FloorRecord(TypedDict):
+    """The confidential floor record, value-bearing — returned only by the engine-facing
+    get_floor, which no LLM-facing tool calls."""
+
+    item_id: str
+    floor: float
+    currency: str | None
+    source: str
+    auto_counter_step: int | None
+    auto_counter_rounds: int | None
+    updated_ts: float
+
+
+class MessageRecord(TypedDict):
+    """One transcript row (see `get_thread_messages`)."""
+
+    msg_id: str
+    dir: str
+    text: str
+    ts: float
+    source: str | None
+
+
+class ThreadSummary(TypedDict):
+    """A thread's identity/status/cursor fields (see `_thread_from_row`) — what list_threads
+    returns, with no transcript. Never a floor/budget."""
+
+    thread_id: str
+    side: str
+    market: str
+    item_id: str | None
+    want_id: str | None
+    counterpart_handle: str
+    status: str
+    held_reason: str | None
+    held_from_status: str | None
+    buyer_location: str | None
+    agent_note: str | None
+    listing_url: str | None
+    listed_price: float | None
+    close_method: str | None
+    closed_ts: float | None
+    closed_reason: str | None
+    cursor_last_msg_id: str | None
+    cursor_last_ts: float | None
+    last_followup_ts: float | None
+    followup_disposition: str | None
+    source: str | None
+    created_ts: float
+    updated_ts: float
+
+
+class ThreadRecord(ThreadSummary):
+    """A single thread with its (capped) transcript folded in — what get_thread returns."""
+
+    messages: list[MessageRecord]
+    message_count: int
+
+
+class WantRecord(TypedDict):
+    """The buyer-safe want view (see `_want_from_row`) — never the max budget."""
+
+    want_id: str
+    query: str
+    category: str | None
+    condition_pref: str | None
+    region: str | None
+    currency: str | None
+    target_price: float | None
+    status: str
+    source: str | None
+    cancelled_ts: float | None
+    cancel_reason: str | None
+    created_ts: float
+    updated_ts: float
+    candidates: list
+    shortlist: list
+
+
+class BudgetAck(TypedDict):
+    """The provenance-only receipt `set_budget` returns — structurally no budget value."""
+
+    status: str
+    want_id: str
+    source: str
+    replaced: str | None
+
+
+class BudgetRecord(TypedDict):
+    """The confidential budget record, value-bearing — returned only by the engine-facing
+    get_budget, which no LLM-facing tool calls."""
+
+    want_id: str
+    max_budget: float
+    target_price: float | None
+    currency: str | None
+    opening_ratio: float | None
+    auto_counter_step: int | None
+    auto_counter_rounds: int | None
+    give_up_polls: int | None
+    source: str
+    updated_ts: float
+
+
+class CheckoutRecord(TypedDict):
+    """A persisted checkout link (see `get_checkout`)."""
+
+    sale_id: str
+    item_id: str
+    thread_id: str | None
+    checkout_url: str
+    price: float | None
+    currency: str | None
+    issued_ts: float
+
+
+# `class` is a reserved word, so PassRecord needs the functional syntax. Its annotations are
+# strings (forward refs) so the `X | None` unions are never evaluated at runtime on the 3.9 floor;
+# the checker still resolves them.
+PassRecord = TypedDict(
+    "PassRecord",
+    {
+        "pass_id": str,
+        "type": str,
+        "payload": dict,
+        "status": str,
+        "rc": "int | None",
+        "class": "str | None",
+        "summary": "str | None",
+        "requested_ts": float,
+        "started_ts": "float | None",
+        "finished_ts": "float | None",
+    },
+)
+
+
+def _item_from_row(row: sqlite3.Row) -> ItemRecord:
     """The buyer-safe item view — never a floor."""
     return {
         "id": row["id"],
@@ -150,9 +329,9 @@ _THREAD_FIELDS = (
 )
 
 
-def _thread_from_row(row) -> dict:
+def _thread_from_row(row: sqlite3.Row) -> ThreadSummary:
     """The thread record — identity, status, cursor, side-specific fields. Never a floor/budget."""
-    return {name: row[name] for name in _THREAD_FIELDS}
+    return {name: row[name] for name in _THREAD_FIELDS}  # type: ignore[return-value]
 
 
 _WANT_FIELDS = (
@@ -172,12 +351,12 @@ _WANT_FIELDS = (
 )
 
 
-def _want_from_row(row) -> dict:
+def _want_from_row(row: sqlite3.Row) -> WantRecord:
     """The buyer-safe want view — never the max budget (that lives only behind the engine)."""
     record = {name: row[name] for name in _WANT_FIELDS}
     record["candidates"] = json.loads(row["candidates"])
     record["shortlist"] = json.loads(row["shortlist"])
-    return record
+    return record  # type: ignore[return-value]
 
 
 class Store:
@@ -188,11 +367,11 @@ class Store:
 
     # --- items: reads -----------------------------------------------------------------------
 
-    def get_item(self, item_id: str) -> dict | None:
+    def get_item(self, item_id: str) -> ItemRecord | None:
         rows = self._db.query("SELECT * FROM items WHERE id = ?", (item_id,))
         return _item_from_row(rows[0]) if rows else None
 
-    def list_items(self, status: str | None = None) -> list[dict]:
+    def list_items(self, status: str | None = None) -> list[ItemRecord]:
         if status is None:
             rows = self._db.query("SELECT * FROM items ORDER BY created_ts DESC")
         else:
@@ -211,7 +390,7 @@ class Store:
         currency: str | None = None,
         description: str = "",
         condition: str | None = None,
-    ) -> dict:
+    ) -> ItemRecord:
         if not title or not title.strip():
             raise StoreError("title must be non-empty")
         item_id = _new_id("item")
@@ -235,7 +414,7 @@ class Store:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
-    def update_item(self, item_id: str, fields: dict) -> dict:
+    def update_item(self, item_id: str, fields: dict) -> ItemRecord:
         if "listing_urls" in fields:
             raise StoreError(
                 "listing_urls is not writable here — it is recorded by "
@@ -267,7 +446,7 @@ class Store:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
-    def record_listing_url(self, item_id: str, market: str, url: str) -> dict:
+    def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
         """Merge one verified listing URL into the item's listing_urls map. The one writer of
         that field — a live verify has already passed before this is called."""
         with self._db.transaction() as conn:
@@ -284,7 +463,7 @@ class Store:
 
     # --- floors -----------------------------------------------------------------------------
 
-    def get_floor(self, item_id: str) -> dict | None:
+    def get_floor(self, item_id: str) -> FloorRecord | None:
         """Internal only: the confidential floor record. No LLM-facing tool calls this."""
         rows = self._db.query("SELECT * FROM floors WHERE item_id = ?", (item_id,))
         if not rows:
@@ -309,7 +488,7 @@ class Store:
         *,
         auto_counter_step: int | None = None,
         auto_counter_rounds: int | None = None,
-    ) -> dict:
+    ) -> FloorAck:
         """The one hardened floor writer. Returns an ack carrying provenance only — never the
         value. Raises StoreError on invalid input or a refused overwrite."""
         if source not in _FLOOR_SOURCES:
@@ -376,7 +555,7 @@ class Store:
         listed_price: float | None = None,
         buyer_location: str | None = None,
         source: str | None = None,
-    ) -> dict:
+    ) -> ThreadRecord:
         """Create an identity-complete thread. The natural key is the caller-supplied
         `<market>:<local id>`; identity (side, market, counterpart, and the owning item/want) is
         required at creation so the suppression layers that key off it can never be disabled by a
@@ -431,18 +610,23 @@ class Store:
 
     def get_thread(
         self, thread_id: str, *, message_cap: int = _TRANSCRIPT_DEFAULT_CAP
-    ) -> dict | None:
+    ) -> ThreadRecord | None:
         rows = self._db.query("SELECT * FROM threads WHERE thread_id = ?", (thread_id,))
         if not rows:
             return None
-        record = _thread_from_row(rows[0])
-        record["messages"] = self.get_thread_messages(thread_id, limit=message_cap)
-        record["message_count"] = self._db.query(
+        message_count = self._db.query(
             "SELECT COUNT(*) AS n FROM thread_messages WHERE thread_id = ?", (thread_id,)
         )[0]["n"]
+        record: ThreadRecord = {
+            **_thread_from_row(rows[0]),
+            "messages": self.get_thread_messages(thread_id, limit=message_cap),
+            "message_count": message_count,
+        }
         return record
 
-    def list_threads(self, side: str | None = None, status: str | None = None) -> list[dict]:
+    def list_threads(
+        self, side: str | None = None, status: str | None = None
+    ) -> list[ThreadSummary]:
         clauses, params = [], []
         if side is not None:
             clauses.append("side = ?")
@@ -484,7 +668,9 @@ class Store:
             )
             return cur.rowcount > 0
 
-    def get_thread_messages(self, thread_id: str, *, limit: int | None = None) -> list[dict]:
+    def get_thread_messages(
+        self, thread_id: str, *, limit: int | None = None
+    ) -> list[MessageRecord]:
         """The transcript in chronological order, capped to the most recent `limit` rows."""
         if limit is None:
             rows = self._db.query(
@@ -515,7 +701,7 @@ class Store:
     # escalate, and the sale states by the confirm-sold / buyer-accept flows.
     _THREAD_STATUS_TRANSITIONS = frozenset({("escalated", "active"), ("active", "closed")})
 
-    def update_thread(self, thread_id: str, fields: dict) -> dict:
+    def update_thread(self, thread_id: str, fields: dict) -> ThreadRecord:
         status = fields.get("status")
         other = {k: v for k, v in fields.items() if k != "status"}
         unknown = [k for k in other if k not in self._THREAD_WRITABLE]
@@ -554,7 +740,9 @@ class Store:
             )
         return self.get_thread(thread_id)  # type: ignore[return-value]
 
-    def hold_thread(self, thread_id: str, reason: str, mark_handled_msg: str | None = None) -> dict:
+    def hold_thread(
+        self, thread_id: str, reason: str, mark_handled_msg: str | None = None
+    ) -> ThreadRecord:
         """Flip a thread to held, preserving the pre-hold status so release can restore it. A
         re-hold keeps the original held_from_status; mark_handled advances the cursor (the hold IS
         the handling — no reply is sent)."""
@@ -583,7 +771,7 @@ class Store:
                 )
         return self.get_thread(thread_id)  # type: ignore[return-value]
 
-    def release_thread(self, thread_id: str) -> dict:
+    def release_thread(self, thread_id: str) -> ThreadRecord:
         with self._db.transaction() as conn:
             row = conn.execute(
                 "SELECT status, held_from_status FROM threads WHERE thread_id = ?", (thread_id,)
@@ -610,7 +798,7 @@ class Store:
         currency: str | None = None,
         target_price: float | None = None,
         source: str | None = None,
-    ) -> dict:
+    ) -> WantRecord:
         if not query or not query.strip():
             raise StoreError("query must be non-empty")
         want_id = _new_id("want")
@@ -635,11 +823,11 @@ class Store:
             )
         return self.get_want(want_id)  # type: ignore[return-value]
 
-    def get_want(self, want_id: str) -> dict | None:
+    def get_want(self, want_id: str) -> WantRecord | None:
         rows = self._db.query("SELECT * FROM wants WHERE want_id = ?", (want_id,))
         return _want_from_row(rows[0]) if rows else None
 
-    def list_wants(self, status: str | None = None) -> list[dict]:
+    def list_wants(self, status: str | None = None) -> list[WantRecord]:
         if status is None:
             rows = self._db.query("SELECT * FROM wants ORDER BY created_ts DESC")
         else:
@@ -662,7 +850,7 @@ class Store:
     # Thread states a want-cancel closes; closed/escalated threads are left as they are.
     _WANT_OPEN_THREAD_STATUSES = ("active", "liaising", "agreed", "held")
 
-    def update_want(self, want_id: str, fields: dict) -> dict:
+    def update_want(self, want_id: str, fields: dict) -> WantRecord:
         unknown = [k for k in fields if k not in self._WANT_WRITABLE]
         if unknown:
             raise StoreError(
@@ -735,7 +923,7 @@ class Store:
         auto_counter_step: int | None = None,
         auto_counter_rounds: int | None = None,
         give_up_polls: int | None = None,
-    ) -> dict:
+    ) -> BudgetAck:
         """The one hardened budget writer — the buy-side mirror of set_floor, closing the legacy
         free-write hole. Validates 0 < target <= max, records provenance, refuses a `default` write
         over a `buyer` value (force replaces a buyer value), and never echoes a value."""
@@ -791,7 +979,7 @@ class Store:
             )
         return {"status": "written", "want_id": want_id, "source": source, "replaced": replaced}
 
-    def get_budget(self, want_id: str) -> dict | None:
+    def get_budget(self, want_id: str) -> BudgetRecord | None:
         """Internal only: the confidential budget record. No LLM-facing tool calls this — only
         the buyer engine loads it, exactly as get_floor serves the sell engine."""
         rows = self._db.query("SELECT * FROM budgets WHERE want_id = ?", (want_id,))
@@ -1345,7 +1533,7 @@ class Store:
                 return {"status": "below_floor", "currency": currency}
             return {"status": "ok", "currency": currency}
 
-    def get_checkout(self, sale_id: str) -> dict | None:
+    def get_checkout(self, sale_id: str) -> CheckoutRecord | None:
         rows = self._db.query("SELECT * FROM checkouts WHERE sale_id = ?", (sale_id,))
         if not rows:
             return None
@@ -1362,7 +1550,7 @@ class Store:
 
     def record_checkout(
         self, *, sale_id: str, item_id: str, thread_id: str, checkout_url: str, price, currency
-    ) -> dict:
+    ) -> CheckoutRecord:
         """Persist the checkout record idempotently — the deterministic sale_id maps to one record;
         a re-record returns the existing one, never a second link."""
         with self._db.transaction() as conn:
@@ -1848,7 +2036,7 @@ class Store:
                 (status, rc, cls, summary, _now(), pass_id),
             )
 
-    def get_pass(self, pass_id: str) -> dict | None:
+    def get_pass(self, pass_id: str) -> PassRecord | None:
         rows = self._db.query("SELECT * FROM passes WHERE pass_id = ?", (pass_id,))
         if not rows:
             return None
@@ -2007,19 +2195,21 @@ class ScopedStore:
         self._scope = scope
 
     # List reads are filtered to the scope (a scoped pass enumerates only its own entities).
-    def list_threads(self, side: str | None = None, status: str | None = None) -> list[dict]:
+    def list_threads(
+        self, side: str | None = None, status: str | None = None
+    ) -> list[ThreadSummary]:
         rows = self._store.list_threads(side=side, status=status)
         if self._scope is None:
             return rows
         return [r for r in rows if r["thread_id"] in self._scope.thread_ids]
 
-    def list_items(self, status: str | None = None) -> list[dict]:
+    def list_items(self, status: str | None = None) -> list[ItemRecord]:
         rows = self._store.list_items(status=status)
         if self._scope is None:
             return rows
         return [r for r in rows if r["id"] in self._scope.item_ids]
 
-    def list_wants(self, status: str | None = None) -> list[dict]:
+    def list_wants(self, status: str | None = None) -> list[WantRecord]:
         rows = self._store.list_wants(status=status)
         if self._scope is None:
             return rows
@@ -2028,7 +2218,8 @@ class ScopedStore:
     def __getattr__(self, name: str):
         target = getattr(self._store, name)
         spec = _SCOPE_GUARDED.get(name)
-        if self._scope is None or spec is None:
+        scope = self._scope
+        if scope is None or spec is None:
             return target
         sig = inspect.signature(target)
 
@@ -2036,7 +2227,7 @@ class ScopedStore:
             bound = sig.bind(*args, **kwargs)
             bound.apply_defaults()
             for param, kind in spec:
-                if not self._scope.allows(kind, bound.arguments.get(param)):
+                if not scope.allows(kind, bound.arguments.get(param)):
                     return self._deny(name, bound.arguments)
             return target(*args, **kwargs)
 
