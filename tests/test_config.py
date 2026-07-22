@@ -101,6 +101,92 @@ def test_invalid_values_are_rejected_not_sanitized(xdg_tmp, obj) -> None:
         load()
 
 
+def test_pacing_and_negotiation_defaults(xdg_tmp) -> None:
+    cfg = load()
+    assert cfg.max_actions_per_hour == 12
+    assert cfg.reply_delay_sec == (1.0, 3.0)
+    assert cfg.interactive_reply_delay_sec == (1.0, 3.0)
+    assert cfg.quiet_hours == (23, 8)
+    assert cfg.pacing_mode == "normal"
+    assert cfg.negotiation_max_counters == 2
+    assert cfg.negotiation_min_offer_ratio == 0.6
+    assert cfg.negotiation_lowball_cap == 3
+
+
+def test_pacing_and_negotiation_knobs_are_read(xdg_tmp) -> None:
+    _write_config(
+        {
+            "max_actions_per_hour": 6,
+            "reply_delay_sec": [0, 2],
+            "interactive_reply_delay_sec": [0.5, 1.5],
+            "quiet_hours": [22, 9],
+            "pacing_mode": "fast",
+            "negotiation_max_counters": 4,
+            "negotiation_min_offer_ratio": 0.5,
+            "negotiation_lowball_cap": 2,
+        }
+    )
+    cfg = load()
+    assert cfg.max_actions_per_hour == 6
+    assert cfg.reply_delay_sec == (0.0, 2.0)
+    assert cfg.interactive_reply_delay_sec == (0.5, 1.5)
+    assert cfg.quiet_hours == (22, 9)
+    assert cfg.pacing_mode == "fast"
+    assert cfg.negotiation_max_counters == 4
+    assert cfg.negotiation_min_offer_ratio == 0.5
+    assert cfg.negotiation_lowball_cap == 2
+
+
+def test_valid_but_loose_pacing_values_clamp_down(xdg_tmp) -> None:
+    # Tighten-only: a well-formed cap/delay above the hard ceiling clamps down (never rejects,
+    # never relaxes) — distinct from malformed values, which reject below.
+    _write_config(
+        {
+            "max_actions_per_hour": 500,
+            "reply_delay_sec": [10, 120],
+            "interactive_reply_delay_sec": [0, 60],
+        }
+    )
+    cfg = load()
+    assert cfg.max_actions_per_hour == 60
+    assert cfg.reply_delay_sec == (3.0, 3.0)  # min follows max down so min <= max holds
+    assert cfg.interactive_reply_delay_sec == (0.0, 3.0)
+
+
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {"max_actions_per_hour": 0},
+        {"max_actions_per_hour": -1},
+        {"max_actions_per_hour": "12"},
+        {"max_actions_per_hour": True},
+        {"reply_delay_sec": [3]},
+        {"reply_delay_sec": [-1, 2]},
+        {"reply_delay_sec": [2, 1]},
+        {"reply_delay_sec": "fast"},
+        {"reply_delay_sec": [1, "2"]},
+        {"interactive_reply_delay_sec": [2, 1]},
+        {"quiet_hours": [23]},
+        {"quiet_hours": [23, 25]},
+        {"quiet_hours": [-1, 8]},
+        {"quiet_hours": [23.5, 8]},
+        {"pacing_mode": "FAST"},
+        {"pacing_mode": "turbo"},
+        {"pacing_mode": 1},
+        {"negotiation_max_counters": -1},
+        {"negotiation_max_counters": 1.5},
+        {"negotiation_min_offer_ratio": 0},
+        {"negotiation_min_offer_ratio": 1.2},
+        {"negotiation_min_offer_ratio": "0.6"},
+        {"negotiation_lowball_cap": 0},
+    ],
+)
+def test_invalid_pacing_and_negotiation_values_are_rejected(xdg_tmp, obj) -> None:
+    _write_config(obj)
+    with pytest.raises(ConfigError):
+        load()
+
+
 def test_unknown_keys_warn_and_are_ignored(xdg_tmp, caplog) -> None:
     _write_config({"tick_interval_sec": 7, "future_knob": "whatever"})
     with caplog.at_level(logging.WARNING):

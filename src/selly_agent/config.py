@@ -20,6 +20,16 @@ log = logging.getLogger(__name__)
 
 _VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _VALID_DAEMON_MODES = {"login-start", "manual"}
+_VALID_PACING_MODES = {"normal", "fast"}
+
+# Account-safety ceilings, in code. Pacing config is validated in two directions: a malformed
+# value is rejected (fail loud, like every other knob), but a well-formed value that is *looser*
+# than these ceilings is clamped down — a tampered or fat-fingered config can only ever tighten
+# pacing, never relax it past the ceiling. The delay ceiling also bounds how long a healthy
+# send intent can sit between reserve and send, so the stale-intent sweep's grace window can
+# never fold a merely-jittered send as a crash orphan.
+HARD_CAP_CEILING = 60
+HARD_DELAY_CEILING_SEC = 3.0
 
 
 class ConfigError(Exception):
@@ -44,6 +54,22 @@ class Config:
     claude_bin: str | None = None
     carousell_ai_api_base: str = "https://api.carousell.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"
+    # Pacing knobs. The cap is per marketplace account per hour; the delay pairs are the
+    # post-go anti-automation jitter ranges ([min, max] seconds — unattended vs attended).
+    # Stored already clamped to the hard ceilings above.
+    max_actions_per_hour: int = 12
+    reply_delay_sec: tuple = (1.0, 3.0)
+    interactive_reply_delay_sec: tuple = (1.0, 3.0)
+    quiet_hours: tuple = (23, 8)
+    # normal|fast. Fast is the live-demo mode: no jitter, cap at ceiling, quiet hours off —
+    # it deliberately drops the account-safety disguise. The pacing engine reads this; the
+    # stored knob values themselves are untouched, so tuned values survive a round-trip.
+    pacing_mode: str = "normal"
+    # Negotiation knobs (absent keys leave the engine defaults in force; a style/firmness
+    # preset layer may later sit between these and the defaults).
+    negotiation_max_counters: int = 2
+    negotiation_min_offer_ratio: float = 0.6
+    negotiation_lowball_cap: int = 3
 
 
 def _is_real_number(value: object) -> bool:
@@ -141,7 +167,74 @@ def _validate(raw: dict) -> Config:
                 raise ConfigError(f"{key} must be an http(s) URL, got {base!r}")
             values[key] = base.rstrip("/")
 
+    # Pacing knobs: malformed → ConfigError like everything else; well-formed but looser than
+    # the hard ceilings → clamped down (tighten-only — see the ceiling constants above).
+    if "max_actions_per_hour" in raw:
+        cap = raw["max_actions_per_hour"]
+        if not _is_real_int(cap) or cap < 1:
+            raise ConfigError(
+                f"max_actions_per_hour must be an integer >= 1, got {cap!r} "
+                "(to stop the agent, pause it instead)"
+            )
+        values["max_actions_per_hour"] = min(cap, HARD_CAP_CEILING)
+
+    for key in ("reply_delay_sec", "interactive_reply_delay_sec"):
+        if key in raw:
+            values[key] = _validate_delay_pair(key, raw[key])
+
+    if "quiet_hours" in raw:
+        quiet = raw["quiet_hours"]
+        if (
+            not isinstance(quiet, list)
+            or len(quiet) != 2
+            or not all(_is_real_int(h) and 0 <= h <= 24 for h in quiet)
+        ):
+            raise ConfigError(
+                f"quiet_hours must be a [start, end] pair of integers in 0..24, got {quiet!r}"
+            )
+        values["quiet_hours"] = (quiet[0], quiet[1])
+
+    if "pacing_mode" in raw:
+        mode = raw["pacing_mode"]
+        if mode not in _VALID_PACING_MODES:
+            raise ConfigError(
+                f"pacing_mode must be one of {sorted(_VALID_PACING_MODES)}, got {mode!r}"
+            )
+        values["pacing_mode"] = mode
+
+    if "negotiation_max_counters" in raw:
+        counters = raw["negotiation_max_counters"]
+        if not _is_real_int(counters) or counters < 0:
+            raise ConfigError(f"negotiation_max_counters must be an integer >= 0, got {counters!r}")
+        values["negotiation_max_counters"] = counters
+
+    if "negotiation_min_offer_ratio" in raw:
+        ratio = raw["negotiation_min_offer_ratio"]
+        if not _is_real_number(ratio) or not (0 < ratio <= 1):
+            raise ConfigError(
+                f"negotiation_min_offer_ratio must be a number in (0, 1], got {ratio!r}"
+            )
+        values["negotiation_min_offer_ratio"] = float(ratio)
+
+    if "negotiation_lowball_cap" in raw:
+        lowball = raw["negotiation_lowball_cap"]
+        if not _is_real_int(lowball) or lowball < 1:
+            raise ConfigError(f"negotiation_lowball_cap must be an integer >= 1, got {lowball!r}")
+        values["negotiation_lowball_cap"] = lowball
+
     return Config(**values)
+
+
+def _validate_delay_pair(key: str, value: object) -> tuple:
+    """Validate a [min, max] jitter pair; clamp max (then min) down to the delay ceiling."""
+    if not isinstance(value, list) or len(value) != 2 or not all(_is_real_number(v) for v in value):
+        raise ConfigError(f"{key} must be a [min, max] pair of numbers, got {value!r}")
+    delay_min, delay_max = float(value[0]), float(value[1])
+    if delay_min < 0 or delay_max < delay_min:
+        raise ConfigError(f"{key} must satisfy 0 <= min <= max, got {value!r}")
+    delay_max = min(delay_max, HARD_DELAY_CEILING_SEC)
+    delay_min = min(delay_min, delay_max)
+    return (delay_min, delay_max)
 
 
 def load(path: Path | None = None) -> Config:
