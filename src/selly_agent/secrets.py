@@ -74,3 +74,11 @@ def read_carousell_ai_api_key() -> str | None:
 
 def write_carousell_ai_api_key(value: str) -> None:
     write_secret(paths.carousell_ai_api_key_path(), value)
+
+
+def read_telegram_bot_token() -> str | None:
+    return read_secret(paths.telegram_bot_token_path())
+
+
+def write_telegram_bot_token(value: str) -> None:
+    write_secret(paths.telegram_bot_token_path(), value)

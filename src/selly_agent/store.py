@@ -285,6 +285,82 @@ PassRecord = TypedDict(
 )
 
 
+class ChannelRecord(TypedDict):
+    """The bound-channel singleton (see `get_channel`) — synthesized to defaults when no row
+    exists yet (unbound: chat_id/bind_nonce None, update_offset 0). Holds no secret (the bot
+    token lives in its own 0600 file, never here)."""
+
+    adapter: str
+    bot_username: str | None
+    chat_id: int | None
+    update_offset: int
+    bind_nonce: str | None
+    welcomed_at: float | None
+    commands_hash: str | None
+    bound_ts: float | None
+    updated_ts: float | None
+
+
+class InboxRecord(TypedDict):
+    """One durable inbox row (see `_inbox_from_row`). payload/media_paths are decoded from JSON;
+    src_ts is Telegram's own clock (informational), received_ts the local journal clock."""
+
+    id: int
+    event_id: int
+    kind: str
+    text: str | None
+    payload: dict
+    media_paths: list
+    src_ts: float | None
+    received_ts: float
+    status: str
+    handled_by: str | None
+    pass_id: str | None
+    updated_ts: float
+
+
+class NoticeRecord(TypedDict):
+    """One needs-me notice (see `_notice_from_row`) — a queued or delivered outbound message."""
+
+    id: int
+    text: str
+    ref: str | None
+    created_ts: float
+    status: str
+    attempts: int
+    delivered_ts: float | None
+    via: str | None
+    pass_id: str | None
+
+
+class EscalationRecord(TypedDict):
+    """One escalation row (see `_escalation_from_row`). Every key present; a null column is a
+    `… | None` value, so the whole record being absent is the only optionality."""
+
+    id: str
+    thread_id: str
+    side: str | None
+    item_id: str | None
+    want_id: str | None
+    kind: str | None
+    open_question: str
+    context_summary: str | None
+    status: str
+    resolution: str | None
+    created_ts: float
+    resolved_ts: float | None
+
+
+class TranscriptEntry(TypedDict):
+    """One interleaved conversational-memory entry (see `recent_transcript`): an inbound inbox row
+    or the agent's own outbound notice, keyed by the local clock so both sides order together."""
+
+    direction: str
+    kind: str
+    text: str
+    ts: float
+
+
 def _item_from_row(row: sqlite3.Row) -> ItemRecord:
     """The buyer-safe item view — never a floor."""
     return {
@@ -357,6 +433,84 @@ def _want_from_row(row: sqlite3.Row) -> WantRecord:
     record["candidates"] = json.loads(row["candidates"])
     record["shortlist"] = json.loads(row["shortlist"])
     return record  # type: ignore[return-value]
+
+
+_DEFAULT_CHANNEL: ChannelRecord = {
+    "adapter": "telegram",
+    "bot_username": None,
+    "chat_id": None,
+    "update_offset": 0,
+    "bind_nonce": None,
+    "welcomed_at": None,
+    "commands_hash": None,
+    "bound_ts": None,
+    "updated_ts": None,
+}
+
+
+def _channel_from_row(row: sqlite3.Row) -> ChannelRecord:
+    return {
+        "adapter": row["adapter"],
+        "bot_username": row["bot_username"],
+        "chat_id": row["chat_id"],
+        "update_offset": row["update_offset"],
+        "bind_nonce": row["bind_nonce"],
+        "welcomed_at": row["welcomed_at"],
+        "commands_hash": row["commands_hash"],
+        "bound_ts": row["bound_ts"],
+        "updated_ts": row["updated_ts"],
+    }
+
+
+def _inbox_from_row(row: sqlite3.Row) -> InboxRecord:
+    return {
+        "id": row["id"],
+        "event_id": row["event_id"],
+        "kind": row["kind"],
+        "text": row["text"],
+        "payload": json.loads(row["payload"]) if row["payload"] else {},
+        "media_paths": json.loads(row["media_paths"]) if row["media_paths"] else [],
+        "src_ts": row["src_ts"],
+        "received_ts": row["received_ts"],
+        "status": row["status"],
+        "handled_by": row["handled_by"],
+        "pass_id": row["pass_id"],
+        "updated_ts": row["updated_ts"],
+    }
+
+
+def _notice_from_row(row: sqlite3.Row) -> NoticeRecord:
+    return {
+        "id": row["id"],
+        "text": row["text"],
+        "ref": row["ref"],
+        "created_ts": row["created_ts"],
+        "status": row["status"],
+        "attempts": row["attempts"],
+        "delivered_ts": row["delivered_ts"],
+        "via": row["via"],
+        "pass_id": row["pass_id"],
+    }
+
+
+_ESCALATION_FIELDS = (
+    "id",
+    "thread_id",
+    "side",
+    "item_id",
+    "want_id",
+    "kind",
+    "open_question",
+    "context_summary",
+    "status",
+    "resolution",
+    "created_ts",
+    "resolved_ts",
+)
+
+
+def _escalation_from_row(row: sqlite3.Row) -> EscalationRecord:
+    return {name: row[name] for name in _ESCALATION_FIELDS}  # type: ignore[return-value]
 
 
 class Store:
@@ -1829,6 +1983,14 @@ class Store:
         rows = self._db.query("SELECT DISTINCT thread_id FROM escalations WHERE status = 'open'")
         return {r["thread_id"] for r in rows}
 
+    def list_open_escalations(self) -> list[EscalationRecord]:
+        """Every open escalation, oldest first — the needs-me read the catchup surface renders.
+        Escalations clear only via resolve_escalation; a read never stamps them."""
+        rows = self._db.query(
+            "SELECT * FROM escalations WHERE status = 'open' ORDER BY created_ts ASC, id ASC"
+        )
+        return [_escalation_from_row(r) for r in rows]
+
     # --- pacing -----------------------------------------------------------------------------
 
     def reserve_action(
@@ -2076,6 +2238,270 @@ class Store:
                     (_now(), *pass_ids),
                 )
         return pass_ids
+
+    def has_active_channel_pass(self) -> bool:
+        """True while a channel pass is queued or running — the coalescing gate: the poller only
+        enqueues a new channel pass when this is False, so one pass sweeps all pending rows and
+        later arrivals wait for the next (at most one in-flight + one queued batch)."""
+        rows = self._db.query(
+            "SELECT 1 FROM passes WHERE type = 'channel' "
+            "AND status IN ('queued', 'running') LIMIT 1"
+        )
+        return bool(rows)
+
+    # --- channel: the bound Telegram channel (singleton; states off/awaiting-bind/bound) --------
+
+    def get_channel(self) -> ChannelRecord:
+        """The channel singleton, or synthesized defaults when no row exists yet (off: no bot, no
+        nonce, no chat, cursor 0). Never returns None so callers read a state, not an absence."""
+        rows = self._db.query("SELECT * FROM channel WHERE id = 1")
+        return _channel_from_row(rows[0]) if rows else dict(_DEFAULT_CHANNEL)  # type: ignore[return-value]
+
+    def arm_bind(self, bot_username: str, bind_nonce: str) -> None:
+        """Reset the channel row for a fresh bind and mint the nonce, one transaction: chat_id
+        NULL, cursor 0, the connecting bot's username, the new nonce. welcomed_at and commands_hash
+        survive only when the SAME bot re-binds — a re-connect must neither re-greet nor re-register
+        commands; a different bot (a new token) resets both, so the new bot greets and registers."""
+        now = _now()
+        with self._db.transaction() as conn:
+            existing = conn.execute("SELECT * FROM channel WHERE id = 1").fetchone()
+            if existing is not None and existing["bot_username"] == bot_username:
+                welcomed_at = existing["welcomed_at"]
+                commands_hash = existing["commands_hash"]
+            else:
+                welcomed_at = None
+                commands_hash = None
+            conn.execute("DELETE FROM channel WHERE id = 1")
+            conn.execute(
+                "INSERT INTO channel "
+                "(id, adapter, bot_username, chat_id, update_offset, bind_nonce, "
+                " welcomed_at, commands_hash, bound_ts, updated_ts) "
+                "VALUES (1, 'telegram', ?, NULL, 0, ?, ?, ?, NULL, ?)",
+                (bot_username, bind_nonce, welcomed_at, commands_hash, now),
+            )
+
+    def complete_bind(self, chat_id: int, update_offset: int) -> None:
+        """Bind the authorized chat: set chat_id, clear the nonce (single-use), stamp bound_ts, and
+        advance the cursor past the /start — all one transaction, so a crash never leaves a half-
+        bind. Raises if no row was armed (arm_bind must precede)."""
+        now = _now()
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE channel SET chat_id = ?, bind_nonce = NULL, bound_ts = ?, "
+                "update_offset = ?, updated_ts = ? WHERE id = 1",
+                (chat_id, now, update_offset, now),
+            )
+            if cur.rowcount == 0:
+                raise StoreError("no channel row to bind — arm_bind must run first")
+
+    def advance_offset(self, update_offset: int) -> None:
+        """Advance the Telegram cursor without ingesting — the awaiting-bind path acking (and thus
+        discarding) unattributable pre-bind traffic. Never lowers the cursor."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel SET update_offset = ?, updated_ts = ? "
+                "WHERE id = 1 AND ? > update_offset",
+                (update_offset, _now(), update_offset),
+            )
+
+    def stamp_welcomed(self) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel SET welcomed_at = ?, updated_ts = ? WHERE id = 1", (_now(), _now())
+            )
+
+    def stamp_commands_hash(self, commands_hash: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel SET commands_hash = ?, updated_ts = ? WHERE id = 1",
+                (commands_hash, _now()),
+            )
+
+    # --- channel inbox (durable intake; persist-then-ack in one transaction) --------------------
+
+    def ingest_updates(self, events: list, update_offset: int) -> list[InboxRecord]:
+        """Persist a batch of inbound updates and advance the cursor in ONE transaction (the next
+        getUpdates offset silently acks the batch): acking and durability commit together, so a
+        crash either re-delivers (deduped by event_id UNIQUE) or finds the rows already safe.
+        Returns the rows actually inserted (new event_ids), arrival order, for the poller to act."""
+        now = _now()
+        inserted: list[InboxRecord] = []
+        with self._db.transaction() as conn:
+            for ev in events:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO channel_inbox "
+                    "(event_id, kind, text, payload, media_paths, src_ts, received_ts, "
+                    " status, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    (
+                        ev["event_id"],
+                        ev["kind"],
+                        ev.get("text"),
+                        json.dumps(ev.get("payload") or {}, sort_keys=True),
+                        json.dumps(ev.get("media_paths") or []),
+                        ev.get("src_ts"),
+                        now,
+                        now,
+                    ),
+                )
+                if cur.rowcount:
+                    row = conn.execute(
+                        "SELECT * FROM channel_inbox WHERE id = ?", (cur.lastrowid,)
+                    ).fetchone()
+                    inserted.append(_inbox_from_row(row))
+            conn.execute(
+                "UPDATE channel SET update_offset = ?, updated_ts = ? WHERE id = 1",
+                (update_offset, now),
+            )
+        return inserted
+
+    def mark_inbox_handled(self, inbox_ids: list, handled_by: str) -> None:
+        """Mark inbox rows handled by a deterministic fast path (never routed to a pass)."""
+        if not inbox_ids:
+            return
+        placeholders = ",".join("?" for _ in inbox_ids)
+        with self._db.transaction() as conn:
+            conn.execute(
+                f"UPDATE channel_inbox SET status = 'handled', handled_by = ?, updated_ts = ? "
+                f"WHERE id IN ({placeholders})",
+                (handled_by, _now(), *inbox_ids),
+            )
+
+    def claim_pending_inbox(self, pass_id: str) -> list[InboxRecord]:
+        """Claim every pending inbox row into a channel pass (status -> claimed, pass_id stamped),
+        one transaction. Returns the claimed rows (arrival order) for the prompt payload."""
+        now = _now()
+        with self._db.transaction() as conn:
+            rows = conn.execute(
+                "SELECT * FROM channel_inbox WHERE status = 'pending' ORDER BY id ASC"
+            ).fetchall()
+            claimed = [_inbox_from_row(r) for r in rows]
+            ids = [r["id"] for r in claimed]
+            if ids:
+                placeholders = ",".join("?" for _ in ids)
+                conn.execute(
+                    f"UPDATE channel_inbox SET status = 'claimed', pass_id = ?, updated_ts = ? "
+                    f"WHERE id IN ({placeholders})",
+                    (pass_id, now, *ids),
+                )
+        return claimed
+
+    def fold_inbox(self, pass_id: str, status: str) -> int:
+        """Fold a channel pass's claimed rows to a terminal status: 'handled' (pass.end ok) or
+        'failed' (error/timeout/paused — surfaced via a notice, never auto-refired)."""
+        if status not in ("handled", "failed"):
+            raise StoreError("fold_inbox status must be 'handled' or 'failed'")
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE channel_inbox SET status = ?, updated_ts = ? "
+                "WHERE pass_id = ? AND status = 'claimed'",
+                (status, _now(), pass_id),
+            )
+            return cur.rowcount
+
+    def count_pending_inbox(self) -> int:
+        rows = self._db.query("SELECT COUNT(*) AS n FROM channel_inbox WHERE status = 'pending'")
+        return rows[0]["n"]
+
+    def recent_transcript(self, limit: int) -> list[TranscriptEntry]:
+        """The recent conversational window: inbound inbox rows (any status) interleaved with the
+        agent's own outbound notices, ordered by the local clock, the most-recent `limit` entries
+        oldest-first. A pure read of two already-durable tables — no new state — so a follow-up
+        like "yes, do that" has the prior turn to resolve against."""
+        inbox_rows = self._db.query(
+            "SELECT text, kind, received_ts FROM channel_inbox "
+            "ORDER BY received_ts DESC, id DESC LIMIT ?",
+            (limit,),
+        )
+        notice_rows = self._db.query(
+            "SELECT text, created_ts FROM notices ORDER BY created_ts DESC, id DESC LIMIT ?",
+            (limit,),
+        )
+        entries: list[TranscriptEntry] = []
+        for r in inbox_rows:
+            text = r["text"] or ("[photo]" if r["kind"] == "photo" else "")
+            entries.append(
+                {"direction": "in", "kind": r["kind"], "text": text, "ts": r["received_ts"]}
+            )
+        for r in notice_rows:
+            entries.append(
+                {"direction": "out", "kind": "notice", "text": r["text"], "ts": r["created_ts"]}
+            )
+        entries.sort(key=lambda e: e["ts"])
+        return entries[-limit:]
+
+    # --- notices (the needs-me outbound queue: queued -> delivered) -----------------------------
+
+    def queue_notice(self, text: str, *, ref: str | None = None, pass_id: str | None = None) -> int:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO notices (text, ref, created_ts, status, attempts, pass_id) "
+                "VALUES (?, ?, ?, 'queued', 0, ?)",
+                (text, ref, _now(), pass_id),
+            )
+            notice_id = cur.lastrowid
+            assert notice_id is not None  # an INSERT always sets lastrowid
+            return notice_id
+
+    def claim_queued_notices(self, limit: int) -> list[NoticeRecord]:
+        """The oldest queued notices, FIFO — the drain lane delivers them in order."""
+        rows = self._db.query(
+            "SELECT * FROM notices WHERE status = 'queued' ORDER BY created_ts ASC, id ASC LIMIT ?",
+            (limit,),
+        )
+        return [_notice_from_row(r) for r in rows]
+
+    def list_queued_notices(self) -> list[NoticeRecord]:
+        """Every queued notice, FIFO — what catchup/status surface (catchup stamps them)."""
+        rows = self._db.query(
+            "SELECT * FROM notices WHERE status = 'queued' ORDER BY created_ts ASC, id ASC"
+        )
+        return [_notice_from_row(r) for r in rows]
+
+    def mark_notice_delivered(self, notice_id: int, via: str) -> None:
+        if via not in ("channel", "catchup"):
+            raise StoreError("notice delivery via must be 'channel' or 'catchup'")
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE notices SET status = 'delivered', delivered_ts = ?, via = ? WHERE id = ?",
+                (_now(), via, notice_id),
+            )
+
+    def bump_notice_attempts(self, notice_id: int) -> int:
+        """Count a failed delivery try (the row stays queued, visible in catchup — loud, never
+        silently dropped). Returns the new attempt count."""
+        with self._db.transaction() as conn:
+            conn.execute("UPDATE notices SET attempts = attempts + 1 WHERE id = ?", (notice_id,))
+            row = conn.execute("SELECT attempts FROM notices WHERE id = ?", (notice_id,)).fetchone()
+            return row["attempts"] if row else 0
+
+    def count_queued_notices(self) -> int:
+        rows = self._db.query("SELECT COUNT(*) AS n FROM notices WHERE status = 'queued'")
+        return rows[0]["n"]
+
+    # --- pause control (singleton; a missing row reads as NOT paused) ---------------------------
+
+    def set_paused(self, paused: bool, *, source: str | None = None) -> None:
+        """Set/clear the pause flag. since_ts is stamped only on the false->true edge (a redundant
+        pause keeps the original), and cleared on resume."""
+        with self._db.transaction() as conn:
+            existing = conn.execute("SELECT paused, since_ts FROM control WHERE id = 1").fetchone()
+            was_paused = bool(existing["paused"]) if existing else False
+            if paused:
+                since = existing["since_ts"] if (was_paused and existing) else _now()
+            else:
+                since = None
+            conn.execute(
+                "INSERT INTO control (id, paused, since_ts, source) VALUES (1, ?, ?, ?) "
+                "ON CONFLICT (id) DO UPDATE SET paused = excluded.paused, "
+                "since_ts = excluded.since_ts, source = excluded.source",
+                (1 if paused else 0, since, source),
+            )
+
+    def is_paused(self) -> bool:
+        """Missing row reads as NOT paused — a corrupt/absent control state can never strand the
+        agent paused forever (fail toward not-paused)."""
+        rows = self._db.query("SELECT paused FROM control WHERE id = 1")
+        return bool(rows[0]["paused"]) if rows else False
 
 
 @dataclass(frozen=True)

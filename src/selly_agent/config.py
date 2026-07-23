@@ -54,6 +54,9 @@ class Config:
     claude_bin: str | None = None
     carousell_ai_api_base: str = "https://api.carousell.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"
+    # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
+    # local fake server; production uses the default.
+    telegram_api_base: str = "https://api.telegram.org"
     # Pacing knobs. The cap is per marketplace account per hour; the delay pairs are the
     # post-go anti-automation jitter ranges ([min, max] seconds — unattended vs attended).
     # Stored already clamped to the hard ceilings above.
@@ -156,7 +159,7 @@ def _validate(raw: dict) -> Config:
             raise ConfigError(f"claude_bin must be a non-empty string or null, got {claude_bin!r}")
         values["claude_bin"] = claude_bin
 
-    for key in ("carousell_ai_api_base", "carousell_ai_web_base_url"):
+    for key in ("carousell_ai_api_base", "carousell_ai_web_base_url", "telegram_api_base"):
         if key in raw:
             base = raw[key]
             if (

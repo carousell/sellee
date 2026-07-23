@@ -74,6 +74,12 @@ def selly_db() -> Path:
     return data_dir() / "selly.db"
 
 
+def media_dir() -> Path:
+    """Inbound channel media (photo bursts) downloaded by the poller before any LLM sees them —
+    business data, never pruned."""
+    return data_root() / "media"
+
+
 # --- state_dir children --------------------------------------------------------------------
 
 
@@ -128,6 +134,11 @@ def carousell_ai_api_key_path() -> Path:
     return config_dir() / "carousell_ai_api_key"
 
 
+def telegram_bot_token_path() -> Path:
+    """The bound Telegram bot token (a 0600 secret file, written by the connect flow)."""
+    return config_dir() / "telegram_bot_token"
+
+
 # --- platform-owned -----------------------------------------------------------------------
 
 
@@ -170,6 +181,7 @@ def ensure_data_dirs() -> None:
     _ensure(data_root(), 0o755)
     _ensure(versions_dir(), 0o755)
     _ensure(data_dir(), 0o755)
+    _ensure(media_dir(), 0o755)
 
 
 def ensure_state_dirs() -> None:
