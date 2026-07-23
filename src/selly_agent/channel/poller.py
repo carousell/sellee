@@ -22,6 +22,7 @@ from __future__ import annotations
 import logging
 
 from .. import paths, secrets
+from . import commands
 from .commands import BOT_COMMANDS, WELCOME_TEXT
 from .telegram import ChannelError, TelegramClient, _normalize, commands_hash
 
@@ -181,6 +182,33 @@ class Poller:
         inserted = self.store.ingest_updates(events, max_id + 1)
         for row in inserted:
             self._publish_in(row)
+        self._dispatch_fast_paths(client, ch["chat_id"], inserted)
+
+    def _dispatch_fast_paths(self, client, chat_id, inserted) -> None:
+        """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /selly and the
+        control-row buttons) instantly, before any pass routing — so `/pause` is heard even mid-
+        pass. A button tap is acked first (stop its spinner), then the reply is sent; the row is
+        marked handled so it never routes. Everything else stays pending for the channel pass."""
+        handled: list = []
+        for row in inserted:
+            event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
+            if not commands.is_fast_path(event):
+                continue
+            text, keyboard = commands.handle_fast_path(self.store, event)
+            cq_id = row["payload"].get("callback_query_id")
+            if cq_id:
+                try:
+                    client.answer_callback_query(cq_id)
+                except ChannelError as exc:
+                    log.warning("answerCallbackQuery failed: %s", exc)
+            try:
+                client.send_message(chat_id, text, reply_markup=keyboard)
+            except ChannelError as exc:
+                log.warning("fast-path reply send failed: %s", exc)
+            handled.append(row["id"])
+            self.bus.publish("channel.handled", {"kind": row["kind"], "by": "fast_path"})
+        if handled:
+            self.store.mark_inbox_handled(handled, "fast_path")
 
     def _download_photos(self, client, ev) -> list:
         file_id = ev["payload"].get("file_id")
