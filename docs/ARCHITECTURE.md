@@ -116,38 +116,12 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   harness output stream and **`proc_tree.py`** owns the process-group kill and
   stray-pass reaper.
 
-The channel subsystem — the optional bound channel plus the needs-me queue that
-works with none bound. Provider-agnostic core + per-provider packages under
-`channel/`:
-
-- **Core** (`channel/`) — `fastpaths` (deterministic commands: decide, render,
-  emit a provider-neutral control spec), `routing` (the `channel.in` event +
-  coalesced channel-pass routing), `outbound` (notice-drain / typing-pulse policy
-  + the fold and escalation-push subscribers), `prompt` (the channel pass's capped
-  transcript window). None import a provider — a guard pins it.
-- **Provider** (`channel/telegram/`) — `transport` (the Bot API pipe; the one
-  network module, allowlisted), `poller` (the long-poll loop), `bind` (nonce
-  connect), `commands` (the "/" set + control-spec keyboard), `outbound`
-  (`deliver`/`typing`). A second channel is a sibling package, not a core change.
-- **Registration** — a `channel.manager.ChannelManager` owns which providers are
-  *running*: `register(name)` starts one (idempotent), `deregister(name)` stops
-  it, `shutdown_all()` at daemon stop. A provider runs only when registered — the
-  daemon registers already-configured ones at boot, and the `connect` route
-  registers one at runtime — so a daemon with no channel set up starts no channel
-  thread at all. Each provider exposes `start(deps) -> handle` / `handle.shutdown()`
-  / `is_configured()`, and `start` also registers that provider's delivery lanes
-  (notice drain, typing pulse), so those exist only while it runs.
-- **Poller** — one thread owns all Bot API traffic; three durable-state modes,
-  failing toward the less capable: *off* (no token/nonce — no API calls),
-  *awaiting-bind* (only a `/start` matching the minted nonce binds), *bound* (only
-  the authorized chat ingests, persist-then-ack in one transaction). Bind is nonce
-  deep-link authenticated (no capture-window race); the token travels stdin →
-  control route → 0600 file, never argv/events.
-- **Needs-me queue** — open escalations + a `notices` table in `selly.db`. Bound,
-  the drain lane delivers FIFO; unbound, `get_catchup` delivers (never
-  pretend-push).
-- **Pause** — a paused daemon runs but acts on nothing (lane claims nothing, send
-  tools refuse, babysitter kills a running pass ≤~1s); missing row = not paused.
+The channel subsystem — the optional bound chat (Telegram today) plus the
+needs-me queue that works with none bound. A provider-agnostic core (`channel/`)
+with per-provider packages (`channel/telegram/`); a manager starts a provider
+only when it's configured or connected, so a daemon with no channel set up runs
+no channel thread. Pause lives here too (a paused daemon runs but acts on
+nothing). Detail in [`channels.md`](channels.md).
 
 Lifecycle:
 
@@ -168,14 +142,11 @@ Lifecycle:
 3. Apply pending migrations (snapshot the business database first if any are
    pending); a failure aborts startup.
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
-5. Ensure the attended MCP token; subscribe the (always-on, provider-independent)
-   escalation-push and channel-pass fold handlers; build the channel manager;
-   start the localhost HTTP server (a bind failure is fatal — fail loud so
-   launchd's throttle paces respawns).
-6. Register the core tasks (retention, the pass lane, the stray reaper, the
-   stale-intent sweep), register any already-configured channel providers (each
-   starts its poller + delivery lanes), and run the scheduler, writing the
-   heartbeat each tick.
+5. Ensure the attended MCP token; wire the always-on needs-me handlers; start the
+   localhost HTTP server (a bind failure is fatal — fail loud so launchd's
+   throttle paces respawns).
+6. Register the scheduler's tasks, start any configured channel providers, and
+   run the loop, writing the heartbeat each tick.
 7. On SIGTERM/SIGINT: drain, shut down channel providers, stop the HTTP server,
    emit `daemon.stop`, clear the lock, exit 0.
 
