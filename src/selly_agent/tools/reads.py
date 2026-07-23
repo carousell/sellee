@@ -20,6 +20,10 @@ from .registry import (
 
 _NO_PARAMS = {"type": "object", "properties": {}, "additionalProperties": False}
 
+# Unbound, the connect nudge fires once an open escalation has aged past this without a channel to
+# push it to. Computed at read time from the escalation's own timestamp — no stored nudge state.
+CONNECT_HINT_AGE_SEC = 24 * 3600
+
 
 def _get_config(ctx: ToolContext, params: dict) -> dict:
     # Every config knob in 03 is non-secret; secrets live in their own files, never in config.
@@ -31,6 +35,7 @@ def _get_status(ctx: ToolContext, params: dict) -> dict:
     now = time.time()
     heartbeat_age = (now - hb["ts"]) if hb and "ts" in hb else None
     uptime = (now - ctx.started_ts) if ctx.started_ts else None
+    channel = ctx.store.get_channel()
     return {
         "version": __version__,
         "pid": os.getpid(),
@@ -39,6 +44,37 @@ def _get_status(ctx: ToolContext, params: dict) -> dict:
         "carousell_ai_provisioned": secrets.read_carousell_ai_api_key() is not None,
         "queue_depth": ctx.store.count_queued_passes(),
         "open_escalations": ctx.store.count_open_escalations(),
+        "channel_bound": channel["chat_id"] is not None,
+        "paused": ctx.store.is_paused(),
+        "queued_notices": ctx.store.count_queued_notices(),
+    }
+
+
+def _connect_hint(bound: bool, escalations: list, now: float) -> bool:
+    if bound:
+        return False
+    threshold = now - CONNECT_HINT_AGE_SEC
+    return any(e["created_ts"] < threshold for e in escalations)
+
+
+def _get_catchup(ctx: ToolContext, params: dict) -> dict:
+    """The needs-me queue: open escalations and queued notices, with counts and channel/pause
+    state. Handing the queued notices to this session IS their delivery, so they are stamped
+    delivered via catchup; escalations are never stamped by a read (they clear only on resolve)."""
+    escalations = ctx.store.list_open_escalations()
+    notices = ctx.store.list_queued_notices()
+    channel = ctx.store.get_channel()
+    bound = channel["chat_id"] is not None
+    hint = _connect_hint(bound, escalations, time.time())
+    for notice in notices:
+        ctx.store.mark_notice_delivered(notice["id"], "catchup")
+    return {
+        "escalations": escalations,
+        "notices": notices,
+        "counts": {"escalations": len(escalations), "notices": len(notices)},
+        "channel": {"bound": bound, "bot_username": channel["bot_username"]},
+        "paused": ctx.store.is_paused(),
+        "connect_hint": hint,
     }
 
 
@@ -70,6 +106,16 @@ register(
         input_schema=_NO_PARAMS,
         handler=_get_status,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="get_catchup",
+        description="The needs-me queue: open escalations awaiting your call and queued updates "
+        "(returning the updates delivers them), plus channel/pause state and a connect hint.",
+        input_schema=_NO_PARAMS,
+        handler=_get_catchup,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )
 register(

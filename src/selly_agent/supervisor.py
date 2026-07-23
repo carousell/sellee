@@ -173,6 +173,37 @@ class Status:
     registered: bool
     heartbeat_age_sec: float | None
     recent_events: list
+    channel_bound: bool
+    paused: bool
+    queued_notices: int
+
+
+def _channel_snapshot() -> dict:
+    """Read channel-bound / paused / queued-notice state from selly.db over a read-only connection
+    (the daemon's WAL DB allows a concurrent reader). Degrades to all-false when the DB or the
+    channel tables are not present yet, so `daemon status` never errors on a fresh install."""
+    import sqlite3
+
+    db = paths.selly_db()
+    default = {"channel_bound": False, "paused": False, "queued_notices": 0}
+    if not db.exists():
+        return default
+    conn = connect_reader(db)
+    try:
+        ch = conn.execute("SELECT chat_id FROM channel WHERE id = 1").fetchone()
+        ctrl = conn.execute("SELECT paused FROM control WHERE id = 1").fetchone()
+        notices = conn.execute(
+            "SELECT COUNT(*) AS n FROM notices WHERE status = 'queued'"
+        ).fetchone()
+        return {
+            "channel_bound": ch is not None and ch["chat_id"] is not None,
+            "paused": bool(ctrl["paused"]) if ctrl else False,
+            "queued_notices": notices["n"],
+        }
+    except sqlite3.OperationalError:  # channel tables not migrated in yet
+        return default
+    finally:
+        conn.close()
 
 
 def gather_status(*, label: str | None = None, platform: Platform | None = None) -> Status:
@@ -194,12 +225,16 @@ def gather_status(*, label: str | None = None, platform: Platform | None = None)
         finally:
             conn.close()
 
+    snap = _channel_snapshot()
     return Status(
         label=label,
         mode=cfg.daemon_mode,
         registered=platform.is_registered(label),
         heartbeat_age_sec=hb_age,
         recent_events=recent,
+        channel_bound=snap["channel_bound"],
+        paused=snap["paused"],
+        queued_notices=snap["queued_notices"],
     )
 
 
@@ -218,6 +253,9 @@ def status(*, label: str | None = None, platform: Platform | None = None) -> int
         print("heartbeat: none")
     else:
         print(f"heartbeat: {st.heartbeat_age_sec:.0f}s ago")
+    print(f"channel:   {'bound' if st.channel_bound else 'not connected'}")
+    print(f"paused:    {'yes' if st.paused else 'no'}")
+    print(f"notices:   {st.queued_notices} queued")
     if st.recent_events:
         print("recent events:")
         for ev in st.recent_events:
