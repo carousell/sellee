@@ -90,6 +90,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     hconf.add_argument("--dir", default=None, help="destination directory (default: cwd)")
 
+    connect = sub.add_parser("connect", help="connect an optional channel")
+    consub = connect.add_subparsers(dest="connect_command", required=True)
+    ctel = consub.add_parser("telegram", help="bind a Telegram bot (token read from stdin)")
+    ctel.add_argument("--status", action="store_true", help="report bind status and exit")
+    ctel.add_argument(
+        "--timeout", type=int, default=120, help="seconds to wait for /start (default 120)"
+    )
+
     provision = sub.add_parser("provision", help="provision an external rail")
     prsub = provision.add_subparsers(dest="provision_command", required=True)
     prov_ai = prsub.add_parser("carousell-ai", help="obtain the carousell.ai guest API key")
@@ -128,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import pass_cli
 
         return pass_cli.harness_config(args)
+
+    if args.command == "connect":
+        from . import connect_cli
+
+        return connect_cli.run(args)
 
     if args.command == "provision":
         from . import pass_cli

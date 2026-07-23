@@ -29,6 +29,7 @@ from . import (
     retention,
     secrets,
 )
+from .channel.poller import POLL_TIMEOUT_SEC, Poller
 from .db import Database
 from .events import EventBus, EventStore
 from .http_server import HttpServer
@@ -142,6 +143,7 @@ def run_daemon(*, once: bool) -> int:
             events_db_path=events_db.path,
             context_factory=context_factory,
             attended_token=attended_token,
+            config=cfg,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so
@@ -152,6 +154,15 @@ def run_daemon(*, once: bool) -> int:
         events_db.close()
         return 3
     http.start()
+
+    # The channel poller runs on its own thread (a 25s long-poll would pin a scheduler worker per
+    # tick), not as a scheduler task. It shares stop so a daemon stop is heard between long polls.
+    # In --once mode the daemon is a single scheduler tick for tests; the poller thread is skipped.
+    poller_thread: threading.Thread | None = None
+    if not once:
+        poller = Poller(store=store, config=cfg, bus=bus, stop_event=stop)
+        poller_thread = threading.Thread(target=poller.run, name="channel-poller", daemon=True)
+        poller_thread.start()
 
     pass_deps = passes.PassDeps(
         bus=bus,
@@ -211,6 +222,10 @@ def run_daemon(*, once: bool) -> int:
             scheduler.run()
     finally:
         scheduler.shutdown()
+        if poller_thread is not None:
+            # The poller may be mid long-poll (up to its poll timeout); stop is already set, so it
+            # exits at the next boundary. A daemon thread, so the process never blocks on it.
+            poller_thread.join(timeout=POLL_TIMEOUT_SEC + 5)
         http.stop()
         bus.publish("daemon.stop", {"pid": os.getpid()})
         lock.clear_holder(paths.lock_path())

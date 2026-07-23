@@ -93,12 +93,14 @@ class HttpServer:
         events_db_path,
         context_factory,
         attended_token: str,
+        config=None,
         host: str = "127.0.0.1",
     ):
         self.bus = bus
         self.store = store
         self.events_db_path = events_db_path
         self.context_factory = context_factory
+        self.config = config
         self.auth = Auth(attended_token)
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self._httpd.daemon_threads = True
@@ -192,6 +194,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_mcp()
         elif route == "/control/enqueue-pass":
             self._handle_enqueue_pass()
+        elif route == "/control/connect-telegram":
+            self._handle_connect_telegram()
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -203,6 +207,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(405, {"error": "method not allowed"})
         elif parsed.path == "/events.json":
             self._handle_events_json(parsed)
+        elif parsed.path == "/control/channel-status":
+            self._handle_channel_status(parsed)
         elif parsed.path == "/tail":
             self._handle_tail()
         else:
@@ -297,6 +303,44 @@ class _Handler(BaseHTTPRequestHandler):
             "pass.queued", {"type": pass_type, "payload": payload}, pass_id=pass_id
         )
         self._send_json(200, {"pass_id": pass_id})
+
+    def _handle_connect_telegram(self) -> None:
+        # Attended-only: the token arrives here (never argv), the daemon validates it, writes the
+        # 0600 secret, arms a bind nonce, and returns the deep link. The token is never echoed and
+        # never logged; only bot_username is published.
+        from .channel import bind
+
+        session = self._app.auth.resolve(self._bearer())
+        if session is None or session.tier != "attended":
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            body = json.loads(self._read_body() or b"{}")
+        except ValueError:
+            self._send_json(400, {"error": "invalid json"})
+            return
+        token = body.get("token")
+        if not isinstance(token, str):
+            self._send_json(400, {"error": "token (string) is required"})
+            return
+        try:
+            result = bind.connect_telegram(self._app.store, self._app.config, token)
+        except bind.BindError as exc:
+            status = {"bad_token_format": 400, "unauthorized": 401}.get(exc.kind, 502)
+            self._send_json(status, {"error": exc.kind, "detail": str(exc)})
+            return
+        self._app.bus.publish("channel.bind_attempt", {"bot_username": result["bot_username"]})
+        self._send_json(200, result)
+
+    def _handle_channel_status(self, parsed) -> None:
+        from .channel import bind
+
+        qs = parse_qs(parsed.query)
+        session = self._app.auth.resolve(qs.get("token", [None])[0])
+        if session is None or session.tier != "attended":
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        self._send_json(200, bind.channel_status(self._app.store))
 
     # --- web tail -------------------------------------------------------------------------
 
