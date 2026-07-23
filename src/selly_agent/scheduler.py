@@ -80,6 +80,14 @@ class Scheduler:
             # due immediately on the first tick, so a fresh start exercises each lane
             self._reg.state[task.name] = _TaskState(next_due=self._clock())
 
+    def deregister(self, name: str) -> None:
+        """Remove a task so it stops being scheduled — used when a channel provider is torn down,
+        so its delivery lanes don't linger as no-ops. Safe to call on a running scheduler and even
+        while the task is mid-run (its completion tolerates the missing state)."""
+        with self._lock:
+            self._reg.tasks.pop(name, None)
+            self._reg.state.pop(name, None)
+
     def request_stop(self) -> None:
         self._stop.set()
 
@@ -106,7 +114,9 @@ class Scheduler:
             task.func()
         except Exception as exc:
             with self._lock:
-                st = self._reg.state[task.name]
+                st = self._reg.state.get(task.name)
+                if st is None:  # deregistered mid-run — nothing to reschedule
+                    return
                 st.consecutive_failures += 1
                 delay = self._backoff_delay(st.consecutive_failures)
                 st.backoff_until = self._clock() + delay
@@ -120,7 +130,9 @@ class Scheduler:
             )
         else:
             with self._lock:
-                st = self._reg.state[task.name]
+                st = self._reg.state.get(task.name)
+                if st is None:  # deregistered mid-run
+                    return
                 st.consecutive_failures = 0
                 st.backoff_until = 0.0
                 st.running = False

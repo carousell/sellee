@@ -30,8 +30,8 @@ from . import (
     secrets,
 )
 from .channel import outbound
-from .channel.telegram import outbound as tg_outbound
-from .channel.telegram.poller import POLL_TIMEOUT_SEC, Poller
+from .channel.manager import ChannelManager
+from .channel.telegram import provider as telegram_provider
 from .db import Database
 from .events import EventBus, EventStore
 from .http_server import HttpServer
@@ -114,11 +114,10 @@ def run_daemon(*, once: bool) -> int:
     started_ts = time.time()
     attended_token = secrets.ensure_mcp_token()
 
-    # Push every new escalation to the channel as a queued notice (the drain delivers it when
-    # bound; catchup is the backstop). Subscribed before work starts so nothing is missed.
+    # Core needs-me wiring — always on, provider-independent (A15: the queue works with no channel
+    # bound). Push every new escalation to a queued notice, and fold a channel pass's rows when it
+    # ends. Subscribed before work starts so nothing is missed.
     bus.subscribe(outbound.escalation_notifier(store))
-    # Fold a channel pass's claimed rows when it ends: handled on ok, failed + one notice on any
-    # failure (never auto-refired).
     bus.subscribe(outbound.channel_pass_folder(store))
 
     def rail_factory():
@@ -144,6 +143,29 @@ def run_daemon(*, once: bool) -> int:
             started_ts=started_ts,
         )
 
+    scheduler = Scheduler(
+        bus,
+        tick_interval_sec=cfg.tick_interval_sec,
+        on_tick=lambda: heartbeat.write(paths.heartbeat_path()),
+        stop_event=stop,
+    )
+
+    # Channel providers run only when registered: at boot for those already configured, and at
+    # runtime when `connect` brings one up (the connect control route calls channels.register).
+    # A daemon with no channel set up starts no channel thread at all. Skipped in --once (the test
+    # seam): no provider spins, and the connect route is a no-op without a manager.
+    channels = (
+        None
+        if once
+        else ChannelManager(
+            providers={"telegram": telegram_provider},
+            bus=bus,
+            store=store,
+            config=cfg,
+            scheduler=scheduler,
+        )
+    )
+
     try:
         http = HttpServer(
             port=cfg.http_port,
@@ -153,6 +175,7 @@ def run_daemon(*, once: bool) -> int:
             context_factory=context_factory,
             attended_token=attended_token,
             config=cfg,
+            channels=channels,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so
@@ -164,15 +187,6 @@ def run_daemon(*, once: bool) -> int:
         return 3
     http.start()
 
-    # The channel poller runs on its own thread (a 25s long-poll would pin a scheduler worker per
-    # tick), not as a scheduler task. It shares stop so a daemon stop is heard between long polls.
-    # In --once mode the daemon is a single scheduler tick for tests; the poller thread is skipped.
-    poller_thread: threading.Thread | None = None
-    if not once:
-        poller = Poller(store=store, config=cfg, bus=bus, stop_event=stop)
-        poller_thread = threading.Thread(target=poller.run, name="channel-poller", daemon=True)
-        poller_thread.start()
-
     pass_deps = passes.PassDeps(
         bus=bus,
         store=store,
@@ -183,12 +197,6 @@ def run_daemon(*, once: bool) -> int:
         argv_builder=passes.default_argv_builder(cfg),
     )
 
-    scheduler = Scheduler(
-        bus,
-        tick_interval_sec=cfg.tick_interval_sec,
-        on_tick=lambda: heartbeat.write(paths.heartbeat_path()),
-        stop_event=stop,
-    )
     scheduler.register(
         Task(
             name="retention",
@@ -223,22 +231,12 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: intent_sweep.run_stale_intent_sweep(bus=bus, store=store),
         )
     )
-    scheduler.register(
-        Task(
-            name="notice_drain",
-            interval_sec=outbound.NOTICE_DRAIN_INTERVAL_SEC,
-            func=lambda: outbound.drain_notices(
-                store=store, bus=bus, deliver=tg_outbound.make_deliver(cfg)
-            ),
-        )
-    )
-    scheduler.register(
-        Task(
-            name="typing_pulse",
-            interval_sec=outbound.TYPING_PULSE_INTERVAL_SEC,
-            func=lambda: outbound.pulse_typing(store=store, typing=tg_outbound.make_typing(cfg)),
-        )
-    )
+
+    # Start the providers already configured (their poller + delivery lanes); a fresh `connect`
+    # starts one later at runtime. The delivery/typing scheduler tasks are registered inside the
+    # provider's start, so they exist only while a provider runs.
+    if channels is not None:
+        channels.register_configured()
 
     try:
         if once:
@@ -246,11 +244,9 @@ def run_daemon(*, once: bool) -> int:
         else:
             scheduler.run()
     finally:
+        if channels is not None:
+            channels.shutdown_all()
         scheduler.shutdown()
-        if poller_thread is not None:
-            # The poller may be mid long-poll (up to its poll timeout); stop is already set, so it
-            # exits at the next boundary. A daemon thread, so the process never blocks on it.
-            poller_thread.join(timeout=POLL_TIMEOUT_SEC + 5)
         http.stop()
         bus.publish("daemon.stop", {"pid": os.getpid()})
         lock.clear_holder(paths.lock_path())

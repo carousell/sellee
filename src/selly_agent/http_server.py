@@ -94,6 +94,7 @@ class HttpServer:
         context_factory,
         attended_token: str,
         config=None,
+        channels=None,
         host: str = "127.0.0.1",
     ):
         self.bus = bus
@@ -101,6 +102,7 @@ class HttpServer:
         self.events_db_path = events_db_path
         self.context_factory = context_factory
         self.config = config
+        self.channels = channels  # the ChannelManager, so connect can start a provider at runtime
         self.auth = Auth(attended_token)
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self._httpd.daemon_threads = True
@@ -330,6 +332,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(status, {"error": exc.kind, "detail": str(exc)})
             return
         self._app.bus.publish("channel.bind_attempt", {"bot_username": result["bot_username"]})
+        # Bring the provider up now if it isn't already — a fresh connect starts the poller at
+        # runtime (a reconnect while running is a no-op; the live poller re-reads the new nonce).
+        if self._app.channels is not None:
+            self._app.channels.register("telegram")
         self._send_json(200, result)
 
     def _handle_channel_status(self, parsed) -> None:

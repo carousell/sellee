@@ -173,7 +173,7 @@ def test_bound_downloads_photo_before_ingest(store, bus, xdg_tmp) -> None:
 
 
 class _Server:
-    def __init__(self, store, bus, api):
+    def __init__(self, store, bus, api, channels=None):
         self.srv = HttpServer(
             port=0,
             bus=bus,
@@ -182,6 +182,7 @@ class _Server:
             context_factory=lambda s: None,
             attended_token="attended-secret",
             config=Config(telegram_api_base=api.base_url),
+            channels=channels,
         )
 
     def __enter__(self):
@@ -262,6 +263,22 @@ def test_reconnect_while_bound_re_arms(store, bus, xdg_tmp) -> None:
         ch = store.get_channel()
         assert ch["chat_id"] is None  # re-arm resets the chat; a fresh /start must re-bind
         assert ch["bind_nonce"] == body["start_url"].split("start=", 1)[1]
+
+
+class _RecordingChannels:
+    def __init__(self):
+        self.registered = []
+
+    def register(self, name):
+        self.registered.append(name)
+
+
+def test_connect_route_registers_the_provider(store, bus, xdg_tmp) -> None:
+    channels = _RecordingChannels()
+    with FakeTelegramAPI() as api, _Server(store, bus, api, channels=channels) as server:
+        status, _ = _post(server, "/control/connect-telegram", {"token": FAKE_TOKEN})
+        assert status == 200
+    assert channels.registered == ["telegram"]  # a fresh connect brings the provider up at runtime
 
 
 def test_bind_attempt_event_carries_only_bot_username(store, bus, xdg_tmp) -> None:

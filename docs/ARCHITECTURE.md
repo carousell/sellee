@@ -129,6 +129,14 @@ works with none bound. Provider-agnostic core + per-provider packages under
   network module, allowlisted), `poller` (the long-poll loop), `bind` (nonce
   connect), `commands` (the "/" set + control-spec keyboard), `outbound`
   (`deliver`/`typing`). A second channel is a sibling package, not a core change.
+- **Registration** — a `channel.manager.ChannelManager` owns which providers are
+  *running*: `register(name)` starts one (idempotent), `deregister(name)` stops
+  it, `shutdown_all()` at daemon stop. A provider runs only when registered — the
+  daemon registers already-configured ones at boot, and the `connect` route
+  registers one at runtime — so a daemon with no channel set up starts no channel
+  thread at all. Each provider exposes `start(deps) -> handle` / `handle.shutdown()`
+  / `is_configured()`, and `start` also registers that provider's delivery lanes
+  (notice drain, typing pulse), so those exist only while it runs.
 - **Poller** — one thread owns all Bot API traffic; three durable-state modes,
   failing toward the less capable: *off* (no token/nonce — no API calls),
   *awaiting-bind* (only a `/start` matching the minted nonce binds), *bound* (only
@@ -160,14 +168,16 @@ Lifecycle:
 3. Apply pending migrations (snapshot the business database first if any are
    pending); a failure aborts startup.
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
-5. Ensure the attended MCP token; subscribe the escalation-push and channel-pass
-   fold handlers; start the localhost HTTP server (a bind failure is fatal — fail
-   loud so launchd's throttle paces respawns); start the channel poller thread.
-6. Register tasks (retention, the pass lane, the stray reaper, the stale-intent
-   sweep, the notice drain, the typing pulse) and run the scheduler, writing the
+5. Ensure the attended MCP token; subscribe the (always-on, provider-independent)
+   escalation-push and channel-pass fold handlers; build the channel manager;
+   start the localhost HTTP server (a bind failure is fatal — fail loud so
+   launchd's throttle paces respawns).
+6. Register the core tasks (retention, the pass lane, the stray reaper, the
+   stale-intent sweep), register any already-configured channel providers (each
+   starts its poller + delivery lanes), and run the scheduler, writing the
    heartbeat each tick.
-7. On SIGTERM/SIGINT: drain, join the poller, stop the HTTP server, emit
-   `daemon.stop`, clear the lock, exit 0.
+7. On SIGTERM/SIGINT: drain, shut down channel providers, stop the HTTP server,
+   emit `daemon.stop`, clear the lock, exit 0.
 
 `daemon run --once` runs a single tick and stops — the deterministic test seam.
 
