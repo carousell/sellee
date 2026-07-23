@@ -16,6 +16,12 @@ surfaces:
 - **`GET /events.json` + `GET /tail`** — the localhost web tail, reading the
   event store over a read-only connection.
 - **`POST /control/enqueue-pass`** — enqueue a pass (attended token only).
+- **`POST /control/connect-telegram`** + **`GET /control/channel-status`** — the
+  Telegram bind flow (attended token only): the connect route takes the BotFather
+  token, validates it, writes it 0600, mints a bind nonce, and returns the
+  `t.me/<bot>?start=<nonce>` deep link; the status route reports off /
+  awaiting-bind / bound for the connecting CLI to poll. The token is never echoed
+  or logged; only `bot_username` is published (`channel.bind_attempt`).
 
 Hardening applies to every request: the Host must be a localhost name and any
 Origin header a localhost origin (DNS-rebinding defense), and a bearer token must
@@ -67,10 +73,33 @@ sanitize):
   spawn path yet. Keeping a second real emitter forces the internal representation
   to stay genuinely common.
 
+## Pass types
+
+`passes.PASS_TYPES` maps a pass type to its tier and a prompt builder, so a new
+type registers there rather than forking the runner:
+
+- **`publish`** (`pass:publish`) — the vertical-slice type: publish one item.
+- **`channel`** (`pass:channel`) — the phone-driven sell conversation. It runs
+  **full-scope** (the counterpart is the trusted seller, not a buyer), so its
+  tier is a broad set (items, floors, threads, negotiate, escalations,
+  `send_message`, …). Its prompt embeds a **recent-transcript window** — inbox
+  rows interleaved with the agent's own notices, capped by count and chars — so a
+  follow-up like "yes, do that" resolves, clearly separated from the messages to
+  handle now. The interim prompt is throwaway; the skills rewrite replaces it and
+  finalizes tier membership.
+
+`send_message` and `get_catchup` are the channel's tool seam. `send_message`
+inserts a durable notice and returns `{queued: true, notice_id}` — it never forks
+on binding state, so an unbound send simply queues for catchup. `get_catchup` is
+the needs-me read (open escalations + queued notices + channel/pause state +
+connect hint); returning the queued notices delivers them, so it stamps them
+delivered-via-catchup, while escalations clear only on resolve.
+
 ## A pass, end to end
 
 1. `pass run publish --item X` posts to `POST /control/enqueue-pass`; a `queued`
-   row is inserted and a pass id returned.
+   row is inserted and a pass id returned. (A `channel` pass is enqueued instead
+   by the poller, which claims the pending inbox rows into it in one transaction.)
 2. The scheduler's pass lane claims it **single-flight** (stamping `running` in
    one transaction), mints an ephemeral pass-tier token, writes an empty per-pass
    workspace holding only the generated harness config, and spawns the harness.

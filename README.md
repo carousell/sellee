@@ -16,7 +16,10 @@ launchd integration, and the `inspect` CLI), the daemon now runs the **vertical
 slice**: a localhost HTTP server exposing a typed MCP tool surface, a pass runner
 that spawns a headless `claude -p` pass and streams it to the event bus, the
 carousell.ai rail wrapped behind a tool, and the harness-config seam. The
-remaining engines, channel, and browser layer land in later workstreams.
+optional **Telegram channel** now lands too — nonce bind, a durable inbox,
+deterministic fast paths, the needs-me queue (escalations + notices), and a
+phone-driven channel pass. The browser layer and the skills rewrite are later
+workstreams.
 
 ## Where the plans live
 
@@ -56,9 +59,18 @@ bin/selly-agent pass run publish --item <item_id> --follow
 # point an attended Claude Code session at the same daemon MCP server
 bin/selly-agent harness config --attended --dir /path/to/session
 
+# connect the optional Telegram channel: pipe the BotFather token on stdin, then
+# tap the printed t.me/<bot>?start=<nonce> deep link (a bare /start won't bind);
+# re-runnable, and `--status` just reports the bind state
+printf '%s' "<bot-token>" | bin/selly-agent connect telegram
+
 # tail the event store (works whether or not the daemon is running)
 bin/selly-agent inspect --follow
 ```
+
+Once bound, the phone is the async channel: buyer escalations push to it, and
+`/pause` · `/resume` · `/status` · `/catchup` · `/selly` are answered instantly
+by the daemon (no LLM); anything else is a conversation with your selling agent.
 
 The daemon serves a localhost web tail at `http://127.0.0.1:<http_port>/tail?token=<attended-token>`
 (the token lives 0600 in the config dir). Tests point `$XDG_*_HOME` at a tmpdir, so they never
@@ -82,6 +94,8 @@ src/selly_agent/
   http_server.py           localhost HTTP: MCP endpoint + web tail + pass control
   mcp_proxy.py             stdio<->HTTP MCP shim for stdio-only harnesses
   tools/                   the typed MCP tool registry + the tool implementations
+  channel/                 provider-agnostic channel core + channel/telegram/ provider
+  connect_cli.py           `connect telegram` (token via stdin -> control route)
   rail/                    the carousell.ai rail client + guest-key provisioning
   harness/                 the harness seam: PassSpec + claude/codex emitters
   passes.py                the pass runner (claim -> spawn -> babysit -> classify)
@@ -100,8 +114,8 @@ tests/                     plain pytest (tests/conformance/ = MCP SDK interop, 3
 ## Filesystem locations (XDG)
 
 ```
-~/.local/share/selly-agent/   versions/, current -> …, data/selly.db
+~/.local/share/selly-agent/   versions/, current -> …, data/selly.db, media/
 ~/.local/state/selly-agent/   events.db, backups/, logs/, heartbeat, lock
-~/.config/selly-agent/        config.json (0700)
+~/.config/selly-agent/        config.json + secrets 0600 (MCP, carousell.ai, telegram token)
 ~/.cache/selly-agent/         downloaded release tarballs
 ```

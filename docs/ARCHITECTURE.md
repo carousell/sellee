@@ -116,6 +116,31 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   harness output stream and **`proc_tree.py`** owns the process-group kill and
   stray-pass reaper.
 
+The channel subsystem — the optional bound channel plus the needs-me queue that
+works with none bound. Provider-agnostic core + per-provider packages under
+`channel/`:
+
+- **Core** (`channel/`) — `fastpaths` (deterministic commands: decide, render,
+  emit a provider-neutral control spec), `routing` (the `channel.in` event +
+  coalesced channel-pass routing), `outbound` (notice-drain / typing-pulse policy
+  + the fold and escalation-push subscribers), `prompt` (the channel pass's capped
+  transcript window). None import a provider — a guard pins it.
+- **Provider** (`channel/telegram/`) — `transport` (the Bot API pipe; the one
+  network module, allowlisted), `poller` (the long-poll loop), `bind` (nonce
+  connect), `commands` (the "/" set + control-spec keyboard), `outbound`
+  (`deliver`/`typing`). A second channel is a sibling package, not a core change.
+- **Poller** — one thread owns all Bot API traffic; three durable-state modes,
+  failing toward the less capable: *off* (no token/nonce — no API calls),
+  *awaiting-bind* (only a `/start` matching the minted nonce binds), *bound* (only
+  the authorized chat ingests, persist-then-ack in one transaction). Bind is nonce
+  deep-link authenticated (no capture-window race); the token travels stdin →
+  control route → 0600 file, never argv/events.
+- **Needs-me queue** — open escalations + a `notices` table in `selly.db`. Bound,
+  the drain lane delivers FIFO; unbound, `get_catchup` delivers (never
+  pretend-push).
+- **Pause** — a paused daemon runs but acts on nothing (lane claims nothing, send
+  tools refuse, babysitter kills a running pass ≤~1s); missing row = not paused.
+
 Lifecycle:
 
 - **`lock.py`** — a PID-aware single-instance lock (a live duplicate exits
@@ -135,12 +160,14 @@ Lifecycle:
 3. Apply pending migrations (snapshot the business database first if any are
    pending); a failure aborts startup.
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
-5. Ensure the attended MCP token; start the localhost HTTP server (a bind
-   failure is fatal — fail loud so launchd's throttle paces respawns).
+5. Ensure the attended MCP token; subscribe the escalation-push and channel-pass
+   fold handlers; start the localhost HTTP server (a bind failure is fatal — fail
+   loud so launchd's throttle paces respawns); start the channel poller thread.
 6. Register tasks (retention, the pass lane, the stray reaper, the stale-intent
-   sweep) and run the scheduler, writing the heartbeat each tick.
-7. On SIGTERM/SIGINT: drain, stop the HTTP server, emit `daemon.stop`, clear the
-   lock, exit 0.
+   sweep, the notice drain, the typing pulse) and run the scheduler, writing the
+   heartbeat each tick.
+7. On SIGTERM/SIGINT: drain, join the poller, stop the HTTP server, emit
+   `daemon.stop`, clear the lock, exit 0.
 
 `daemon run --once` runs a single tick and stops — the deterministic test seam.
 
@@ -149,14 +176,15 @@ Lifecycle:
 Resolved by `paths.py` from the XDG base directories:
 
 ```
-~/.local/share/selly-agent/   versions/, current -> …, data/selly.db (business data)
+~/.local/share/selly-agent/   versions/, current -> …, data/selly.db, media/ (business data)
 ~/.local/state/selly-agent/   events.db, backups/, logs/, passes/, heartbeat, lock (prunable)
 ~/.config/selly-agent/        config.json + secret files (0700 dir, 0600 secrets)
 ~/.cache/selly-agent/         downloaded release artifacts
 ```
 
-Secrets (the attended MCP token, the carousell.ai guest key) are 0600 files in
-the config dir, never logged or evented. Per-pass workspaces live under
+Secrets (the attended MCP token, the carousell.ai guest key, the Telegram bot
+token) are 0600 files in the config dir, never logged or evented. Inbound channel
+media (photo bursts) is downloaded to `share/media/` before any LLM sees it. Per-pass workspaces live under
 `state/passes/<pass_id>/` and are swept on pass end. Tests point the XDG
 variables at a temporary directory.
 

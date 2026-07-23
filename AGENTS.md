@@ -22,6 +22,13 @@ src-relative path to `NETWORK_ALLOWLIST` in
 deliberate act: it grants that module the capability to open sockets, and a
 reviewer should treat it as such. Everything else stays network-free.
 
+The channel poller thread is the **one consumer** of all Telegram Bot API
+traffic — only `channel/telegram/transport.py` talks to the network, and the
+poller is its only caller of `get_updates`. That single-consumer property is
+what makes "an unbound channel consumes nothing" a state of one thread rather
+than a convention; keep it that way (a guard also pins that the channel *core*
+imports no provider).
+
 ## Python 3.9 floor
 
 The runtime floor is Python 3.9 (macOS Command Line Tools). The suite must pass
