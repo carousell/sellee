@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import (  # noqa: F401  imported for registration
     buyer,
     checkout,
+    control,
     escalations,
     messaging,
     negotiate,

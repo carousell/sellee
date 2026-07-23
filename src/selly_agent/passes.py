@@ -34,6 +34,9 @@ PASS_MAX_TURNS = 30
 # in its final teardown is never de-authed or reaped out from under itself.
 TOKEN_SLACK_SEC = 60.0
 _BABY_POLL_SEC = 0.1
+# How often the babysitter checks the pause flag — a pause interrupts a running pass within about
+# this window (INV-29's mid-flight interrupt; the read is a cheap single-row SQLite query).
+_PAUSE_WATCH_SEC = 1.0
 # confirm_dead can spend up to grace + kill-wait seconds; give the babysitter join headroom.
 _GRACE_JOIN_SEC = 20.0
 
@@ -125,10 +128,12 @@ def _reader(proc, bus, pass_id: str, holder: dict) -> None:
         pass
 
 
-def _babysitter(proc, deadline_sec: float, stop_event, killed: dict) -> None:
+def _babysitter(proc, deadline_sec: float, stop_event, killed: dict, paused_check=None) -> None:
     start = time.monotonic()
+    last_pause_check = start
     while proc.poll() is None:
-        if time.monotonic() - start >= deadline_sec:
+        now = time.monotonic()
+        if now - start >= deadline_sec:
             killed["timeout"] = True
             confirm_dead(proc)
             return
@@ -136,10 +141,20 @@ def _babysitter(proc, deadline_sec: float, stop_event, killed: dict) -> None:
             killed["stopped"] = True
             confirm_dead(proc)
             return
+        # A pause interrupts a running pass within one watch window — safe because cursors/pacing
+        # make the killed step re-runnable, so nothing is half-done.
+        if paused_check is not None and now - last_pause_check >= _PAUSE_WATCH_SEC:
+            last_pause_check = now
+            if paused_check():
+                killed["paused"] = True
+                confirm_dead(proc)
+                return
         time.sleep(_BABY_POLL_SEC)
 
 
 def _classify(rc: int | None, killed: dict, result: dict | None) -> str:
+    if killed.get("paused"):
+        return "paused"
     if killed.get("timeout"):
         return "timeout"
     if killed.get("stopped"):
@@ -221,7 +236,9 @@ def run_pass(deps: PassDeps, claimed) -> str:
                 target=_reader, args=(proc, deps.bus, pass_id, holder), daemon=True
             )
             baby = threading.Thread(
-                target=_babysitter, args=(proc, deadline_sec, deps.stop_event, killed), daemon=True
+                target=_babysitter,
+                args=(proc, deadline_sec, deps.stop_event, killed, deps.store.is_paused),
+                daemon=True,
             )
             reader.start()
             baby.start()
@@ -262,6 +279,10 @@ def pass_lane(deps: PassDeps) -> None:
     stale = deps.store.fail_stale_running(deadline_slack(deps.config), now=deps.now())
     for pid in stale:
         deps.bus.publish("pass.end", {"class": "stale", "is_error": True}, pass_id=pid)
+    # A paused daemon runs but acts on nothing: the lane claims no queued pass while paused (the
+    # babysitter has already killed any in-flight one). /resume lets the next tick claim again.
+    if deps.store.is_paused():
+        return
     claimed = deps.store.claim_queued_pass()
     if claimed is None:
         return

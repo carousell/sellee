@@ -35,6 +35,11 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     if existing:
         return {"listing_id": None, "url": existing, "already_published": True}
 
+    # A paused agent takes no marketplace action. The idempotent already-published read above is a
+    # no-op and stays allowed; a real publish is refused until resume.
+    if ctx.store.is_paused():
+        raise ToolError("the agent is paused — resume before publishing")
+
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
     if not (item.get("currency") or "").strip():

@@ -44,6 +44,10 @@ def _refused(side: str, status: str, kind: str) -> bool:
 
 
 def _send_reply(ctx: ToolContext, params: dict) -> dict:
+    # A paused agent acts on nothing — even an attended session's send respects the pause. Refuse
+    # before any thread load or reserve so nothing is recorded.
+    if ctx.store.is_paused():
+        return {"status": "paused", "thread_id": params["thread_id"]}
     kind = params.get("kind", "reply")
     thread = ctx.store.get_thread(params["thread_id"])
     if thread is None:
