@@ -9,10 +9,10 @@ import threading
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import secrets
-from selly_agent.channel import commands
-from selly_agent.channel.commands import CB_NEEDS_ME, CB_PAUSE, CB_RESUME
-from selly_agent.channel.poller import Poller
-from selly_agent.channel.telegram import TelegramClient
+from selly_agent.channel import fastpaths
+from selly_agent.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME
+from selly_agent.channel.telegram.poller import Poller
+from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
 
 
@@ -50,16 +50,16 @@ def _seed_needs_me(store):
 
 
 def test_pause_command_is_a_fast_path() -> None:
-    assert commands.is_fast_path({"kind": "command", "text": "/pause", "payload": {}})
+    assert fastpaths.is_fast_path({"kind": "command", "text": "/pause", "payload": {}})
 
 
 def test_non_exact_token_is_not_a_fast_path() -> None:
     # "please /pause" arrives as kind=text (does not start with '/'), so it is never a fast path.
-    assert not commands.is_fast_path({"kind": "text", "text": "please /pause", "payload": {}})
+    assert not fastpaths.is_fast_path({"kind": "text", "text": "please /pause", "payload": {}})
 
 
 def test_unknown_command_is_not_a_fast_path() -> None:
-    assert not commands.is_fast_path({"kind": "command", "text": "/sell", "payload": {}})
+    assert not fastpaths.is_fast_path({"kind": "command", "text": "/sell", "payload": {}})
 
 
 # --- instant acks + flag flips --------------------------------------------------------------

@@ -15,8 +15,8 @@ import urllib.request
 
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import secrets
-from selly_agent.channel.poller import Poller
-from selly_agent.channel.telegram import TelegramClient
+from selly_agent.channel.telegram.poller import Poller
+from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
 from selly_agent.http_server import HttpServer
 

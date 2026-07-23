@@ -29,8 +29,9 @@ from . import (
     retention,
     secrets,
 )
-from .channel import delivery
-from .channel.poller import POLL_TIMEOUT_SEC, Poller
+from .channel import outbound
+from .channel.telegram import outbound as tg_outbound
+from .channel.telegram.poller import POLL_TIMEOUT_SEC, Poller
 from .db import Database
 from .events import EventBus, EventStore
 from .http_server import HttpServer
@@ -115,10 +116,10 @@ def run_daemon(*, once: bool) -> int:
 
     # Push every new escalation to the channel as a queued notice (the drain delivers it when
     # bound; catchup is the backstop). Subscribed before work starts so nothing is missed.
-    bus.subscribe(delivery.escalation_notifier(store))
+    bus.subscribe(outbound.escalation_notifier(store))
     # Fold a channel pass's claimed rows when it ends: handled on ok, failed + one notice on any
     # failure (never auto-refired).
-    bus.subscribe(delivery.channel_pass_folder(store))
+    bus.subscribe(outbound.channel_pass_folder(store))
 
     def rail_factory():
         key = secrets.read_carousell_ai_api_key()
@@ -225,15 +226,17 @@ def run_daemon(*, once: bool) -> int:
     scheduler.register(
         Task(
             name="notice_drain",
-            interval_sec=delivery.NOTICE_DRAIN_INTERVAL_SEC,
-            func=lambda: delivery.drain_notices(store=store, config=cfg, bus=bus),
+            interval_sec=outbound.NOTICE_DRAIN_INTERVAL_SEC,
+            func=lambda: outbound.drain_notices(
+                store=store, bus=bus, deliver=tg_outbound.make_deliver(cfg)
+            ),
         )
     )
     scheduler.register(
         Task(
             name="typing_pulse",
-            interval_sec=delivery.TYPING_PULSE_INTERVAL_SEC,
-            func=lambda: delivery.pulse_typing(store=store, config=cfg),
+            interval_sec=outbound.TYPING_PULSE_INTERVAL_SEC,
+            func=lambda: outbound.pulse_typing(store=store, typing=tg_outbound.make_typing(cfg)),
         )
     )
 

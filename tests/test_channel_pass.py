@@ -8,14 +8,14 @@ import threading
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import passes, secrets
-from selly_agent.channel import delivery
-from selly_agent.channel.poller import Poller
+from selly_agent.channel import outbound
 from selly_agent.channel.prompt import (
     TRANSCRIPT_CHAR_CAP,
     _format_transcript,
     build_channel_prompt,
 )
-from selly_agent.channel.telegram import TelegramClient
+from selly_agent.channel.telegram.poller import Poller
+from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
 from selly_agent.proc_tree import PASS_PROMPT_MARKER
 from selly_agent.tools import TIER_PASS_CHANNEL, tools_for_tier
@@ -128,7 +128,7 @@ def test_fold_handled_on_ok(store, bus, xdg_tmp) -> None:
     _bound(store)
     store.ingest_updates([_ev(1, text="hi")], update_offset=2)
     pass_id = store.enqueue_channel_pass()
-    fold = delivery.channel_pass_folder(store)
+    fold = outbound.channel_pass_folder(store)
 
     class _E:
         kind = "pass.end"
@@ -146,7 +146,7 @@ def test_fold_failed_queues_one_notice_no_refire(store, bus, xdg_tmp) -> None:
     _bound(store)
     store.ingest_updates([_ev(1, text="hi")], update_offset=2)
     pass_id = store.enqueue_channel_pass()
-    fold = delivery.channel_pass_folder(store)
+    fold = outbound.channel_pass_folder(store)
 
     class _E:
         kind = "pass.end"
@@ -169,14 +169,14 @@ def test_typing_pulse_only_while_a_channel_pass_is_active(store, bus, xdg_tmp) -
     _bound(store)
     with FakeTelegramAPI() as api:
 
-        def cf(token):
-            return TelegramClient(FAKE_TOKEN, api_base=api.base_url)
+        def typing(chat_id):
+            TelegramClient(FAKE_TOKEN, api_base=api.base_url).send_chat_action(chat_id, "typing")
 
         # no active channel pass -> no pulse
-        delivery.pulse_typing(store=store, config=Config(), client_factory=cf)
+        outbound.pulse_typing(store=store, typing=typing)
         assert api.chat_actions == []
         # with a channel pass queued -> a typing action goes out
         store.ingest_updates([_ev(1, text="hi")], update_offset=2)
         store.enqueue_channel_pass()
-        delivery.pulse_typing(store=store, config=Config(), client_factory=cf)
+        outbound.pulse_typing(store=store, typing=typing)
         assert api.chat_actions == [CHAT_ID]

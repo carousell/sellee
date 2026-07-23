@@ -16,8 +16,8 @@ from __future__ import annotations
 
 import secrets as _stdlib_secrets
 
-from .. import secrets
-from .telegram import ChannelError, TelegramClient, is_valid_token_format
+from ... import secrets
+from .transport import ChannelError, TelegramClient, is_valid_token_format
 
 
 class BindError(Exception):

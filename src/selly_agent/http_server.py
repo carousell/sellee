@@ -308,7 +308,7 @@ class _Handler(BaseHTTPRequestHandler):
         # Attended-only: the token arrives here (never argv), the daemon validates it, writes the
         # 0600 secret, arms a bind nonce, and returns the deep link. The token is never echoed and
         # never logged; only bot_username is published.
-        from .channel import bind
+        from .channel.telegram import bind
 
         session = self._app.auth.resolve(self._bearer())
         if session is None or session.tier != "attended":
@@ -333,7 +333,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _handle_channel_status(self, parsed) -> None:
-        from .channel import bind
+        from .channel.telegram import bind
 
         qs = parse_qs(parsed.query)
         session = self._app.auth.resolve(qs.get("token", [None])[0])

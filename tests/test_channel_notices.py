@@ -9,9 +9,8 @@ import pytest
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import secrets
-from selly_agent.channel import delivery
-from selly_agent.channel.telegram import ChannelError, TelegramClient
-from selly_agent.config import Config
+from selly_agent.channel import outbound
+from selly_agent.channel.telegram.transport import ChannelError, TelegramClient
 from selly_agent.tools import TIER_ATTENDED
 from selly_agent.tools.registry import dispatch
 
@@ -22,13 +21,15 @@ def _bind(store):
     store.complete_bind(CHAT_ID, update_offset=1)
 
 
+def _deliver(api):
+    def deliver(chat_id, text):
+        TelegramClient(FAKE_TOKEN, api_base=api.base_url).send_message(chat_id, text)
+
+    return deliver
+
+
 def _drain(store, bus, api):
-    delivery.drain_notices(
-        store=store,
-        config=Config(telegram_api_base=api.base_url),
-        bus=bus,
-        client_factory=lambda token: TelegramClient(FAKE_TOKEN, api_base=api.base_url),
-    )
+    outbound.drain_notices(store=store, bus=bus, deliver=_deliver(api))
 
 
 # --- delivery when bound --------------------------------------------------------------------
@@ -50,15 +51,11 @@ def test_drain_transport_failure_bumps_attempts_and_raises(store, bus, xdg_tmp) 
     _bind(store)
     nid = store.queue_notice("ping")
 
-    def failing_client(token):
-        class _C:
-            def send_message(self, *a, **k):
-                raise ChannelError("Bot API sendMessage HTTP 500")
-
-        return _C()
+    def failing_deliver(chat_id, text):
+        raise ChannelError("Bot API sendMessage HTTP 500")
 
     with pytest.raises(ChannelError):
-        delivery.drain_notices(store=store, config=Config(), bus=bus, client_factory=failing_client)
+        outbound.drain_notices(store=store, bus=bus, deliver=failing_deliver)
     queued = store.list_queued_notices()
     assert len(queued) == 1 and queued[0]["id"] == nid and queued[0]["attempts"] == 1
 
@@ -88,7 +85,7 @@ def test_drain_is_noop_when_paused(store, bus, xdg_tmp) -> None:
 
 
 def test_escalation_open_queues_one_notice(make_ctx, store, bus) -> None:
-    bus.subscribe(delivery.escalation_notifier(store))
+    bus.subscribe(outbound.escalation_notifier(store))
     item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
     store.create_thread(
         thread_id="carousell:t1",

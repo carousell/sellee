@@ -1,40 +1,21 @@
-"""The channel's command surface: the "/" menu set, the welcome text, and the deterministic fast
-paths (answered by daemon code, no LLM).
+"""Provider-agnostic fast-path logic: the deterministic commands the daemon answers itself (no
+LLM), their store effects, and the text renders.
 
-Fast paths are matched on the exact first-word token (`/pause`, not "please /pause" — fuzzy phrasing
-stays the LLM's job) or an inline-keyboard callback. `/selly` renders a settings *card*: current
-state with values, closing with an invitation to say what to change in plain words — no numbered
-menu, no pick-session state. The settings surface plan grows the card with real settings lines and
-the approve button; the one control row (pause/resume · what-needs-me) and its callback plumbing
-ship here.
+This is the "what" — which token does what, and what the reply text is. The "how" (rendering the
+control row into a provider's native widget, sending it) stays in the provider. `handle_fast_path`
+returns the reply text plus a controls *spec* — a plain list of (label, token) buttons, or None —
+so the core never builds a Telegram keyboard or a Slack block; the provider renders the spec.
 """
 
 from __future__ import annotations
-
-from .telegram import build_inline_keyboard
-
-# The commands this plan handles deterministically — setMyCommands registers exactly these, so the
-# "/" menu never advertises a command the daemon can't answer. Slash stripped, lowercase (Telegram's
-# own convention). The settings surface / skills rewrite grow this set as they add real commands.
-BOT_COMMANDS = [
-    {"command": "selly", "description": "Settings & what needs you"},
-    {"command": "status", "description": "What's live and anything waiting on you"},
-    {"command": "catchup", "description": "Everything queued for you right now"},
-    {"command": "pause", "description": "Pause the agent (it stops acting)"},
-    {"command": "resume", "description": "Resume the agent"},
-]
-
-WELCOME_TEXT = (
-    "You're connected. I'll message you here when a buyer needs a decision or something needs "
-    "your call. Send /selly any time to see your settings and what's waiting."
-)
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
 _FAST_PATH_COMMANDS = frozenset({"/pause", "/resume", "/status", "/catchup", "/selly"})
 
-# Inline-keyboard callback tokens. The control row emits these; the settings-surface plan reuses
-# the same callback plumbing for its approve button (a different token, routed there).
+# Callback tokens the control row emits. Provider-neutral: a provider carries them in whatever its
+# interactive widget uses (Telegram callback_data, Slack action_id). The settings-surface plan
+# reuses the same callback plumbing for its approve button (a different token, routed there).
 CB_PAUSE = "pause"
 CB_RESUME = "resume"
 CB_NEEDS_ME = "needsme"
@@ -52,32 +33,29 @@ def is_fast_path(event: dict) -> bool:
 
 
 def handle_fast_path(store, event: dict) -> tuple:
-    """Apply a fast path and return (reply_text, reply_markup|None). Pause/resume flip the control
-    flag here (the enforcement — gating passes and killing a running one — lives in the pause
-    wiring); the reads render from the store. Assumes is_fast_path(event) is True."""
+    """Apply a fast path and return (reply_text, controls_spec | None). Pause/resume flip the
+    control flag here (the enforcement — gating passes and killing a running one — lives in the
+    pause wiring); the reads render from the store. Assumes is_fast_path(event) is True."""
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
     if token in ("/pause", CB_PAUSE):
         store.set_paused(True, source="telegram")
-        return "Paused — I won't act on anything until you resume.", _control_row(store)
+        return "Paused — I won't act on anything until you resume.", _control_spec(store)
     if token in ("/resume", CB_RESUME):
         store.set_paused(False, source="telegram")
-        return "Resumed — I'm back on.", _control_row(store)
+        return "Resumed — I'm back on.", _control_spec(store)
     if token == "/status":
         return render_status(store), None
     if token == "/catchup":
         return render_catchup(store), None
     # /selly and the what-needs-me button both render the settings card + control row.
-    return render_settings_card(store), _control_row(store)
+    return render_settings_card(store), _control_spec(store)
 
 
-def _control_row(store) -> dict:
-    """The one surviving inline row: a pause/resume toggle (reflecting current state) plus a
-    what-needs-me shortcut."""
-    if store.is_paused():
-        toggle = ("▶️ Resume", CB_RESUME)
-    else:
-        toggle = ("⏸ Pause", CB_PAUSE)
-    return build_inline_keyboard([[toggle, ("What needs me", CB_NEEDS_ME)]])
+def _control_spec(store) -> list:
+    """The one control row as provider-neutral (label, token) buttons: a pause/resume toggle
+    reflecting current state, plus a what-needs-me shortcut. The provider renders it."""
+    toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
+    return [toggle, ("What needs me", CB_NEEDS_ME)]
 
 
 def _needs_me_counts(store) -> tuple:

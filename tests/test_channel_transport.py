@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent.channel import telegram
-from selly_agent.channel.telegram import (
+from selly_agent.channel.telegram import transport
+from selly_agent.channel.telegram.transport import (
     ChannelError,
     TelegramClient,
     build_inline_keyboard,
@@ -41,26 +41,26 @@ def _msg(text, uid=5, date=111):
 
 
 def test_normalize_text() -> None:
-    ev, chat = telegram._normalize(_msg("hello there"), CHAT_ID)
+    ev, chat = transport._normalize(_msg("hello there"), CHAT_ID)
     assert chat == CHAT_ID
     assert ev["kind"] == "text" and ev["text"] == "hello there"
     assert ev["src_ts"] == 111 and ev["payload"] == {}
 
 
 def test_normalize_command_without_arg() -> None:
-    ev, _ = telegram._normalize(_msg("/status"), CHAT_ID)
+    ev, _ = transport._normalize(_msg("/status"), CHAT_ID)
     assert ev["kind"] == "command" and ev["text"] == "/status"
     assert ev["payload"] == {}
 
 
 def test_normalize_start_lifts_nonce_payload() -> None:
-    ev, _ = telegram._normalize(_msg("/start nonce-abc123"), CHAT_ID)
+    ev, _ = transport._normalize(_msg("/start nonce-abc123"), CHAT_ID)
     assert ev["kind"] == "command" and ev["text"] == "/start"
     assert ev["payload"]["start_param"] == "nonce-abc123"
 
 
 def test_normalize_bare_start_has_empty_param() -> None:
-    ev, _ = telegram._normalize(_msg("/start"), CHAT_ID)
+    ev, _ = transport._normalize(_msg("/start"), CHAT_ID)
     assert ev["text"] == "/start" and ev["payload"]["start_param"] == ""
 
 
@@ -73,7 +73,7 @@ def test_normalize_callback_query_splits_ref() -> None:
             "message": {"chat": {"id": CHAT_ID}, "date": 222},
         },
     }
-    ev, chat = telegram._normalize(upd, CHAT_ID)
+    ev, chat = transport._normalize(upd, CHAT_ID)
     assert ev["kind"] == "action" and ev["text"] == "approve"
     assert ev["payload"]["ref"] == "chg_1" and ev["payload"]["choice"] == "approve"
     assert ev["payload"]["callback_query_id"] == "cbq9"
@@ -93,21 +93,21 @@ def test_normalize_photo_picks_largest_and_group_hint() -> None:
             ],
         },
     }
-    ev, _ = telegram._normalize(upd, CHAT_ID)
+    ev, _ = transport._normalize(upd, CHAT_ID)
     assert ev["kind"] == "photo" and ev["text"] == "for sale"
     assert ev["payload"]["file_id"] == "big"
     assert ev["payload"]["media_group_id"] == "mg1"
 
 
 def test_normalize_drops_unauthorized_chat() -> None:
-    ev, chat = telegram._normalize(_msg("hi"), authorized_chat=CHAT_ID + 1)
+    ev, chat = transport._normalize(_msg("hi"), authorized_chat=CHAT_ID + 1)
     assert ev is None and chat == CHAT_ID
 
 
 def test_normalize_accepts_any_chat_when_none_authorized() -> None:
     # awaiting-bind: authorized_chat None means "not yet bound" — the update is returned so the
     # poller can inspect a /start payload; a non-matching one is discarded by the poller, not here.
-    ev, chat = telegram._normalize(_msg("/start n1"), authorized_chat=None)
+    ev, chat = transport._normalize(_msg("/start n1"), authorized_chat=None)
     assert ev is not None and chat == CHAT_ID
 
 

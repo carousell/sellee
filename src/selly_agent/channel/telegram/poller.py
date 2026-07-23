@@ -1,4 +1,4 @@
-"""The channel poller — a dedicated thread that owns ALL Bot API traffic.
+"""The Telegram receive loop — a dedicated thread that owns ALL Bot API traffic.
 
 Because it is the one consumer of getUpdates, "an unbound channel consumes nothing" is a property
 of this thread's state, not a convention spread across callers. Three states, derived from durable
@@ -12,19 +12,19 @@ rows every tick (so a restart resumes correctly), always failing toward the *les
   * bound          — a chat is bound. Only that chat's updates are ingested (persist-then-ack in
                      one transaction); other chats are dropped before ingest.
 
-Transport errors back off 5s -> 60s so a DNS outage never hot-spins. Acting on ingested rows (fast
-paths, pass routing) is layered on top of the durable inbox by later steps — this thread's job is
-correct intake.
+The long-poll shape is Telegram-specific; once a batch is ingested, the fan-out to observability
+events, fast-path dispatch, and channel-pass routing is provider-agnostic (channel.fastpaths /
+channel.routing). Transport errors back off 5s -> 60s so a DNS outage never hot-spins.
 """
 
 from __future__ import annotations
 
 import logging
 
-from .. import paths, secrets
+from ... import paths, secrets
+from .. import fastpaths, routing
 from . import commands
-from .commands import BOT_COMMANDS, WELCOME_TEXT
-from .telegram import ChannelError, TelegramClient, _normalize, commands_hash
+from .transport import ChannelError, TelegramClient, _normalize, commands_hash
 
 log = logging.getLogger(__name__)
 
@@ -32,7 +32,6 @@ POLL_TIMEOUT_SEC = 25
 OFF_IDLE_SEC = 1.0
 BACKOFF_BASE_SEC = 5.0
 BACKOFF_CAP_SEC = 60.0
-_CHANNEL_IN_PREVIEW_CAP = 200
 _ALLOWED_UPDATES = ["message", "callback_query"]
 
 
@@ -146,7 +145,7 @@ class Poller:
         ch = self.store.get_channel()
         if not ch["welcomed_at"]:
             try:
-                client.send_message(chat_id, WELCOME_TEXT)
+                client.send_message(chat_id, commands.WELCOME_TEXT)
             except ChannelError as exc:
                 log.warning("welcome send failed (bind still complete): %s", exc)
             else:
@@ -155,10 +154,10 @@ class Poller:
 
     def _ensure_commands(self, client) -> None:
         """Register the "/" menu, content-hash idempotent so a re-bind of the same bot is free."""
-        digest = commands_hash(BOT_COMMANDS)
+        digest = commands_hash(commands.BOT_COMMANDS)
         if self.store.get_channel()["commands_hash"] == digest:
             return
-        client.set_my_commands(BOT_COMMANDS)
+        client.set_my_commands(commands.BOT_COMMANDS)
         self.store.stamp_commands_hash(digest)
 
     # --- bound ----------------------------------------------------------------------------
@@ -181,17 +180,9 @@ class Poller:
             events.append(ev)
         inserted = self.store.ingest_updates(events, max_id + 1)
         for row in inserted:
-            self._publish_in(row)
+            routing.publish_channel_in(self.bus, row)
         self._dispatch_fast_paths(client, ch["chat_id"], inserted)
-        self._route_channel_pass()
-
-    def _route_channel_pass(self) -> None:
-        """Route pending free-text rows to a channel pass — coalescing: the store enqueues one only
-        when none is queued/running, so one pass sweeps everything pending and later arrivals wait
-        for the next. Claiming the rows and creating the pass is one transaction in the store."""
-        pass_id = self.store.enqueue_channel_pass()
-        if pass_id is not None:
-            self.bus.publish("pass.queued", {"type": "channel"}, pass_id=pass_id)
+        routing.route_channel_pass(self.store, self.bus)
 
     def _dispatch_fast_paths(self, client, chat_id, inserted) -> None:
         """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /selly and the
@@ -201,9 +192,9 @@ class Poller:
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
-            if not commands.is_fast_path(event):
+            if not fastpaths.is_fast_path(event):
                 continue
-            text, keyboard = commands.handle_fast_path(self.store, event)
+            text, controls = fastpaths.handle_fast_path(self.store, event)
             cq_id = row["payload"].get("callback_query_id")
             if cq_id:
                 try:
@@ -211,7 +202,7 @@ class Poller:
                 except ChannelError as exc:
                     log.warning("answerCallbackQuery failed: %s", exc)
             try:
-                client.send_message(chat_id, text, reply_markup=keyboard)
+                client.send_message(chat_id, text, reply_markup=commands.render_controls(controls))
             except ChannelError as exc:
                 log.warning("fast-path reply send failed: %s", exc)
             handled.append(row["id"])
@@ -230,10 +221,3 @@ class Poller:
             log.warning("photo download failed for update %s: %s", ev["event_id"], exc)
             return []
         return [str(dest)]
-
-    def _publish_in(self, row) -> None:
-        preview = (row["text"] or "")[:_CHANNEL_IN_PREVIEW_CAP]
-        self.bus.publish(
-            "channel.in",
-            {"kind": row["kind"], "preview": preview, "src_ts": row["src_ts"]},
-        )
