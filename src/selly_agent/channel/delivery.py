@@ -21,6 +21,9 @@ from .telegram import ChannelError, TelegramClient
 log = logging.getLogger(__name__)
 
 NOTICE_DRAIN_INTERVAL_SEC = 2.0
+# Telegram's typing indicator lasts ~5s, so a pulse a little under that keeps it alive while a
+# channel pass is in flight.
+TYPING_PULSE_INTERVAL_SEC = 4.0
 _NOTICE_DRAIN_BATCH = 10
 
 
@@ -53,6 +56,42 @@ def drain_notices(*, store, config, bus, client_factory=None, limit=_NOTICE_DRAI
             raise
         store.mark_notice_delivered(notice["id"], "channel")
         bus.publish("message.delivered", {"notice_id": notice["id"], "ref": notice["ref"]})
+
+
+def pulse_typing(*, store, config, client_factory=None) -> None:
+    """Keep the 'typing…' indicator alive while a channel pass is queued or running, so the phone
+    feels responsive across the minutes an LLM turn can take. Best-effort: a failed pulse is
+    swallowed. No-op while paused, unbound, or with no channel pass in flight."""
+    if store.is_paused() or not store.has_active_channel_pass():
+        return
+    ch = store.get_channel()
+    if ch["chat_id"] is None:
+        return
+    token = secrets.read_telegram_bot_token()
+    if not token:
+        return
+    make = client_factory or _default_client_factory(config)
+    try:
+        make(token).send_chat_action(ch["chat_id"], "typing")
+    except ChannelError as exc:
+        log.debug("typing pulse failed (ignored): %s", exc)
+
+
+def channel_pass_folder(store):
+    """A bus subscriber: fold a channel pass's claimed rows when it ends. On ok they are handled;
+    on any failure (error/timeout/paused) they are folded failed and one notice is queued — never
+    auto-refired (failed rows are terminal; the seller repeating themselves is the recovery)."""
+
+    def _on(event) -> None:
+        if event.kind != "pass.end" or event.payload.get("type") != "channel":
+            return
+        if event.payload.get("class") == "ok":
+            store.fold_inbox(event.pass_id, "handled")
+            return
+        if store.fold_inbox(event.pass_id, "failed"):
+            store.queue_notice("I couldn't process your last message — please send it again.")
+
+    return _on
 
 
 def escalation_notifier(store):

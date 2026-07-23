@@ -8,6 +8,7 @@ from __future__ import annotations
 from ..store import StoreError
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -89,7 +90,7 @@ register(
             "additionalProperties": False,
         },
         handler=_offer,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -98,7 +99,7 @@ register(
         description="Report an item's standing-offer / FCFS / bidding state.",
         input_schema=_ITEM_ONLY_SCHEMA,
         handler=_status,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -107,7 +108,7 @@ register(
         description="Reserve an item for the current leading bid (seller has approved it).",
         input_schema=_ITEM_THREAD_SCHEMA,
         handler=_confirm_bid,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -117,7 +118,7 @@ register(
         "and the threads to close.",
         input_schema=_ITEM_THREAD_SCHEMA,
         handler=_confirm_sold,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -126,6 +127,6 @@ register(
         description="Return an item to available after a sale fell through.",
         input_schema=_ITEM_ONLY_SCHEMA,
         handler=_release,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

@@ -113,14 +113,32 @@ def test_fast_path_handled_rows_leave_pending(store) -> None:
     assert store.count_pending_inbox() == 1  # only the free-text row still routes
 
 
-def test_claim_and_fold_inbox(store) -> None:
+def test_enqueue_channel_pass_claims_and_folds(store) -> None:
     store.arm_bind("b", "n")
     store.complete_bind(1, update_offset=0)
     store.ingest_updates([_ev(1, text="a"), _ev(2, text="b")], update_offset=3)
-    claimed = store.claim_pending_inbox("pass_x")
+    pass_id = store.enqueue_channel_pass()
+    assert pass_id is not None
+    claimed = store.inbox_for_pass(pass_id)
     assert [c["text"] for c in claimed] == ["a", "b"]
     assert store.count_pending_inbox() == 0  # claimed, not pending
-    assert store.fold_inbox("pass_x", "handled") == 2
+    assert store.fold_inbox(pass_id, "handled") == 2
+
+
+def test_enqueue_channel_pass_coalesces(store) -> None:
+    store.arm_bind("b", "n")
+    store.complete_bind(1, update_offset=0)
+    store.ingest_updates([_ev(1, text="a")], update_offset=2)
+    first = store.enqueue_channel_pass()
+    assert first is not None
+    # a channel pass is already queued: later arrivals do not spawn a second one
+    store.ingest_updates([_ev(2, text="b")], update_offset=3)
+    assert store.enqueue_channel_pass() is None
+    assert store.count_pending_inbox() == 1  # the new row waits for the next pass
+
+
+def test_enqueue_channel_pass_none_when_no_pending(store) -> None:
+    assert store.enqueue_channel_pass() is None
 
 
 def test_fold_inbox_rejects_bad_status(store) -> None:

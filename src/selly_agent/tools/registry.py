@@ -174,3 +174,7 @@ TIER_PASS_PUBLISH = "pass:publish"
 # exercisable end to end by tests. No reply pass *type* exists yet — the skills rewrite finalizes
 # pass-tier membership; this label only makes the scoped-token path testable now.
 TIER_PASS_REPLY = "pass:reply"
+# The provisional channel-pass tier — the tools a phone-driven sell conversation needs. The channel
+# pass runs full-scope (the counterpart is the trusted seller), so this is a broad set; the skills
+# rewrite finalizes membership.
+TIER_PASS_CHANNEL = "pass:channel"

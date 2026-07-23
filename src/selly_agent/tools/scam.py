@@ -15,6 +15,7 @@ from ..engines import scam as scam_engine
 from ..store import StoreError
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -104,7 +105,7 @@ register(
             "additionalProperties": False,
         },
         handler=_scam_scan,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(

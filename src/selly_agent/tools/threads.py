@@ -13,6 +13,7 @@ from __future__ import annotations
 from ..store import StoreError
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -111,7 +112,7 @@ register(
             "additionalProperties": False,
         },
         handler=_create_thread,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -126,7 +127,7 @@ register(
             "additionalProperties": False,
         },
         handler=_get_thread,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -142,7 +143,7 @@ register(
             "additionalProperties": False,
         },
         handler=_list_threads,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -161,7 +162,7 @@ register(
             "additionalProperties": False,
         },
         handler=_update_thread,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -180,7 +181,7 @@ register(
             "additionalProperties": False,
         },
         handler=_hold_thread,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -194,6 +195,6 @@ register(
             "additionalProperties": False,
         },
         handler=_release_thread,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

@@ -8,7 +8,7 @@ set_floor's floor parameter is marked secret, so the dispatch path masks it befo
 from __future__ import annotations
 
 from ..store import StoreError
-from .registry import TIER_ATTENDED, ToolContext, ToolError, ToolSpec, register
+from .registry import TIER_ATTENDED, TIER_PASS_CHANNEL, ToolContext, ToolError, ToolSpec, register
 
 
 def _create_item(ctx: ToolContext, params: dict) -> dict:
@@ -60,7 +60,7 @@ register(
             "additionalProperties": False,
         },
         handler=_create_item,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -78,7 +78,7 @@ register(
             "additionalProperties": False,
         },
         handler=_update_item,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -98,7 +98,7 @@ register(
             "additionalProperties": False,
         },
         handler=_set_floor,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
         secret_params=frozenset({"floor"}),
     )
 )

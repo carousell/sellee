@@ -17,6 +17,7 @@ from ..engines import pacing as pacing_engine
 from ..store import StoreError
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -150,6 +151,6 @@ register(
             "additionalProperties": False,
         },
         handler=_record_manual_reply,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

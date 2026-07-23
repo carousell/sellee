@@ -12,6 +12,7 @@ from __future__ import annotations
 from ..engines import shipping as shipping_engine
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -85,7 +86,7 @@ register(
         "exact origin address is never returned.",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_get_seller_config,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -103,7 +104,7 @@ register(
             "additionalProperties": False,
         },
         handler=_update_seller_config,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
         secret_params=frozenset({"origin"}),
     )
 )
@@ -123,6 +124,6 @@ register(
             "additionalProperties": False,
         },
         handler=_quote_shipping,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )

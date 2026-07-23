@@ -15,6 +15,7 @@ from ..rail.client import RailUnprovisioned
 from ..store import StoreError
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,
     ToolContext,
     ToolError,
@@ -111,6 +112,6 @@ register(
             "additionalProperties": False,
         },
         handler=_publish,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH}),
     )
 )

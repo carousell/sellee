@@ -139,9 +139,10 @@ def test_bound_ingests_authorized_chat(store, bus, xdg_tmp) -> None:
     with FakeTelegramAPI() as api:
         api.inject_text("is it available?")
         _poller(store, bus, api).tick()
-    assert store.count_pending_inbox() == 1
     ins = [e for e in bus.store.read() if e.kind == "channel.in"]
     assert ins and ins[0].payload["preview"] == "is it available?"
+    # a free-text message ingests and then routes to a channel pass
+    assert store.has_active_channel_pass() is True
 
 
 def test_bound_drops_other_chats_before_ingest(store, bus, xdg_tmp) -> None:
@@ -159,7 +160,9 @@ def test_bound_downloads_photo_before_ingest(store, bus, xdg_tmp) -> None:
         api.files["p1"] = b"\xff\xd8jpeg-bytes"
         api.inject_photo("for sale", file_id="p1")
         _poller(store, bus, api).tick()
-    rows = store.claim_pending_inbox("x")
+    # the photo row routed into a channel pass; its media was downloaded before ingest
+    queued = [e for e in bus.store.read() if e.kind == "pass.queued"]
+    rows = store.inbox_for_pass(queued[0].pass_id)
     assert rows[0]["kind"] == "photo" and rows[0]["media_paths"]
     from pathlib import Path
 

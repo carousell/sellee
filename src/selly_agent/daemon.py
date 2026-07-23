@@ -116,6 +116,9 @@ def run_daemon(*, once: bool) -> int:
     # Push every new escalation to the channel as a queued notice (the drain delivers it when
     # bound; catchup is the backstop). Subscribed before work starts so nothing is missed.
     bus.subscribe(delivery.escalation_notifier(store))
+    # Fold a channel pass's claimed rows when it ends: handled on ok, failed + one notice on any
+    # failure (never auto-refired).
+    bus.subscribe(delivery.channel_pass_folder(store))
 
     def rail_factory():
         key = secrets.read_carousell_ai_api_key()
@@ -224,6 +227,13 @@ def run_daemon(*, once: bool) -> int:
             name="notice_drain",
             interval_sec=delivery.NOTICE_DRAIN_INTERVAL_SEC,
             func=lambda: delivery.drain_notices(store=store, config=cfg, bus=bus),
+        )
+    )
+    scheduler.register(
+        Task(
+            name="typing_pulse",
+            interval_sec=delivery.TYPING_PULSE_INTERVAL_SEC,
+            func=lambda: delivery.pulse_typing(store=store, config=cfg),
         )
     )
 

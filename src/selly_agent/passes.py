@@ -21,11 +21,12 @@ from pathlib import Path
 from typing import Callable
 
 from . import paths
+from .channel import prompt as channel_prompt_mod
 from .harness import claude
 from .harness.model import PassSpec
 from .pass_stream import is_cap_hit, parse_stream_line
 from .proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
-from .tools import TIER_PASS_PUBLISH, tools_for_tier
+from .tools import TIER_PASS_CHANNEL, TIER_PASS_PUBLISH, tools_for_tier
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,10 @@ class SpawnError(Exception):
     """The pass could not be launched (binary missing, bad payload). A loud, ledgered outcome."""
 
 
+class PassPayloadError(Exception):
+    """A pass's payload is missing/invalid — a loud, ledgered spawn_error, never a silent skip."""
+
+
 def publish_prompt(item_id: str) -> str:
     return (
         f"{PASS_PROMPT_MARKER}\n"
@@ -54,8 +59,38 @@ def publish_prompt(item_id: str) -> str:
     )
 
 
-def allowed_tools_for_publish(server_name: str = "selly") -> tuple:
-    return tuple(f"mcp__{server_name}__{spec.name}" for spec in tools_for_tier(TIER_PASS_PUBLISH))
+def _publish_prompt(payload: dict, store, pass_id: str) -> str:
+    item_id = payload.get("item_id")
+    if not item_id:
+        raise PassPayloadError("no item_id in payload")
+    return publish_prompt(item_id)
+
+
+def _channel_prompt(payload: dict, store, pass_id: str) -> str:
+    # The rows claimed into this pass at enqueue, plus the conversational window — both read fresh
+    # from durable selly.db rows, so a restart rebuilds the same prompt.
+    claimed = store.inbox_for_pass(pass_id)
+    transcript = store.recent_transcript(channel_prompt_mod.TRANSCRIPT_WINDOW_LIMIT)
+    return channel_prompt_mod.build_channel_prompt(claimed, transcript)
+
+
+@dataclass(frozen=True)
+class PassType:
+    """A pass type's spec: the tier its token carries (which tools it may call) and how its prompt
+    is built from the queued payload. New types register here rather than forking run_pass."""
+
+    tier: str
+    build_prompt: Callable[[dict, object, str], str]
+
+
+PASS_TYPES = {
+    "publish": PassType(tier=TIER_PASS_PUBLISH, build_prompt=_publish_prompt),
+    "channel": PassType(tier=TIER_PASS_CHANNEL, build_prompt=_channel_prompt),
+}
+
+
+def allowed_tools_for(tier: str, server_name: str = "selly") -> tuple:
+    return tuple(f"mcp__{server_name}__{spec.name}" for spec in tools_for_tier(tier))
 
 
 def resolve_claude_bin(config) -> str | None:
@@ -95,13 +130,13 @@ class PassDeps:
     now: Callable[[], float] = time.time
 
 
-def build_spec(item_id: str, endpoint: str, token: str, model: str) -> PassSpec:
+def build_spec(prompt: str, endpoint: str, token: str, model: str, tier: str) -> PassSpec:
     return PassSpec(
-        prompt=publish_prompt(item_id),
+        prompt=prompt,
         model=model,
         mcp_endpoint=endpoint,
         mcp_token=token,
-        allowed_tools=allowed_tools_for_publish(),
+        allowed_tools=allowed_tools_for(tier),
         max_turns=PASS_MAX_TURNS,
     )
 
@@ -176,28 +211,24 @@ def run_pass(deps: PassDeps, claimed) -> str:
     """Run one claimed pass to completion and return its outcome class. Always ledgers pass.end,
     revokes the token, and sweeps the workspace — even on a forced kill."""
     pass_id = claimed.pass_id
-    item_id = (claimed.payload or {}).get("item_id")
-    if not item_id:
-        deps.store.finish_pass(
-            pass_id, status="error", rc=None, cls="spawn_error", summary="no item_id in payload"
-        )
-        deps.bus.publish(
-            "pass.end",
-            {"class": "spawn_error", "is_error": True, "error": "no item_id in payload"},
-            pass_id=pass_id,
-        )
-        return "spawn_error"
+    pass_type = PASS_TYPES.get(claimed.type)
+    if pass_type is None:
+        return _spawn_error(deps, claimed, pass_id, f"unknown pass type {claimed.type!r}")
+    try:
+        prompt = pass_type.build_prompt(claimed.payload or {}, deps.store, pass_id)
+    except PassPayloadError as exc:
+        return _spawn_error(deps, claimed, pass_id, str(exc))
 
     deadline_sec = float(deps.config.pass_deadline_sec)
     expiry = deps.now() + deadline_sec + TOKEN_SLACK_SEC
-    token = deps.auth.mint_pass_token(TIER_PASS_PUBLISH, pass_id, expiry)
+    token = deps.auth.mint_pass_token(pass_type.tier, pass_id, expiry)
     workspace = paths.pass_workspace_dir(pass_id)
-    deps.bus.publish("pass.start", {"type": claimed.type, "item_id": item_id}, pass_id=pass_id)
+    deps.bus.publish("pass.start", {"type": claimed.type}, pass_id=pass_id)
 
     proc = None
     pgid = None
     try:
-        spec = build_spec(item_id, deps.http_endpoint, token, deps.config.pass_model)
+        spec = build_spec(prompt, deps.http_endpoint, token, deps.config.pass_model, pass_type.tier)
         _write_workspace(workspace, spec)
         try:
             argv = deps.argv_builder(spec)
@@ -256,7 +287,6 @@ def run_pass(deps: PassDeps, claimed) -> str:
             "pass.end",
             {
                 "type": claimed.type,
-                "item_id": item_id,
                 "rc": rc,
                 "class": cls,
                 "is_error": cls != "ok",
@@ -271,6 +301,17 @@ def run_pass(deps: PassDeps, claimed) -> str:
         if pgid is not None:
             deps.tracked_pgids.discard(pgid)
         _cleanup_workspace(workspace)
+
+
+def _spawn_error(deps: PassDeps, claimed, pass_id: str, reason: str) -> str:
+    """Ledger a pass that could never start (unknown type, bad payload) loudly and return."""
+    deps.store.finish_pass(pass_id, status="error", rc=None, cls="spawn_error", summary=reason)
+    deps.bus.publish(
+        "pass.end",
+        {"type": claimed.type, "class": "spawn_error", "is_error": True, "error": reason},
+        pass_id=pass_id,
+    )
+    return "spawn_error"
 
 
 def pass_lane(deps: PassDeps) -> None:

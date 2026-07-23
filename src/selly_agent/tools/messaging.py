@@ -8,7 +8,14 @@ unbound channel simply accumulates notices that catchup surfaces later.
 
 from __future__ import annotations
 
-from .registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolContext, ToolSpec, register
+from .registry import (
+    TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
+    TIER_PASS_PUBLISH,
+    ToolContext,
+    ToolSpec,
+    register,
+)
 
 
 def _send_message(ctx: ToolContext, params: dict) -> dict:
@@ -37,6 +44,6 @@ register(
             "additionalProperties": False,
         },
         handler=_send_message,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_CHANNEL}),
     )
 )

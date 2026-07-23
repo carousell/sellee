@@ -183,6 +183,15 @@ class Poller:
         for row in inserted:
             self._publish_in(row)
         self._dispatch_fast_paths(client, ch["chat_id"], inserted)
+        self._route_channel_pass()
+
+    def _route_channel_pass(self) -> None:
+        """Route pending free-text rows to a channel pass — coalescing: the store enqueues one only
+        when none is queued/running, so one pass sweeps everything pending and later arrivals wait
+        for the next. Claiming the rows and creating the pass is one transaction in the store."""
+        pass_id = self.store.enqueue_channel_pass()
+        if pass_id is not None:
+            self.bus.publish("pass.queued", {"type": "channel"}, pass_id=pass_id)
 
     def _dispatch_fast_paths(self, client, chat_id, inserted) -> None:
         """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /selly and the

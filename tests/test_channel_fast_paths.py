@@ -84,12 +84,13 @@ def test_resume_clears_flag(store, bus, xdg_tmp) -> None:
         assert store.is_paused() is False
 
 
-def test_freetext_stays_pending_for_the_pass(store, bus, xdg_tmp) -> None:
+def test_freetext_routes_to_the_pass_not_a_fast_path(store, bus, xdg_tmp) -> None:
     _bound(store)
     with FakeTelegramAPI() as api:
         api.inject_text("is the lamp still available?")
         _poller(store, bus, api).tick()
-    assert store.count_pending_inbox() == 1  # not a fast path — routes to the channel pass
+        assert api.outbox == []  # not a fast path — no deterministic reply
+    assert store.has_active_channel_pass() is True  # it routed to the channel pass instead
 
 
 # --- renders --------------------------------------------------------------------------------

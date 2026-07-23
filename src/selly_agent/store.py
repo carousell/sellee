@@ -2370,24 +2370,46 @@ class Store:
                 (handled_by, _now(), *inbox_ids),
             )
 
-    def claim_pending_inbox(self, pass_id: str) -> list[InboxRecord]:
-        """Claim every pending inbox row into a channel pass (status -> claimed, pass_id stamped),
-        one transaction. Returns the claimed rows (arrival order) for the prompt payload."""
+    def enqueue_channel_pass(self) -> str | None:
+        """Coalescing route, one transaction: when pending inbox rows exist and no channel pass is
+        already queued or running, create a channel pass and claim ALL pending rows into it — so
+        the lane can never claim the pass before its rows are attached, and one pass sweeps
+        everything pending (later arrivals wait for the next). Returns the pass_id, or None when
+        there is nothing to do."""
+        pass_id = _new_id("pass")
         now = _now()
         with self._db.transaction() as conn:
-            rows = conn.execute(
-                "SELECT * FROM channel_inbox WHERE status = 'pending' ORDER BY id ASC"
+            active = conn.execute(
+                "SELECT 1 FROM passes WHERE type = 'channel' "
+                "AND status IN ('queued', 'running') LIMIT 1"
+            ).fetchone()
+            if active:
+                return None
+            pending = conn.execute(
+                "SELECT id FROM channel_inbox WHERE status = 'pending' ORDER BY id ASC"
             ).fetchall()
-            claimed = [_inbox_from_row(r) for r in rows]
-            ids = [r["id"] for r in claimed]
-            if ids:
-                placeholders = ",".join("?" for _ in ids)
-                conn.execute(
-                    f"UPDATE channel_inbox SET status = 'claimed', pass_id = ?, updated_ts = ? "
-                    f"WHERE id IN ({placeholders})",
-                    (pass_id, now, *ids),
-                )
-        return claimed
+            if not pending:
+                return None
+            ids = [r["id"] for r in pending]
+            conn.execute(
+                "INSERT INTO passes (pass_id, type, payload, status, requested_ts) "
+                "VALUES (?, 'channel', ?, 'queued', ?)",
+                (pass_id, json.dumps({"inbox_ids": ids}, sort_keys=True), now),
+            )
+            placeholders = ",".join("?" for _ in ids)
+            conn.execute(
+                f"UPDATE channel_inbox SET status = 'claimed', pass_id = ?, updated_ts = ? "
+                f"WHERE id IN ({placeholders})",
+                (pass_id, now, *ids),
+            )
+        return pass_id
+
+    def inbox_for_pass(self, pass_id: str) -> list[InboxRecord]:
+        """The inbox rows claimed into a pass — the prompt builder reads these (arrival order)."""
+        rows = self._db.query(
+            "SELECT * FROM channel_inbox WHERE pass_id = ? ORDER BY id ASC", (pass_id,)
+        )
+        return [_inbox_from_row(r) for r in rows]
 
     def fold_inbox(self, pass_id: str, status: str) -> int:
         """Fold a channel pass's claimed rows to a terminal status: 'handled' (pass.end ok) or

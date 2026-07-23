@@ -9,6 +9,7 @@ import time
 from .. import __version__, heartbeat, paths, secrets
 from .registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
     ToolContext,
@@ -68,7 +69,7 @@ register(
         "whether the carousell.ai rail is provisioned, and the pass queue depth.",
         input_schema=_NO_PARAMS,
         handler=_get_status,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(
@@ -82,7 +83,7 @@ register(
             "additionalProperties": False,
         },
         handler=_get_item,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY}),
     )
 )
 register(
@@ -95,6 +96,6 @@ register(
             "additionalProperties": False,
         },
         handler=_list_items,
-        tiers=frozenset({TIER_ATTENDED}),
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
