@@ -1,7 +1,9 @@
-"""send_message — the queue-and-catchup shape without a channel yet.
+"""send_message — queue-and-catchup, never pretend-push.
 
-Publishes a message.out event and acks {queued: true}. The Telegram workstream replaces the
-sink (a bound channel, or the needs-me queue when unbound), not this tool.
+The handler inserts a durable notice row and publishes message.out; delivery is a separate concern
+(the notice-drain lane sends it to the bound channel, or catchup hands it over when unbound). The
+tool's behavior never forks on binding state — a send always succeeds and always queues, so an
+unbound channel simply accumulates notices that catchup surfaces later.
 """
 
 from __future__ import annotations
@@ -10,18 +12,21 @@ from .registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolContext, ToolSpec, r
 
 
 def _send_message(ctx: ToolContext, params: dict) -> dict:
-    payload = {"text": params["text"]}
+    notice_id = ctx.store.queue_notice(
+        params["text"], ref=params.get("ref"), pass_id=ctx.session.pass_id
+    )
+    payload = {"text": params["text"], "notice_id": notice_id}
     if "ref" in params:
         payload["ref"] = params["ref"]
     ctx.bus.publish("message.out", payload, pass_id=ctx.session.pass_id)
-    return {"queued": True}
+    return {"queued": True, "notice_id": notice_id}
 
 
 register(
     ToolSpec(
         name="send_message",
-        description="Queue a message to the seller's bound channel (a no-op sink until a "
-        "channel is connected).",
+        description="Queue a message to the seller's channel. It is delivered when a channel is "
+        "bound, or surfaced at catchup when not — a send never fails for lack of a channel.",
         input_schema={
             "type": "object",
             "properties": {

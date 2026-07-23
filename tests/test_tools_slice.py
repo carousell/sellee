@@ -77,9 +77,12 @@ def test_set_floor_ack_has_no_value(make_ctx) -> None:
         dispatch("set_floor", {"item_id": item["id"], "floor": 999.0, "source": "seller"}, ctx)
 
 
-def test_send_message_stub_queues_event(make_ctx, bus) -> None:
+def test_send_message_queues_notice_and_event(make_ctx, bus, store) -> None:
     ctx = make_ctx(TIER_ATTENDED)
     ack = dispatch("send_message", {"text": "hi", "ref": "thread-1"}, ctx)
-    assert ack == {"queued": True}
+    assert ack["queued"] is True
+    # a durable notice row was written (delivery is the drain/catchup's job, not this tool's)
+    queued = store.list_queued_notices()
+    assert len(queued) == 1 and queued[0]["id"] == ack["notice_id"] and queued[0]["text"] == "hi"
     outs = [e for e in bus.store.read() if e.kind == "message.out"]
     assert outs and outs[0].payload["text"] == "hi" and outs[0].payload["ref"] == "thread-1"

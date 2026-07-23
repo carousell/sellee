@@ -29,6 +29,7 @@ from . import (
     retention,
     secrets,
 )
+from .channel import delivery
 from .channel.poller import POLL_TIMEOUT_SEC, Poller
 from .db import Database
 from .events import EventBus, EventStore
@@ -111,6 +112,10 @@ def run_daemon(*, once: bool) -> int:
     store = Store(data_db)
     started_ts = time.time()
     attended_token = secrets.ensure_mcp_token()
+
+    # Push every new escalation to the channel as a queued notice (the drain delivers it when
+    # bound; catchup is the backstop). Subscribed before work starts so nothing is missed.
+    bus.subscribe(delivery.escalation_notifier(store))
 
     def rail_factory():
         key = secrets.read_carousell_ai_api_key()
@@ -212,6 +217,13 @@ def run_daemon(*, once: bool) -> int:
             name="stale_intent_sweep",
             interval_sec=_INTENT_SWEEP_INTERVAL_SEC,
             func=lambda: intent_sweep.run_stale_intent_sweep(bus=bus, store=store),
+        )
+    )
+    scheduler.register(
+        Task(
+            name="notice_drain",
+            interval_sec=delivery.NOTICE_DRAIN_INTERVAL_SEC,
+            func=lambda: delivery.drain_notices(store=store, config=cfg, bus=bus),
         )
     )
 

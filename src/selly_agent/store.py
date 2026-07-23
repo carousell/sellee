@@ -1991,6 +1991,10 @@ class Store:
         )
         return [_escalation_from_row(r) for r in rows]
 
+    def get_escalation(self, escalation_id: str) -> EscalationRecord | None:
+        rows = self._db.query("SELECT * FROM escalations WHERE id = ?", (escalation_id,))
+        return _escalation_from_row(rows[0]) if rows else None
+
     # --- pacing -----------------------------------------------------------------------------
 
     def reserve_action(
