@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import subprocess
@@ -21,7 +22,7 @@ LAUNCHER = REPO_ROOT / "bin" / "selly-agent"
 
 
 def _args(**overrides) -> SimpleNamespace:
-    base = {"follow": False, "pass_id": None, "since": None, "kinds": None}
+    base = {"follow": False, "pass_id": None, "since": None, "kinds": None, "json": False}
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -45,6 +46,27 @@ def test_format_line_shape() -> None:
     assert "daemon.start" in line
     assert "pass=-" in line
     assert '{"pid":7}' in line
+
+
+def test_format_ndjson_shape() -> None:
+    ev = Event(seq=1, ts=0.0, pass_id=None, kind="daemon.start", payload={"pid": 7})
+    obj = json.loads(inspect_cli._format_ndjson(ev))
+    assert next(iter(obj)) == "@ts"  # @ts leads the wire form
+    assert obj["seq"] == 1
+    assert obj["ts"] == 0.0  # raw epoch retained alongside @ts
+    assert obj["pass_id"] is None
+    assert obj["kind"] == "daemon.start"
+    assert obj["payload"] == {"pid": 7}
+
+
+def test_json_mode_emits_ndjson(xdg_tmp, capsys) -> None:
+    daemon.run_daemon(once=True)
+    assert inspect_cli.run(_args(json=True)) == 0
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    assert lines
+    parsed = [json.loads(line) for line in lines]  # every line is valid JSON
+    assert all(next(iter(obj)) == "@ts" for obj in parsed)
+    assert any(obj["kind"] == "daemon.start" for obj in parsed)
 
 
 def test_no_db_reports_and_returns_zero(xdg_tmp, capsys) -> None:

@@ -16,7 +16,7 @@ from datetime import datetime
 
 from selly_agent import paths
 from selly_agent.db import connect_reader
-from selly_agent.events import Event, query_events
+from selly_agent.events import Event, event_to_wire, query_events
 
 _POLL_INTERVAL_SEC = 1.0
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$")
@@ -38,6 +38,11 @@ def _format(event: Event) -> str:
     return f"{local}  {event.kind:<18} pass={pass_id}  {payload}"
 
 
+def _format_ndjson(event: Event) -> str:
+    # compact, no sort_keys — preserve the wire field order so @ts stays first
+    return json.dumps(event_to_wire(event), separators=(",", ":"))
+
+
 def run(args: argparse.Namespace) -> int:
     db_path = paths.events_db()
     if not db_path.exists():
@@ -50,13 +55,14 @@ def run(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return 2
 
+    fmt = _format_ndjson if args.json else _format
     filters = {"since_ts": since_ts, "pass_id": args.pass_id, "kinds": args.kinds}
     conn = connect_reader(db_path)
     try:
         last_seq = 0
         for event in query_events(conn, **filters):
             # flush per line so a piped --follow surfaces events as they land, not in blocks
-            print(_format(event), flush=True)
+            print(fmt(event), flush=True)
             last_seq = event.seq
 
         if not args.follow:
@@ -65,7 +71,7 @@ def run(args: argparse.Namespace) -> int:
         while True:
             time.sleep(_POLL_INTERVAL_SEC)
             for event in query_events(conn, after_seq=last_seq, **filters):
-                print(_format(event), flush=True)
+                print(fmt(event), flush=True)
                 last_seq = event.seq
     except KeyboardInterrupt:
         return 0

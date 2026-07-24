@@ -71,6 +71,11 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help="filter by event kind (repeatable)",
     )
+    inspect.add_argument(
+        "--json",
+        action="store_true",
+        help="emit NDJSON (one event object per line) instead of the human format",
+    )
 
     pass_cmd = sub.add_parser("pass", help="pass lifecycle")
     psub = pass_cmd.add_subparsers(dest="pass_command", required=True)
