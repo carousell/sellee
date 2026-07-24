@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 from selly_agent import __version__
 from selly_agent.db import connect_reader
-from selly_agent.events import query_events
+from selly_agent.events import event_to_wire, query_events
 from selly_agent.tools.registry import Session, ToolError, UnknownTool, dispatch, tools_for_tier
 
 log = logging.getLogger(__name__)
@@ -364,10 +364,7 @@ class _Handler(BaseHTTPRequestHandler):
             events = query_events(conn, after_seq=after_seq, pass_id=pass_id, limit=500)
         finally:
             conn.close()
-        rows = [
-            {"seq": e.seq, "ts": e.ts, "pass_id": e.pass_id, "kind": e.kind, "payload": e.payload}
-            for e in events
-        ]
+        rows = [event_to_wire(e) for e in events]
         last_seq = rows[-1]["seq"] if rows else (after_seq or 0)
         self._send_json(200, {"events": rows, "last_seq": last_seq})
 
@@ -407,6 +404,7 @@ _TAIL_HTML = """<!doctype html>
 <script>
 const params = new URLSearchParams(location.search);
 const token = params.get("token") || "";
+const jsonMode = params.get("json") === "true";
 let after = 0;
 async function poll(){
   try{
@@ -415,9 +413,13 @@ async function poll(){
       const d = await r.json();
       for(const e of d.events){
         const line = document.createElement("div");
-        line.innerHTML = `<span class=p>${new Date(e.ts*1000).toLocaleTimeString()}</span> `
-          + `<span class=k>${e.kind}</span> `
-          + `<span class=p>pass=${e.pass_id||"-"}</span> ${JSON.stringify(e.payload)}`;
+        if(jsonMode){
+          line.textContent = JSON.stringify(e);
+        }else{
+          line.innerHTML = `<span class=p>${new Date(e.ts*1000).toLocaleTimeString()}</span> `
+            + `<span class=k>${e.kind}</span> `
+            + `<span class=p>pass=${e.pass_id||"-"}</span> ${JSON.stringify(e.payload)}`;
+        }
         document.getElementById("log").appendChild(line);
       }
       after = d.last_seq;

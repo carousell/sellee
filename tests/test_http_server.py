@@ -238,6 +238,7 @@ def test_events_json_returns_events(server, bus) -> None:
     kinds = [e["kind"] for e in body["events"]]
     assert "demo.event" in kinds
     assert body["last_seq"] >= 1
+    assert all("@ts" in e for e in body["events"])  # rows share the inspect --json wire shape
 
 
 def test_tail_serves_html(server) -> None:
