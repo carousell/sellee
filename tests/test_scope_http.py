@@ -30,7 +30,7 @@ def scoped_server(bus, store, xdg_tmp):
             session=session,
             store=ScopedStore(store, getattr(session, "scope", None)),
             bus=bus,
-            config=Config(quiet_hours=(0, 0)),
+            config=Config(),
             rail_factory=None,
             started_ts=1.0,
         )

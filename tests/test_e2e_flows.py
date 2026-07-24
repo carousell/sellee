@@ -16,7 +16,6 @@ ORIGIN_SENTINEL = "7333 Marina Boulevard"
 _CFG = Config(
     reply_delay_sec=(0, 0),
     interactive_reply_delay_sec=(0, 0),
-    quiet_hours=(0, 0),
     carousell_ai_api_base="https://api.carousell.ai",
 )
 _ZONES = [{"zone": "nationwide", "match": {"areas": ["__else__"]}, "fee": 5}]

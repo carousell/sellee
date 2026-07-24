@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import time
 
+from selly_agent import settings
 from selly_agent.engines import pacing as pacing_engine
 from selly_agent.store import StoreError
 from selly_agent.tools.registry import (
@@ -67,7 +68,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             "market": thread["market"],
         }
 
-    cfg = pacing_engine.resolve(ctx.config)
+    cfg = pacing_engine.resolve(ctx.config, settings.get(ctx.store, "quiet_hours"))
     interactive = ctx.session.tier == TIER_ATTENDED
     try:
         reserved = ctx.store.reserve_reply(

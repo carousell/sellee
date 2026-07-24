@@ -37,15 +37,17 @@ class PacingConfig:
     mode: str
 
 
-def resolve(config) -> PacingConfig:
-    """Build the effective pacing config from the daemon config. The knob values are already
-    validated and clamped to the hard ceilings at load; FAST mode is applied here — it zeroes both
-    jitter ranges, lifts the cap to the ceiling, and disables quiet hours."""
+def resolve(config, quiet_hours) -> PacingConfig:
+    """Build the effective pacing config from the daemon config plus the quiet-hours window. The
+    window is passed in explicitly — it is a runtime *setting* (read from the settings store by the
+    tool layer), not a config knob, and engines never touch the store. The jitter/cap knobs are
+    already validated and clamped to the hard ceilings at load; FAST mode is applied here — it
+    zeroes both jitter ranges, lifts the cap to the ceiling, and disables quiet hours."""
     from selly_agent import config as config_mod
 
     reply = tuple(config.reply_delay_sec)
     interactive = tuple(config.interactive_reply_delay_sec)
-    quiet = tuple(config.quiet_hours)
+    quiet = tuple(quiet_hours)
     if config.pacing_mode == "fast":
         return PacingConfig(
             cap=config_mod.HARD_CAP_CEILING,

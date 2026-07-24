@@ -80,7 +80,7 @@ def _post(server, path, body, token=_ATTENDED):
 
 
 def _deliver(api):
-    def deliver(chat_id, text):
+    def deliver(chat_id, text, controls=None):
         TelegramClient(FAKE_TOKEN, api_base=api.base_url).send_message(chat_id, text)
 
     return deliver
@@ -156,7 +156,7 @@ def test_unbound_escalation_surfaces_and_send_queues(bus, store, xdg_tmp) -> Non
 def test_bind_then_conversation_end_to_end(bus, store, xdg_tmp, tmp_path) -> None:
     paths.ensure_state_dirs()
     with FakeTelegramAPI() as api:
-        cfg = Config(quiet_hours=(0, 0), reply_delay_sec=(0, 0), telegram_api_base=api.base_url)
+        cfg = Config(reply_delay_sec=(0, 0), telegram_api_base=api.base_url)
         server = _server(bus, store, cfg)
         server.start()
         try:

@@ -106,7 +106,6 @@ def test_pacing_and_negotiation_defaults(xdg_tmp) -> None:
     assert cfg.max_actions_per_hour == 12
     assert cfg.reply_delay_sec == (1.0, 3.0)
     assert cfg.interactive_reply_delay_sec == (1.0, 3.0)
-    assert cfg.quiet_hours == (23, 8)
     assert cfg.pacing_mode == "normal"
     assert cfg.negotiation_max_counters == 2
     assert cfg.negotiation_min_offer_ratio == 0.6
@@ -119,7 +118,6 @@ def test_pacing_and_negotiation_knobs_are_read(xdg_tmp) -> None:
             "max_actions_per_hour": 6,
             "reply_delay_sec": [0, 2],
             "interactive_reply_delay_sec": [0.5, 1.5],
-            "quiet_hours": [22, 9],
             "pacing_mode": "fast",
             "negotiation_max_counters": 4,
             "negotiation_min_offer_ratio": 0.5,
@@ -130,7 +128,6 @@ def test_pacing_and_negotiation_knobs_are_read(xdg_tmp) -> None:
     assert cfg.max_actions_per_hour == 6
     assert cfg.reply_delay_sec == (0.0, 2.0)
     assert cfg.interactive_reply_delay_sec == (0.5, 1.5)
-    assert cfg.quiet_hours == (22, 9)
     assert cfg.pacing_mode == "fast"
     assert cfg.negotiation_max_counters == 4
     assert cfg.negotiation_min_offer_ratio == 0.5
@@ -166,10 +163,6 @@ def test_valid_but_loose_pacing_values_clamp_down(xdg_tmp) -> None:
         {"reply_delay_sec": "fast"},
         {"reply_delay_sec": [1, "2"]},
         {"interactive_reply_delay_sec": [2, 1]},
-        {"quiet_hours": [23]},
-        {"quiet_hours": [23, 25]},
-        {"quiet_hours": [-1, 8]},
-        {"quiet_hours": [23.5, 8]},
         {"pacing_mode": "FAST"},
         {"pacing_mode": "turbo"},
         {"pacing_mode": 1},

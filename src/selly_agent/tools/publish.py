@@ -9,6 +9,7 @@ any store transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+from selly_agent import settings
 from selly_agent.engines import pacing as pacing_engine
 from selly_agent.money import to_price_cents
 from selly_agent.rail.client import RailUnprovisioned
@@ -53,7 +54,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
-    cfg = pacing_engine.resolve(ctx.config)
+    cfg = pacing_engine.resolve(ctx.config, settings.get(ctx.store, "quiet_hours"))
     paced = ctx.store.reserve_action(
         marketplace=_MARKET,
         kind="publish",

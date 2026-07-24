@@ -63,7 +63,6 @@ class Config:
     max_actions_per_hour: int = 12
     reply_delay_sec: tuple = (1.0, 3.0)
     interactive_reply_delay_sec: tuple = (1.0, 3.0)
-    quiet_hours: tuple = (23, 8)
     # normal|fast. Fast is the live-demo mode: no jitter, cap at ceiling, quiet hours off —
     # it deliberately drops the account-safety disguise. The pacing engine reads this; the
     # stored knob values themselves are untouched, so tuned values survive a round-trip.
@@ -184,18 +183,6 @@ def _validate(raw: dict) -> Config:
     for key in ("reply_delay_sec", "interactive_reply_delay_sec"):
         if key in raw:
             values[key] = _validate_delay_pair(key, raw[key])
-
-    if "quiet_hours" in raw:
-        quiet = raw["quiet_hours"]
-        if (
-            not isinstance(quiet, list)
-            or len(quiet) != 2
-            or not all(_is_real_int(h) and 0 <= h <= 24 for h in quiet)
-        ):
-            raise ConfigError(
-                f"quiet_hours must be a [start, end] pair of integers in 0..24, got {quiet!r}"
-            )
-        values["quiet_hours"] = (quiet[0], quiet[1])
 
     if "pacing_mode" in raw:
         mode = raw["pacing_mode"]

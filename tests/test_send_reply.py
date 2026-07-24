@@ -15,7 +15,7 @@ from selly_agent.config import Config
 from selly_agent.engines import pacing
 from selly_agent.tools.registry import ToolError, dispatch
 
-_FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0), quiet_hours=(0, 0))
+_FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
 
 
 class FakeSink:
@@ -90,7 +90,7 @@ def test_followup_kind_stamps_thread(make_ctx, store) -> None:
 
 def test_wait_verdict_records_no_second_intent(make_ctx, store) -> None:
     _sell_thread(store)
-    capped = Config(max_actions_per_hour=1, reply_delay_sec=(0, 0), quiet_hours=(0, 0))
+    capped = Config(max_actions_per_hour=1, reply_delay_sec=(0, 0))
     ctx = make_ctx("attended", reply_sink=FakeSink(), config=capped)
     first = dispatch("send_reply", {"thread_id": "fb:1", "text": "one"}, ctx)
     assert first["status"] == "sent"
@@ -102,7 +102,7 @@ def test_wait_verdict_records_no_second_intent(make_ctx, store) -> None:
 
 def test_quiet_verdict_records_nothing_at_store(store) -> None:
     _sell_thread(store)
-    cfg = pacing.resolve(Config(quiet_hours=(23, 8)))  # default night window
+    cfg = pacing.resolve(Config(), quiet_hours=(23, 8))  # default night window
     two_am = datetime.fromisoformat("2026-07-22T02:00:00").timestamp()
     res = store.reserve_reply(
         thread_id="fb:1", kind="reply", text="x", in_msg_id=None, cfg=cfg, now=two_am
@@ -133,7 +133,7 @@ def test_sink_failure_leaves_pending_then_sweep_folds_unconfirmed(make_ctx, stor
 
 def test_duplicate_commit_is_a_noop(store) -> None:
     _sell_thread(store)
-    cfg = pacing.resolve(_FAST)
+    cfg = pacing.resolve(_FAST, quiet_hours=(0, 0))
     reserved = store.reserve_reply(
         thread_id="fb:1", kind="reply", text="hi", in_msg_id="m1", cfg=cfg
     )
