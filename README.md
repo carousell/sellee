@@ -59,10 +59,12 @@ bin/selly-agent pass run publish --item <item_id> --follow
 # point an attended Claude Code session at the same daemon MCP server
 bin/selly-agent harness config --attended --dir /path/to/session
 
-# connect the optional Telegram channel: pipe the BotFather token on stdin, then
-# tap the printed t.me/<bot>?start=<nonce> deep link (a bare /start won't bind);
-# re-runnable, and `--status` just reports the bind state
-printf '%s' "<bot-token>" | bin/selly-agent connect telegram
+# connect the optional Telegram channel. Run it interactively and it prints BotFather
+# guidance, then prompts (hidden) for the token; open the printed t.me/<bot>?start=<nonce>
+# deep link on the phone that has Telegram (a bare /start won't bind). Re-runnable, and
+# `--status` just reports the bind state. Scripted? Pipe the token on stdin instead:
+bin/selly-agent connect telegram                          # interactive prompt
+printf '%s' "<bot-token>" | bin/selly-agent connect telegram   # scripted
 
 # tail the event store (works whether or not the daemon is running)
 bin/selly-agent inspect --follow

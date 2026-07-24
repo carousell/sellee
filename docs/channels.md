@@ -52,13 +52,21 @@ removes those lanes).
 
 ## Bind (Telegram)
 
-`selly-agent connect telegram` pipes the BotFather token on stdin (never argv) to
-the running daemon, which:
+`selly-agent connect telegram` reads the BotFather token — never from argv, so it
+stays out of `ps`/shell history — and sends it to the running daemon, which:
 
 1. validates it (`getMe`), writes it to a 0600 file, and mints a one-time
    **nonce**;
 2. returns `t.me/<bot>?start=<nonce>` and starts the provider;
 3. binds the first chat whose `/start` carries that nonce — and no other.
+
+Run interactively (stdin is a TTY), it prints short BotFather guidance and prompts
+for the token with `getpass` (not echoed); run with a pipe (scripted / installer),
+it reads one line of stdin unchanged. Either way it then prints the deep link with
+phone-oriented wording — **open it on the phone that has Telegram**, not "tap it"
+(the operator is often at a desktop) — and polls until the chat binds. The
+interactive wait is longer (300s vs 120s piped) to cover relaying the link to a
+phone.
 
 Because authorization is nonce possession, not first contact, the hijack race a
 first-contact capture would have can't happen, and an interrupted bind resumes

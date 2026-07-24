@@ -1,14 +1,27 @@
 """`selly-agent connect telegram` — bind a Telegram bot over the daemon's control route.
 
-The token is a long-lived credential, so it never touches argv: it is read from one line of stdin
-and POSTed to the running daemon, which validates it, stores it 0600, and mints a bind nonce. The
-CLI prints the deep link (tap it — a bare /start won't bind) and polls channel-status until the
-chat binds. Exit codes mirror the legacy bind discipline: 0 bound · 1 awaiting /start (timed out,
-re-runnable) · 2 bad token · 3 daemon/API error.
+The token is a long-lived credential, so it never touches argv: it is read from stdin and POSTed to
+the running daemon, which validates it, stores it 0600, and mints a bind nonce. The CLI prints the
+deep link (open it on the phone that has Telegram) and polls channel-status until the chat binds.
+Exit codes mirror the legacy bind discipline: 0 bound · 1 awaiting /start (timed out, re-runnable) ·
+2 bad token · 3 daemon/API error.
+
+Interactive vs piped:
+
+- Interactive (stdin is a TTY): print short BotFather guidance, then read the token with
+  ``getpass`` — prompted and not echoed, so a credential never lands in the terminal scrollback.
+- Piped / scripted / installer with a pipe (stdin is not a TTY): one ``readline()``, exactly as
+  before — no prompt, no guidance, so scripted token entry is unchanged.
+
+The bind flow (guidance → token read → POST → print identity + start_url + phone-delivery
+guidance → poll) lives in :func:`bind_flow` so the installer's inline "want your agent on your
+phone?" offer reuses the same UX rather than duplicating it. A scannable terminal QR of the deep
+link is a separate plan; this command prints the URL for now.
 """
 
 from __future__ import annotations
 
+import getpass
 import json
 import sys
 import time
@@ -19,6 +32,19 @@ from selly_agent import config, secrets
 
 _LOCALHOST_ORIGIN = "http://127.0.0.1"
 _POLL_INTERVAL_SEC = 1.0
+# Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
+# default is generous; the piped/scripted default stays tight (a script isn't waiting on a human).
+_INTERACTIVE_TIMEOUT_SEC = 300
+_PIPED_TIMEOUT_SEC = 120
+# While polling interactively, remind the operator of the remaining wait at this cadence.
+_REMAINING_NOTICE_SEC = 30
+
+_BOTFATHER_GUIDANCE = (
+    "To connect Telegram you need a bot token from BotFather:\n"
+    "  1. Open Telegram and message @BotFather\n"
+    "  2. Send /newbot and follow the prompts (a name, then a username)\n"
+    "  3. Copy the HTTP API token it replies with (looks like 123456789:AA...)\n"
+)
 
 
 def _base_url(port: int) -> str:
@@ -63,6 +89,18 @@ def _get(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
+def _read_token(interactive: bool) -> str:
+    """Read the BotFather token. Interactive: a non-echoed getpass prompt (a credential must stay
+    off the scrollback). Piped: one readline, byte-for-byte the pre-existing behaviour."""
+    if interactive:
+        try:
+            return getpass.getpass("Paste your BotFather bot token: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print(file=sys.stderr)  # close the dangling prompt line
+            return ""
+    return sys.stdin.readline().strip()
+
+
 def run(args) -> int:
     token = _require_token()
     if not token:
@@ -70,17 +108,45 @@ def run(args) -> int:
     port = config.load().http_port
     if getattr(args, "status", False):
         return _print_status(port, token)
-    return _connect(port, token, timeout=getattr(args, "timeout", 120))
+    return bind_flow(port, token, timeout=getattr(args, "timeout", None))
 
 
-def _connect(port: int, token: str, *, timeout: int) -> int:
-    bot_token = sys.stdin.readline().strip()
+def bind_flow(
+    port: int,
+    mcp_token: str,
+    *,
+    timeout: int | None = None,
+    interactive: bool | None = None,
+) -> int:
+    """Run the full connect-telegram UX and return the process exit code.
+
+    Guidance → token read → POST /control/connect-telegram → print identity + start_url +
+    phone-delivery guidance → poll channel-status until bound or timeout. Shared by the standalone
+    command and the installer's inline offer; the caller owns any offer/accept/decline framing, this
+    owns everything from the token to a bound chat.
+
+    ``interactive`` defaults to whether stdin is a TTY; ``timeout`` defaults to 300s interactive /
+    120s piped (a desktop operator relaying the link to a phone needs the longer window).
+    """
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if timeout is None:
+        timeout = _INTERACTIVE_TIMEOUT_SEC if interactive else _PIPED_TIMEOUT_SEC
+
+    if interactive:
+        print(_BOTFATHER_GUIDANCE)
+
+    bot_token = _read_token(interactive)
     if not bot_token:
-        print("selly-agent: no token on stdin — pipe the BotFather token in", file=sys.stderr)
+        if interactive:
+            print("selly-agent: no token entered — nothing to connect.", file=sys.stderr)
+        else:
+            print("selly-agent: no token on stdin — pipe the BotFather token in", file=sys.stderr)
         return 2
+
     url = f"{_base_url(port)}/control/connect-telegram"
     try:
-        status, body = _post(url, token, {"token": bot_token})
+        status, body = _post(url, mcp_token, {"token": bot_token})
     except (urllib.error.URLError, OSError) as exc:
         print(f"selly-agent: could not reach the daemon: {exc}", file=sys.stderr)
         return 3
@@ -92,17 +158,35 @@ def _connect(port: int, token: str, *, timeout: int) -> int:
         print(f"selly-agent: Telegram API error ({body.get('detail', kind)})", file=sys.stderr)
         return 3
 
-    print(f"Bot @{body['bot_username']} validated. Open this link and tap Start:")
-    print(f"  {body['start_url']}")
-    print("(tap the link — a plain /start won't bind)")
-    print("Waiting for you to start the bot...")
-    return _await_bind(port, token, timeout=timeout)
+    _print_bind_prompt(body["bot_username"], body["start_url"], timeout=timeout)
+    return _await_bind(port, mcp_token, timeout=timeout, interactive=interactive)
 
 
-def _await_bind(port: int, token: str, *, timeout: int) -> int:
+def _print_bind_prompt(bot_username: str, start_url: str, *, timeout: int) -> None:
+    """Show the bot identity and the deep link the operator must open on their phone.
+
+    Wording is phone-oriented ("open on the phone that has Telegram"), not "tap the link" — the
+    operator is often at a desktop with no Telegram, so the link has to travel to the phone. The URL
+    is printed prominently with one line on getting it across (no online-QR suggestion — the nonce
+    is a single-use secret).
+    """
+    print(f"Bot @{bot_username} validated.\n")
+    print("Open this link on the phone that has Telegram, then tap Start:")
+    print(f"  {start_url}")
+    print("  On a desktop with no Telegram? Send the link to your phone (message it to")
+    print("  yourself) and open it there — don't just type /start, the link carries a")
+    print("  one-time code that binds your chat.")
+    print(f"\nWaiting for you to start the bot (up to {timeout}s)...")
+
+
+def _await_bind(port: int, token: str, *, timeout: int, interactive: bool) -> int:
     deadline = time.monotonic() + timeout
     url = f"{_base_url(port)}/control/channel-status?token={token}"
-    while time.monotonic() < deadline:
+    next_notice = timeout - _REMAINING_NOTICE_SEC
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
         try:
             status = _get(url)
         except (urllib.error.URLError, OSError):
@@ -110,9 +194,13 @@ def _await_bind(port: int, token: str, *, timeout: int) -> int:
         if status.get("bound"):
             print(f"Connected as @{status.get('bot_username')}.")
             return 0
+        if interactive and remaining <= next_notice:
+            print(f"  still waiting — {int(remaining)}s left...")
+            next_notice = remaining - _REMAINING_NOTICE_SEC
         time.sleep(_POLL_INTERVAL_SEC)
     print(
-        "Timed out waiting for /start. Tap the link, then re-run: selly-agent connect telegram",
+        "Timed out waiting for /start. Open the link on your phone, then re-run: "
+        "selly-agent connect telegram",
         file=sys.stderr,
     )
     return 1

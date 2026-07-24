@@ -100,7 +100,10 @@ def _build_parser() -> argparse.ArgumentParser:
     ctel = consub.add_parser("telegram", help="bind a Telegram bot (token read from stdin)")
     ctel.add_argument("--status", action="store_true", help="report bind status and exit")
     ctel.add_argument(
-        "--timeout", type=int, default=120, help="seconds to wait for /start (default 120)"
+        "--timeout",
+        type=int,
+        default=None,
+        help="seconds to wait for /start (default: 300 interactive, 120 piped)",
     )
 
     provision = sub.add_parser("provision", help="provision an external rail")
