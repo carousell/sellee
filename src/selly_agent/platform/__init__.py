@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import sys
 
-from .base import Platform, UnsupportedPlatform
+from selly_agent.platform.base import Platform, UnsupportedPlatform
 
 
 def get_platform() -> Platform:
     if sys.platform == "darwin":
-        from .macos import MacOSPlatform
+        from selly_agent.platform.macos import MacOSPlatform
 
         return MacOSPlatform()
     raise UnsupportedPlatform(

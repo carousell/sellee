@@ -21,10 +21,15 @@ from __future__ import annotations
 
 import logging
 
-from ... import paths, secrets
-from .. import fastpaths, routing
-from . import commands
-from .transport import ChannelError, TelegramClient, _normalize, commands_hash
+from selly_agent import paths, secrets
+from selly_agent.channel import fastpaths, routing
+from selly_agent.channel.telegram import commands
+from selly_agent.channel.telegram.transport import (
+    ChannelError,
+    TelegramClient,
+    _normalize,
+    commands_hash,
+)
 
 log = logging.getLogger(__name__)
 

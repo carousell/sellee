@@ -7,7 +7,7 @@ list complete — an unimported tool module is a tool that silently doesn't exis
 
 from __future__ import annotations
 
-from . import (  # noqa: F401  imported for registration
+from selly_agent.tools import (  # noqa: F401  imported for registration
     buyer,
     checkout,
     control,
@@ -24,7 +24,7 @@ from . import (  # noqa: F401  imported for registration
     wants,
     writes,
 )
-from .registry import (  # noqa: F401  re-exported as the package's public surface
+from selly_agent.tools.registry import (  # noqa: F401  re-exported as the package's public surface
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,

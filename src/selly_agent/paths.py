@@ -15,7 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .platform import get_platform
+from selly_agent.platform import get_platform
 
 APP = "selly-agent"
 

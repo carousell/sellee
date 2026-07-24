@@ -14,9 +14,9 @@ import sys
 import time
 from datetime import datetime
 
-from . import paths
-from .db import connect_reader
-from .events import Event, query_events
+from selly_agent import paths
+from selly_agent.db import connect_reader
+from selly_agent.events import Event, query_events
 
 _POLL_INTERVAL_SEC = 1.0
 _DURATION_RE = re.compile(r"^(\d+)([smhd])$")

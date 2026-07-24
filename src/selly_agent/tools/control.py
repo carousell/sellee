@@ -8,7 +8,7 @@ tools refuse, the babysitter kills a running pass within a poll cadence). Missin
 
 from __future__ import annotations
 
-from .registry import TIER_ATTENDED, ToolContext, ToolSpec, register
+from selly_agent.tools.registry import TIER_ATTENDED, ToolContext, ToolSpec, register
 
 
 def _pause_agent(ctx: ToolContext, params: dict) -> dict:

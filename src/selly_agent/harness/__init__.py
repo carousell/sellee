@@ -8,6 +8,6 @@ rejected, never sanitized.
 
 from __future__ import annotations
 
-from .model import PassSpec
+from selly_agent.harness.model import PassSpec
 
 __all__ = ["PassSpec"]

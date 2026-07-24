@@ -9,8 +9,8 @@ never enters the computation or the output.
 
 from __future__ import annotations
 
-from ..engines import shipping as shipping_engine
-from .registry import (
+from selly_agent.engines import shipping as shipping_engine
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,

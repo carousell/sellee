@@ -6,8 +6,8 @@ import dataclasses
 import os
 import time
 
-from .. import __version__, heartbeat, paths, secrets
-from .registry import (
+from selly_agent import __version__, heartbeat, paths, secrets
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,

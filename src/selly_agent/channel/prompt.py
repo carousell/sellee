@@ -9,7 +9,7 @@ This interim prompt is throwaway: the skills rewrite replaces it and finalizes t
 
 from __future__ import annotations
 
-from ..proc_tree import PASS_PROMPT_MARKER
+from selly_agent.proc_tree import PASS_PROMPT_MARKER
 
 # The conversational window caps (F13): the most recent N entries, further trimmed to a char budget.
 TRANSCRIPT_WINDOW_LIMIT = 40

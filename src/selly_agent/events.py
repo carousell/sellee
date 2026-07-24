@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-from .db import Database
+from selly_agent.db import Database
 
 log = logging.getLogger(__name__)
 

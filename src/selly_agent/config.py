@@ -14,7 +14,7 @@ import logging
 from dataclasses import dataclass, fields
 from pathlib import Path
 
-from . import paths
+from selly_agent import paths
 
 log = logging.getLogger(__name__)
 

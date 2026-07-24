@@ -26,10 +26,10 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from . import __version__
-from .db import connect_reader
-from .events import query_events
-from .tools.registry import Session, ToolError, UnknownTool, dispatch, tools_for_tier
+from selly_agent import __version__
+from selly_agent.db import connect_reader
+from selly_agent.events import query_events
+from selly_agent.tools.registry import Session, ToolError, UnknownTool, dispatch, tools_for_tier
 
 log = logging.getLogger(__name__)
 
@@ -310,7 +310,7 @@ class _Handler(BaseHTTPRequestHandler):
         # Attended-only: the token arrives here (never argv), the daemon validates it, writes the
         # 0600 secret, arms a bind nonce, and returns the deep link. The token is never echoed and
         # never logged; only bot_username is published.
-        from .channel.telegram import bind
+        from selly_agent.channel.telegram import bind
 
         session = self._app.auth.resolve(self._bearer())
         if session is None or session.tier != "attended":
@@ -339,7 +339,7 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, result)
 
     def _handle_channel_status(self, parsed) -> None:
-        from .channel.telegram import bind
+        from selly_agent.channel.telegram import bind
 
         qs = parse_qs(parsed.query)
         session = self._app.auth.resolve(qs.get("token", [None])[0])

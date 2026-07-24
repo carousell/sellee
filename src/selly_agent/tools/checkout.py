@@ -12,10 +12,10 @@ from __future__ import annotations
 
 import hashlib
 
-from ..money import to_price_cents
-from ..rail.client import RailError, RailUnprovisioned
-from ..store import StoreError
-from .registry import (
+from selly_agent.money import to_price_cents
+from selly_agent.rail.client import RailError, RailUnprovisioned
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_REPLY,
     ToolContext,

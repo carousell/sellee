@@ -12,7 +12,7 @@ import subprocess
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from .base import Platform
+from selly_agent.platform.base import Platform
 
 _DEFAULT_LABEL = "com.selly.agent"
 

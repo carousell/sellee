@@ -9,11 +9,11 @@ any store transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
-from ..engines import pacing as pacing_engine
-from ..money import to_price_cents
-from ..rail.client import RailUnprovisioned
-from ..store import StoreError
-from .registry import (
+from selly_agent.engines import pacing as pacing_engine
+from selly_agent.money import to_price_cents
+from selly_agent.rail.client import RailUnprovisioned
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,

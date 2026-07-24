@@ -17,7 +17,7 @@ import sys
 import threading
 import time
 
-from . import (
+from selly_agent import (
     __version__,
     config,
     heartbeat,
@@ -29,16 +29,16 @@ from . import (
     retention,
     secrets,
 )
-from .channel import outbound
-from .channel.manager import ChannelManager
-from .channel.telegram import provider as telegram_provider
-from .db import Database
-from .events import EventBus, EventStore
-from .http_server import HttpServer
-from .rail.client import RailClient, RailUnprovisioned
-from .scheduler import Scheduler, Task
-from .store import ScopedStore, Store
-from .tools.registry import ToolContext
+from selly_agent.channel import outbound
+from selly_agent.channel.manager import ChannelManager
+from selly_agent.channel.telegram import provider as telegram_provider
+from selly_agent.db import Database
+from selly_agent.events import EventBus, EventStore
+from selly_agent.http_server import HttpServer
+from selly_agent.rail.client import RailClient, RailUnprovisioned
+from selly_agent.scheduler import Scheduler, Task
+from selly_agent.store import ScopedStore, Store
+from selly_agent.tools.registry import ToolContext
 
 log = logging.getLogger(__name__)
 

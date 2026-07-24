@@ -41,7 +41,7 @@ def resolve(config) -> PacingConfig:
     """Build the effective pacing config from the daemon config. The knob values are already
     validated and clamped to the hard ceilings at load; FAST mode is applied here — it zeroes both
     jitter ranges, lifts the cap to the ceiling, and disables quiet hours."""
-    from .. import config as config_mod
+    from selly_agent import config as config_mod
 
     reply = tuple(config.reply_delay_sec)
     interactive = tuple(config.interactive_reply_delay_sec)

@@ -7,8 +7,15 @@ set_floor's floor parameter is marked secret, so the dispatch path masks it befo
 
 from __future__ import annotations
 
-from ..store import StoreError
-from .registry import TIER_ATTENDED, TIER_PASS_CHANNEL, ToolContext, ToolError, ToolSpec, register
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
+    TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
+    ToolContext,
+    ToolError,
+    ToolSpec,
+    register,
+)
 
 
 def _create_item(ctx: ToolContext, params: dict) -> dict:

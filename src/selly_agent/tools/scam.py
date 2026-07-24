@@ -9,11 +9,11 @@ signature (anti-poisoning), in code.
 
 from __future__ import annotations
 
-from .. import marketplaces
-from ..engines import hosts
-from ..engines import scam as scam_engine
-from ..store import StoreError
-from .registry import (
+from selly_agent import marketplaces
+from selly_agent.engines import hosts
+from selly_agent.engines import scam as scam_engine
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,

@@ -12,7 +12,7 @@ path here; that parity work is gated to the cutover plan.
 
 from __future__ import annotations
 
-from .model import PassSpec
+from selly_agent.harness.model import PassSpec
 
 
 def render_config(spec: PassSpec) -> str:

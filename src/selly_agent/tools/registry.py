@@ -21,7 +21,7 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
-from .schema import ValidationError, validate
+from selly_agent.tools.schema import ValidationError, validate
 
 _MASK = "***"
 _RESULT_EVENT_CAP = 4096  # chars of a result's JSON kept in the event payload (not the return)

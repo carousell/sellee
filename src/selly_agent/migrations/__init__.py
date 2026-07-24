@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from ..db import Database
+from selly_agent.db import Database
 
 log = logging.getLogger(__name__)
 

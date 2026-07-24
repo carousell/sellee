@@ -13,7 +13,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from . import config, secrets
+from selly_agent import config, secrets
 
 _TIMEOUT_SEC = 120.0
 _INTERNAL_ERROR = -32603

@@ -8,8 +8,8 @@ inside the store, and its outputs are secret-free (the never-above-max assert is
 
 from __future__ import annotations
 
-from ..store import StoreError
-from .registry import TIER_ATTENDED, ToolContext, ToolError, ToolSpec, register
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import TIER_ATTENDED, ToolContext, ToolError, ToolSpec, register
 
 
 def _set_budget(ctx: ToolContext, params: dict) -> dict:

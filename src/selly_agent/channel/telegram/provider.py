@@ -12,11 +12,11 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 
-from ... import secrets
-from ...scheduler import Task
-from .. import outbound
-from . import outbound as tg_outbound
-from .poller import POLL_TIMEOUT_SEC, Poller
+from selly_agent import secrets
+from selly_agent.channel import outbound
+from selly_agent.channel.telegram import outbound as tg_outbound
+from selly_agent.channel.telegram.poller import POLL_TIMEOUT_SEC, Poller
+from selly_agent.scheduler import Task
 
 _DRAIN_TASK = "notice_drain"
 _TYPING_TASK = "typing_pulse"

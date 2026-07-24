@@ -15,7 +15,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from . import config, secrets
+from selly_agent import config, secrets
 
 _LOCALHOST_ORIGIN = "http://127.0.0.1"
 
@@ -123,7 +123,7 @@ def harness_config(args) -> int:
 
 def provision(args) -> int:
     """`selly-agent provision carousell-ai [--region XX]` — obtain the guest API key."""
-    from .rail import provision as rail_provision
+    from selly_agent.rail import provision as rail_provision
 
     cfg = config.load()
     status = rail_provision.ensure(args.region or None, api_base=cfg.carousell_ai_api_base)

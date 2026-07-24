@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import argparse
 
-from . import __version__
+from selly_agent import __version__
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -118,37 +118,37 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.command == "daemon":
-        from . import daemon_cli
+        from selly_agent import daemon_cli
 
         return daemon_cli.dispatch(args)
 
     if args.command == "inspect":
-        from . import inspect_cli
+        from selly_agent import inspect_cli
 
         return inspect_cli.run(args)
 
     if args.command == "pass":
-        from . import pass_cli
+        from selly_agent import pass_cli
 
         return pass_cli.run(args)
 
     if args.command == "harness":
-        from . import pass_cli
+        from selly_agent import pass_cli
 
         return pass_cli.harness_config(args)
 
     if args.command == "connect":
-        from . import connect_cli
+        from selly_agent import connect_cli
 
         return connect_cli.run(args)
 
     if args.command == "provision":
-        from . import pass_cli
+        from selly_agent import pass_cli
 
         return pass_cli.provision(args)
 
     if args.command == "mcp-proxy":
-        from . import mcp_proxy
+        from selly_agent import mcp_proxy
 
         return mcp_proxy.main(args)
 

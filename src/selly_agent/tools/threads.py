@@ -10,8 +10,8 @@ their own tools, never this generic writer.
 
 from __future__ import annotations
 
-from ..store import StoreError
-from .registry import (
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
@@ -20,7 +20,7 @@ from .registry import (
     ToolSpec,
     register,
 )
-from .verify import verify_market_url
+from selly_agent.tools.verify import verify_market_url
 
 
 def _create_thread(ctx: ToolContext, params: dict) -> dict:

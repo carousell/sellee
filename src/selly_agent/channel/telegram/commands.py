@@ -4,7 +4,7 @@ provider-neutral controls spec into a Telegram inline keyboard.
 
 from __future__ import annotations
 
-from .transport import build_inline_keyboard
+from selly_agent.channel.telegram.transport import build_inline_keyboard
 
 # The commands this plan handles deterministically — setMyCommands registers exactly these, so the
 # "/" menu never advertises a command the daemon can't answer. Slash stripped, lowercase (Telegram's

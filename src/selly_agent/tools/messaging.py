@@ -8,7 +8,7 @@ unbound channel simply accumulates notices that catchup surfaces later.
 
 from __future__ import annotations
 
-from .registry import (
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,

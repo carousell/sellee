@@ -31,12 +31,12 @@ import uuid
 from dataclasses import dataclass
 from typing import TypedDict
 
-from . import marketplaces
-from .db import Database
-from .engines import buyer_negotiate as buyer_engine
-from .engines import negotiate as negotiate_engine
-from .engines import pacing as pacing_engine
-from .engines import scam as scam_engine
+from selly_agent import marketplaces
+from selly_agent.db import Database
+from selly_agent.engines import buyer_negotiate as buyer_engine
+from selly_agent.engines import negotiate as negotiate_engine
+from selly_agent.engines import pacing as pacing_engine
+from selly_agent.engines import scam as scam_engine
 
 # Fields a caller may set on an item. listing_urls is deliberately absent — it is written only
 # after a live listing verify, by the publish path. Sale-state transitions are not here either.

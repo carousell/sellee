@@ -12,8 +12,8 @@ import logging
 import time
 from pathlib import Path
 
-from . import migrations
-from .events import EventBus
+from selly_agent import migrations
+from selly_agent.events import EventBus
 
 log = logging.getLogger(__name__)
 

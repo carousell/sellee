@@ -4,8 +4,8 @@ present in any want read — it lives only behind set_budget and the buyer engin
 
 from __future__ import annotations
 
-from ..store import StoreError
-from .registry import (
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_REPLY,
     ToolContext,

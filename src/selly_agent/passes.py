@@ -20,13 +20,13 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from . import paths
-from .channel import prompt as channel_prompt_mod
-from .harness import claude
-from .harness.model import PassSpec
-from .pass_stream import is_cap_hit, parse_stream_line
-from .proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
-from .tools import TIER_PASS_CHANNEL, TIER_PASS_PUBLISH, tools_for_tier
+from selly_agent import paths
+from selly_agent.channel import prompt as channel_prompt_mod
+from selly_agent.harness import claude
+from selly_agent.harness.model import PassSpec
+from selly_agent.pass_stream import is_cap_hit, parse_stream_line
+from selly_agent.proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
+from selly_agent.tools import TIER_PASS_CHANNEL, TIER_PASS_PUBLISH, tools_for_tier
 
 log = logging.getLogger(__name__)
 

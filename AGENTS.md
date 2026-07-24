@@ -44,6 +44,13 @@ on it — run `make test-3.9`. Syntax discipline:
 `ruff` with `target-version = "py39"` is a second mechanical enforcer of the
 floor — it flags 3.10+ syntax at lint time.
 
+## Imports are absolute
+
+Intra-package imports use the absolute `from selly_agent.x import y` style (not
+relative `from .x import y`, and not bare `import selly_agent.x.y`), so moving a
+module never forces rewriting its own imports. Relative imports fail `make lint`
+(ruff TID252, `ban-relative-imports = "all"`).
+
 ## Types are checked, not just written
 
 A static type checker runs via `make typecheck` (pyright, dev-only — it never

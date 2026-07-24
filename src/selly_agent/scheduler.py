@@ -17,7 +17,7 @@ from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor, wait
 from dataclasses import dataclass, field
 
-from .events import EventBus
+from selly_agent.events import EventBus
 
 log = logging.getLogger(__name__)
 

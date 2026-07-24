@@ -7,8 +7,8 @@ only the Telegram-specific act of putting bytes on the wire.
 
 from __future__ import annotations
 
-from ... import secrets
-from .transport import ChannelError, TelegramClient
+from selly_agent import secrets
+from selly_agent.channel.telegram.transport import ChannelError, TelegramClient
 
 
 def _client(config) -> TelegramClient:

@@ -12,7 +12,7 @@ import json
 import urllib.error
 import urllib.request
 
-from .. import secrets
+from selly_agent import secrets
 
 _GUESTS_PATH = "/api/v1/guests"
 _DEFAULT_TIMEOUT_SEC = 10.0

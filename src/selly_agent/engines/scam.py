@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import hashlib
 
-from . import hosts
+from selly_agent.engines import hosts
 
 # Scoring weights (named, not magic).
 SCORE_OFFPLATFORM_LINK = 2

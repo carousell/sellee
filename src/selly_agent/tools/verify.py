@@ -10,10 +10,10 @@ seam; this tool exists for a pre-message check.
 
 from __future__ import annotations
 
-from .. import marketplaces
-from ..engines import hosts
-from ..rail.client import RailError, RailUnprovisioned
-from .registry import (
+from selly_agent import marketplaces
+from selly_agent.engines import hosts
+from selly_agent.rail.client import RailError, RailUnprovisioned
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_REPLY,
     ToolContext,

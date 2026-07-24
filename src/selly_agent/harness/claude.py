@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import json
 
-from .model import PassSpec
+from selly_agent.harness.model import PassSpec
 
 
 def mcp_config(spec: PassSpec) -> dict:

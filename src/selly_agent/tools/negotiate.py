@@ -5,8 +5,8 @@ needs_floor result carries no number, and the below-floor assert in the engine i
 
 from __future__ import annotations
 
-from ..store import StoreError
-from .registry import (
+from selly_agent.store import StoreError
+from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,

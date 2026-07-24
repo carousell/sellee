@@ -13,7 +13,7 @@ import os
 import secrets as _stdlib_secrets
 from pathlib import Path
 
-from . import paths
+from selly_agent import paths
 
 _TOKEN_BYTES = 32
 

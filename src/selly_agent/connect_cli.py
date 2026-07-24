@@ -15,7 +15,7 @@ import time
 import urllib.error
 import urllib.request
 
-from . import config, secrets
+from selly_agent import config, secrets
 
 _LOCALHOST_ORIGIN = "http://127.0.0.1"
 _POLL_INTERVAL_SEC = 1.0

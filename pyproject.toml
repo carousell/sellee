@@ -49,7 +49,13 @@ select = [
     "I",  # isort
     "UP", # pyupgrade (respects target-version)
     "B",  # bugbear
+    "TID", # tidy-imports: bans relative imports (see below)
 ]
+
+[tool.ruff.lint.flake8-tidy-imports]
+# Intra-package imports are absolute (from selly_agent.x import y) so moving a
+# module never forces rewriting its own imports.
+ban-relative-imports = "all"
 
 [tool.pyright]
 # Basic mode checks only what is annotated, so its blast radius is the annotated

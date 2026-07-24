@@ -9,11 +9,11 @@ def dispatch(args: argparse.Namespace) -> int:
     command = args.daemon_command
 
     if command == "run":
-        from . import daemon
+        from selly_agent import daemon
 
         return daemon.run_daemon(once=args.once)
 
-    from . import supervisor
+    from selly_agent import supervisor
 
     if command == "install":
         return supervisor.install(mode=args.mode, label=args.label)

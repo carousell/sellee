@@ -15,10 +15,10 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from . import config, heartbeat, paths
-from .db import connect_reader
-from .events import query_events
-from .platform import Platform, get_platform
+from selly_agent import config, heartbeat, paths
+from selly_agent.db import connect_reader
+from selly_agent.events import query_events
+from selly_agent.platform import Platform, get_platform
 
 # Embedded in every plist we render, so a re-install/flip only ever touches our own file and
 # never silently replaces a foreign (e.g. legacy) daemon's plist with the same label.
