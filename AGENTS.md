@@ -101,6 +101,34 @@ data loss, never backed up). Never open a cross-DB transaction — events are
 observability, not ledger. All writes go through the single write connection
 per DB; the LLM never writes state directly.
 
+## Three kinds of config, three homes
+
+Keep these distinct — where a value lives is a decision about what it *is*:
+
+- **Operator/install knobs** — `config.py` reading `config.json`. Validated at
+  load, restart semantics, written only by the installer/tools, never the daemon.
+  (e.g. `http_port`, pacing jitter/cap, `pacing_mode`.)
+- **Seller domain records** — the `seller_config` table (basics, shipping zones,
+  the origin address). Free-form JSON sections the flows consult; written
+  attended-direct via `update_seller_config`.
+- **Seller settings** — the `settings` table plus the `settings.py` code
+  registry. Runtime behavior knobs the seller changes through a door. Defaults
+  live in the registry, not as rows: an unset key reads as its default. Adding a
+  setting is one `SettingSpec` (type/parse/render/default/description/approval
+  policy) — the registry is the validation source, the card's discoverability
+  source, and the LLM's vocabulary at once.
+
+**Settings change only through a door — the LLM proposes, it never applies.**
+`propose_setting_change` is the *only* settings-mutation tool on any tier; there
+is deliberately no apply/approve/undo/cancel tool. The daemon decides by policy
+(a registry `requires_approval` flag): high-stakes changes are held for a human
+signal (an Approve/Cancel button, an exact `approve <id>` text token, or the
+attended `selly-agent settings approve <id>` CLI over `/control/settings-decide`);
+low-stakes ones apply immediately in deterministic store code. Every apply is one
+`selly.db` transaction (setting upsert + ledger row + echo notice), and every
+consumer reads its setting at its own decision point (read-at-use — no caching, no
+reload). The no-apply-tool rule is enforced by a guard test, not just convention.
+
 ## Engines stay pure
 
 Modules under `src/selly_agent/engines/` are pure decision layers. They must not
