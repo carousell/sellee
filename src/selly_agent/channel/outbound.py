@@ -30,17 +30,18 @@ FAILED_PASS_NOTICE = "I couldn't process your last message — please send it ag
 
 def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=None) -> None:
     """Deliver queued notices to the bound chat, FIFO, via the provider's `deliver`. No-op while
-    paused or unbound (catchup delivers then). During quiet hours only urgent notices (escalation
-    pushes) go out — routine ones stay queued and drain at the window's end. A delivery failure
-    bumps the notice's attempts (the row stays queued — visible in catchup, never dropped) and
-    re-raises so the scheduler backs the lane off."""
+    paused or unbound (catchup delivers then). During quiet hours only *proactive* notices are held
+    — seller-facing ones (channel-pass replies, settings approvals, escalation pushes) deliver at
+    any hour, so seller-initiated chat is never gated. A delivery failure bumps the notice's
+    attempts (the row stays queued — visible in catchup, never dropped) and re-raises so the
+    scheduler backs the lane off."""
     if store.is_paused():
         return
     ch = store.get_channel()
     if ch["chat_id"] is None:
         return
-    urgent_only = _in_quiet_hours(store, now)
-    for notice in store.claim_queued_notices(limit, urgent_only=urgent_only):
+    in_quiet = _in_quiet_hours(store, now)
+    for notice in store.claim_queued_notices(limit, in_quiet=in_quiet):
         try:
             deliver(ch["chat_id"], notice["text"], notice["controls"])
         except Exception:
@@ -100,11 +101,10 @@ def escalation_notifier(store):
         esc = store.get_escalation(event.payload.get("id"))
         if esc is None:  # resolved/pruned between publish and here — catchup covers it
             return
-        # Urgent: an escalation is a decision the seller must make; it bypasses the quiet-hours
-        # drain hold (a meetup confirmation shouldn't wait until morning — the seller can mute
-        # Telegram themselves if they want silence).
-        store.queue_notice(
-            f"Needs your call: {esc['open_question']}", ref=esc["thread_id"], urgent=True
-        )
+        # An escalation is a decision the seller must make; it is not holdable, so it delivers at
+        # any hour (a meetup confirmation shouldn't wait until morning — the seller can mute
+        # Telegram themselves if they want silence). holdable defaults to False, so this is just a
+        # plain queue_notice — spelled out here because the non-hold is a deliberate policy.
+        store.queue_notice(f"Needs your call: {esc['open_question']}", ref=esc["thread_id"])
 
     return _on

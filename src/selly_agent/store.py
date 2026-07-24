@@ -321,8 +321,9 @@ class InboxRecord(TypedDict):
 
 class NoticeRecord(TypedDict):
     """One needs-me notice (see `_notice_from_row`) — a queued or delivered outbound message.
-    `urgent` bypasses the quiet-hours drain hold; `controls` is an optional provider-neutral list
-    of [label, token] button pairs the channel renders into a native keyboard."""
+    `holdable` marks a proactive notice the drain may defer during quiet hours (seller-facing
+    notices are not holdable and deliver at any hour); `controls` is an optional provider-neutral
+    list of [label, token] button pairs the channel renders into a native keyboard."""
 
     id: int
     text: str
@@ -333,7 +334,7 @@ class NoticeRecord(TypedDict):
     delivered_ts: float | None
     via: str | None
     pass_id: str | None
-    urgent: bool
+    holdable: bool
     controls: list | None
 
 
@@ -494,7 +495,7 @@ def _notice_from_row(row: sqlite3.Row) -> NoticeRecord:
         "delivered_ts": row["delivered_ts"],
         "via": row["via"],
         "pass_id": row["pass_id"],
-        "urgent": bool(row["urgent"]),
+        "holdable": bool(row["holdable"]),
         "controls": json.loads(row["controls"]) if row["controls"] else None,
     }
 
@@ -532,21 +533,22 @@ def _insert_notice(
     *,
     ref: str | None = None,
     pass_id: str | None = None,
-    urgent: bool = False,
+    holdable: bool = False,
     controls: list | None = None,
 ) -> int:
     """Insert one queued notice within an existing transaction, returning its id. Shared by the
     standalone queue_notice and the settings apply paths (whose notice insert rides in the same
     transaction as the state change)."""
     cur = conn.execute(
-        "INSERT INTO notices (text, ref, created_ts, status, attempts, pass_id, urgent, controls) "
+        "INSERT INTO notices "
+        "(text, ref, created_ts, status, attempts, pass_id, holdable, controls) "
         "VALUES (?, ?, ?, 'queued', 0, ?, ?, ?)",
         (
             text,
             ref,
             _now(),
             pass_id,
-            1 if urgent else 0,
+            1 if holdable else 0,
             json.dumps(controls, sort_keys=True) if controls is not None else None,
         ),
     )
@@ -2595,19 +2597,19 @@ class Store:
         *,
         ref: str | None = None,
         pass_id: str | None = None,
-        urgent: bool = False,
+        holdable: bool = False,
         controls: list | None = None,
     ) -> int:
         with self._db.transaction() as conn:
             return _insert_notice(
-                conn, text, ref=ref, pass_id=pass_id, urgent=urgent, controls=controls
+                conn, text, ref=ref, pass_id=pass_id, holdable=holdable, controls=controls
             )
 
-    def claim_queued_notices(self, limit: int, *, urgent_only: bool = False) -> list[NoticeRecord]:
-        """The oldest queued notices, FIFO — the drain lane delivers them in order. `urgent_only`
-        restricts the claim to escalation-urgent notices, so the drain can hold routine ones during
-        quiet hours while still delivering urgent pushes."""
-        where = "status = 'queued'" + (" AND urgent = 1" if urgent_only else "")
+    def claim_queued_notices(self, limit: int, *, in_quiet: bool = False) -> list[NoticeRecord]:
+        """The oldest queued notices, FIFO — the drain lane delivers them in order. During quiet
+        hours (`in_quiet`) holdable notices are skipped so only seller-facing/immediate ones go out;
+        they are claimed normally once the window ends."""
+        where = "status = 'queued'" + (" AND holdable = 0" if in_quiet else "")
         rows = self._db.query(
             f"SELECT * FROM notices WHERE {where} ORDER BY created_ts ASC, id ASC LIMIT ?",
             (limit,),

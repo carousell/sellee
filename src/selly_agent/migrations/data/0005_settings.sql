@@ -40,11 +40,13 @@ CREATE TABLE pending_setting_changes (
 
 CREATE INDEX idx_pending_setting_changes_key_status ON pending_setting_changes (key, status);
 
--- Notice urgency: a routine notice (urgent = 0) is held by the drain lane during quiet hours and
--- delivered at the window's end; an urgent notice (an escalation push) bypasses the hold and goes
--- out immediately. The column is on notices, not a separate table, so the drain lane's claim query
--- reads urgency in the same row it already claims.
-ALTER TABLE notices ADD COLUMN urgent INTEGER NOT NULL DEFAULT 0;
+-- Notice hold policy: holdable = 1 marks a proactive/background notice the drain lane may defer to
+-- the end of quiet hours. Everything seller-facing — a channel-pass reply, a settings approval, an
+-- escalation push — is holdable = 0 and delivered at any hour, so seller-initiated chat is never
+-- gated (a seller messaging at 3am has opted in). The flag is on notices, not a separate table, so
+-- the drain reads it in the same row it already claims. Nothing sets holdable = 1 yet — proactive
+-- marketplace pushes arrive with the poll lanes; the machinery ships now.
+ALTER TABLE notices ADD COLUMN holdable INTEGER NOT NULL DEFAULT 0;
 
 -- Optional provider-neutral controls for a notice: a JSON list of [label, token] button pairs an
 -- approval or echo notice carries (Approve/Cancel, Undo), rendered into the channel's native

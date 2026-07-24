@@ -1,6 +1,6 @@
 """The settings doors: fast-path recognition (buttons + exact text tokens), the deterministic
 decision router (approve/cancel/undo, double-tap idempotence, stale ids), the quiet-hours drain
-hold with urgent bypass, doors while paused, and one button-tap round trip through the real poller
+deferring only proactive notices, doors while paused, and a poller button-tap round trip.
 against the fake Bot API.
 """
 
@@ -139,13 +139,13 @@ def test_doors_work_while_paused(store, bus) -> None:
 # --- quiet-hours drain hold -------------------------------------------------------------------
 
 
-def test_drain_holds_routine_passes_urgent_then_delivers_at_window_end(store, bus, xdg_tmp) -> None:
+def test_drain_defers_holdable_but_delivers_seller_facing_in_quiet_hours(store, bus, xdg_tmp):
     from tests.conftest import seed_setting
 
     _bind(store)
     seed_setting(store, "quiet_hours", [800, 2000])  # 08:00-20:00 covers noon
-    store.queue_notice("routine update")
-    store.queue_notice("URGENT: accept $70?", urgent=True)
+    store.queue_notice("proactive update", holdable=True)  # a background push — deferrable
+    store.queue_notice("reply to the seller")  # seller-facing (default) — delivered at any hour
     sent: list = []
 
     def deliver(chat_id, text, controls=None):
@@ -153,12 +153,12 @@ def test_drain_holds_routine_passes_urgent_then_delivers_at_window_end(store, bu
 
     noon = datetime.fromisoformat("2026-07-22T12:00:00").timestamp()
     outbound.drain_notices(store=store, bus=bus, deliver=deliver, now=noon)
-    assert sent == ["URGENT: accept $70?"]  # routine held inside the window
+    assert sent == ["reply to the seller"]  # the holdable one waits; the reply goes out
     assert store.count_queued_notices() == 1
 
     evening = datetime.fromisoformat("2026-07-22T21:00:00").timestamp()
     outbound.drain_notices(store=store, bus=bus, deliver=deliver, now=evening)
-    assert sent == ["URGENT: accept $70?", "routine update"]  # drains once the window ends
+    assert sent == ["reply to the seller", "proactive update"]  # drains once the window ends
     assert store.count_queued_notices() == 0
 
 
