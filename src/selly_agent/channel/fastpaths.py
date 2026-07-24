@@ -72,10 +72,12 @@ def is_fast_path(event: dict) -> bool:
     return is_settings_door(event)
 
 
-def handle_settings_door(store, bus, event: dict) -> str:
-    """Apply a settings decision door and return the reply text. The parse and the apply are both
-    deterministic (settings.decide); no LLM sits between the authenticated tap/token and the state
-    change. Assumes is_settings_door(event) is True."""
+def handle_settings_door(store, bus, event: dict) -> tuple:
+    """Apply a settings decision door and return (reply_text, controls_spec | None). The parse and
+    the apply are both deterministic (settings.decide); no LLM sits between the authenticated
+    tap/token and the state change. A channel decision replies synchronously and carries its own
+    Undo button (settings.decide returns the controls), so it never also queues an echo notice —
+    that is what keeps the seller from seeing the confirmation twice. Assumes is_settings_door."""
     if event["kind"] == "action":
         decision = _DECISION_FOR_CALLBACK[event["payload"]["choice"]]
         change_id = (event.get("payload") or {}).get("ref")
@@ -84,10 +86,11 @@ def handle_settings_door(store, bus, event: dict) -> str:
         decision, change_id = _settings_text_decision(event["text"])
         decided_via = "token"
     if not change_id:
-        return "That action was missing its change id — ask me again."
-    return settings.decide(
+        return "That action was missing its change id — ask me again.", None
+    result = settings.decide(
         store, bus, change_id=change_id, decision=decision, decided_via=decided_via
-    )["message"]
+    )
+    return result["message"], result.get("controls")
 
 
 def handle_fast_path(store, event: dict) -> tuple:

@@ -57,9 +57,21 @@ def test_conversational_text_is_not_a_door() -> None:
 def test_button_approve_applies(store, bus) -> None:
     cid = _propose(store)
     event = {"kind": "action", "payload": {"choice": settings.CB_APPROVE, "ref": cid}}
-    reply = fastpaths.handle_settings_door(store, bus, event)
+    reply, controls = fastpaths.handle_settings_door(store, bus, event)
     assert "Applied" in reply
+    assert controls == [["Undo", f"{cid}:{settings.CB_UNDO}"]]  # the reply carries the Undo button
     assert settings.get(store, "quiet_hours") == [23, 9]
+
+
+def test_channel_approve_queues_no_echo_notice(store, bus) -> None:
+    # A channel approve confirms synchronously (reply + Undo button), so it must NOT also queue an
+    # echo notice — otherwise the seller sees the confirmation twice (the reported duplication).
+    cid = _propose(store)  # this queues exactly one (approval) notice
+    before = store.count_queued_notices()
+    fastpaths.handle_settings_door(
+        store, bus, {"kind": "action", "payload": {"choice": settings.CB_APPROVE, "ref": cid}}
+    )
+    assert store.count_queued_notices() == before  # no new echo notice added
 
 
 def test_text_token_approve_applies(store, bus) -> None:
@@ -175,7 +187,10 @@ def test_button_tap_through_poller_applies_and_acks(store, bus, xdg_tmp) -> None
         poller.tick()
         assert settings.get(store, "quiet_hours") == [23, 9]  # the tap applied the change
         assert "cbq1" in api.answered  # the callback spinner was answered
-        assert any("Applied" in m["text"] for m in api.outbox)  # the door replied
+        applied_msgs = [m for m in api.outbox if "Applied" in m["text"]]
+        assert len(applied_msgs) == 1  # exactly one confirmation — never a duplicate
+        # and it carries the Undo button inline (no separate echo notice)
+        assert applied_msgs[0]["reply_markup"]["inline_keyboard"][0][0]["text"] == "Undo"
 
 
 class _never_set:

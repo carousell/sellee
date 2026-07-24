@@ -237,6 +237,12 @@ def undo_confirmation(spec: SettingSpec, value: object) -> str:
     return f"{spec.label} reverted to {spec.render(value)}."
 
 
+def _is_channel_origin(decided_via: str) -> bool:
+    """A button tap or a text token comes in over the channel, which then replies synchronously; a
+    CLI ('cli') or an auto-apply ('auto') has no such reply path."""
+    return decided_via in ("button", "token")
+
+
 def _current_status_message(current: str | None) -> str:
     return {
         "applied": "That change was already applied.",
@@ -259,22 +265,36 @@ def decide(store, bus, *, change_id: str, decision: str, decided_via: str) -> di
         return {"status": "unknown", "message": "That setting no longer exists."}
     key = change["key"]
 
+    channel = _is_channel_origin(decided_via)
+
     if decision == DECIDE_APPROVE:
-        text, controls = echo_notice(spec, change_id, change["value"], change["prior_value"])
-        result = store.approve_setting_change(
-            change_id,
-            decided_via=decided_via,
-            notice_text=text,
-            notice_controls=controls,
-            ttl_sec=PROPOSAL_TTL_SEC,
-        )
+        # A channel door (button/text) has a synchronous reply path, so it carries the confirmation
+        # itself (with the Undo button) — queuing an echo notice too would deliver it twice to the
+        # same chat. A CLI/auto decision has no channel reply, so it queues the echo notice as the
+        # channel's only path to the confirmation.
+        if channel:
+            result = store.approve_setting_change(
+                change_id, decided_via=decided_via, ttl_sec=PROPOSAL_TTL_SEC
+            )
+        else:
+            text, controls = echo_notice(spec, change_id, change["value"], change["prior_value"])
+            result = store.approve_setting_change(
+                change_id,
+                decided_via=decided_via,
+                notice_text=text,
+                notice_controls=controls,
+                ttl_sec=PROPOSAL_TTL_SEC,
+            )
         if result["status"] == "applied":
             publish_changed(bus, spec, change_id, result["value"], result["prior_value"])
-            return {
+            out = {
                 "status": "applied",
                 "key": key,
                 "message": f"Applied — {spec.label.lower()} is now {spec.render(result['value'])}.",
             }
+            if channel:
+                out["controls"] = [["Undo", f"{change_id}:{CB_UNDO}"]]
+            return out
         if result["status"] == "expired":
             bus.publish("setting.expired", {"change_id": change_id, "key": key})
             return {
@@ -313,8 +333,15 @@ def decide(store, bus, *, change_id: str, decision: str, decided_via: str) -> di
         }
 
     if decision == DECIDE_UNDO:
-        confirm = undo_confirmation(spec, change["prior_value"])
-        result = store.undo_setting_change(change_id, decided_via=decided_via, notice_text=confirm)
+        # Same rule as approve: a channel door replies synchronously (no confirmation notice); a
+        # CLI/auto undo queues the confirmation notice so the channel still learns of it.
+        if channel:
+            result = store.undo_setting_change(change_id, decided_via=decided_via)
+        else:
+            confirm = undo_confirmation(spec, change["prior_value"])
+            result = store.undo_setting_change(
+                change_id, decided_via=decided_via, notice_text=confirm
+            )
         if result["status"] == "undone":
             publish_changed(bus, spec, result["change_id"], result["value"], result["prior_value"])
             restored = spec.render(result["value"])

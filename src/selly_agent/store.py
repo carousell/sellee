@@ -2714,12 +2714,13 @@ class Store:
         change_id: str,
         prior_value: object,
         decided_via: str = "auto",
-        notice_text: str,
+        notice_text: str | None = None,
         notice_controls: list | None = None,
         notice_ref: str | None = None,
     ) -> dict:
-        """ALLOW path: record the proposal already applied, upsert the setting, and queue the echo
-        notice — one transaction. Returns {change_id, key, value, prior_value}."""
+        """ALLOW path: record the proposal already applied, upsert the setting, and (when a notice
+        is given) queue the echo notice — one transaction. Returns {change_id, key, value,
+        prior_value}."""
         now = _now()
         with self._db.transaction() as conn:
             _supersede_pending_in_txn(conn, key, now)
@@ -2731,7 +2732,8 @@ class Store:
                 (change_id, key, _json(value), _json(prior_value), now, now, decided_via),
             )
             _upsert_setting_in_txn(conn, key, value, prior_value, now)
-            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+            if notice_text is not None:
+                _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
         return {"change_id": change_id, "key": key, "value": value, "prior_value": prior_value}
 
     def approve_setting_change(
@@ -2739,15 +2741,16 @@ class Store:
         change_id: str,
         *,
         decided_via: str,
-        notice_text: str,
+        notice_text: str | None = None,
         notice_controls: list | None = None,
         notice_ref: str | None = None,
         ttl_sec: float = 0.0,
     ) -> dict:
         """Apply a held proposal through a door: upsert the setting from the proposal's snapshot,
-        mark it applied, and queue the echo notice — one transaction, re-checking the row is still
-        pending inside it (so a raced supersede/expiry never double-applies). Returns a status dict:
-        applied | expired | not_pending (with the row's current status)."""
+        mark it applied, and (when a notice is given) queue the echo notice — one transaction,
+        re-checking the row is still pending inside it (so a raced supersede/expiry never
+        double-applies). Returns a status dict: applied | expired | not_pending (with the row's
+        current status)."""
         now = _now()
         with self._db.transaction() as conn:
             row = conn.execute(
@@ -2765,7 +2768,8 @@ class Store:
             prior_value = json.loads(row["prior_value"]) if row["prior_value"] is not None else None
             _upsert_setting_in_txn(conn, key, value, prior_value, now)
             _decide_pending_in_txn(conn, change_id, "applied", now, decided_via)
-            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+            if notice_text is not None:
+                _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
         return {
             "status": "applied",
             "change_id": change_id,
@@ -2799,14 +2803,14 @@ class Store:
         change_id: str,
         *,
         decided_via: str,
-        notice_text: str,
+        notice_text: str | None = None,
         notice_controls: list | None = None,
         notice_ref: str | None = None,
     ) -> dict:
         """Revert an applied change through a door: restore its prior value via the same apply
-        transaction (a fresh applied ledger row + echo notice). Valid only while it is still the
-        key's latest change — a later change to the key makes it stale. Returns a status dict:
-        undone | not_undoable (with a reason)."""
+        transaction (a fresh applied ledger row +, when a notice is given, a confirmation notice).
+        Valid only while it is still the key's latest change — a later change to the key makes it
+        stale. Returns a status dict: undone | not_undoable (with a reason)."""
         now = _now()
         with self._db.transaction() as conn:
             row = conn.execute(
@@ -2833,7 +2837,8 @@ class Store:
                 (revert_id, key, _json(restored), _json(replaced), now, now, decided_via),
             )
             _upsert_setting_in_txn(conn, key, restored, replaced, now)
-            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+            if notice_text is not None:
+                _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
         return {
             "status": "undone",
             "change_id": revert_id,

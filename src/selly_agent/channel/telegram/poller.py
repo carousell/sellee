@@ -201,8 +201,9 @@ class Poller:
                 continue
             if fastpaths.is_settings_door(event):
                 # A door — button or exact text token — routed to the deterministic apply; it never
-                # touches an LLM and works while paused (seller-initiated control).
-                text, controls = fastpaths.handle_settings_door(self.store, self.bus, event), None
+                # touches an LLM and works while paused (seller-initiated control). The reply may
+                # carry its own controls (an Undo button on an applied change).
+                text, controls = fastpaths.handle_settings_door(self.store, self.bus, event)
             else:
                 text, controls = fastpaths.handle_fast_path(self.store, event)
             cq_id = row["payload"].get("callback_query_id")
