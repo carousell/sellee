@@ -21,7 +21,7 @@ def _bind(store):
 
 
 def _propose(store, value=None):
-    value = [23, 9] if value is None else value
+    value = [2300, 930] if value is None else value
     cid = store.new_change_id()
     store.propose_setting_change(
         "quiet_hours",
@@ -60,7 +60,7 @@ def test_button_approve_applies(store, bus) -> None:
     reply, controls = fastpaths.handle_settings_door(store, bus, event)
     assert "Applied" in reply
     assert controls == [["Undo", f"{cid}:{settings.CB_UNDO}"]]  # the reply carries the Undo button
-    assert settings.get(store, "quiet_hours") == [23, 9]
+    assert settings.get(store, "quiet_hours") == [2300, 930]
 
 
 def test_channel_approve_queues_no_echo_notice(store, bus) -> None:
@@ -78,7 +78,7 @@ def test_text_token_approve_applies(store, bus) -> None:
     cid = _propose(store)
     event = {"kind": "text", "text": f"approve {cid}", "payload": {}}
     fastpaths.handle_settings_door(store, bus, event)
-    assert settings.get(store, "quiet_hours") == [23, 9]
+    assert settings.get(store, "quiet_hours") == [2300, 930]
     assert store.get_pending_change(cid)["decided_via"] == "token"
 
 
@@ -96,7 +96,7 @@ def test_undo_round_trip(store, bus) -> None:
     settings.decide(
         store, bus, change_id=cid, decision=settings.DECIDE_APPROVE, decided_via="button"
     )
-    assert settings.get(store, "quiet_hours") == [23, 9]
+    assert settings.get(store, "quiet_hours") == [2300, 930]
     out = settings.decide(
         store, bus, change_id=cid, decision=settings.DECIDE_UNDO, decided_via="button"
     )
@@ -133,7 +133,7 @@ def test_doors_work_while_paused(store, bus) -> None:
     cid = _propose(store)
     out = settings.decide(store, bus, change_id=cid, decision="approve", decided_via="cli")
     assert out["status"] == "applied"  # a door is seller-initiated control — it bypasses the pause
-    assert settings.get(store, "quiet_hours") == [23, 9]
+    assert settings.get(store, "quiet_hours") == [2300, 930]
 
 
 # --- quiet-hours drain hold -------------------------------------------------------------------
@@ -143,7 +143,7 @@ def test_drain_holds_routine_passes_urgent_then_delivers_at_window_end(store, bu
     from tests.conftest import seed_setting
 
     _bind(store)
-    seed_setting(store, "quiet_hours", [8, 20])  # a window that covers noon
+    seed_setting(store, "quiet_hours", [800, 2000])  # 08:00-20:00 covers noon
     store.queue_notice("routine update")
     store.queue_notice("URGENT: accept $70?", urgent=True)
     sent: list = []
@@ -185,7 +185,7 @@ def test_button_tap_through_poller_applies_and_acks(store, bus, xdg_tmp) -> None
         api.inject_tap(f"{cid}:{settings.CB_APPROVE}")
         poller = Poller(store=store, config=cfg, bus=bus, stop_event=_never_set(), poll_timeout=0)
         poller.tick()
-        assert settings.get(store, "quiet_hours") == [23, 9]  # the tap applied the change
+        assert settings.get(store, "quiet_hours") == [2300, 930]  # the tap applied the change
         assert "cbq1" in api.answered  # the callback spinner was answered
         applied_msgs = [m for m in api.outbox if "Applied" in m["text"]]
         assert len(applied_msgs) == 1  # exactly one confirmation — never a duplicate

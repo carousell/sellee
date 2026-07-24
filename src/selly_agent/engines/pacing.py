@@ -32,17 +32,18 @@ class PacingConfig:
     delay_max: float
     idelay_min: float
     idelay_max: float
-    quiet_start: int
-    quiet_end: int
+    quiet_start_min: int  # minutes since midnight
+    quiet_end_min: int
     mode: str
 
 
 def resolve(config, quiet_hours) -> PacingConfig:
     """Build the effective pacing config from the daemon config plus the quiet-hours window. The
-    window is passed in explicitly — it is a runtime *setting* (read from the settings store by the
-    tool layer), not a config knob, and engines never touch the store. The jitter/cap knobs are
-    already validated and clamped to the hard ceilings at load; FAST mode is applied here — it
-    zeroes both jitter ranges, lifts the cap to the ceiling, and disables quiet hours."""
+    window — a [start, end] pair of minutes since midnight — is passed in explicitly: it is a
+    runtime *setting* (read from the settings store by the tool layer), not a config knob, and
+    engines never touch the store. The jitter/cap knobs are already validated and clamped to the
+    hard ceilings at load; FAST mode is applied here — it zeroes both jitter ranges, lifts the cap
+    to the ceiling, and disables quiet hours."""
     from selly_agent import config as config_mod
 
     reply = tuple(config.reply_delay_sec)
@@ -55,8 +56,8 @@ def resolve(config, quiet_hours) -> PacingConfig:
             delay_max=0.0,
             idelay_min=0.0,
             idelay_max=0.0,
-            quiet_start=0,
-            quiet_end=0,
+            quiet_start_min=0,
+            quiet_end_min=0,
             mode="fast",
         )
     return PacingConfig(
@@ -65,25 +66,27 @@ def resolve(config, quiet_hours) -> PacingConfig:
         delay_max=reply[1],
         idelay_min=interactive[0],
         idelay_max=interactive[1],
-        quiet_start=quiet[0],
-        quiet_end=quiet[1],
+        quiet_start_min=quiet[0],
+        quiet_end_min=quiet[1],
         mode="normal",
     )
 
 
-def in_quiet_hours(hour: int, start: int, end: int) -> bool:
-    """Is `hour` inside [start, end)? Handles a window that wraps past midnight (e.g. 23..8)."""
+def in_quiet_window(minute_of_day: int, start: int, end: int) -> bool:
+    """Is `minute_of_day` (0..1439, minutes since midnight) inside [start, end)? Handles a window
+    that wraps past midnight (e.g. 23:00..08:00). start == end disables the window."""
     if start == end:
         return False
     if start < end:
-        return start <= hour < end
-    return hour >= start or hour < end
+        return start <= minute_of_day < end
+    return minute_of_day >= start or minute_of_day < end
 
 
-def _seconds_until_hour(now: float, target_hour: int) -> float:
+def _seconds_until_minute_of_day(now: float, target_min: int) -> float:
+    """Seconds from `now` until the wall clock next reaches `target_min` minutes past midnight."""
     dt = datetime.fromtimestamp(now)
-    delta_hours = (target_hour - dt.hour) % 24
-    secs = delta_hours * 3600 - dt.minute * 60 - dt.second
+    delta_min = (target_min - (dt.hour * 60 + dt.minute)) % (24 * 60)
+    secs = delta_min * 60 - dt.second
     if secs <= 0:
         secs += 24 * 3600
     return float(secs)
@@ -107,13 +110,18 @@ def evaluate(
     """Pure decision over the marketplace's in-window action timestamps. Returns a verdict dict
     with `record` True only on `go` — quiet hours and the cap are checked before recording, so a
     blocked request never consumes a slot. `interactive` selects the jitter range only."""
-    hour = datetime.fromtimestamp(now).hour
+    dt = datetime.fromtimestamp(now)
+    minute_of_day = dt.hour * 60 + dt.minute
     in_window = [t for t in timestamps if t > now - WINDOW_SECONDS]
     count = len(in_window)
     base = {"kind": kind, "count": count, "cap": cfg.cap, "record": False}
 
-    if in_quiet_hours(hour, cfg.quiet_start, cfg.quiet_end):
-        return {**base, "verdict": "quiet", "delay_sec": _seconds_until_hour(now, cfg.quiet_end)}
+    if in_quiet_window(minute_of_day, cfg.quiet_start_min, cfg.quiet_end_min):
+        return {
+            **base,
+            "verdict": "quiet",
+            "delay_sec": _seconds_until_minute_of_day(now, cfg.quiet_end_min),
+        }
     if count >= cfg.cap:
         return {**base, "verdict": "wait", "delay_sec": _seconds_until_slot_frees(in_window, now)}
 

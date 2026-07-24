@@ -102,7 +102,7 @@ def test_wait_verdict_records_no_second_intent(make_ctx, store) -> None:
 
 def test_quiet_verdict_records_nothing_at_store(store) -> None:
     _sell_thread(store)
-    cfg = pacing.resolve(Config(), quiet_hours=(23, 8))  # default night window
+    cfg = pacing.resolve(Config(), quiet_hours=(1380, 480))  # default night window
     two_am = datetime.fromisoformat("2026-07-22T02:00:00").timestamp()
     res = store.reserve_reply(
         thread_id="fb:1", kind="reply", text="x", in_msg_id=None, cfg=cfg, now=two_am

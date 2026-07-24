@@ -386,27 +386,65 @@ def publish_changed(bus, spec, change_id, value, prior_value) -> None:
 
 # --- the v1 inventory: quiet_hours only ------------------------------------------------------
 
+# The canonical value is a [start, end] pair of HHMM integers (2300 = 23:00, 930 = 09:30, 0 =
+# midnight) — readable at a glance and minute-granular, so a seller can set, say, 22:30–07:15.
+# Equal values disable the window. The pacing engine works in minutes since midnight, so
+# quiet_window_minutes() converts at the boundary.
+_QUIET_HELP = (
+    "quiet hours must be a [start, end] pair of times as HHMM integers — e.g. [2300, 930] for "
+    "11pm to 9:30am, or whole hours [23, 9]; equal values disable it"
+)
+
+
+def _to_hhmm(elem: object) -> int:
+    """Canonicalize one end of the window to an HHMM integer. Accepts a whole hour 0..24 (23 →
+    2300), an HHMM integer 0..2400 with valid minutes (930 → 09:30), or an 'HH:MM'/'HHMM' string.
+    Anything else raises SettingError."""
+    if isinstance(elem, bool):
+        raise SettingError(_QUIET_HELP)
+    if isinstance(elem, int):
+        if 0 <= elem <= 24:
+            return elem * 100
+        if 100 <= elem <= 2400 and elem % 100 <= 59:
+            return elem
+        raise SettingError(_QUIET_HELP)
+    if isinstance(elem, str):
+        s = elem.strip()
+        try:
+            if ":" in s:
+                hh, mm = s.split(":", 1)
+                h, m = int(hh), int(mm)
+                if 0 <= h <= 24 and 0 <= m <= 59:
+                    return h * 100 + m
+            else:
+                return _to_hhmm(int(s))
+        except (ValueError, TypeError):
+            pass
+    raise SettingError(_QUIET_HELP)
+
 
 def _parse_quiet_hours(raw: object) -> list:
-    """Accept a [start, end] pair of whole hours in 0..24; return the canonical list. (0, 0) (or
-    any start == end) disables the window."""
-    if (
-        isinstance(raw, (list, tuple))
-        and len(raw) == 2
-        and all(isinstance(h, int) and not isinstance(h, bool) and 0 <= h <= 24 for h in raw)
-    ):
-        return [int(raw[0]), int(raw[1])]
-    raise SettingError(
-        "quiet hours must be a [start, end] pair of whole hours in 0..24 — e.g. [23, 9] for "
-        "11pm to 9am, or [0, 0] to disable"
-    )
+    if isinstance(raw, (list, tuple)) and len(raw) == 2:
+        return [_to_hhmm(raw[0]), _to_hhmm(raw[1])]
+    raise SettingError(_QUIET_HELP)
 
 
 def _render_quiet_hours(value: object) -> str:
     start, end = value
     if start == end:
         return "disabled"
-    return f"{start:02d}:00–{end:02d}:00"
+    return f"{start // 100:02d}:{start % 100:02d}–{end // 100:02d}:{end % 100:02d}"
+
+
+def _hhmm_to_minutes(hhmm: int) -> int:
+    return (hhmm // 100) * 60 + (hhmm % 100)
+
+
+def quiet_window_minutes(store) -> tuple:
+    """The quiet-hours window as (start, end) minutes since midnight — the pacing engine's unit.
+    The stored/rendered value is HHMM; this is the one place that converts."""
+    start, end = get(store, "quiet_hours")
+    return _hhmm_to_minutes(start), _hhmm_to_minutes(end)
 
 
 register(
@@ -415,9 +453,10 @@ register(
         label="Quiet hours",
         parse=_parse_quiet_hours,
         render=_render_quiet_hours,
-        default=[23, 8],
+        default=[2300, 800],  # 23:00–08:00
         description="A nightly window that holds routine updates until it ends (urgent decisions "
-        "still come through). A [start, end] pair of whole hours; equal values disable it.",
+        "still come through). A [start, end] pair of HHMM times (2300 = 11pm, 930 = 9:30am); equal "
+        "values disable it.",
         take_effect="takes effect immediately for new marketplace sends; already-queued notices "
         "re-check at the next drain.",
         requires_approval=True,

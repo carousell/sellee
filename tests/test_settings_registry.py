@@ -1,5 +1,6 @@
-"""The settings registry: quiet_hours parse/render round-trips, the read helpers (registry default
-when unset), and the discoverability renderers (card lines, prompt block, describe)."""
+"""The settings registry: quiet_hours parse/render round-trips (HHMM integers, minute-granular),
+the HHMM→minutes boundary, the read helpers (registry default when unset), and the discoverability
+renderers (card lines, prompt block, describe)."""
 
 from __future__ import annotations
 
@@ -10,22 +11,35 @@ from selly_agent import settings
 # --- quiet_hours parse / render ---------------------------------------------------------------
 
 
-def test_parse_canonicalizes_pair() -> None:
+def test_parse_canonicalizes_to_hhmm() -> None:
     spec = settings.get_spec("quiet_hours")
-    assert spec.parse([23, 9]) == [23, 9]
-    assert spec.parse((23, 9)) == [23, 9]  # a tuple canonicalizes to a list
+    assert spec.parse([23, 9]) == [2300, 900]  # whole hours → HHMM
+    assert spec.parse((2300, 930)) == [2300, 930]  # HHMM integers, minute-granular
+    assert spec.parse(["23:00", "09:30"]) == [2300, 930]  # HH:MM strings also accepted
 
 
 def test_render_window_and_disabled() -> None:
     spec = settings.get_spec("quiet_hours")
-    assert spec.render([23, 9]) == "23:00–09:00"
+    assert spec.render([2300, 930]) == "23:00–09:30"
+    assert spec.render([2230, 715]) == "22:30–07:15"
     assert spec.render([0, 0]) == "disabled"  # start == end disables
-    assert spec.render([8, 8]) == "disabled"
+    assert spec.render([900, 900]) == "disabled"
 
 
 @pytest.mark.parametrize(
     "bad",
-    [[23], [23, 25], [-1, 8], [23.5, 8], "night", [True, 8], {"start": 23}, [1, 2, 3]],
+    [
+        [23],  # not a pair
+        [1, 2, 3],  # not a pair
+        [2360, 900],  # 60 minutes is invalid
+        [2500, 900],  # past 2400
+        [25, 9],  # 25 is neither a valid hour nor a valid HHMM
+        [-1, 8],
+        [23.5, 8],  # not an int
+        "night",
+        [True, 8],  # bool is not an hour
+        {"start": 23},
+    ],
 )
 def test_parse_rejects_out_of_range_or_malformed(bad) -> None:
     spec = settings.get_spec("quiet_hours")
@@ -34,57 +48,62 @@ def test_parse_rejects_out_of_range_or_malformed(bad) -> None:
 
 
 def test_default_is_night_window() -> None:
-    assert settings.get_spec("quiet_hours").default == [23, 8]
+    assert settings.get_spec("quiet_hours").default == [2300, 800]
 
 
-# --- read helpers -----------------------------------------------------------------------------
+# --- read helpers + the minutes boundary ------------------------------------------------------
 
 
 def test_get_returns_default_when_unset(fresh_store) -> None:
-    assert settings.get(fresh_store, "quiet_hours") == [23, 8]
+    assert settings.get(fresh_store, "quiet_hours") == [2300, 800]
 
 
 def test_get_returns_stored_value(fresh_store) -> None:
     fresh_store.apply_setting_now(
-        "quiet_hours", [22, 9], change_id="chg_x", prior_value=[23, 8], notice_text="ok"
+        "quiet_hours", [2230, 715], change_id="chg_x", prior_value=[2300, 800], notice_text="ok"
     )
-    assert settings.get(fresh_store, "quiet_hours") == [22, 9]
+    assert settings.get(fresh_store, "quiet_hours") == [2230, 715]
+
+
+def test_quiet_window_minutes_converts(fresh_store) -> None:
+    assert settings.quiet_window_minutes(fresh_store) == (1380, 480)  # 23:00 / 08:00 default
+    fresh_store.apply_setting_now(
+        "quiet_hours", [2230, 715], change_id="chg_m", prior_value=[2300, 800], notice_text="ok"
+    )
+    assert settings.quiet_window_minutes(fresh_store) == (1350, 435)  # 22:30 / 07:15
 
 
 def test_effective_covers_every_registered_key(fresh_store) -> None:
     eff = settings.effective(fresh_store)
     assert set(eff) == {spec.key for spec in settings.all_specs()}
-    assert eff["quiet_hours"] == [23, 8]
+    assert eff["quiet_hours"] == [2300, 800]
 
 
-def test_effective_ignores_orphan_stored_key(fresh_store, caplog) -> None:
+def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
     from tests.conftest import seed_setting
 
     seed_setting(fresh_store, "gone_setting", [1, 2])
-    eff = settings.effective(fresh_store)  # never crashes on a stale row
-    assert "gone_setting" not in eff
+    assert "gone_setting" not in settings.effective(fresh_store)  # never crashes on a stale row
 
 
 # --- discoverability renderers ----------------------------------------------------------------
 
 
 def test_card_lists_headline_at_default(fresh_store) -> None:
-    lines = settings.card_lines(fresh_store)
-    assert lines == ["• Quiet hours: 23:00–08:00"]  # headline shown even at its default
+    assert settings.card_lines(fresh_store) == ["• Quiet hours: 23:00–08:00"]
 
 
 def test_card_shows_changed_value(fresh_store) -> None:
     fresh_store.apply_setting_now(
-        "quiet_hours", [22, 9], change_id="chg_y", prior_value=[23, 8], notice_text="ok"
+        "quiet_hours", [2230, 715], change_id="chg_y", prior_value=[2300, 800], notice_text="ok"
     )
-    assert settings.card_lines(fresh_store) == ["• Quiet hours: 22:00–09:00"]
+    assert settings.card_lines(fresh_store) == ["• Quiet hours: 22:30–07:15"]
 
 
 def test_describe_carries_policy(fresh_store) -> None:
-    rows = {r["key"]: r for r in settings.describe(fresh_store)}
-    q = rows["quiet_hours"]
-    assert q["value"] == [23, 8]
-    assert q["default"] == [23, 8]
+    q = {r["key"]: r for r in settings.describe(fresh_store)}["quiet_hours"]
+    assert q["value"] == [2300, 800]
+    assert q["default"] == [2300, 800]
     assert q["requires_approval"] is True
     assert q["rendered"] == "23:00–08:00"
 

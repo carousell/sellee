@@ -51,12 +51,13 @@ def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=
 
 
 def _in_quiet_hours(store, now) -> bool:
-    """Whether the quiet-hours setting's window covers the current daemon-local hour. Evaluated per
-    tick against the wall clock (the one-clock rule) — a DST shift moves the window with it, which
-    is exactly right for 'don't buzz me at night'."""
-    start, end = settings.get(store, "quiet_hours")
+    """Whether the quiet-hours setting's window (minutes since midnight) covers the current
+    daemon-local time. Evaluated per tick against the wall clock (the one-clock rule) — a DST shift
+    moves the window with it, which is exactly right for 'don't buzz me at night'."""
+    start_min, end_min = settings.quiet_window_minutes(store)
     now = time.time() if now is None else now
-    return pacing.in_quiet_hours(datetime.fromtimestamp(now).hour, start, end)
+    dt = datetime.fromtimestamp(now)
+    return pacing.in_quiet_window(dt.hour * 60 + dt.minute, start_min, end_min)
 
 
 def pulse_typing(*, store, typing) -> None:

@@ -89,7 +89,7 @@ def test_unknown_key_is_a_tool_error(make_ctx) -> None:
 
 def test_parse_error_round_trips_as_tool_error(make_ctx) -> None:
     ctx = make_ctx(TIER_ATTENDED)
-    with pytest.raises(ToolError, match="0..24"):
+    with pytest.raises(ToolError, match="HHMM"):
         dispatch("propose_setting_change", {"key": "quiet_hours", "raw_value": [23, 99]}, ctx)
 
 

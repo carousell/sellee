@@ -134,9 +134,10 @@ register(
         name="propose_setting_change",
         description="Propose a change to a seller setting (you can only propose — the seller "
         "approves high-stakes changes; low-stakes ones apply immediately). Pass the setting key "
-        "and the new value in the setting's own shape (e.g. quiet_hours as [start, end] whole "
-        "hours). Returns the canonical value, its rendering, and whether it was applied or is held "
-        "for approval. Call get_settings for the keys and their shapes.",
+        "and the new value in the setting's own shape (e.g. quiet_hours as [start, end] times — "
+        '["23:00", "09:30"] for HH:MM, or [23, 9] for whole hours). Returns the canonical value, '
+        "its rendering, and whether it was applied or is held for approval. Call get_settings for "
+        "the keys and their shapes.",
         input_schema={
             "type": "object",
             "properties": {

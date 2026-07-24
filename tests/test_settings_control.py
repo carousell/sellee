@@ -54,7 +54,7 @@ def _request(server, method, path, *, token=None, body=None):
 
 
 def _propose(store, value=None):
-    value = [23, 9] if value is None else value
+    value = [2300, 930] if value is None else value
     cid = store.new_change_id()
     store.propose_setting_change(
         "quiet_hours",
@@ -79,7 +79,7 @@ def test_list_surfaces_pending_with_id(server, store) -> None:
     status, body = _request(server, "GET", "/control/settings-list?token=attended-secret")
     assert status == 200
     assert [p["change_id"] for p in body["pending"]] == [cid]
-    assert body["pending"][0]["proposed"] == "23:00–09:00"
+    assert body["pending"][0]["proposed"] == "23:00–09:30"
     assert any(s["key"] == "quiet_hours" for s in body["settings"])
 
 
@@ -104,7 +104,7 @@ def test_decide_approve_applies(server, store) -> None:
         body={"action": "approve", "change_id": cid},
     )
     assert status == 200 and body["status"] == "applied"
-    assert settings.get(store, "quiet_hours") == [23, 9]
+    assert settings.get(store, "quiet_hours") == [2300, 930]
     assert store.get_pending_change(cid)["decided_via"] == "cli"
 
 

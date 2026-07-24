@@ -50,7 +50,7 @@ def test_at_cap_waits_without_recording() -> None:
 
 def test_quiet_checked_before_cap_and_no_record() -> None:
     # default quiet hours 23..8; at 02:00 even an empty ledger is quiet, never a go
-    cfg = pacing.resolve(Config(max_actions_per_hour=12), quiet_hours=[23, 8])
+    cfg = pacing.resolve(Config(max_actions_per_hour=12), quiet_hours=[1380, 480])
     r = pacing.evaluate([], now=_midnight_ish(), cfg=cfg, kind="reply")
     assert r["verdict"] == "quiet" and r["record"] is False
 
@@ -58,7 +58,7 @@ def test_quiet_checked_before_cap_and_no_record() -> None:
 def test_fast_mode_zeroes_jitter_lifts_cap_disables_quiet() -> None:
     cfg = pacing.resolve(
         Config(pacing_mode="fast", max_actions_per_hour=1, reply_delay_sec=[1, 3]),
-        quiet_hours=[23, 8],
+        quiet_hours=[1380, 480],
     )
     assert cfg.cap == 60
     # even at 02:00 and with a full small cap's worth of history, fast still goes, jitter-free
