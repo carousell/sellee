@@ -208,6 +208,7 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: retention.run_retention(
                 bus=bus,
                 retention_days=cfg.retention_days,
+                routine_events_retention_hours=cfg.routine_events_retention_hours,
                 backups_dir=paths.backups_dir(),
                 backups_keep=cfg.backups_keep,
                 logs_dir=paths.logs_dir(),

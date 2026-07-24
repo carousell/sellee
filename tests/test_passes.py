@@ -196,6 +196,7 @@ def test_pass_end_survives_retention_prune(bus, store, fake_harness, xdg_tmp) ->
     retention.run_retention(
         bus=bus,
         retention_days=1,
+        routine_events_retention_hours=24,
         backups_dir=paths.backups_dir(),
         backups_keep=5,
         logs_dir=paths.logs_dir(),
