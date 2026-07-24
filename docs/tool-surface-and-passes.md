@@ -14,7 +14,9 @@ surfaces:
   `initialize`, `notifications/initialized`, `tools/list`, `tools/call`, `ping`.
   Responses are plain JSON (no SSE); `GET /mcp` is 405.
 - **`GET /events.json` + `GET /tail`** — the localhost web tail, reading the
-  event store over a read-only connection.
+  event store over a read-only connection. Rows use the shared
+  `events.event_to_wire` shape (same as `inspect --json`); `/tail?...&json=true`
+  renders that raw JSON per line.
 - **`POST /control/enqueue-pass`** — enqueue a pass (attended token only).
 - **`POST /control/connect-telegram`** + **`GET /control/channel-status`** — the
   Telegram bind flow (attended token only): the connect route takes the BotFather

@@ -66,6 +66,9 @@ printf '%s' "<bot-token>" | bin/selly-agent connect telegram
 
 # tail the event store (works whether or not the daemon is running)
 bin/selly-agent inspect --follow
+
+# or NDJSON — one event object per line, pipeable to jq
+bin/selly-agent inspect --follow --json | jq .
 ```
 
 Once bound, the phone is the async channel: buyer escalations push to it, and
@@ -73,8 +76,8 @@ Once bound, the phone is the async channel: buyer escalations push to it, and
 by the daemon (no LLM); anything else is a conversation with your selling agent.
 
 The daemon serves a localhost web tail at `http://127.0.0.1:<http_port>/tail?token=<attended-token>`
-(the token lives 0600 in the config dir). Tests point `$XDG_*_HOME` at a tmpdir, so they never
-touch a real install.
+(the token lives 0600 in the config dir); append `&json=true` for a raw-JSON view matching
+`inspect --json`. Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 
 ## Layout
 
