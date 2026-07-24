@@ -19,6 +19,7 @@ from selly_agent.tools import (  # noqa: F401  imported for registration
     reply,
     scam,
     seller,
+    settings,
     threads,
     verify,
     wants,
