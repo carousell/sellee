@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from selly_agent import paths
+from selly_agent import paths, settings
 from selly_agent.channel import prompt as channel_prompt_mod
 from selly_agent.harness import claude
 from selly_agent.harness.model import PassSpec
@@ -71,7 +71,9 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
     # from durable selly.db rows, so a restart rebuilds the same prompt.
     claimed = store.inbox_for_pass(pass_id)
     transcript = store.recent_transcript(channel_prompt_mod.TRANSCRIPT_WINDOW_LIMIT)
-    return channel_prompt_mod.build_channel_prompt(claimed, transcript)
+    return channel_prompt_mod.build_channel_prompt(
+        claimed, transcript, settings_block=settings.prompt_block(store)
+    )
 
 
 @dataclass(frozen=True)

@@ -22,7 +22,7 @@ def _bind(store):
 
 
 def _deliver(api):
-    def deliver(chat_id, text):
+    def deliver(chat_id, text, controls=None):
         TelegramClient(FAKE_TOKEN, api_base=api.base_url).send_message(chat_id, text)
 
     return deliver
@@ -51,7 +51,7 @@ def test_drain_transport_failure_bumps_attempts_and_raises(store, bus, xdg_tmp) 
     _bind(store)
     nid = store.queue_notice("ping")
 
-    def failing_deliver(chat_id, text):
+    def failing_deliver(chat_id, text, controls=None):
         raise ChannelError("Bot API sendMessage HTTP 500")
 
     with pytest.raises(ChannelError):

@@ -43,11 +43,16 @@ def _format_pending(rows: list) -> str:
     return "\n".join(out) if out else "(none)"
 
 
-def build_channel_prompt(claimed_rows: list, transcript: list) -> str:
-    """Assemble the pass prompt from the claimed pending rows and the recent-transcript window.
-    History and the work-to-do are clearly separated so a follow-up like "yes, do that" resolves
-    against the prior turn without confusing it for a new instruction."""
+def build_channel_prompt(
+    claimed_rows: list, transcript: list, settings_block: str | None = None
+) -> str:
+    """Assemble the pass prompt from the claimed pending rows and the recent-transcript window, plus
+    a compact settings block (the LLM's near-context vocabulary for what it can propose). History
+    and the work-to-do are clearly separated so a follow-up like "yes, do that" resolves against the
+    prior turn without confusing it for a new instruction."""
     parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS]
+    if settings_block:
+        parts.append(settings_block)
     window = _format_transcript(transcript, TRANSCRIPT_CHAR_CAP)
     if window:
         parts.append("Recent conversation (oldest first, for context):\n" + window)

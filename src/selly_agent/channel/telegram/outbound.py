@@ -8,6 +8,7 @@ only the Telegram-specific act of putting bytes on the wire.
 from __future__ import annotations
 
 from selly_agent import secrets
+from selly_agent.channel.telegram import commands
 from selly_agent.channel.telegram.transport import ChannelError, TelegramClient
 
 
@@ -20,8 +21,10 @@ def _client(config) -> TelegramClient:
 
 
 def make_deliver(config):
-    def deliver(chat_id, text) -> None:
-        _client(config).send_message(chat_id, text)
+    def deliver(chat_id, text, controls=None) -> None:
+        # A notice may carry provider-neutral controls (an approval notice's Approve/Cancel, an echo
+        # notice's Undo); render them into an inline keyboard on the last chunk.
+        _client(config).send_message(chat_id, text, reply_markup=commands.render_controls(controls))
 
     return deliver
 

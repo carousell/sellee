@@ -111,6 +111,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for /start (default: 300 interactive, 120 piped)",
     )
 
+    settings_cmd = sub.add_parser("settings", help="view and decide seller settings changes")
+    ssub = settings_cmd.add_subparsers(dest="settings_command", required=True)
+    ssub.add_parser("list", help="list current settings and any pending changes")
+    for verb, helptext in (
+        ("approve", "approve a held settings change by id"),
+        ("cancel", "cancel a held settings change by id"),
+        ("undo", "undo an applied settings change by id"),
+    ):
+        sp = ssub.add_parser(verb, help=helptext)
+        sp.add_argument("change_id", help="the change id (from `settings list`)")
+
     provision = sub.add_parser("provision", help="provision an external rail")
     prsub = provision.add_subparsers(dest="provision_command", required=True)
     prov_ai = prsub.add_parser("carousell-ai", help="obtain the carousell.ai guest API key")
@@ -154,6 +165,11 @@ def main(argv: list[str] | None = None) -> int:
         from selly_agent import connect_cli
 
         return connect_cli.run(args)
+
+    if args.command == "settings":
+        from selly_agent import settings_cli
+
+        return settings_cli.run(args)
 
     if args.command == "provision":
         from selly_agent import pass_cli

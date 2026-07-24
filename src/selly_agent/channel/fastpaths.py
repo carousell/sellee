@@ -9,27 +9,85 @@ so the core never builds a Telegram keyboard or a Slack block; the provider rend
 
 from __future__ import annotations
 
+from selly_agent import settings
+
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
 _FAST_PATH_COMMANDS = frozenset({"/pause", "/resume", "/status", "/catchup", "/selly"})
 
 # Callback tokens the control row emits. Provider-neutral: a provider carries them in whatever its
-# interactive widget uses (Telegram callback_data, Slack action_id). The settings-surface plan
-# reuses the same callback plumbing for its approve button (a different token, routed there).
+# interactive widget uses (Telegram callback_data, Slack action_id). The settings surface reuses the
+# same callback plumbing for its Approve/Cancel/Undo buttons (different tokens, routed to a door).
 CB_PAUSE = "pause"
 CB_RESUME = "resume"
 CB_NEEDS_ME = "needsme"
 _FAST_PATH_CALLBACKS = frozenset({CB_PAUSE, CB_RESUME, CB_NEEDS_ME})
 
+_DECISION_FOR_CALLBACK = {
+    settings.CB_APPROVE: settings.DECIDE_APPROVE,
+    settings.CB_CANCEL: settings.DECIDE_CANCEL,
+    settings.CB_UNDO: settings.DECIDE_UNDO,
+}
+_DECISION_FOR_VERB = {
+    settings.TEXT_APPROVE: settings.DECIDE_APPROVE,
+    settings.TEXT_CANCEL: settings.DECIDE_CANCEL,
+    settings.TEXT_UNDO: settings.DECIDE_UNDO,
+}
+
+
+def _settings_text_decision(text: str | None) -> tuple | None:
+    """Parse an exact-token settings door — a bare '<verb> <chg_id>' text, nothing more. Returns
+    (decision, change_id) or None. The strict two-word / chg_ shape keeps a conversational
+    'approve the buyer's offer' from ever tripping the deterministic apply."""
+    if not text:
+        return None
+    parts = text.split()
+    if len(parts) != 2:
+        return None
+    verb, change_id = parts[0].lower(), parts[1]
+    if verb not in settings.TEXT_VERBS or not change_id.startswith("chg_"):
+        return None
+    return _DECISION_FOR_VERB[verb], change_id
+
+
+def is_settings_door(event: dict) -> bool:
+    """True if `event` is a settings decision door — an Approve/Cancel/Undo button, or an exact
+    '<verb> <chg_id>' text token."""
+    if event["kind"] == "action":
+        return (event.get("payload") or {}).get("choice") in settings.CALLBACK_CHOICES
+    if event["kind"] == "text":
+        return _settings_text_decision(event.get("text")) is not None
+    return False
+
 
 def is_fast_path(event: dict) -> bool:
     """True if `event` (a normalized inbox row's kind/text/payload) is one the daemon answers
-    itself. A command matches on its exact first-word token; an action on its callback choice."""
+    itself. A command matches on its exact first-word token; an action on its callback choice; a
+    settings door on its button token or exact text token."""
     if event["kind"] == "command":
         return event["text"] in _FAST_PATH_COMMANDS
     if event["kind"] == "action":
-        return (event.get("payload") or {}).get("choice") in _FAST_PATH_CALLBACKS
-    return False
+        choice = (event.get("payload") or {}).get("choice")
+        return choice in _FAST_PATH_CALLBACKS or choice in settings.CALLBACK_CHOICES
+    return is_settings_door(event)
+
+
+def handle_settings_door(store, bus, event: dict) -> str:
+    """Apply a settings decision door and return the reply text. The parse and the apply are both
+    deterministic (settings.decide); no LLM sits between the authenticated tap/token and the state
+    change. Assumes is_settings_door(event) is True."""
+    if event["kind"] == "action":
+        decision = _DECISION_FOR_CALLBACK[event["payload"]["choice"]]
+        change_id = (event.get("payload") or {}).get("ref")
+        decided_via = "button"
+    else:
+        decision, change_id = _settings_text_decision(event["text"])
+        decided_via = "token"
+    if not change_id:
+        return "That action was missing its change id — ask me again."
+    return settings.decide(
+        store, bus, change_id=change_id, decision=decision, decided_via=decided_via
+    )["message"]
 
 
 def handle_fast_path(store, event: dict) -> tuple:
@@ -84,14 +142,22 @@ def render_catchup(store) -> str:
     if notices:
         lines.append("Updates:" if lines else "Updates for you:")
         lines.extend(f"• {n['text']}" for n in notices)
+    pending = settings.pending_view(store)
+    if pending:
+        lines.append("Changes awaiting your OK:")
+        lines.extend(
+            f"• {p['label']}: {p['current']} → {p['proposed']} (approve {p['change_id']})"
+            for p in pending
+        )
     if not lines:
         return "You're all caught up — nothing waiting."
     return "\n".join(lines)
 
 
 def render_settings_card(store) -> str:
-    """The `/selly` card: current state with values, closing with the free-text invitation. The
-    settings-surface plan appends real settings lines; the frame is what ships here."""
+    """The `/selly` card: current state, then the settings lines (changed-from-default plus the
+    headline set), closing with the free-text invitation. A capped summary — discovery is by
+    display, mutation by free text; get_settings carries the tail."""
     escalations, notices = _needs_me_counts(store)
     ch = store.get_channel()
     bound = "connected" if ch["chat_id"] is not None else "not connected"
@@ -101,7 +167,7 @@ def render_settings_card(store) -> str:
         f"• Agent: {paused}",
         f"• Telegram: {bound}",
         f"• Waiting on you: {escalations} decision(s), {notices} update(s)",
-        "",
-        "Tell me in plain words what you'd like to change.",
     ]
+    lines.extend(settings.card_lines(store))
+    lines += ["", "Tell me in plain language what you'd like to change."]
     return "\n".join(lines)

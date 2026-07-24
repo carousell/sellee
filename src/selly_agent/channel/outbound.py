@@ -10,6 +10,11 @@ once and every provider reuses it.
 from __future__ import annotations
 
 import logging
+import time
+from datetime import datetime
+
+from selly_agent import settings
+from selly_agent.engines import pacing
 
 log = logging.getLogger(__name__)
 
@@ -23,24 +28,35 @@ _NOTICE_DRAIN_BATCH = 10
 FAILED_PASS_NOTICE = "I couldn't process your last message — please send it again."
 
 
-def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH) -> None:
+def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=None) -> None:
     """Deliver queued notices to the bound chat, FIFO, via the provider's `deliver`. No-op while
-    paused or unbound (catchup delivers then). A delivery failure bumps the notice's attempts (the
-    row stays queued — visible in catchup, never dropped) and re-raises so the scheduler backs
-    the lane off."""
+    paused or unbound (catchup delivers then). During quiet hours only urgent notices (escalation
+    pushes) go out — routine ones stay queued and drain at the window's end. A delivery failure
+    bumps the notice's attempts (the row stays queued — visible in catchup, never dropped) and
+    re-raises so the scheduler backs the lane off."""
     if store.is_paused():
         return
     ch = store.get_channel()
     if ch["chat_id"] is None:
         return
-    for notice in store.claim_queued_notices(limit):
+    urgent_only = _in_quiet_hours(store, now)
+    for notice in store.claim_queued_notices(limit, urgent_only=urgent_only):
         try:
-            deliver(ch["chat_id"], notice["text"])
+            deliver(ch["chat_id"], notice["text"], notice["controls"])
         except Exception:
             store.bump_notice_attempts(notice["id"])
             raise
         store.mark_notice_delivered(notice["id"], "channel")
         bus.publish("message.delivered", {"notice_id": notice["id"], "ref": notice["ref"]})
+
+
+def _in_quiet_hours(store, now) -> bool:
+    """Whether the quiet-hours setting's window covers the current daemon-local hour. Evaluated per
+    tick against the wall clock (the one-clock rule) — a DST shift moves the window with it, which
+    is exactly right for 'don't buzz me at night'."""
+    start, end = settings.get(store, "quiet_hours")
+    now = time.time() if now is None else now
+    return pacing.in_quiet_hours(datetime.fromtimestamp(now).hour, start, end)
 
 
 def pulse_typing(*, store, typing) -> None:
@@ -83,6 +99,11 @@ def escalation_notifier(store):
         esc = store.get_escalation(event.payload.get("id"))
         if esc is None:  # resolved/pruned between publish and here — catchup covers it
             return
-        store.queue_notice(f"Needs your call: {esc['open_question']}", ref=esc["thread_id"])
+        # Urgent: an escalation is a decision the seller must make; it bypasses the quiet-hours
+        # drain hold (a meetup confirmation shouldn't wait until morning — the seller can mute
+        # Telegram themselves if they want silence).
+        store.queue_notice(
+            f"Needs your call: {esc['open_question']}", ref=esc["thread_id"], urgent=True
+        )
 
     return _on

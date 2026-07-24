@@ -28,6 +28,7 @@ from selly_agent import (
     paths,
     retention,
     secrets,
+    settings,
 )
 from selly_agent.channel import outbound
 from selly_agent.channel.manager import ChannelManager
@@ -47,6 +48,9 @@ log = logging.getLogger(__name__)
 _PASS_LANE_INTERVAL_SEC = 2.0
 _STRAY_REAPER_INTERVAL_SEC = 60.0
 _INTENT_SWEEP_INTERVAL_SEC = 120.0
+# The proposal TTL is a day; an hourly sweep gives at most an hour's slack past it. The doors also
+# enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
+_SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
 
 
 def _setup_logging(level_name: str) -> None:
@@ -229,6 +233,15 @@ def run_daemon(*, once: bool) -> int:
             name="stale_intent_sweep",
             interval_sec=_INTENT_SWEEP_INTERVAL_SEC,
             func=lambda: intent_sweep.run_stale_intent_sweep(bus=bus, store=store),
+        )
+    )
+    # Expire never-answered settings proposals (always on, channel-independent — a proposal is
+    # durable the moment it's written; catchup surfaces it meanwhile).
+    scheduler.register(
+        Task(
+            name="settings_expiry_sweep",
+            interval_sec=_SETTINGS_EXPIRY_INTERVAL_SEC,
+            func=lambda: settings.expire_stale_proposals(store, bus),
         )
     )
     # Fold settled channel passes' claimed inbox rows from durable state (not a pass.end

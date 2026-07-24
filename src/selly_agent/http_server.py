@@ -198,6 +198,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_enqueue_pass()
         elif route == "/control/connect-telegram":
             self._handle_connect_telegram()
+        elif route == "/control/settings-decide":
+            self._handle_settings_decide()
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -211,6 +213,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_events_json(parsed)
         elif parsed.path == "/control/channel-status":
             self._handle_channel_status(parsed)
+        elif parsed.path == "/control/settings-list":
+            self._handle_settings_list(parsed)
         elif parsed.path == "/tail":
             self._handle_tail()
         else:
@@ -337,6 +341,49 @@ class _Handler(BaseHTTPRequestHandler):
         if self._app.channels is not None:
             self._app.channels.register("telegram")
         self._send_json(200, result)
+
+    def _handle_settings_decide(self) -> None:
+        # Attended CLI door: approve/cancel/undo a change by id. Same trust as the channel buttons —
+        # an authenticated surface, a deterministic parse, a deterministic apply — so it works with
+        # no channel bound and while paused (seller-initiated control).
+        from selly_agent import settings
+
+        session = self._app.auth.resolve(self._bearer())
+        if session is None or session.tier != "attended":
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        try:
+            body = json.loads(self._read_body() or b"{}")
+        except ValueError:
+            self._send_json(400, {"error": "invalid json"})
+            return
+        action = body.get("action")
+        change_id = body.get("change_id")
+        if action not in settings.TEXT_VERBS or not isinstance(change_id, str):
+            self._send_json(
+                400, {"error": "action (approve|cancel|undo) and change_id are required"}
+            )
+            return
+        result = settings.decide(
+            self._app.store, self._app.bus, change_id=change_id, decision=action, decided_via="cli"
+        )
+        self._send_json(200, result)
+
+    def _handle_settings_list(self, parsed) -> None:
+        from selly_agent import settings
+
+        qs = parse_qs(parsed.query)
+        session = self._app.auth.resolve(qs.get("token", [None])[0])
+        if session is None or session.tier != "attended":
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        self._send_json(
+            200,
+            {
+                "pending": settings.pending_view(self._app.store),
+                "settings": settings.describe(self._app.store),
+            },
+        )
 
     def _handle_channel_status(self, parsed) -> None:
         from selly_agent.channel.telegram import bind

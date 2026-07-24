@@ -29,6 +29,7 @@ NETWORK_ALLOWLIST: set[str] = {
     "selly_agent/mcp_proxy.py",  # stdio shim forwarding JSON-RPC to the daemon over HTTP
     "selly_agent/pass_cli.py",  # `pass run` posts to the daemon's control route
     "selly_agent/connect_cli.py",  # `connect telegram` posts the token to the control route
+    "selly_agent/settings_cli.py",  # `settings list|approve|cancel|undo` over the control route
     "selly_agent/rail/client.py",  # carousell.ai MCP client + live listing verify
     "selly_agent/rail/provision.py",  # carousell.ai guest-key provisioning
     "selly_agent/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)

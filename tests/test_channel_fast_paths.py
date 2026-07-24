@@ -123,7 +123,7 @@ def test_selly_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
         _poller(store, bus, api).tick()
         msg = api.outbox[-1]
     assert "where things stand" in msg["text"]
-    assert "plain words" in msg["text"]  # the free-text invitation, not a numbered menu
+    assert "plain language" in msg["text"]  # the free-text invitation, not a numbered menu
     buttons = msg["reply_markup"]["inline_keyboard"][0]
     assert [b["callback_data"] for b in buttons] == [
         CB_PAUSE,

@@ -199,7 +199,12 @@ class Poller:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
             if not fastpaths.is_fast_path(event):
                 continue
-            text, controls = fastpaths.handle_fast_path(self.store, event)
+            if fastpaths.is_settings_door(event):
+                # A door — button or exact text token — routed to the deterministic apply; it never
+                # touches an LLM and works while paused (seller-initiated control).
+                text, controls = fastpaths.handle_settings_door(self.store, self.bus, event), None
+            else:
+                text, controls = fastpaths.handle_fast_path(self.store, event)
             cq_id = row["payload"].get("callback_query_id")
             if cq_id:
                 try:

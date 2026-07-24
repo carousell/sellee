@@ -6,7 +6,7 @@ import dataclasses
 import os
 import time
 
-from selly_agent import __version__, heartbeat, paths, secrets
+from selly_agent import __version__, heartbeat, paths, secrets, settings
 from selly_agent.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -63,6 +63,7 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     delivered via catchup; escalations are never stamped by a read (they clear only on resolve)."""
     escalations = ctx.store.list_open_escalations()
     notices = ctx.store.list_queued_notices()
+    pending_settings = settings.pending_view(ctx.store)
     channel = ctx.store.get_channel()
     bound = channel["chat_id"] is not None
     hint = _connect_hint(bound, escalations, time.time())
@@ -71,7 +72,14 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     return {
         "escalations": escalations,
         "notices": notices,
-        "counts": {"escalations": len(escalations), "notices": len(notices)},
+        # An unanswered proposal is needs-me work — surfaced here (with its change id) so an unbound
+        # or attended-only install can still act on it. A read never decides it.
+        "pending_settings": pending_settings,
+        "counts": {
+            "escalations": len(escalations),
+            "notices": len(notices),
+            "pending_settings": len(pending_settings),
+        },
         "channel": {"bound": bound, "bot_username": channel["bot_username"]},
         "paused": ctx.store.is_paused(),
         "connect_hint": hint,
