@@ -15,6 +15,7 @@ import threading
 import time
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
+from datetime import datetime
 
 from selly_agent.db import Database
 
@@ -38,6 +39,21 @@ def _row_to_event(row) -> Event:
         kind=row["kind"],
         payload=json.loads(row["payload"]),
     )
+
+
+def event_to_wire(event: Event) -> dict:
+    """Canonical JSON shape of an event: the `inspect --json` NDJSON line and the web tail's
+    /events.json rows share this exactly. `@ts` is a system-local RFC3339 render of `ts`,
+    emitted first for legibility; `ts` stays as the raw epoch (the faithful ordering value).
+    The field order here is the wire order — serialize without sort_keys to preserve it."""
+    return {
+        "@ts": datetime.fromtimestamp(event.ts).astimezone().isoformat(),
+        "seq": event.seq,
+        "ts": event.ts,
+        "pass_id": event.pass_id,
+        "kind": event.kind,
+        "payload": event.payload,
+    }
 
 
 def query_events(
