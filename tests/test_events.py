@@ -6,7 +6,7 @@ import time
 
 from selly_agent import migrations
 from selly_agent.db import Database
-from selly_agent.events import EventBus, EventStore
+from selly_agent.events import EventBus, EventStore, routine_kinds
 
 
 def _store(tmp_path) -> EventStore:
@@ -87,3 +87,23 @@ def test_delete_older_than_honors_cutoff_and_keep_kinds(tmp_path) -> None:
     assert deleted == 2
     remaining = store.read()
     assert [e.seq for e in remaining] == [keeper.seq]
+
+
+def test_routine_kinds_are_the_demoted_ones(tmp_path) -> None:
+    # Derived from the level map, so it's exactly the kinds retention ages out on the short
+    # window — task.start/task.ok today, and whatever else gets demoted later.
+    assert set(routine_kinds()) == {"task.start", "task.ok"}
+
+
+def test_delete_kinds_older_than_targets_only_listed_kinds(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.record("task.ok", {}, pass_id=None)  # routine, in the target set
+    keeper = store.record("channel.in", {}, pass_id=None)  # info, not in the set
+
+    # a past cutoff deletes nothing; an empty kinds set is a no-op even with a future cutoff
+    assert store.delete_kinds_older_than(0.0, ("task.ok",)) == 0
+    assert store.delete_kinds_older_than(time.time() + 1000, ()) == 0
+
+    deleted = store.delete_kinds_older_than(time.time() + 1000, ("task.ok",))
+    assert deleted == 1
+    assert [e.seq for e in store.read()] == [keeper.seq]  # the info event is untouched

@@ -60,6 +60,12 @@ def level_for(kind: str) -> str:
     return _KIND_LEVELS.get(kind, "info")
 
 
+def routine_kinds() -> tuple[str, ...]:
+    """Kinds demoted to the routine tier — the set retention ages out on a short window. Derived
+    from the level map so there's one source of truth; a newly demoted kind inherits it."""
+    return tuple(k for k, v in _KIND_LEVELS.items() if v == "routine")
+
+
 def event_to_wire(event: Event) -> dict:
     """Canonical JSON shape of an event: the `inspect --json` NDJSON line and the web tail's
     /events.json rows share this exactly. `@ts` is a system-local RFC3339 render of `ts`,
@@ -149,6 +155,20 @@ class EventStore:
                 )
             else:
                 cur = conn.execute("DELETE FROM events WHERE ts < ?", (cutoff_ts,))
+            return cur.rowcount
+
+    def delete_kinds_older_than(self, cutoff_ts: float, kinds: Iterable[str]) -> int:
+        """Delete only the given kinds past the cutoff — the routine tier's short-window prune.
+        Symmetric to delete_older_than (which keeps kinds); an empty kinds set is a no-op."""
+        kinds = list(kinds)
+        if not kinds:
+            return 0
+        placeholders = ",".join("?" for _ in kinds)
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                f"DELETE FROM events WHERE ts < ? AND kind IN ({placeholders})",
+                (cutoff_ts, *kinds),
+            )
             return cur.rowcount
 
 
