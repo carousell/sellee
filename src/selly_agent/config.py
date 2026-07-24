@@ -41,6 +41,11 @@ class Config:
     log_level: str = "INFO"
     tick_interval_sec: float = 5.0
     retention_days: int = 14
+    # Routine-tier events (the per-attempt task.start/task.ok ledger) age out on a much shorter
+    # window than retention_days — they're ~99% of event volume and no consumer reads them by
+    # name, so keeping them the full window is mostly dead weight (and it multiplies across DB
+    # backups).
+    routine_events_retention_hours: int = 24
     backups_keep: int = 5
     # Recorded by the installer, read by daemon status. Not consumed by the daemon loop.
     daemon_mode: str = "manual"
@@ -110,6 +115,14 @@ def _validate(raw: dict) -> Config:
         if not _is_real_int(days) or days < 1:
             raise ConfigError(f"retention_days must be an integer >= 1, got {days!r}")
         values["retention_days"] = days
+
+    if "routine_events_retention_hours" in raw:
+        hours = raw["routine_events_retention_hours"]
+        if not _is_real_int(hours) or hours < 1:
+            raise ConfigError(
+                f"routine_events_retention_hours must be an integer >= 1, got {hours!r}"
+            )
+        values["routine_events_retention_hours"] = hours
 
     if "backups_keep" in raw:
         keep = raw["backups_keep"]

@@ -21,6 +21,7 @@ def test_missing_file_yields_all_defaults(xdg_tmp) -> None:
     assert cfg == Config()
     assert cfg.log_level == "INFO"
     assert cfg.tick_interval_sec == 5.0
+    assert cfg.routine_events_retention_hours == 24
 
 
 def test_values_are_read_from_the_config_path(xdg_tmp) -> None:
@@ -29,6 +30,7 @@ def test_values_are_read_from_the_config_path(xdg_tmp) -> None:
             "log_level": "debug",
             "tick_interval_sec": 2,
             "retention_days": 30,
+            "routine_events_retention_hours": 6,
             "backups_keep": 3,
         }
     )
@@ -36,6 +38,7 @@ def test_values_are_read_from_the_config_path(xdg_tmp) -> None:
     assert cfg.log_level == "DEBUG"  # normalized to canonical case
     assert cfg.tick_interval_sec == 2.0
     assert cfg.retention_days == 30
+    assert cfg.routine_events_retention_hours == 6
     assert cfg.backups_keep == 3
 
 
@@ -79,6 +82,8 @@ def test_http_port_zero_allowed_as_ephemeral(xdg_tmp) -> None:
         {"tick_interval_sec": True},
         {"retention_days": 0},
         {"retention_days": 1.5},
+        {"routine_events_retention_hours": 0},
+        {"routine_events_retention_hours": 1.5},
         {"backups_keep": -1},
         {"http_port": 80},
         {"http_port": 70000},
