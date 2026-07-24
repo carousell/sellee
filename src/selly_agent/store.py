@@ -320,7 +320,9 @@ class InboxRecord(TypedDict):
 
 
 class NoticeRecord(TypedDict):
-    """One needs-me notice (see `_notice_from_row`) — a queued or delivered outbound message."""
+    """One needs-me notice (see `_notice_from_row`) — a queued or delivered outbound message.
+    `urgent` bypasses the quiet-hours drain hold; `controls` is an optional provider-neutral list
+    of [label, token] button pairs the channel renders into a native keyboard."""
 
     id: int
     text: str
@@ -331,6 +333,8 @@ class NoticeRecord(TypedDict):
     delivered_ts: float | None
     via: str | None
     pass_id: str | None
+    urgent: bool
+    controls: list | None
 
 
 class EscalationRecord(TypedDict):
@@ -490,7 +494,99 @@ def _notice_from_row(row: sqlite3.Row) -> NoticeRecord:
         "delivered_ts": row["delivered_ts"],
         "via": row["via"],
         "pass_id": row["pass_id"],
+        "urgent": bool(row["urgent"]),
+        "controls": json.loads(row["controls"]) if row["controls"] else None,
     }
+
+
+class PendingChangeRecord(TypedDict):
+    """One row of the settings change ledger (see `_pending_change_from_row`). value/prior_value are
+    the canonical values decoded from JSON; a live proposal is status 'pending'."""
+
+    change_id: str
+    key: str
+    value: object
+    prior_value: object
+    status: str
+    proposed_ts: float
+    decided_ts: float | None
+    decided_via: str | None
+
+
+def _pending_change_from_row(row: sqlite3.Row) -> PendingChangeRecord:
+    return {
+        "change_id": row["change_id"],
+        "key": row["key"],
+        "value": json.loads(row["value"]),
+        "prior_value": json.loads(row["prior_value"]) if row["prior_value"] is not None else None,
+        "status": row["status"],
+        "proposed_ts": row["proposed_ts"],
+        "decided_ts": row["decided_ts"],
+        "decided_via": row["decided_via"],
+    }
+
+
+def _insert_notice(
+    conn,
+    text: str,
+    *,
+    ref: str | None = None,
+    pass_id: str | None = None,
+    urgent: bool = False,
+    controls: list | None = None,
+) -> int:
+    """Insert one queued notice within an existing transaction, returning its id. Shared by the
+    standalone queue_notice and the settings apply paths (whose notice insert rides in the same
+    transaction as the state change)."""
+    cur = conn.execute(
+        "INSERT INTO notices (text, ref, created_ts, status, attempts, pass_id, urgent, controls) "
+        "VALUES (?, ?, ?, 'queued', 0, ?, ?, ?)",
+        (
+            text,
+            ref,
+            _now(),
+            pass_id,
+            1 if urgent else 0,
+            json.dumps(controls, sort_keys=True) if controls is not None else None,
+        ),
+    )
+    notice_id = cur.lastrowid
+    assert notice_id is not None  # an INSERT always sets lastrowid
+    return notice_id
+
+
+def _json(value: object) -> str:
+    """Canonical JSON for a stored setting/proposal value — the same encoding settings.py compares
+    on, so a round-tripped value is byte-identical."""
+    return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _upsert_setting_in_txn(conn, key: str, value: object, prior_value: object, now: float) -> None:
+    conn.execute(
+        "INSERT INTO settings (key, value, updated_ts, prior_value, prior_ts) "
+        "VALUES (?, ?, ?, ?, ?) "
+        "ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_ts = excluded.updated_ts, "
+        "prior_value = excluded.prior_value, prior_ts = excluded.prior_ts",
+        (key, _json(value), now, _json(prior_value), now),
+    )
+
+
+def _supersede_pending_in_txn(conn, key: str, now: float) -> None:
+    """Retire any live proposal for a key — one live proposal per key, so a new proposal or an
+    apply leaves the decision surface unambiguous."""
+    conn.execute(
+        "UPDATE pending_setting_changes SET status = 'superseded', decided_ts = ? "
+        "WHERE key = ? AND status = 'pending'",
+        (now, key),
+    )
+
+
+def _decide_pending_in_txn(conn, change_id: str, status: str, now: float, decided_via) -> None:
+    conn.execute(
+        "UPDATE pending_setting_changes SET status = ?, decided_ts = ?, decided_via = ? "
+        "WHERE change_id = ?",
+        (status, now, decided_via, change_id),
+    )
 
 
 _ESCALATION_FIELDS = (
@@ -2493,21 +2589,27 @@ class Store:
 
     # --- notices (the needs-me outbound queue: queued -> delivered) -----------------------------
 
-    def queue_notice(self, text: str, *, ref: str | None = None, pass_id: str | None = None) -> int:
+    def queue_notice(
+        self,
+        text: str,
+        *,
+        ref: str | None = None,
+        pass_id: str | None = None,
+        urgent: bool = False,
+        controls: list | None = None,
+    ) -> int:
         with self._db.transaction() as conn:
-            cur = conn.execute(
-                "INSERT INTO notices (text, ref, created_ts, status, attempts, pass_id) "
-                "VALUES (?, ?, ?, 'queued', 0, ?)",
-                (text, ref, _now(), pass_id),
+            return _insert_notice(
+                conn, text, ref=ref, pass_id=pass_id, urgent=urgent, controls=controls
             )
-            notice_id = cur.lastrowid
-            assert notice_id is not None  # an INSERT always sets lastrowid
-            return notice_id
 
-    def claim_queued_notices(self, limit: int) -> list[NoticeRecord]:
-        """The oldest queued notices, FIFO — the drain lane delivers them in order."""
+    def claim_queued_notices(self, limit: int, *, urgent_only: bool = False) -> list[NoticeRecord]:
+        """The oldest queued notices, FIFO — the drain lane delivers them in order. `urgent_only`
+        restricts the claim to escalation-urgent notices, so the drain can hold routine ones during
+        quiet hours while still delivering urgent pushes."""
+        where = "status = 'queued'" + (" AND urgent = 1" if urgent_only else "")
         rows = self._db.query(
-            "SELECT * FROM notices WHERE status = 'queued' ORDER BY created_ts ASC, id ASC LIMIT ?",
+            f"SELECT * FROM notices WHERE {where} ORDER BY created_ts ASC, id ASC LIMIT ?",
             (limit,),
         )
         return [_notice_from_row(r) for r in rows]
@@ -2539,6 +2641,221 @@ class Store:
     def count_queued_notices(self) -> int:
         rows = self._db.query("SELECT COUNT(*) AS n FROM notices WHERE status = 'queued'")
         return rows[0]["n"]
+
+    # --- settings & the propose->approve->apply change ledger -----------------------------------
+    #
+    # The LLM only proposes; every apply happens here, in deterministic code, one transaction. The
+    # registry (settings.py) owns validation, rendering, defaults, and the approval policy — the
+    # store owns only durable state, so a caller passes concrete canonical values and the composed
+    # notice copy in, and these methods persist the state change + its notice atomically.
+
+    def get_setting(self, key: str) -> object | None:
+        """One setting's stored canonical value, or None when unset (the registry default applies —
+        defaults are not rows). Effective values are read via settings.get / settings.effective."""
+        rows = self._db.query("SELECT value FROM settings WHERE key = ?", (key,))
+        return json.loads(rows[0]["value"]) if rows else None
+
+    def get_all_settings(self) -> dict:
+        """Every stored setting's canonical value, keyed by key (unset keys are simply absent)."""
+        rows = self._db.query("SELECT key, value FROM settings")
+        return {r["key"]: json.loads(r["value"]) for r in rows}
+
+    def get_pending_change(self, change_id: str) -> PendingChangeRecord | None:
+        rows = self._db.query(
+            "SELECT * FROM pending_setting_changes WHERE change_id = ?", (change_id,)
+        )
+        return _pending_change_from_row(rows[0]) if rows else None
+
+    def list_pending_changes(self) -> list[PendingChangeRecord]:
+        """Every live (pending) proposal, oldest first — what catchup and `settings list` surface
+        (the CLI door needs the change id from somewhere)."""
+        rows = self._db.query(
+            "SELECT * FROM pending_setting_changes WHERE status = 'pending' "
+            "ORDER BY proposed_ts ASC, change_id ASC"
+        )
+        return [_pending_change_from_row(r) for r in rows]
+
+    def new_change_id(self) -> str:
+        """Mint a change id up front, so a caller can encode it into an approval/echo notice's
+        buttons before the proposal row and that notice are written in one transaction."""
+        return _new_id("chg")
+
+    def propose_setting_change(
+        self,
+        key: str,
+        value: object,
+        *,
+        change_id: str,
+        prior_value: object,
+        notice_text: str,
+        notice_controls: list | None = None,
+        notice_ref: str | None = None,
+    ) -> str:
+        """HOLD path: write a pending proposal (superseding any live one for the same key) and queue
+        its approval notice, atomically. Returns the change_id. The daemon — never the model —
+        decided to hold; this only records that decision durably."""
+        now = _now()
+        with self._db.transaction() as conn:
+            _supersede_pending_in_txn(conn, key, now)
+            conn.execute(
+                "INSERT INTO pending_setting_changes "
+                "(change_id, key, value, prior_value, status, proposed_ts) "
+                "VALUES (?, ?, ?, ?, 'pending', ?)",
+                (change_id, key, _json(value), _json(prior_value), now),
+            )
+            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+        return change_id
+
+    def apply_setting_now(
+        self,
+        key: str,
+        value: object,
+        *,
+        change_id: str,
+        prior_value: object,
+        decided_via: str = "auto",
+        notice_text: str,
+        notice_controls: list | None = None,
+        notice_ref: str | None = None,
+    ) -> dict:
+        """ALLOW path: record the proposal already applied, upsert the setting, and queue the echo
+        notice — one transaction. Returns {change_id, key, value, prior_value}."""
+        now = _now()
+        with self._db.transaction() as conn:
+            _supersede_pending_in_txn(conn, key, now)
+            conn.execute(
+                "INSERT INTO pending_setting_changes "
+                "(change_id, key, value, prior_value, status, proposed_ts, decided_ts, "
+                "decided_via) "
+                "VALUES (?, ?, ?, ?, 'applied', ?, ?, ?)",
+                (change_id, key, _json(value), _json(prior_value), now, now, decided_via),
+            )
+            _upsert_setting_in_txn(conn, key, value, prior_value, now)
+            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+        return {"change_id": change_id, "key": key, "value": value, "prior_value": prior_value}
+
+    def approve_setting_change(
+        self,
+        change_id: str,
+        *,
+        decided_via: str,
+        notice_text: str,
+        notice_controls: list | None = None,
+        notice_ref: str | None = None,
+        ttl_sec: float = 0.0,
+    ) -> dict:
+        """Apply a held proposal through a door: upsert the setting from the proposal's snapshot,
+        mark it applied, and queue the echo notice — one transaction, re-checking the row is still
+        pending inside it (so a raced supersede/expiry never double-applies). Returns a status dict:
+        applied | expired | not_pending (with the row's current status)."""
+        now = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM pending_setting_changes WHERE change_id = ?", (change_id,)
+            ).fetchone()
+            if row is None:
+                return {"status": "not_pending", "current": None}
+            if row["status"] != "pending":
+                return {"status": "not_pending", "current": row["status"]}
+            if ttl_sec and now - row["proposed_ts"] > ttl_sec:
+                _decide_pending_in_txn(conn, change_id, "expired", now, None)
+                return {"status": "expired", "key": row["key"]}
+            key = row["key"]
+            value = json.loads(row["value"])
+            prior_value = json.loads(row["prior_value"]) if row["prior_value"] is not None else None
+            _upsert_setting_in_txn(conn, key, value, prior_value, now)
+            _decide_pending_in_txn(conn, change_id, "applied", now, decided_via)
+            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+        return {
+            "status": "applied",
+            "change_id": change_id,
+            "key": key,
+            "value": value,
+            "prior_value": prior_value,
+        }
+
+    def cancel_setting_change(
+        self, change_id: str, *, decided_via: str, ttl_sec: float = 0.0
+    ) -> dict:
+        """Cancel a held proposal through a door (leaves the setting untouched). Returns a status
+        dict: cancelled | expired | not_pending."""
+        now = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM pending_setting_changes WHERE change_id = ?", (change_id,)
+            ).fetchone()
+            if row is None:
+                return {"status": "not_pending", "current": None}
+            if row["status"] != "pending":
+                return {"status": "not_pending", "current": row["status"]}
+            if ttl_sec and now - row["proposed_ts"] > ttl_sec:
+                _decide_pending_in_txn(conn, change_id, "expired", now, None)
+                return {"status": "expired", "key": row["key"]}
+            _decide_pending_in_txn(conn, change_id, "cancelled", now, decided_via)
+        return {"status": "cancelled", "change_id": change_id, "key": row["key"]}
+
+    def undo_setting_change(
+        self,
+        change_id: str,
+        *,
+        decided_via: str,
+        notice_text: str,
+        notice_controls: list | None = None,
+        notice_ref: str | None = None,
+    ) -> dict:
+        """Revert an applied change through a door: restore its prior value via the same apply
+        transaction (a fresh applied ledger row + echo notice). Valid only while it is still the
+        key's latest change — a later change to the key makes it stale. Returns a status dict:
+        undone | not_undoable (with a reason)."""
+        now = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT * FROM pending_setting_changes WHERE change_id = ?", (change_id,)
+            ).fetchone()
+            if row is None:
+                return {"status": "not_undoable", "reason": "unknown"}
+            if row["status"] != "applied":
+                return {"status": "not_undoable", "reason": "not_applied", "current": row["status"]}
+            key = row["key"]
+            current = conn.execute("SELECT value FROM settings WHERE key = ?", (key,)).fetchone()
+            # Undo is single-level: valid only while this change is still the key's latest, i.e. the
+            # stored value is still exactly what it set. A newer change moved it — refuse (stale).
+            if current is None or current["value"] != row["value"]:
+                return {"status": "not_undoable", "reason": "superseded"}
+            restored = json.loads(row["prior_value"]) if row["prior_value"] is not None else None
+            replaced = json.loads(row["value"])
+            revert_id = _new_id("chg")
+            conn.execute(
+                "INSERT INTO pending_setting_changes "
+                "(change_id, key, value, prior_value, status, proposed_ts, decided_ts, "
+                "decided_via) "
+                "VALUES (?, ?, ?, ?, 'applied', ?, ?, ?)",
+                (revert_id, key, _json(restored), _json(replaced), now, now, decided_via),
+            )
+            _upsert_setting_in_txn(conn, key, restored, replaced, now)
+            _insert_notice(conn, notice_text, ref=notice_ref, controls=notice_controls)
+        return {
+            "status": "undone",
+            "change_id": revert_id,
+            "key": key,
+            "value": restored,
+            "prior_value": replaced,
+        }
+
+    def expire_pending_changes(self, cutoff_ts: float) -> list[PendingChangeRecord]:
+        """Mark every pending proposal older than the cutoff expired, returning those rows (the
+        expiry sweep publishes an event per one). An expired proposal is answered, never re-fired —
+        the seller starts fresh."""
+        now = _now()
+        with self._db.transaction() as conn:
+            stale = conn.execute(
+                "SELECT * FROM pending_setting_changes "
+                "WHERE status = 'pending' AND proposed_ts < ?",
+                (cutoff_ts,),
+            ).fetchall()
+            for row in stale:
+                _decide_pending_in_txn(conn, row["change_id"], "expired", now, None)
+        return [_pending_change_from_row(r) for r in stale]
 
     # --- pause control (singleton; a missing row reads as NOT paused) ---------------------------
 

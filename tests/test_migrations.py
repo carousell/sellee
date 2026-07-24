@@ -42,6 +42,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 2),
         ("data", 3),
         ("data", 4),
+        ("data", 5),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -55,12 +56,15 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "channel_inbox")
     assert _table_exists(data_db, "notices")
     assert _table_exists(data_db, "control")
+    assert _table_exists(data_db, "settings")
+    assert _table_exists(data_db, "pending_setting_changes")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
         2,
         3,
         4,
+        5,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

@@ -2,12 +2,28 @@
 
 from __future__ import annotations
 
+import json
+import time
+
 import pytest
 
 from selly_agent import migrations
 from selly_agent.config import Config
 from selly_agent.db import Database
 from selly_agent.events import EventBus, EventStore
+
+
+def seed_setting(store, key, value) -> None:
+    """Write a setting directly, bypassing the change protocol — a test hook for arranging state
+    (e.g. disabling quiet hours so a pacing-gated tool isn't blocked by the wall-clock hour a test
+    happens to run in). Not a production path; real writes go through the propose→apply doors."""
+    with store._db.transaction() as conn:  # noqa: SLF001 — tests may arrange store state directly
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_ts) VALUES (?, ?, ?) "
+            "ON CONFLICT (key) DO UPDATE SET value = excluded.value, "
+            "updated_ts = excluded.updated_ts",
+            (key, json.dumps(value), time.time()),
+        )
 
 
 @pytest.fixture
@@ -26,10 +42,29 @@ def bus(tmp_path):
 
 @pytest.fixture
 def store(bus):
-    """A Store over the same freshly-migrated selly.db the bus fixture created."""
+    """A Store over the same freshly-migrated selly.db the bus fixture created. Quiet hours are
+    seeded off so a pacing-gated tool isn't blocked by the wall-clock hour a test runs in (quiet
+    hours moved from a config knob to a setting); a settings-behavior test that needs the registry
+    default or a specific window builds its own store or re-seeds."""
     from selly_agent.store import Store
 
-    return Store(Database(bus.store.db.path.parent / "selly.db"))
+    st = Store(Database(bus.store.db.path.parent / "selly.db"))
+    seed_setting(st, "quiet_hours", [0, 0])
+    return st
+
+
+@pytest.fixture
+def fresh_store(tmp_path):
+    """A migrated Store with nothing seeded — for settings tests that need the registry default
+    (the `store` fixture seeds quiet hours off)."""
+    from selly_agent.store import Store
+
+    data_db = Database(tmp_path / "fresh.db")
+    events_db = Database(tmp_path / "fresh-events.db")
+    migrations.run_startup_migrations(
+        data_db=data_db, events_db=events_db, backups_dir=tmp_path / "fresh-backups", backups_keep=5
+    )
+    return Store(data_db)
 
 
 @pytest.fixture
@@ -52,13 +87,13 @@ def make_ctx(bus, store, xdg_tmp):
         started_ts=1000.0,
     ):
         # A scoped session sees a ScopedStore (as the daemon builds per request); unscoped uses the
-        # raw store. Default quiet hours off so a pacing-gated tool (publish, send_reply) is not
-        # blocked by the wall-clock hour a test happens to run in — quiet-verdict tests pass config.
+        # raw store. The store fixture seeds quiet hours off, so a pacing-gated tool (publish,
+        # send_reply) is not blocked by the wall-clock hour a test happens to run in.
         return ToolContext(
             session=Session(tier=tier, pass_id=pass_id, scope=scope),
             store=ScopedStore(store, scope) if scope is not None else store,
             bus=bus,
-            config=config or Config(quiet_hours=(0, 0)),
+            config=config or Config(),
             rail_factory=rail_factory,
             reply_sink=reply_sink,
             started_ts=started_ts,
