@@ -1,7 +1,7 @@
-"""`selly-agent connect telegram` client UX: interactive getpass + BotFather guidance, the
-byte-for-byte-unchanged piped path, the phone-delivery affordance (QR seam or printed URL), the
-interactive/piped timeout defaults, and token hygiene. The daemon routes are exercised in
-test_channel_bind; here the HTTP calls are stubbed so the CLI's own behaviour is isolated.
+"""`selly-agent connect telegram` client UX: interactive getpass + BotFather guidance, the piped
+token read, the printed phone-delivery URL, the interactive/piped timeout defaults, and token
+hygiene. The daemon routes are exercised in test_channel_bind; here the HTTP calls are stubbed so
+the CLI's own behaviour is isolated.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _pipe_stdin(monkeypatch, text):
 # --- token entry: piped path is unchanged ----------------------------------------------------
 
 
-def test_piped_empty_token_exits_2_with_unchanged_message(monkeypatch, capsys) -> None:
+def test_piped_empty_token_exits_2(monkeypatch, capsys) -> None:
     _pipe_stdin(monkeypatch, "")
     called = {"getpass": False}
     monkeypatch.setattr(
@@ -78,7 +78,7 @@ def test_interactive_prints_guidance_and_uses_getpass(monkeypatch, stub_daemon, 
     assert rc == 0
     assert stub_daemon["posts"][0][2] == {"token": _TOKEN}  # getpass token, not the piped bytes
     out = capsys.readouterr().out
-    assert "message @BotFather" in out and "/newbot" in out  # F2 guidance
+    assert "message @BotFather" in out and "/newbot" in out  # BotFather guidance above the prompt
 
 
 def test_interactive_empty_token_exits_2(monkeypatch, capsys) -> None:
@@ -137,7 +137,7 @@ def test_timeout_exits_1(monkeypatch, stub_daemon, capsys) -> None:
     assert "Timed out waiting for /start" in capsys.readouterr().err
 
 
-# --- phone-delivery affordance (F3) ----------------------------------------------------------
+# --- phone-delivery affordance ---------------------------------------------------------------
 
 
 def test_prints_prominent_url_with_phone_wording(monkeypatch, stub_daemon, capsys) -> None:

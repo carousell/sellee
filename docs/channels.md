@@ -62,7 +62,7 @@ stays out of `ps`/shell history — and sends it to the running daemon, which:
 
 Run interactively (stdin is a TTY), it prints short BotFather guidance and prompts
 for the token with `getpass` (not echoed); run with a pipe (scripted / installer),
-it reads one line of stdin unchanged. Either way it then prints the deep link with
+it reads one line of stdin with no prompt. Either way it then prints the deep link with
 phone-oriented wording — **open it on the phone that has Telegram**, not "tap it"
 (the operator is often at a desktop) — and polls until the chat binds. The
 interactive wait is longer (300s vs 120s piped) to cover relaying the link to a

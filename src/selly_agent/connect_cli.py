@@ -3,20 +3,18 @@
 The token is a long-lived credential, so it never touches argv: it is read from stdin and POSTed to
 the running daemon, which validates it, stores it 0600, and mints a bind nonce. The CLI prints the
 deep link (open it on the phone that has Telegram) and polls channel-status until the chat binds.
-Exit codes mirror the legacy bind discipline: 0 bound · 1 awaiting /start (timed out, re-runnable) ·
-2 bad token · 3 daemon/API error.
+Exit codes: 0 bound · 1 awaiting /start (timed out, re-runnable) · 2 bad token · 3 daemon/API error.
 
 Interactive vs piped:
 
 - Interactive (stdin is a TTY): print short BotFather guidance, then read the token with
   ``getpass`` — prompted and not echoed, so a credential never lands in the terminal scrollback.
-- Piped / scripted / installer with a pipe (stdin is not a TTY): one ``readline()``, exactly as
-  before — no prompt, no guidance, so scripted token entry is unchanged.
+- Piped / scripted / installer with a pipe (stdin is not a TTY): read one ``readline()`` with no
+  prompt and no guidance, so a token can be fed in non-interactively.
 
 The bind flow (guidance → token read → POST → print identity + start_url + phone-delivery
 guidance → poll) lives in :func:`bind_flow` so the installer's inline "want your agent on your
-phone?" offer reuses the same UX rather than duplicating it. A scannable terminal QR of the deep
-link is a separate plan; this command prints the URL for now.
+phone?" offer shares one implementation of the UX.
 """
 
 from __future__ import annotations
@@ -91,7 +89,7 @@ def _get(url: str) -> dict:
 
 def _read_token(interactive: bool) -> str:
     """Read the BotFather token. Interactive: a non-echoed getpass prompt (a credential must stay
-    off the scrollback). Piped: one readline, byte-for-byte the pre-existing behaviour."""
+    off the scrollback). Piped: one readline, no prompt."""
     if interactive:
         try:
             return getpass.getpass("Paste your BotFather bot token: ").strip()
