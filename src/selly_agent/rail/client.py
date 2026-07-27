@@ -180,6 +180,11 @@ class RailClient:
             raise RailToolError("photo upload returned no media reference")
         return encrypted
 
+    def update_listing(self, listing_id: str, *, status: str) -> dict:
+        """Flip a listing's status on the rail. PATCH semantics: only what is passed changes, so
+        this leaves the photos, price and text alone."""
+        return self.call_tool("update_listing", {"id": str(listing_id), "status": status})
+
     def create_checkout(self, args: dict) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
         RailToolError if the rail returns no URL (we never fabricate one)."""

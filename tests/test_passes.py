@@ -17,9 +17,9 @@ class FakeAuth:
         self.minted = []
         self.revoked = []
 
-    def mint_pass_token(self, tier, pass_id, expiry_ts):
+    def mint_pass_token(self, tier, pass_id, expiry_ts, scope=None):
         token = f"tok-{pass_id}"
-        self.minted.append((token, tier, pass_id))
+        self.minted.append((token, tier, pass_id, scope))
         return token
 
     def revoke_pass_token(self, token):

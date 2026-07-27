@@ -1,7 +1,9 @@
 {
   "pass:channel": [
+    "add_qa_entry",
     "carousell_ai_create_checkout_link",
     "carousell_ai_publish_listing",
+    "carousell_ai_update_listing",
     "carousell_ai_upload_photos",
     "create_item",
     "create_thread",
@@ -23,10 +25,13 @@
     "propose_setting_change",
     "quote_shipping",
     "record_manual_reply",
+    "record_scam_signature",
     "release_thread",
     "resolve_escalation",
     "scam_scan",
+    "search_qa_bank",
     "send_message",
+    "send_reply",
     "set_floor",
     "update_item",
     "update_seller_config",
@@ -41,5 +46,22 @@
     "ui_cache_get",
     "ui_cache_invalidate",
     "ui_cache_record"
+  ],
+  "pass:reply": [
+    "carousell_ai_create_checkout_link",
+    "escalate",
+    "get_item",
+    "get_seller_config",
+    "get_thread",
+    "get_want",
+    "hold_thread",
+    "list_threads",
+    "negotiate_offer",
+    "negotiate_status",
+    "quote_shipping",
+    "scam_scan",
+    "search_qa_bank",
+    "send_reply",
+    "verify_listing_url"
   ]
 }

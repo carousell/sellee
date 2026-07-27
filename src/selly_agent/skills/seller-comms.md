@@ -55,9 +55,11 @@ want the counterpart reported, say so plainly rather than promising to file it f
 
 **Unknown buyer question.** If only the seller knows the answer, escalate it. Quote the question
 as the buyer's words and ask plainly: "❓ <buyer> asks on "<title>": "<question>" — how should I
-answer?" When the seller replies, send the answer to the buyer naturally.
-Not available yet: a bank of taught answers, so the same question can be asked of the seller twice.
-Until it exists, don't pretend otherwise — never tell the seller you'll remember an answer.
+answer?" When the seller replies, send the answer to the buyer naturally, then **bank it with
+`add_qa_entry`** so the same question answers itself next time. Tell them once that you've
+remembered it — that is the compounding part of this: every answer they give is one they never have
+to give again. Bank only what the seller actually said, scoped to the item it is about (or as a
+global entry when it holds for everything they sell, like how they pack fragile things).
 
 **Deal close method.** When a price is agreed (offer accepted or bid confirmed), **always ask how
 to close** — never act from a stored default; the seller decides each sale. Present two options,

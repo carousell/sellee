@@ -50,7 +50,8 @@ State — two SQLite databases, kept apart:
 - **`store.py`** — typed accessors over `selly.db`, the one writer for business
   state: items/floors, threads + their transcript, wants/budgets, the sell/buy
   negotiation ledgers, pacing actions, scam signatures, escalations, checkouts,
-  seller config, and the pass queue. Two confidentials — the floor and the buyer
+  seller config, the Q&A bank of answers the seller has taught, the browser
+  layer's selector cache, and the pass queue. Two confidentials — the floor and the buyer
   budget — live in their own tables and are never returned by a read an LLM-facing
   tool can call (only the engines load them). Every money/safety decision runs as
   one `BEGIN IMMEDIATE` transaction (load → decide → write), the single-writer
@@ -104,14 +105,15 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   validation, secret-param masking, and per-session tier filtering. The money and
   safety tools compose the engines with the store; `send_reply` runs the whole
   send bracket (pacing reserve + durable intent in one transaction, the sink send
-  outside it, then fold + cursor advance + commit) behind a `ReplySink` seam —
-  04 ships no live sink, so a real market returns a structured `no_send_path`. A
-  killed send is folded by the `stale_intent_sweep` scheduler task as unconfirmed
-  + an escalation, never re-sent.
+  outside it, then fold + cursor advance + commit) behind a `ReplySink` seam, which
+  the browser layer fills; with no browser available a real market returns a
+  structured `no_send_path`. A killed send is folded by the `stale_intent_sweep`
+  scheduler task as unconfirmed + an escalation, never re-sent.
 - **`mcp_proxy.py`** — a stdio↔HTTP shim so stdio-only harnesses reach the same
   server.
 - **`rail/`** — the carousell.ai rail (a stdlib MCP client + guest-key
   provisioning) wrapped behind our tools, off the LLM surface.
+- **`browser/`** — the marketplaces the agent drives in Chrome. See below.
 - **`harness/`** — the harness seam: one internal `PassSpec`, pure per-provider
   emitters (claude live, codex stub) with round-trip validators. The spec carries
   the pass's web posture, so allowing `WebSearch`/`WebFetch` for a research flow
@@ -123,6 +125,55 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   headless harness pass, and ledgers its outcome; **`pass_stream.py`** parses the
   harness output stream and **`proc_tree.py`** owns the process-group kill and
   stray-pass reaper.
+
+### The browser layer
+
+Marketplaces with no API are driven through the seller's own logged-in Chrome —
+one dedicated profile, one warm browser, CDP open on the loopback interface. The
+daemon never launches it: one profile admits exactly one Chrome, so supervision is
+launchd's (and in dev, the developer's). `browser/chrome.py` holds the readiness
+probe and the launch invocation, and is the layer's only network I/O.
+
+- **`browser/client.py`** — the daemon's own Playwright MCP client, JSON-RPC over a
+  stdio subprocess: no port, nothing to authenticate, nothing else on the machine
+  can connect to it. Typed errors and no internal retry, the shape `rail/client.py`
+  set. `BrowserUnavailable` is distinct because the response is: no Node means the
+  daemon runs on with browser lanes skipped, not every market reading as quiet.
+- **`browser/markets/`** — the per-market seam. An adapter carries that
+  marketplace's JS artifacts, its composer's shipped selectors, its login probe and
+  its recipe pointer; everything above depends only on that protocol, so adding a
+  marketplace is a new module plus a registry entry. The artifacts are the layer's
+  only DOM knowledge and are all class-agnostic — hashed classes churn every
+  deploy — locating by role, by href shape, and (for message direction) by geometry.
+- **`browser/inbox.py`** — the read lane. It folds buyer messages into durable rows
+  for a navigate and one JS evaluate per thread and no model turns at all, which is
+  what lets the reply pass above it stay browser-free. Three rules: a market that
+  cannot be seen must never look like one with no news (failed reads are counted
+  and raise one needs-me notice); the skip gate is a cost optimization backstopped
+  by a periodic full sweep, never a correctness input; and reading never advances
+  the reply cursor, so a crash between seeing a message and answering it leaves the
+  buyer eligible. Every inbound row is scam-scanned as it is written, so the verdict
+  is on the row before any model sees the text.
+- **`browser/reconcile.py`** — the pure core: a tail read compared against stored
+  rows, with whatever is not stored being new. Counting copies of the same text
+  against stored rows regardless of what wrote them is what makes a re-read insert
+  nothing, and makes our own sent replies and the seller's manual ones reconcile
+  rather than double-record.
+- **`browser/sink.py`** — the scripted send: navigate the recorded thread URL,
+  locate the composer, type, click, stamp, then confirm by reading our own words
+  back. The two failure shapes are treated oppositely — nothing sent fails closed
+  before the click and stays retryable, while sent-but-unconfirmed stays
+  `sent_unverified` and is escalated rather than ever re-driven.
+- **`browser/selectors.py`** — shipped selector defaults with the `ui_cache` table
+  as a heal overlay over them, so a fresh install pays no vision cost and a
+  self-heal never waits on a release. A resolve must match exactly one visible
+  element on the right page; none means absent, several means acting would be a
+  guess.
+
+One Chrome means three actors share one tab — the read lane, the reply sink, and a
+browser-driving pass. A re-entrant mutex on the client serializes whole operations
+rather than single calls, and the lane yields entirely while a browser-touching
+pass is queued or running.
 
 ### Skills and prompt composition
 

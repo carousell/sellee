@@ -1035,6 +1035,25 @@ class Store:
             ).fetchone()
         return {"step": step, "fail_count": row["fail_count"] if row else 0}
 
+    def archive_listing_url(self, item_id: str, market: str) -> ItemRecord:
+        """Drop one market's URL from the item's listing_urls — the listing is no longer live there.
+
+        The counterpart of record_listing_url, and the only other writer of that field. Removing the
+        URL is what stops every later flow (checkout, take-down, follow-ups) from treating a closed
+        listing as somewhere a buyer can still be sent.
+        """
+        with self._db.transaction() as conn:
+            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+            if not row:
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            urls = json.loads(row["listing_urls"])
+            urls.pop(market, None)
+            conn.execute(
+                "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
+                (json.dumps(urls, sort_keys=True), _now(), item_id),
+            )
+        return self.get_item(item_id)  # type: ignore[return-value]
+
     # --- floors -----------------------------------------------------------------------------
 
     def get_floor(self, item_id: str) -> FloorRecord | None:
@@ -3400,6 +3419,7 @@ class Scope:
 _SCOPE_GUARDED = {
     "get_item": (("item_id", "item"),),
     "set_photo_uploads": (("item_id", "item"),),
+    "archive_listing_url": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
@@ -3437,6 +3457,7 @@ _SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),
+    "archive_listing_url": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
     "record_inbound": ("thread", ThreadNotFound),
     "qa_add": ("item", ItemNotFound),

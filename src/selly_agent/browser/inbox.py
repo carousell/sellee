@@ -299,6 +299,27 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
     )
 
 
+def reply_lane(*, store, bus) -> None:
+    """One tick of the reply lane: spawn a scoped reply pass for the buyers who are waiting.
+
+    Coalescing and single-flight like the channel lane: the store claims every waiting thread into
+    one pass and refuses to enqueue a second while one is in flight, so a burst of buyer messages
+    becomes one pass rather than a queue of them. Nothing is auto-refired: a pass that failed
+    leaves its threads eligible, and the next tick picks them up because eligibility comes from the
+    rows and not from a retry counter.
+    """
+    if store.is_paused():
+        return
+    claimed = store.enqueue_reply_pass()
+    if claimed is None:
+        return
+    bus.publish(
+        "pass.queued",
+        {"type": "reply", "threads": len(claimed["thread_ids"])},
+        pass_id=claimed["pass_id"],
+    )
+
+
 def _count_blind(deps: InboxDeps, market: str, reason: str) -> None:
     """Count a failed read, and raise one notice once a run of them means we are genuinely blind."""
     failures = deps.blind.get(market, 0) + 1

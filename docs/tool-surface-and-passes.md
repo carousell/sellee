@@ -103,26 +103,54 @@ express a per-file grant fails at render rather than shipping a looser posture.
 and a prompt builder, so a new type registers there rather than forking the
 runner:
 
-| type | tier | skills | web |
-|---|---|---|---|
-| `publish` | `pass:publish` — `get_item`, `carousell_ai_upload_photos`, `carousell_ai_publish_listing`, `send_message` | conventions, listing-flow | no |
-| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, escalations, settings, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow | yes |
+| type | tier | skills | web | browser | scope |
+|---|---|---|---|---|---|
+| `publish` | `pass:publish` — `get_item`, the photo/publish pair, `send_message`, and the selector cache (`ui_cache_*`, `probe_selector`) | conventions + the market's own recipe | no | for a browser market only | full |
+| `reply` | `pass:reply` — its own threads and items, `negotiate_offer`/`status`, `search_qa_bank`, `send_reply`, `hold_thread`, `escalate`, `quote_shipping`, the checkout link, `scam_scan` | conventions, voice-and-style, buyer-conversation, scam-guard | no | no | its claimed threads + items |
+| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, escalations, settings, the Q&A bank, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow | yes | no | full |
 
-Both tiers are pinned by a golden (`tests/golden/pass_tiers.json`), so widening
-one is a deliberate diff. Membership follows what the skills instruct: a tool no
-skill tells a pass to use is surface with no user, and a tool a skill needs but
-the tier omits is a flow that dead-ends mid-conversation. A third tier,
-`pass:reply`, exists in the registry so entity-scope enforcement is testable, but
-no reply pass type exists yet and its membership is not pinned.
+All three tiers are pinned by a golden (`tests/golden/pass_tiers.json`), so
+widening one is a deliberate diff. Membership follows what the skills instruct: a
+tool no skill tells a pass to use is surface with no user, and a tool a skill
+needs but the tier omits is a flow that dead-ends mid-conversation.
 
 - **`publish`** publishes one already-confirmed item — it talks to no one, so it
-  gets no voice rulebook and no web.
+  gets no voice rulebook and no web. Which recipe it carries, and whether it is
+  handed a browser at all, come from the market in its payload: the rail is an API
+  call, a browser market is a form to fill. Browser authority follows the market,
+  not the pass type.
+- **`reply`** answers buyers, and is the most constrained flow in the system
+  because it is the only one acting on words a stranger wrote. It runs **scoped**
+  to the threads the lane claimed for it, so another buyer's thread reads as
+  absent rather than forbidden. It has no web research and no browser: the send
+  goes out through the daemon's own sink, which the model never touches. Absent by
+  design is anything that writes on the seller's behalf — banking an answer,
+  confirming a sale, recording a scam signature — since it has only ever heard the
+  buyer's side.
 - **`channel`** is the phone-driven sell conversation. It runs **full-scope** (the
   counterpart is the trusted seller, not a buyer). Its prompt embeds a
   **recent-transcript window** — inbox rows interleaved with the agent's own
   notices, capped by count and chars — so a follow-up like "yes, do that"
   resolves, clearly separated from the messages to handle now. Photo rows carry
   their stored media paths inline, so the listing flow can attach them directly.
+  Being the flow that holds the seller's words, it is also the one that banks a
+  taught answer, records a confirmed scam signature, and relays either to a buyer.
+
+## The second MCP server
+
+A pass that drives the browser reaches a second MCP server: its own Playwright
+process, spawned by the harness over **stdio**, inside the pass's process group so
+it dies with the pass. Not an HTTP instance — a localhost browser-control port
+would be an unauthenticated way to drive the seller's Chrome.
+
+Because `--strict-mcp-config` is in force, the rendered server set *is* the pass's
+reachable surface, so all three round-trip validators check every server and
+reject one the spec did not ask for. Reaching the server is necessary but not
+sufficient: the allow-list carries a **diet** of ~12 browser tools. `browser_close`
+(it would shut the seller's warm Chrome), `browser_run_code_unsafe` (arbitrary
+Playwright code — the browser's equivalent of the shell this surface replaces) and
+`browser_take_screenshot` (every check is a DOM read-back) are all deliberately
+out.
 
 ## Prompt composition
 

@@ -180,14 +180,17 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
 #
 # Membership follows what the skills instruct: a tool no skill tells a pass to use is surface with
 # no user, and a tool a skill needs but the tier omits is a flow that dead-ends mid-conversation.
-# The two live tiers below are pinned by golden tests, so a change to either is a deliberate diff.
+# Every tier below is pinned by a golden test, so a change to any of them is a deliberate diff.
 TIER_ATTENDED = "attended"
 # The publish pass: one already-decided job, no counterpart to talk to. Read the item, ship its
-# photos, publish, report — nothing else.
+# photos, publish, report — plus the selector cache, since a browser-market publish is the flow that
+# re-finds a moved control and records where it went.
 TIER_PASS_PUBLISH = "pass:publish"
-# Provisional: the reply-loop tool subset carries this tier so entity-scope enforcement is
-# exercisable end to end by tests. No reply pass *type* exists yet — membership is finalized by
-# the browser layer, which lands the reply pass beside the marketplace inbound that feeds it.
+# The reply pass: the only flow acting on words a stranger wrote, and so the narrowest one that does
+# real work. It may read its own threads and items, decide offers, answer from the Q&A bank, send,
+# hold, and escalate — and nothing else. Absent by design: anything that writes on the seller's
+# behalf (banking an answer, confirming a sale, recording a scam signature), and any browser access,
+# since its send goes through the daemon's sink rather than through the model.
 TIER_PASS_REPLY = "pass:reply"
 # The channel pass: the seller conversation, and so the broadest tier — it runs the whole listing
 # flow and answers anything the seller asks. It runs full-scope because the counterpart is the

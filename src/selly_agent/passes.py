@@ -21,13 +21,20 @@ from pathlib import Path
 from typing import Callable
 
 from selly_agent import marketplaces, paths, settings, skills
+from selly_agent import reply_prompt as reply_prompt_mod
 from selly_agent.browser import client as browser_client
 from selly_agent.channel import prompt as channel_prompt_mod
 from selly_agent.harness import claude
 from selly_agent.harness.model import PassSpec, StdioServer
 from selly_agent.pass_stream import is_cap_hit, parse_stream_line
 from selly_agent.proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
-from selly_agent.tools import TIER_PASS_CHANNEL, TIER_PASS_PUBLISH, tools_for_tier
+from selly_agent.store import Scope
+from selly_agent.tools import (
+    TIER_PASS_CHANNEL,
+    TIER_PASS_PUBLISH,
+    TIER_PASS_REPLY,
+    tools_for_tier,
+)
 
 log = logging.getLogger(__name__)
 
@@ -131,6 +138,23 @@ def _publish_browser_tools(payload: dict, store, pass_id: str) -> tuple:
     return PUBLISH_BROWSER_TOOLS
 
 
+def _reply_prompt(payload: dict, store, pass_id: str) -> str:
+    thread_ids = payload.get("thread_ids") or []
+    if not thread_ids:
+        raise PassPayloadError("no thread_ids in payload")
+    # Read through the store the pass itself will use, so the prompt can only carry what the pass is
+    # scoped to see; a thread that has been closed since the lane claimed it simply drops out.
+    threads = [t for t in (store.get_thread(tid) for tid in thread_ids) if t is not None]
+    items = {}
+    for thread in threads:
+        item_id = thread.get("item_id")
+        if item_id and item_id not in items:
+            item = store.get_item(item_id)
+            if item is not None:
+                items[item_id] = item
+    return reply_prompt_mod.build_reply_prompt(threads, items)
+
+
 def _channel_prompt(payload: dict, store, pass_id: str) -> str:
     # The rows claimed into this pass at enqueue, plus the conversational window — both read fresh
     # from durable selly.db rows, so a restart rebuilds the same prompt.
@@ -165,6 +189,28 @@ def _no_browser_tools(payload: dict, store, pass_id: str) -> tuple:
     return ()
 
 
+def _full_scope(payload: dict) -> object | None:
+    """No entity scope: the pass may reach any row its tier allows.
+
+    Right for the flows whose counterpart is the trusted seller, and for a publish, which touches
+    only the item it was given. A flow processing a buyer's words gets a real scope instead.
+    """
+    return None
+
+
+def _reply_scope(payload: dict):
+    """Exactly the threads this pass was spawned for, plus the items they are about.
+
+    The reply pass is the one flow that acts on text a stranger wrote, so it is held to the entities
+    the lane claimed for it: another buyer's thread reads as absent rather than forbidden, which is
+    what stops one conversation from being used to reach into another.
+    """
+    return Scope.of(
+        threads=payload.get("thread_ids") or (),
+        items=payload.get("item_ids") or (),
+    )
+
+
 @dataclass(frozen=True)
 class PassType:
     """A pass type's spec: the tier its token carries (which tools it may call), the skills that
@@ -185,6 +231,9 @@ class PassType:
     # Which browser tools this pass may call, decided from its payload — the browser is granted per
     # flow, and for the publish flow per marketplace, so a rail publish is handed none.
     build_browser_tools: Callable[[dict, object, str], tuple] = _no_browser_tools
+    # The entity scope the pass's token carries. Enforced per request at every row load, so a scoped
+    # pass cannot read or write outside what it was spawned for.
+    build_scope: Callable[[dict], object] = _full_scope
     # Set when the skill set depends on the payload (which marketplace's recipe a publish needs);
     # otherwise `skills` is the declaration and stays readable at a glance.
     build_skills: Callable[[dict, object, str], tuple] | None = None
@@ -208,6 +257,16 @@ PASS_TYPES = {
         build_prompt=_publish_prompt,
         build_skills=_publish_skills,
         build_browser_tools=_publish_browser_tools,
+    ),
+    # The reply pass answers buyers. It is the one flow acting on words a stranger wrote, so it is
+    # the most constrained: an entity scope covering only its own threads, no web research, and no
+    # browser — the send goes through the daemon's sink, which the LLM never touches. What it needs
+    # is voice, the buyer rulebook, and the scam guard.
+    "reply": PassType(
+        tier=TIER_PASS_REPLY,
+        build_prompt=_reply_prompt,
+        skills=("selly-conventions", "voice-and-style", "buyer-conversation", "scam-guard"),
+        build_scope=_reply_scope,
     ),
     # The channel pass is the seller conversation: it writes to a human, so it needs voice and the
     # escalation copy, and it runs the listing flow end to end — including the comps research the
@@ -416,7 +475,9 @@ def run_pass(deps: PassDeps, claimed) -> str:
 
     deadline_sec = float(deps.config.pass_deadline_sec)
     expiry = deps.now() + deadline_sec + TOKEN_SLACK_SEC
-    token = deps.auth.mint_pass_token(pass_type.tier, pass_id, expiry)
+    token = deps.auth.mint_pass_token(
+        pass_type.tier, pass_id, expiry, scope=pass_type.build_scope(payload)
+    )
     workspace = paths.pass_workspace_dir(pass_id)
     deps.bus.publish("pass.start", {"type": claimed.type}, pass_id=pass_id)
 

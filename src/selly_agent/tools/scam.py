@@ -128,7 +128,10 @@ register(
             "additionalProperties": False,
         },
         handler=_record_scam_signature,
-        tiers=frozenset({TIER_ATTENDED}),
+        # Recording a signature is an act on the seller's judgement, never the agent's, so it lives
+        # with the flow that holds their confirmation — their own channel — and not with the reply
+        # pass, which only ever sees the scammer's side.
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )
 register(

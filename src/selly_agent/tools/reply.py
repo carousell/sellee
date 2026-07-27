@@ -28,8 +28,7 @@ from selly_agent.tools.registry import (
 
 _KINDS = ("reply", "holding", "followup", "nudge")
 
-# Terminal / owned statuses a reply must never re-engage. agreed is included on the sell side —
-# post-agreement coordination belongs to the close / sale-watch flows, not a reply.
+# Terminal / owned statuses a reply must never re-engage.
 _SELL_REFUSED = frozenset(
     {"lost", "handover", "closed", "escalated", "held", "agreed", "seller_handling"}
 )
@@ -38,6 +37,11 @@ _BUY_REFUSED = frozenset({"closed", "escalated", "held"})
 
 def _refused(side: str, status: str, kind: str) -> bool:
     if side == "sell":
+        # `agreed` opens for a plain reply and nothing else. The price is settled, and what the
+        # buyer is still owed is the checkout link — so relaying it is a reply, while a nudge or a
+        # fresh negotiation on a done deal is not. The buy side has always worked this way.
+        if status == "agreed":
+            return kind != "reply"
         return status in _SELL_REFUSED
     if status in _BUY_REFUSED:
         return True
@@ -136,7 +140,9 @@ register(
             "additionalProperties": False,
         },
         handler=_send_reply,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        # The channel pass sends too: when the seller answers a question or picks how to close, the
+        # answer has to reach the buyer, and it is the flow holding the seller's words.
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY, TIER_PASS_CHANNEL}),
     )
 )
 register(

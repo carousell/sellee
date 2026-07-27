@@ -20,6 +20,12 @@ EXPECTED_SKILL_SETS = {
     ("publish", (("market", "carousell-ai"),)): ("selly-conventions", "listing-flow"),
     ("publish", (("market", "carousell"),)): ("selly-conventions", "listing-flow-carousell"),
     ("channel", ()): ("selly-conventions", "voice-and-style", "seller-comms", "listing-flow"),
+    ("reply", ()): (
+        "selly-conventions",
+        "voice-and-style",
+        "buyer-conversation",
+        "scam-guard",
+    ),
 }
 
 

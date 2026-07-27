@@ -52,6 +52,9 @@ log = logging.getLogger(__name__)
 _PASS_LANE_INTERVAL_SEC = 2.0
 _STRAY_REAPER_INTERVAL_SEC = 60.0
 _INTENT_SWEEP_INTERVAL_SEC = 120.0
+# The reply lane only queries durable rows, so it can run often; what paces buyer replies is the
+# pacing gate inside the send, not how often this looks.
+_REPLY_LANE_INTERVAL_SEC = 10.0
 # The proposal TTL is a day; an hourly sweep gives at most an hour's slack past it. The doors also
 # enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
@@ -296,6 +299,15 @@ def run_daemon(*, once: bool) -> int:
             name="inbox_read",
             interval_sec=float(cfg.inbox_read_interval_sec),
             func=lambda: inbox.inbox_lane(inbox_deps),
+        )
+    )
+    # Answer the buyers who are waiting. Driven off durable rows rather than off the read lane, so a
+    # crash between reading a message and answering it still gets answered.
+    scheduler.register(
+        Task(
+            name="reply_lane",
+            interval_sec=_REPLY_LANE_INTERVAL_SEC,
+            func=lambda: inbox.reply_lane(store=store, bus=bus),
         )
     )
     # Fold settled channel passes' claimed inbox rows from durable state (not a pass.end

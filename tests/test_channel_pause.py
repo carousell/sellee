@@ -25,7 +25,7 @@ time.sleep(60)
 
 
 class _FakeAuth:
-    def mint_pass_token(self, tier, pass_id, expiry_ts):
+    def mint_pass_token(self, tier, pass_id, expiry_ts, scope=None):
         return f"tok-{pass_id}"
 
     def revoke_pass_token(self, token):
