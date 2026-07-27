@@ -27,14 +27,31 @@ def mcp_config(spec: PassSpec) -> dict:
     }
 
 
+# The harness's own web-research tools. They are the one part of the deny list that moves: a pass
+# whose skills tell it to price against comps needs them, and every other pass must not have them.
+WEB_TOOLS = ("WebSearch", "WebFetch")
+# Never available to any pass, at any tier — the no-Bash posture and the file-access escape vectors.
+_ALWAYS_DENIED = ("Bash", "Edit", "Write", "Read", "NotebookEdit")
+
+
+def allowed_tools(spec: PassSpec) -> tuple:
+    """Every tool name the pass may call: its tier's MCP tools, plus web research when its pass
+    type asked for it."""
+    return tuple(spec.allowed_tools) + (WEB_TOOLS if spec.web_tools else ())
+
+
+def denied_tools(spec: PassSpec) -> tuple:
+    return _ALWAYS_DENIED + (() if spec.web_tools else WEB_TOOLS)
+
+
 def settings_json(spec: PassSpec) -> dict:
     """The workspace permission posture: allow exactly the tier's tools, deny the escape vectors.
     The argv --allowedTools is the real enforcement; this makes the posture legible on disk and
     covers attended sessions that read settings rather than argv."""
     return {
         "permissions": {
-            "allow": list(spec.allowed_tools),
-            "deny": ["Bash", "Edit", "Write", "Read", "WebFetch", "WebSearch", "NotebookEdit"],
+            "allow": list(allowed_tools(spec)),
+            "deny": list(denied_tools(spec)),
         }
     }
 
@@ -67,8 +84,9 @@ def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
     if spec.output_format == "stream-json":
         # -p with stream-json output requires --verbose, or the CLI refuses to start.
         argv += ["--verbose"]
-    if spec.allowed_tools:
-        argv += ["--allowedTools", *spec.allowed_tools]
+    allowed = allowed_tools(spec)
+    if allowed:
+        argv += ["--allowedTools", *allowed]
     _validate_argv_round_trip(spec, argv)
     return argv
 
@@ -84,8 +102,13 @@ def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
     if server["headers"]["Authorization"] != f"Bearer {spec.mcp_token}":
         raise ValueError("rendered .mcp.json authorization does not match the spec")
     settings = json.loads(files[".claude/settings.json"])
-    if settings["permissions"]["allow"] != list(spec.allowed_tools):
+    if settings["permissions"]["allow"] != list(allowed_tools(spec)):
         raise ValueError("rendered settings.json allow-list does not match the spec")
+    denied = settings["permissions"]["deny"]
+    if any(name in denied for name in allowed_tools(spec)):
+        raise ValueError("rendered settings.json both allows and denies a tool")
+    if not spec.web_tools and not all(name in denied for name in WEB_TOOLS):
+        raise ValueError("a pass without web tools must deny them explicitly")
 
 
 def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
@@ -98,7 +121,10 @@ def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
         raise ValueError("argv --mcp-config does not match the spec")
     if spec.output_format == "stream-json" and "--verbose" not in argv:
         raise ValueError("stream-json output requires --verbose")
-    if spec.allowed_tools:
+    allowed = allowed_tools(spec)
+    if allowed:
         idx = argv.index("--allowedTools")
-        if list(argv[idx + 1 :]) != list(spec.allowed_tools):
-            raise ValueError("--allowedTools must be last and list exactly the tier's tools")
+        if list(argv[idx + 1 :]) != list(allowed):
+            raise ValueError("--allowedTools must be last and list exactly the pass's tools")
+    if spec.append_system_prompt and spec.append_system_prompt not in argv:
+        raise ValueError("argv is missing the composed system prompt")

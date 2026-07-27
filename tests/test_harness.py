@@ -72,6 +72,39 @@ def test_allowed_tools_is_last_and_no_bash() -> None:
     assert "Bash" in deny
 
 
+# --- web posture ------------------------------------------------------------------------------
+
+
+def test_a_pass_without_web_tools_denies_them() -> None:
+    perms = claude.settings_json(_spec())["permissions"]
+    assert set(claude.WEB_TOOLS) <= set(perms["deny"])
+    assert not set(claude.WEB_TOOLS) & set(perms["allow"])
+    assert not set(claude.WEB_TOOLS) & set(claude.pass_argv(_spec()))
+
+
+def test_a_web_enabled_pass_allows_them_and_stops_denying_them() -> None:
+    spec = _spec(web_tools=True)
+    files = claude.render_workspace(spec)
+    assert files[".claude/settings.json"] == (GOLDEN / "claude_settings_web.json").read_text()
+    assert claude.pass_argv(spec, claude_bin="claude") == json.loads(
+        (GOLDEN / "claude_pass_argv_web.json").read_text()
+    )
+
+
+def test_web_tools_never_loosen_the_bash_posture() -> None:
+    """The web flag moves two names between the lists and nothing else — Bash and the file tools
+    stay denied whatever a pass type asks for."""
+    for spec in (_spec(), _spec(web_tools=True)):
+        deny = claude.settings_json(spec)["permissions"]["deny"]
+        assert {"Bash", "Edit", "Write", "Read", "NotebookEdit"} <= set(deny)
+        assert "Bash" not in claude.pass_argv(spec)
+
+
+def test_the_system_prompt_reaches_the_argv() -> None:
+    argv = claude.pass_argv(_spec(append_system_prompt="RULEBOOK"))
+    assert argv[argv.index("--append-system-prompt") + 1] == "RULEBOOK"
+
+
 def test_stream_json_forces_verbose() -> None:
     argv = claude.pass_argv(_spec())
     assert "--verbose" in argv

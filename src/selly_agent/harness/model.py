@@ -21,6 +21,10 @@ class PassSpec:
     output_format: str = "stream-json"
     permission_mode: str = "default"
     append_system_prompt: str | None = None
+    # Whether this pass may reach the harness's own web research tools. Off by default: the web is
+    # untrusted input, so a flow gets it only because its skills call for research. Carried on the
+    # spec rather than hand-written into a config so the emitters' round-trip validators cover it.
+    web_tools: bool = False
     server_name: str = "selly"
 
     def __post_init__(self) -> None:
