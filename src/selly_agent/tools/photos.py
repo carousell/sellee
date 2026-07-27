@@ -33,9 +33,9 @@ from selly_agent.tools.registry import (
     register,
 )
 
-# The longest side an uploaded photo is scaled to. The rail asks for small images and a listing
-# thumbnail never needs more; a 12MP phone photo would otherwise spend seconds per upload.
+# The longest side an oversized photo is scaled down to, and the size above which that happens.
 MAX_UPLOAD_DIM = 1600
+MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
 # What a file's first bytes must look like for us to treat it as an image. Extensions are a
 # claim, not evidence — the sniff is what decides, so a mislabelled or truncated file is caught
@@ -47,7 +47,8 @@ _MAGIC = (
     (b"GIF89a", "gif", ".gif", "image/gif"),
 )
 _MAGIC_READ_BYTES = 32
-_JPEG = "jpeg"
+# Formats the rail accepts as-is. HEIC is not among them, so those are always converted.
+_UPLOADABLE = frozenset({"jpeg", "png", "gif"})
 
 
 def _sniff(path: Path) -> tuple:
@@ -93,10 +94,11 @@ def _import_photos(ctx: ToolContext, params: dict) -> dict:
 
 
 def _prepared_bytes(path: Path, workdir: Path) -> tuple:
-    """(bytes, content_type) ready to upload. A JPEG goes as-is — the channel case, and the one
-    that must work on any machine; anything else is converted through the platform's tool."""
+    """(bytes, content_type) ready to upload. A photo the rail already accepts, at a size it will
+    take, is sent untouched — conversion needs a platform image tool, so the common path must not
+    depend on one. Only a rejected format or an oversized file is re-encoded."""
     kind, _, content_type = _sniff(path)
-    if kind == _JPEG:
+    if kind in _UPLOADABLE and path.stat().st_size <= MAX_UPLOAD_BYTES:
         return path.read_bytes(), content_type
     dest = workdir / (path.stem + ".jpg")
     try:

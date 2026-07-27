@@ -324,7 +324,7 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
             assert item["listing_urls"]["carousell-ai"] == _LISTING_URL
 
             # the photo reached the rail as media on the listing, not just as an upload
-            assert rail.listing_args["media"] == {"urls": [{"url": "enc-1"}]}
+            assert rail.listing_args["media"] == {"urls": [{"url": "enc-1", "type": 1}]}
             assert rail.uploads[0][1] == "image/jpeg"
             assert any(_LISTING_URL in m["text"] for m in api.outbox)
 

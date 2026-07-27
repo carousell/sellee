@@ -26,6 +26,8 @@ from selly_agent.tools.registry import (
 )
 
 _MARKET = "carousell-ai"
+# The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
+_MEDIA_TYPE_IMAGE = 1
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -80,7 +82,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # upload reference is skipped rather than blocking the publish; an item with no photos at all
     # publishes fine (the listing flow asks for photos, but the tool does not gate on them).
     media = [
-        {"url": photo["uploaded_url"]} for photo in item["photos"] if photo.get("uploaded_url")
+        {"url": photo["uploaded_url"], "type": _MEDIA_TYPE_IMAGE}
+        for photo in item["photos"]
+        if photo.get("uploaded_url")
     ]
     if media:
         args["media"] = {"urls": media}

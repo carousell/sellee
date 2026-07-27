@@ -71,7 +71,9 @@ class RailClient:
             method="POST",
             headers={
                 "Content-Type": "application/json",
-                "Accept": "application/json",
+                # Both are required even though the server answers with plain JSON; it rejects the
+                # request otherwise, and the rejection lands after auth so a bad key masks it.
+                "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {self._api_key}",
                 "User-Agent": _CLIENT_UA,
             },
@@ -126,44 +128,56 @@ class RailClient:
                 return parsed
         raise RailToolError(f"{name} returned no usable content")
 
+    def listing_url(self, listing_id: str) -> str:
+        """The listing's page URL, composed from the id the rail assigned it."""
+        return self._web_base_url + _LISTING_PATH + str(listing_id)
+
     def create_listing(self, args: dict) -> dict:
-        """Create a listing and return {listing_id, url}. Raises RailToolError if the rail's
-        response is missing either field (we never fabricate a URL)."""
+        """Create a listing and return {listing_id, url}. Raises RailToolError when the response
+        carries no id — without one there is no listing to point at."""
         result = self.call_tool("create_listing", args)
-        url = result.get("url") or result.get("listing_url")
-        listing_id = result.get("listing_id") or result.get("id")
-        if not url:
-            raise RailToolError("create_listing returned no listing URL")
+        listing = result.get("listing")
+        listing = listing if isinstance(listing, dict) else result
+        listing_id = listing.get("id") or listing.get("listing_id")
+        if not listing_id:
+            raise RailToolError("create_listing returned no listing id")
+        url = listing.get("url") or listing.get("listing_url") or self.listing_url(listing_id)
         return {"listing_id": listing_id, "url": url}
 
     def upload_photo(self, data: bytes, content_type: str) -> str:
-        """Mint a short-lived upload URL, PUT the image bytes to it, and return the encrypted
+        """Mint a short-lived upload URL, POST the image bytes to it, and return the encrypted
         media reference create_listing wants.
 
-        The upload URL is pre-signed and takes no Authorization header — our key never travels
-        to the media host. Both legs are one method because the URL is single-use and useless
-        apart from the bytes it was minted for.
+        The reference comes back from the upload, not from the mint. That URL is pre-signed and
+        takes no Authorization header, so our key never travels to the media host.
         """
         minted = self.call_tool("create_photo_upload_url", {})
         upload_url = minted.get("upload_url") or minted.get("url")
-        encrypted = minted.get("encrypted_url") or minted.get("media_url")
-        if not upload_url or not encrypted:
-            raise RailToolError("create_photo_upload_url returned no usable upload URL")
+        if not upload_url:
+            raise RailToolError("create_photo_upload_url returned no upload URL")
         req = urllib.request.Request(
             upload_url,
             data=data,
-            method="PUT",
+            method="POST",
             headers={"Content-Type": content_type, "User-Agent": _CLIENT_UA},
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
                 status = getattr(resp, "status", None) or resp.getcode()
+                raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             raise RailToolError(f"photo upload returned HTTP {exc.code}") from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RailNetworkError(f"photo upload unreachable: {type(exc).__name__}") from exc
         if status not in (200, 201, 204):
             raise RailToolError(f"photo upload returned HTTP {status}")
+        try:
+            payload = json.loads(raw)
+        except ValueError as exc:
+            raise RailToolError("photo upload returned an unparseable response") from exc
+        encrypted = payload.get("encrypted_url") or payload.get("media_url")
+        if not encrypted:
+            raise RailToolError("photo upload returned no media reference")
         return encrypted
 
     def create_checkout(self, args: dict) -> dict:

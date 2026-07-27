@@ -278,7 +278,9 @@ def test_publish_attaches_uploaded_media_in_display_order(make_ctx, store, xdg_t
     dispatch("carousell_ai_upload_photos", {"item_id": item["id"]}, ctx)
     dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
-    assert rail.listing_args["media"] == {"urls": [{"url": "enc-1"}, {"url": "enc-2"}]}
+    assert rail.listing_args["media"] == {
+        "urls": [{"url": "enc-1", "type": 1}, {"url": "enc-2", "type": 1}]
+    }
 
 
 def test_publish_without_photos_sends_no_media_key(make_ctx, store, xdg_tmp) -> None:
@@ -302,4 +304,4 @@ def test_publish_skips_a_photo_that_was_never_uploaded(make_ctx, store, xdg_tmp)
     store.update_item(item["id"], {"photos": [photos[0], {"path": _stored("c.jpg")}]})
 
     dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
-    assert rail.listing_args["media"] == {"urls": [{"url": "enc-1"}]}
+    assert rail.listing_args["media"] == {"urls": [{"url": "enc-1", "type": 1}]}
