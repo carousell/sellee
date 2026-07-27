@@ -106,7 +106,7 @@ runner:
 | type | tier | skills | web |
 |---|---|---|---|
 | `publish` | `pass:publish` — `get_item`, `carousell_ai_upload_photos`, `carousell_ai_publish_listing`, `send_message` | conventions, listing-flow | no |
-| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, escalations, settings, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow | yes |
+| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, escalations, settings, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow | yes |
 
 Both tiers are pinned by a golden (`tests/golden/pass_tiers.json`), so widening
 one is a deliberate diff. Membership follows what the skills instruct: a tool no

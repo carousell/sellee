@@ -17,6 +17,7 @@ from selly_agent.rail.client import RailError, RailUnprovisioned
 from selly_agent.store import StoreError
 from selly_agent.tools.registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
     TIER_PASS_REPLY,
     ToolContext,
     ToolError,
@@ -129,6 +130,6 @@ register(
             "additionalProperties": False,
         },
         handler=_create_checkout_link,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY, TIER_PASS_CHANNEL}),
     )
 )
