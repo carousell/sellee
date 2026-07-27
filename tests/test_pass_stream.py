@@ -73,6 +73,51 @@ def test_text_is_truncated_to_cap() -> None:
     assert len(payload["text"]) < 5000 and payload["text"].endswith("chars)")
 
 
+def _tool_result_line(content) -> str:
+    return json.dumps({"type": "user", "message": {"content": content}})
+
+
+def test_an_image_result_is_summarized_not_stored_as_base64() -> None:
+    """Reading a photo returns ~170KB of base64. Clipping it to the text cap would store a couple
+    of KB of meaningless prefix and push the useful part out of the event."""
+    data = "A" * 200_000
+    line = _tool_result_line(
+        [
+            {
+                "tool_use_id": "toolu_1",
+                "type": "tool_result",
+                "content": [
+                    {
+                        "type": "image",
+                        "source": {"type": "base64", "media_type": "image/jpeg", "data": data},
+                    }
+                ],
+            }
+        ]
+    )
+    ((kind, payload),) = parse_stream_line(line)
+    assert kind == "pass.tool_result"
+    assert data[:100] not in payload["content"]  # no base64 prefix survives
+    assert "image/jpeg" in payload["content"]
+    assert "150000" in payload["content"]  # 200k base64 chars ≈ 150KB decoded
+    assert not payload["content"].endswith("chars)")  # summarized, so the cap never engaged
+
+
+def test_an_image_block_without_a_usable_source_still_summarizes() -> None:
+    for source in (None, {}, "nonsense"):
+        line = _tool_result_line([{"type": "image", "source": source}])
+        ((_, payload),) = parse_stream_line(line)
+        assert "image" in payload["content"]
+
+
+def test_text_tool_results_are_unaffected() -> None:
+    line = _tool_result_line(
+        [{"tool_use_id": "toolu_1", "type": "tool_result", "content": '{"queued":true}'}]
+    )
+    ((_, payload),) = parse_stream_line(line)
+    assert '{\\"queued\\":true}' in payload["content"] or '"queued":true' in payload["content"]
+
+
 def test_is_cap_hit_reads_result_subtype() -> None:
     assert is_cap_hit({"subtype": "error_max_turns"}) is True
     assert is_cap_hit({"subtype": "success"}) is False

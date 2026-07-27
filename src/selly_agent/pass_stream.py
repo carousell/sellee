@@ -2,9 +2,10 @@
 
 Each stdout line is one JSON object; this maps it to zero or more (kind, payload) pairs the pass
 runner publishes to the bus as the pass runs — so inspect --follow shows a live pass, not a
-post-mortem of a log tail. Text and tool-result payloads are truncated to a cap (the transcript
-store is an observability record, not a verbatim harness log; the per-pass stderr file keeps the
-rest). A line that is not parseable JSON becomes pass.raw rather than crashing the reader.
+post-mortem of a log tail. Text and tool-result payloads are truncated to a cap, and an image
+block's base64 is summarized to its size (the transcript store is an observability record, not a
+verbatim harness log; the per-pass stderr file keeps the rest). A line that is not parseable JSON
+becomes pass.raw rather than crashing the reader.
 """
 
 from __future__ import annotations
@@ -81,10 +82,34 @@ def _message_content(obj: dict) -> list:
     return []
 
 
+def _elide_images(value: object) -> object:
+    """Replace an image block's base64 payload with its media type and decoded size.
+
+    A photo read arrives as a content block carrying ~170KB of base64. Truncating that to the text
+    cap would store a couple of KB of meaningless prefix and push the useful part of the result out
+    of the event — so the payload is summarized rather than clipped, which is also the only form a
+    person tailing `inspect` can read.
+    """
+    if isinstance(value, list):
+        return [_elide_images(item) for item in value]
+    if isinstance(value, dict):
+        if value.get("type") == "image":
+            source = value.get("source")
+            source = source if isinstance(source, dict) else {}
+            data = source.get("data")
+            summary = {"type": "image", "media_type": source.get("media_type")}
+            if isinstance(data, str):
+                # base64 encodes 3 bytes per 4 characters, padding included.
+                summary["bytes"] = len(data) * 3 // 4
+            return summary
+        return {key: _elide_images(item) for key, item in value.items()}
+    return value
+
+
 def _stringify(value: object) -> str:
     if isinstance(value, str):
         return value
-    return json.dumps(value, default=str)
+    return json.dumps(_elide_images(value), default=str)
 
 
 def is_cap_hit(result_payload: dict | None) -> bool:
