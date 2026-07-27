@@ -33,6 +33,7 @@ NETWORK_ALLOWLIST: set[str] = {
     "selly_agent/rail/client.py",  # carousell.ai MCP client + live listing verify
     "selly_agent/rail/provision.py",  # carousell.ai guest-key provisioning
     "selly_agent/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)
+    "selly_agent/browser/chrome.py",  # the warm Chrome's CDP readiness probe (loopback GET)
 }
 
 

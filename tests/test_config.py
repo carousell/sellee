@@ -185,6 +185,53 @@ def test_invalid_pacing_and_negotiation_values_are_rejected(xdg_tmp, obj) -> Non
         load()
 
 
+@pytest.mark.parametrize(
+    "obj",
+    [
+        {"chrome_cdp_port": 80},
+        {"chrome_cdp_port": 70000},
+        {"chrome_cdp_port": "9222"},
+        {"playwright_mcp_cmd": []},
+        {"playwright_mcp_cmd": "npx @playwright/mcp"},
+        {"playwright_mcp_cmd": ["npx", 1]},
+        {"inbox_read_interval_sec": 0},
+        {"inbox_read_interval_sec": -5},
+        {"inbox_full_sweep_every": 0},
+        {"inbox_full_sweep_every": 1.5},
+        {"browser_blind_after": 0},
+    ],
+)
+def test_invalid_browser_values_are_rejected(xdg_tmp, obj) -> None:
+    _write_config(obj)
+    with pytest.raises(ConfigError):
+        load()
+
+
+def test_browser_knobs_round_trip(xdg_tmp) -> None:
+    _write_config(
+        {
+            "chrome_cdp_port": 9333,
+            "playwright_mcp_cmd": ["node", "/opt/mcp/cli.js"],
+            "inbox_read_interval_sec": 120,
+            "inbox_full_sweep_every": 1,
+            "browser_blind_after": 5,
+        }
+    )
+    cfg = load()
+    assert cfg.chrome_cdp_port == 9333
+    assert cfg.playwright_mcp_cmd == ["node", "/opt/mcp/cli.js"]
+    assert cfg.inbox_read_interval_sec == 120.0
+    # 1 disables the skip gate (every tick opens everything) — a supported posture, since the gate
+    # is a cost optimization and never a correctness input.
+    assert cfg.inbox_full_sweep_every == 1
+    assert cfg.browser_blind_after == 5
+
+
+def test_a_null_playwright_command_means_resolve_npx_at_spawn(xdg_tmp) -> None:
+    _write_config({"playwright_mcp_cmd": None})
+    assert load().playwright_mcp_cmd is None
+
+
 def test_unknown_keys_warn_and_are_ignored(xdg_tmp, caplog) -> None:
     _write_config({"tick_interval_sec": 7, "future_knob": "whatever"})
     with caplog.at_level(logging.WARNING):

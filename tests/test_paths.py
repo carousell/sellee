@@ -24,6 +24,7 @@ def test_derived_paths_hang_off_the_roots(xdg_tmp) -> None:
     assert paths.heartbeat_path() == paths.state_dir() / "daemon.heartbeat.json"
     assert paths.lock_path() == paths.state_dir() / "daemon.lock"
     assert paths.config_path() == paths.config_dir() / "config.json"
+    assert paths.browser_profile_dir() == paths.data_root() / "browser-profile"
 
 
 def test_default_layout_without_xdg(monkeypatch, tmp_path) -> None:
@@ -44,12 +45,20 @@ def test_config_dir_is_0700_from_creation(xdg_tmp) -> None:
     assert mode == 0o700
 
 
+def test_the_browser_profile_is_0700_from_creation(xdg_tmp) -> None:
+    """The profile holds the seller's live marketplace sessions, so it is as sensitive as a
+    credential file even though it is not one."""
+    paths.ensure_data_dirs()
+    assert os.stat(paths.browser_profile_dir()).st_mode & 0o777 == 0o700
+
+
 def test_ensure_runtime_dirs_creates_everything(xdg_tmp) -> None:
     paths.ensure_runtime_dirs()
     for d in (
         paths.data_root(),
         paths.versions_dir(),
         paths.data_dir(),
+        paths.browser_profile_dir(),
         paths.state_dir(),
         paths.backups_dir(),
         paths.logs_dir(),

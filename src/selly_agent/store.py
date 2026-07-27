@@ -136,11 +136,19 @@ def _like_escape(text: str) -> str:
 
 # Sell threads whose buyer is still waiting on us. Shared by the read accessor and the enqueue
 # transaction, which must run it on its own connection (the read helper takes the same DB lock).
+#
+# Two independent conditions have to hold, and they answer different questions. The cursor answers
+# "have we handled this message" — it advances only on a committed reply, so a crash between reading
+# a buyer's message and answering it leaves the thread eligible. The last-row direction answers "has
+# anyone answered since" — our own send and a reply the seller typed in the marketplace app both
+# land as an outbound row, so either one stops us from talking over them.
 _UNHANDLED_INBOUND_SQL = (
     "SELECT t.thread_id, t.item_id FROM threads t "
     "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
     "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
     "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
+    "AND (SELECT m2.dir FROM thread_messages m2 WHERE m2.thread_id = t.thread_id "
+    "  ORDER BY m2.ts DESC, m2.rowid DESC LIMIT 1) = 'in' "
     "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
     "  AND e.status = 'open') "
     "ORDER BY t.thread_id ASC"

@@ -80,6 +80,15 @@ def media_dir() -> Path:
     return data_root() / "media"
 
 
+def browser_profile_dir() -> Path:
+    """The dedicated Chrome profile the agent drives — never the seller's everyday Chrome.
+
+    The marketplace logins live here, so it is business data: deleting it means logging in to every
+    market again.
+    """
+    return data_root() / "browser-profile"
+
+
 # --- state_dir children --------------------------------------------------------------------
 
 
@@ -189,6 +198,9 @@ def ensure_data_dirs() -> None:
     _ensure(versions_dir(), 0o755)
     _ensure(data_dir(), 0o755)
     _ensure(media_dir(), 0o755)
+    # 0700: the profile holds the seller's live marketplace sessions (cookies), so it is as
+    # sensitive as a credential file even though it is not one.
+    _ensure(browser_profile_dir(), 0o700)
 
 
 def ensure_state_dirs() -> None:

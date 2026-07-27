@@ -62,6 +62,21 @@ class Config:
     # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
     # local fake server; production uses the default.
     telegram_api_base: str = "https://api.telegram.org"
+    # The warm Chrome's CDP port. The daemon never launches Chrome itself; it attaches to the one
+    # already listening here (dev: launched by hand, production: by launchd).
+    chrome_cdp_port: int = 9222
+    # The Playwright MCP server the daemon spawns as a stdio subprocess, as an argv list. Null
+    # resolves to the npx default at spawn time. Pinning it avoids an npx cold resolution — a
+    # network fetch — landing on the hot path.
+    playwright_mcp_cmd: list | None = None
+    # How often the inbox lane reads the marketplace, and how many of those ticks use the skip gate
+    # before one opens every active thread regardless. The sweep is the backstop for a lying inbox
+    # preview: a missed message costs one sweep interval of latency, never a stranded buyer.
+    inbox_read_interval_sec: float = 300.0
+    inbox_full_sweep_every: int = 6
+    # Consecutive failed marketplace reads before one needs-me escalation. A market that cannot be
+    # seen must never look like a market with no news.
+    browser_blind_after: int = 3
     # Pacing knobs. The cap is per marketplace account per hour; the delay pairs are the
     # post-go anti-automation jitter ranges ([min, max] seconds — unattended vs attended).
     # Stored already clamped to the hard ceilings above.
@@ -181,6 +196,44 @@ def _validate(raw: dict) -> Config:
             ):
                 raise ConfigError(f"{key} must be an http(s) URL, got {base!r}")
             values[key] = base.rstrip("/")
+
+    if "chrome_cdp_port" in raw:
+        port = raw["chrome_cdp_port"]
+        if not _is_real_int(port) or not (1024 <= port <= 65535):
+            raise ConfigError(f"chrome_cdp_port must be an integer in 1024..65535, got {port!r}")
+        values["chrome_cdp_port"] = port
+
+    if "playwright_mcp_cmd" in raw:
+        cmd = raw["playwright_mcp_cmd"]
+        if cmd is not None and (
+            not isinstance(cmd, list) or not cmd or not all(isinstance(part, str) for part in cmd)
+        ):
+            raise ConfigError(
+                f"playwright_mcp_cmd must be a non-empty list of strings or null, got {cmd!r}"
+            )
+        values["playwright_mcp_cmd"] = list(cmd) if cmd is not None else None
+
+    if "inbox_read_interval_sec" in raw:
+        interval = raw["inbox_read_interval_sec"]
+        if not _is_real_number(interval) or interval <= 0:
+            raise ConfigError(
+                f"inbox_read_interval_sec must be a positive number, got {interval!r}"
+            )
+        values["inbox_read_interval_sec"] = float(interval)
+
+    if "inbox_full_sweep_every" in raw:
+        every = raw["inbox_full_sweep_every"]
+        # 1 means every tick is a full sweep (the skip gate disabled) — a supported posture, since
+        # the gate is a cost optimization and never a correctness input.
+        if not _is_real_int(every) or every < 1:
+            raise ConfigError(f"inbox_full_sweep_every must be an integer >= 1, got {every!r}")
+        values["inbox_full_sweep_every"] = every
+
+    if "browser_blind_after" in raw:
+        blind = raw["browser_blind_after"]
+        if not _is_real_int(blind) or blind < 1:
+            raise ConfigError(f"browser_blind_after must be an integer >= 1, got {blind!r}")
+        values["browser_blind_after"] = blind
 
     # Pacing knobs: malformed → ConfigError like everything else; well-formed but looser than
     # the hard ceilings → clamped down (tighten-only — see the ceiling constants above).

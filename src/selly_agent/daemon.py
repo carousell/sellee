@@ -30,6 +30,7 @@ from selly_agent import (
     secrets,
     settings,
 )
+from selly_agent.browser import client as browser_client
 from selly_agent.channel import outbound
 from selly_agent.channel.manager import ChannelManager
 from selly_agent.channel.telegram import provider as telegram_provider
@@ -134,6 +135,21 @@ def run_daemon(*, once: bool) -> int:
             web_base_url=cfg.carousell_ai_web_base_url,
         )
 
+    # One browser client for the whole daemon: one Chrome, one tab, one mutex. Built lazily by the
+    # factory so a machine with no Node still starts, with its browser lanes reporting unavailable
+    # instead of the daemon failing at boot.
+    browser_holder: dict = {}
+
+    def browser_factory():
+        client = browser_holder.get("client")
+        if client is None:
+            command = cfg.playwright_mcp_cmd or browser_client.default_command(
+                browser_client.cdp_endpoint(cfg.chrome_cdp_port)
+            )
+            client = browser_client.BrowserClient(command=command)
+            browser_holder["client"] = client
+        return client
+
     def context_factory(session):
         # The store a handler sees is scoped to the session: attended (scope None) is a
         # transparent pass-through; a headless pass is held to its spawn-time entity scope at
@@ -144,6 +160,7 @@ def run_daemon(*, once: bool) -> int:
             bus=bus,
             config=cfg,
             rail_factory=rail_factory,
+            browser_factory=browser_factory,
             started_ts=started_ts,
         )
 
@@ -271,6 +288,10 @@ def run_daemon(*, once: bool) -> int:
         if channels is not None:
             channels.shutdown_all()
         scheduler.shutdown()
+        # After the lanes have stopped, so nothing is mid-call: this closes the tab we opened and
+        # ends the MCP process, leaving the seller's warm Chrome as we found it.
+        if browser_holder.get("client") is not None:
+            browser_holder["client"].close()
         http.stop()
         bus.publish("daemon.stop", {"pid": os.getpid()})
         lock.clear_holder(paths.lock_path())
