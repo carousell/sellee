@@ -161,6 +161,21 @@ The codebase must read on its own for someone who does not have the plans.
   depends on context the code can't convey; then state that reasoning inline,
   self-contained.
 
+## Skill content
+
+The markdown under `src/selly_agent/skills/` is prompt content, and the same
+comment rule applies with more force: it is read by a model that has none of our
+context, so a reference it cannot resolve is worse than nothing. Two more:
+
+- **Router to anchor: each rule lives in exactly one file**, and the others point
+  at it rather than restating it. A rule stated twice drifts, and the model gets
+  to pick which version it follows.
+- **No choreography in prose.** If a sequence must happen in an order, that order
+  belongs inside a tool, not in instructions the model may skip, reorder, or be
+  interrupted halfway through. What stays in prose is judgment: what to say, what
+  to refuse, when to ask. If you find yourself writing "first call X, then Y, then
+  record Z", the tool surface is missing a tool.
+
 ## Version control
 
 Commit in logical units, each building and passing tests on

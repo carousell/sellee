@@ -113,11 +113,51 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
 - **`rail/`** — the carousell.ai rail (a stdlib MCP client + guest-key
   provisioning) wrapped behind our tools, off the LLM surface.
 - **`harness/`** — the harness seam: one internal `PassSpec`, pure per-provider
-  emitters (claude live, codex stub) with round-trip validators.
+  emitters (claude live, codex stub) with round-trip validators. The spec carries
+  the pass's web posture, so allowing `WebSearch`/`WebFetch` for a research flow
+  is a validated field rather than a hand-edited config.
+- **`skills/`** — the prompt layer: the standing rulebooks as package data, plus
+  a loader that strips frontmatter and composes a pass type's declared skills
+  into one system prompt. See below.
 - **`passes.py`** — claims a queued pass single-flight, spawns and babysits a
   headless harness pass, and ledgers its outcome; **`pass_stream.py`** parses the
   harness output stream and **`proc_tree.py`** owns the process-group kill and
   stray-pass reaper.
+
+### Skills and prompt composition
+
+A pass's prompt is split along what changes. The **system prompt** is the
+standing rulebook — voice, the listing flow, the house conventions — declared per
+pass type and identical across every pass of that type, so a harness can cache
+it. The **user prompt** is the task: the rows claimed this time, the item to
+publish, the conversation window. The stray-reaper's marker stays in the user
+half, where `proc_tree` greps for it.
+
+Skill files are markdown under `skills/`, shipped as package data and read
+`__file__`-relative (the `data/marketplaces.json` convention) — a versioned
+install serves them from its own tree, a checkout from the checkout. Frontmatter
+is stripped when a file is inlined: it is metadata for a human reader, not
+instruction for the model. The loader caps the composed size, so a skill added
+later cannot quietly inflate every pass of that type.
+
+Which skills a pass type gets is declared on the pass type itself, keeping "a new
+pass type is one registry entry" true. The attended surface
+(`harness config --attended`) points its slash commands at the same files by
+path, through the `current` symlink, so an update changes what a command says
+without rewriting it.
+
+### Photos
+
+An item carries an ordered photo list (`{path, uploaded_url?}`, first = cover).
+Paths must resolve inside the media store, checked by containment in the single
+writer, so a `..` segment or an outward symlink is refused before a row exists.
+Photos reach the store two ways: the channel poller downloads them on receipt
+(durable before any LLM sees them), and `import_photos` copies local files in for
+attended sessions. `carousell_ai_upload_photos` converts what needs converting —
+`sips` behind the platform seam, since stdlib cannot transform an image and the
+runtime takes no pip dependency — uploads each photo, and stamps the whole set in
+one transaction. A partial failure stamps nothing: the marketplace replaces a
+photo set wholesale, so half a set is a listing with the wrong cover.
 
 The channel subsystem — the optional bound chat (Telegram today) plus the
 needs-me queue that works with none bound. A provider-agnostic core (`channel/`)

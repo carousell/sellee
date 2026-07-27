@@ -56,7 +56,9 @@ bin/selly-agent daemon run
 bin/selly-agent provision carousell-ai --region SG
 bin/selly-agent pass run publish --item <item_id> --follow
 
-# point an attended Claude Code session at the same daemon MCP server
+# set up an attended Claude Code session against the same daemon MCP server:
+# .mcp.json, the /sell /selly /catchup /pause /resume commands, and a CLAUDE.md.
+# Then, in that directory: `claude`, and `/sell` to list something.
 bin/selly-agent harness config --attended --dir /path/to/session
 
 # connect the optional Telegram channel. Run it interactively and it prints BotFather
@@ -106,6 +108,7 @@ src/selly_agent/
   connect_cli.py           `connect telegram` (token via stdin -> control route)
   rail/                    the carousell.ai rail client + guest-key provisioning
   harness/                 the harness seam: PassSpec + claude/codex emitters
+  skills/                  the prompt layer: skill markdown + attended command bodies
   passes.py                the pass runner (claim -> spawn -> babysit -> classify)
   pass_stream.py           stream-json -> common event schema
   proc_tree.py             process-group kill + stray-pass reaper

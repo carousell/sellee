@@ -14,7 +14,6 @@
         "ship_only",
         "local"
       ],
-      "listing_flow": "skills/listing-flows/fb.md",
       "listing_url": {
         "host": "facebook.com",
         "path": "/marketplace/item/"
@@ -50,7 +49,6 @@
       "fulfillment": [
         "ship_only"
       ],
-      "listing_flow": "skills/listing-flows/carousell.md",
       "listing_url": {
         "host": "carousell.",
         "path": "/p/"
@@ -90,7 +88,7 @@
       "fulfillment": [
         "ship_only"
       ],
-      "listing_flow": "skills/listing-flows/carousell-ai.md",
+      "listing_flow": "listing-flow",
       "listing_url": {
         "host": "www.carousell.ai",
         "path": "/listing/"
@@ -119,7 +117,6 @@
       "fulfillment": [
         "ship_only"
       ],
-      "listing_flow": "skills/listing-flows/ebay.md",
       "listing_url": {
         "host": "ebay.",
         "path": "/itm/"
@@ -152,7 +149,6 @@
       "fulfillment": [
         "ship_only"
       ],
-      "listing_flow": "skills/listing-flows/mercari.md",
       "listing_url": {
         "host": "mercari.",
         "path": "/item/"
@@ -180,7 +176,6 @@
         "ship_only",
         "local"
       ],
-      "listing_flow": "skills/listing-flows/offerup.md",
       "listing_url": {
         "host": "offerup.com",
         "path": "/item/"
@@ -214,7 +209,6 @@
       "fulfillment": [
         "ship_only"
       ],
-      "listing_flow": "skills/listing-flows/poshmark.md",
       "listing_url": {
         "host": "poshmark.",
         "path": "/listing/"
@@ -244,7 +238,6 @@
         "ship_only",
         "local"
       ],
-      "listing_flow": "skills/listing-flows/craigslist.md",
       "listing_url": {
         "host": "craigslist.org",
         "path": "/d/"
