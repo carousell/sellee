@@ -63,10 +63,15 @@ def test_prompt_separates_history_from_work() -> None:
     assert "1. would you take 70?" in prompt
 
 
-def test_prompt_photo_rows_summarized() -> None:
+def test_prompt_photo_rows_carry_their_stored_paths() -> None:
+    """The paths are the usable part: they are already in the media store, so a listing flow can
+    put them straight onto an item. A count alone would tell the pass photos exist and leave it
+    with no way to reach them."""
     claimed = [{"kind": "photo", "text": "sell this", "media_paths": ["/m/a.jpg", "/m/b.jpg"]}]
     prompt = build_channel_prompt(claimed, [])
     assert "[2 photo(s)] sell this" in prompt
+    assert "/m/a.jpg" in prompt
+    assert "/m/b.jpg" in prompt
 
 
 def test_transcript_window_trims_to_char_cap() -> None:

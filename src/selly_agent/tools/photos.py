@@ -163,8 +163,10 @@ register(
             "required": ["paths"],
             "additionalProperties": False,
         },
+        # Attended only: a channel photo is already in the media store by the time a pass sees it
+        # (the poller puts it there), so the channel pass has nothing to import.
         handler=_import_photos,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
+        tiers=frozenset({TIER_ATTENDED}),
     )
 )
 register(

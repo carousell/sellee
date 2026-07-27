@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from selly_agent import paths, settings
+from selly_agent import paths, settings, skills
 from selly_agent.channel import prompt as channel_prompt_mod
 from selly_agent.harness import claude
 from selly_agent.harness.model import PassSpec
@@ -53,9 +53,10 @@ class PassPayloadError(Exception):
 def publish_prompt(item_id: str) -> str:
     return (
         f"{PASS_PROMPT_MARKER}\n"
-        f"You are a headless selly-agent pass. Publish item {item_id} to carousell.ai using ONLY "
-        f"your MCP tools: read the item with get_item, then call carousell_ai_publish_listing. "
-        f"Do not attempt any other tool. When the listing is published, stop."
+        f"Publish item {item_id} to carousell.ai, following the listing flow's publish step.\n"
+        f"Read the item with get_item. It has already been confirmed with the seller, so do not "
+        f"re-confirm and do not change its title, price, or description — publish what is there.\n"
+        f"Report the live listing URL when it is up, or say what failed."
     )
 
 
@@ -78,16 +79,38 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
 
 @dataclass(frozen=True)
 class PassType:
-    """A pass type's spec: the tier its token carries (which tools it may call) and how its prompt
-    is built from the queued payload. New types register here rather than forking run_pass."""
+    """A pass type's spec: the tier its token carries (which tools it may call), the skills that
+    make up its system prompt, whether it may research on the web, and how its task prompt is built
+    from the queued payload. New types register here rather than forking run_pass.
+
+    Skills are per-type and minimal. A pass carrying a rulebook it never acts on pays for it on
+    every run, and a rule stated to a flow that cannot follow it is noise.
+    """
 
     tier: str
     build_prompt: Callable[[dict, object, str], str]
+    skills: tuple = ()
+    web_tools: bool = False
 
 
 PASS_TYPES = {
-    "publish": PassType(tier=TIER_PASS_PUBLISH, build_prompt=_publish_prompt),
-    "channel": PassType(tier=TIER_PASS_CHANNEL, build_prompt=_channel_prompt),
+    # Publish is a narrow, already-decided job: the seller signed off on the numbers in the
+    # conversation that produced the draft, so this pass needs the flow's publish discipline and
+    # nothing about voice — it talks to no one.
+    "publish": PassType(
+        tier=TIER_PASS_PUBLISH,
+        build_prompt=_publish_prompt,
+        skills=("selly-conventions", "listing-flow"),
+    ),
+    # The channel pass is the seller conversation: it writes to a human, so it needs voice and the
+    # escalation copy, and it runs the listing flow end to end — including the comps research the
+    # flow's pricing step calls for.
+    "channel": PassType(
+        tier=TIER_PASS_CHANNEL,
+        build_prompt=_channel_prompt,
+        skills=("selly-conventions", "voice-and-style", "seller-comms", "listing-flow"),
+        web_tools=True,
+    ),
 }
 
 
@@ -132,14 +155,16 @@ class PassDeps:
     now: Callable[[], float] = time.time
 
 
-def build_spec(prompt: str, endpoint: str, token: str, model: str, tier: str) -> PassSpec:
+def build_spec(prompt: str, endpoint: str, token: str, model: str, pass_type: PassType) -> PassSpec:
     return PassSpec(
         prompt=prompt,
         model=model,
         mcp_endpoint=endpoint,
         mcp_token=token,
-        allowed_tools=allowed_tools_for(tier),
+        allowed_tools=allowed_tools_for(pass_type.tier),
         max_turns=PASS_MAX_TURNS,
+        append_system_prompt=skills.compose_system_prompt(pass_type.skills) or None,
+        web_tools=pass_type.web_tools,
     )
 
 
@@ -230,7 +255,7 @@ def run_pass(deps: PassDeps, claimed) -> str:
     proc = None
     pgid = None
     try:
-        spec = build_spec(prompt, deps.http_endpoint, token, deps.config.pass_model, pass_type.tier)
+        spec = build_spec(prompt, deps.http_endpoint, token, deps.config.pass_model, pass_type)
         _write_workspace(workspace, spec)
         try:
             argv = deps.argv_builder(spec)

@@ -168,13 +168,19 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
 
 
 # Tier labels. Open strings; later plans add tiers without registry surgery.
+#
+# Membership follows what the skills instruct: a tool no skill tells a pass to use is surface with
+# no user, and a tool a skill needs but the tier omits is a flow that dead-ends mid-conversation.
+# The two live tiers below are pinned by golden tests, so a change to either is a deliberate diff.
 TIER_ATTENDED = "attended"
+# The publish pass: one already-decided job, no counterpart to talk to. Read the item, ship its
+# photos, publish, report — nothing else.
 TIER_PASS_PUBLISH = "pass:publish"
 # Provisional: the reply-loop tool subset carries this tier so entity-scope enforcement is
-# exercisable end to end by tests. No reply pass *type* exists yet — the skills rewrite finalizes
-# pass-tier membership; this label only makes the scoped-token path testable now.
+# exercisable end to end by tests. No reply pass *type* exists yet — membership is finalized by
+# the browser layer, which lands the reply pass beside the marketplace inbound that feeds it.
 TIER_PASS_REPLY = "pass:reply"
-# The provisional channel-pass tier — the tools a phone-driven sell conversation needs. The channel
-# pass runs full-scope (the counterpart is the trusted seller), so this is a broad set; the skills
-# rewrite finalizes membership.
+# The channel pass: the seller conversation, and so the broadest tier — it runs the whole listing
+# flow and answers anything the seller asks. It runs full-scope because the counterpart is the
+# trusted seller, not a buyer.
 TIER_PASS_CHANNEL = "pass:channel"

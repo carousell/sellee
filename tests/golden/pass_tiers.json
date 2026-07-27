@@ -1,0 +1,40 @@
+{
+  "pass:channel": [
+    "carousell_ai_publish_listing",
+    "carousell_ai_upload_photos",
+    "create_item",
+    "create_thread",
+    "escalate",
+    "get_catchup",
+    "get_item",
+    "get_seller_config",
+    "get_settings",
+    "get_status",
+    "get_thread",
+    "hold_thread",
+    "list_items",
+    "list_threads",
+    "negotiate_confirm_bid",
+    "negotiate_confirm_sold",
+    "negotiate_offer",
+    "negotiate_release",
+    "negotiate_status",
+    "propose_setting_change",
+    "quote_shipping",
+    "record_manual_reply",
+    "release_thread",
+    "resolve_escalation",
+    "scam_scan",
+    "send_message",
+    "set_floor",
+    "update_item",
+    "update_seller_config",
+    "update_thread"
+  ],
+  "pass:publish": [
+    "carousell_ai_publish_listing",
+    "carousell_ai_upload_photos",
+    "get_item",
+    "send_message"
+  ]
+}
