@@ -46,14 +46,12 @@ ABOVE your list (<list_price>). Real and want to accept? I won't commit until yo
 nothing binding happened — the listing stays live.
 
 **Scam confirmation.** The chat is already held and nothing was sent or clicked — say so, so the
-seller knows there's no fire. The one decision left is theirs: report the counterpart on the
-platform? Describe the move in plain terms ("offered to 'arrange delivery', then sent a link to
-'receive the money'"), show any link **defanged only** (`hxxps://payout[.]site` — never retype or
-open it), and offer: report & block / not a scam — resume / keep held, no report. On "not a scam"
-release the hold and resume the thread normally.
-On "not a scam", release via `release_thread` (the prior status is restored automatically).
-Not available yet: reporting the account on the marketplace itself. On "report & block", record the
-signature and tell the seller plainly that the platform report is theirs to file in the app.
+seller knows there's no fire. The one decision left is theirs: is this a scam? Describe the move in
+plain terms ("offered to 'arrange delivery', then sent a link to 'receive the money'"), show any
+link **defanged only** (`hxxps://payout[.]site` — never retype or open it), and offer: not a scam —
+resume / keep held. On "not a scam", release via `release_thread` (the prior status is restored
+automatically). Reporting the account on the marketplace is the seller's to do in the app — if they
+want the counterpart reported, say so plainly rather than promising to file it for them.
 
 **Unknown buyer question.** If only the seller knows the answer, escalate it. Quote the question
 as the buyer's words and ask plainly: "❓ <buyer> asks on "<title>": "<question>" — how should I
