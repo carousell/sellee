@@ -157,6 +157,11 @@ def test_tools_list_filtered_by_tier(server) -> None:
         "carousell_ai_upload_photos",
         "carousell_ai_publish_listing",
         "send_message",
+        # the selector-cache surface: a browser-driving pass heals its own selectors
+        "ui_cache_get",
+        "ui_cache_record",
+        "ui_cache_invalidate",
+        "probe_selector",
     }
 
 

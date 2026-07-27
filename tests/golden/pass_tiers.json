@@ -36,6 +36,10 @@
     "carousell_ai_publish_listing",
     "carousell_ai_upload_photos",
     "get_item",
-    "send_message"
+    "probe_selector",
+    "send_message",
+    "ui_cache_get",
+    "ui_cache_invalidate",
+    "ui_cache_record"
   ]
 }

@@ -32,6 +32,8 @@ from selly_agent import (
 )
 from selly_agent.browser import client as browser_client
 from selly_agent.browser import inbox
+from selly_agent.browser import sink as browser_sink
+from selly_agent.browser.client import BrowserError
 from selly_agent.channel import outbound
 from selly_agent.channel.manager import ChannelManager
 from selly_agent.channel.telegram import provider as telegram_provider
@@ -151,10 +153,27 @@ def run_daemon(*, once: bool) -> int:
             browser_holder["client"] = client
         return client
 
+    def reply_sink_factory():
+        """The marketplace send, built per request so a browser that is unavailable now but present
+        later needs no restart. The sink writes through the unscoped store: it stamps the intent it
+        was handed, which the tool has already checked against the session's scope."""
+        return browser_sink.BrowserReplySink(
+            client=browser_factory(),
+            store=store,
+            bus=bus,
+            region=inbox.seller_region(store),
+        )
+
     def context_factory(session):
         # The store a handler sees is scoped to the session: attended (scope None) is a
         # transparent pass-through; a headless pass is held to its spawn-time entity scope at
         # every row load, so a thread never leaves the store without passing the scope check.
+        try:
+            sink = reply_sink_factory()
+        except BrowserError:
+            # No browser to send through. send_reply then reports no_send_path instead of reserving
+            # pacing and writing an intent for a send that could never happen.
+            sink = None
         return ToolContext(
             session=session,
             store=ScopedStore(store, getattr(session, "scope", None)),
@@ -162,6 +181,7 @@ def run_daemon(*, once: bool) -> int:
             config=cfg,
             rail_factory=rail_factory,
             browser_factory=browser_factory,
+            reply_sink=sink,
             started_ts=started_ts,
         )
 

@@ -8,6 +8,7 @@ list complete — an unimported tool module is a tool that silently doesn't exis
 from __future__ import annotations
 
 from selly_agent.tools import (  # noqa: F401  imported for registration
+    browser,
     buyer,
     checkout,
     control,

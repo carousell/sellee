@@ -2308,6 +2308,20 @@ class Store:
                 )
         return {"msg_id": out_msg_id}
 
+    def mark_intent_sent_unverified(self, intent_id: str) -> None:
+        """Stamp an intent as clicked-but-not-yet-confirmed, between the send and its read-back.
+
+        This is the state that distinguishes "we pressed send and do not know what happened" from
+        "we never sent": the first must only ever be verified, never re-driven, or a buyer gets the
+        same message twice. The sweep folds a stuck one to unconfirmed and escalates.
+        """
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE send_intents SET status = 'sent_unverified', sent_ts = ? "
+                "WHERE intent_id = ? AND status = 'pending'",
+                (_now(), intent_id),
+            )
+
     def record_manual_reply(self, thread_id: str, text: str, *, handle: str | None = None) -> dict:
         """Journal a reply the seller sent themselves in the marketplace app: an outbound row,
         deduped by normalized text, with NO cursor advance and no status change (the manual send

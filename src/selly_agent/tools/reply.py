@@ -91,9 +91,12 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
 
     intent_id = reserved["intent_id"]
     try:
-        ctx.reply_sink.send(thread, params["text"], kind)
+        ctx.reply_sink.send(thread, params["text"], kind, intent_id)
     except Exception:
-        # the intent stays pending; the sweep folds it as unconfirmed + escalates — never re-sent
+        # The sink's own message never reaches here by design (it emits its own events). Whether the
+        # message may be retried is carried by the intent's status, not by this return: still
+        # `pending` means nothing was sent, `sent_unverified` means it was clicked and the sweep
+        # asks a human rather than sending it again.
         return {"status": "send_failed", "intent_id": intent_id}
 
     commit = ctx.store.commit_reply(

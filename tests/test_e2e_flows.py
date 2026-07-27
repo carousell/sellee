@@ -36,7 +36,7 @@ class FakeSink:
     def __init__(self):
         self.sends = []
 
-    def send(self, thread, text, kind):
+    def send(self, thread, text, kind, intent_id):
         self.sends.append((thread["thread_id"], text, kind))
 
 

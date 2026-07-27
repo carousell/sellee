@@ -328,6 +328,3 @@ class BrowserClient:
                 return
             self.call_tool("browser_tabs", {"action": "new"})
             self._tab_opened = True
-
-    def current_url(self) -> str:
-        return str(self.evaluate("() => window.location.href") or "")

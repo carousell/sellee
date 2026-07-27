@@ -83,6 +83,7 @@ def make_ctx(bus, store, xdg_tmp):
         scope=None,
         rail_factory=None,
         reply_sink=None,
+        browser_factory=None,
         config=None,
         started_ts=1000.0,
     ):
@@ -96,6 +97,7 @@ def make_ctx(bus, store, xdg_tmp):
             config=config or Config(),
             rail_factory=rail_factory,
             reply_sink=reply_sink,
+            browser_factory=browser_factory,
             started_ts=started_ts,
         )
 

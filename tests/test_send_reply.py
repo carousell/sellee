@@ -23,8 +23,8 @@ class FakeSink:
         self.fail = fail
         self.sends: list = []
 
-    def send(self, thread, text, kind):
-        self.sends.append((thread["thread_id"], text, kind))
+    def send(self, thread, text, kind, intent_id):
+        self.sends.append((thread["thread_id"], text, kind, intent_id))
         if self.fail:
             raise RuntimeError("browser send blew up")
 

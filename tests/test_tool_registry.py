@@ -79,6 +79,11 @@ def test_tools_for_tier_partitions_the_surface() -> None:
         "carousell_ai_upload_photos",
         "carousell_ai_publish_listing",
         "send_message",
+        # the selector-cache surface: a browser-driving pass heals its own selectors
+        "ui_cache_get",
+        "ui_cache_record",
+        "ui_cache_invalidate",
+        "probe_selector",
     }
     assert "set_floor" not in publish
     assert "create_item" not in publish
