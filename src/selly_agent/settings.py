@@ -462,3 +462,66 @@ register(
         requires_approval=True,
     )
 )
+
+
+# --- style: how the seller likes to deal ------------------------------------------------------
+#
+# Two knobs, and they work in opposite places. `persona` is read at compose time and shapes wording
+# only — it can never change a decision, a routing choice, or a number. `firmness` is never read at
+# compose time; it feeds numbers to the negotiation engine. Both are low-stakes, so a proposal
+# applies immediately and the seller gets an echo notice with an Undo.
+
+PERSONA_MAX_CHARS = 280
+
+_FIRMNESS_LEVELS = ("soft", "balanced", "firm", "hardline")
+_FIRMNESS_HELP = f"firmness must be one of: {', '.join(_FIRMNESS_LEVELS)}"
+
+
+def _parse_persona(raw: object) -> str:
+    if not isinstance(raw, str):
+        raise SettingError("persona must be text (or an empty string to clear it)")
+    text = raw.strip()
+    if len(text) > PERSONA_MAX_CHARS:
+        raise SettingError(f"persona must be at most {PERSONA_MAX_CHARS} characters")
+    return text
+
+
+def _render_persona(value: object) -> str:
+    return str(value) if value else "none set"
+
+
+def _parse_firmness(raw: object) -> str:
+    if isinstance(raw, str) and raw.strip().lower() in _FIRMNESS_LEVELS:
+        return raw.strip().lower()
+    raise SettingError(_FIRMNESS_HELP)
+
+
+def _render_firmness(value: object) -> str:
+    return str(value)
+
+
+register(
+    SettingSpec(
+        key="persona",
+        label="Persona",
+        parse=_parse_persona,
+        render=_render_persona,
+        default="",
+        description='A free-text steer on voice, e.g. "cheeky, give lowballers a hard time". '
+        "Guidance for wording only — it never changes a price, a decision, or an escalation.",
+        take_effect="applies to the next message composed.",
+    )
+)
+register(
+    SettingSpec(
+        key="firmness",
+        label="Negotiation firmness",
+        parse=_parse_firmness,
+        render=_render_firmness,
+        default="balanced",
+        description="How hard to haggle: soft | balanced | firm | hardline. Sets how many "
+        "counters to make, how low an offer counts as a lowball, and how many lowballs to "
+        "tolerate. A per-item counter setting still wins over it.",
+        take_effect="applies to the next offer decided.",
+    )
+)

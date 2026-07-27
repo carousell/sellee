@@ -12,8 +12,8 @@ Per-item state machine spanning both platforms (one physical item, many buyers):
 
 The floor is confidential: it is read only here and never appears in any returned dict. The
 below-floor assert is the defensive backstop — the engine refuses to emit a price under the floor
-rather than leak one. Knob resolution is a per-item floor override, then config, then defaults,
-with a stubbed seam where firmness presets will later sit.
+rather than leak one. Knob resolution runs a per-item floor override, then the seller's firmness
+preset, then config, then defaults.
 """
 
 from __future__ import annotations
@@ -21,18 +21,40 @@ from __future__ import annotations
 DEFAULTS = {"max_counters": 2, "min_offer_ratio": 0.6, "lowball_cap": 3}
 DEFAULT_STEP = 10
 
+# How hard to haggle, as the three anti-probing knobs. Higher firmness concedes fewer times,
+# treats a larger share of the list price as a lowball, and disengages from a lowballer sooner.
+FIRMNESS_PRESETS = {
+    "soft": {"max_counters": 3, "min_offer_ratio": 0.5, "lowball_cap": 5},
+    "balanced": {"max_counters": 2, "min_offer_ratio": 0.6, "lowball_cap": 3},
+    "firm": {"max_counters": 1, "min_offer_ratio": 0.7, "lowball_cap": 2},
+    "hardline": {"max_counters": 1, "min_offer_ratio": 0.8, "lowball_cap": 1},
+}
+# The neutral level expresses no opinion, so a hand-tuned operator config still speaks through it.
+# Its preset reproduces DEFAULTS exactly, so treating it as neutral changes no number — it only
+# avoids overwriting a tuned config with the values it already equals.
+NEUTRAL_FIRMNESS = "balanced"
+
 
 class BelowFloorError(AssertionError):
     """Defensive backstop: a decision tried to emit a price below the floor. Never leaks a value."""
 
 
-def resolve_knobs(config, floor_record: dict | None = None) -> dict:
-    """Per-item floor override → config → defaults. The style/firmness layer will slot between the
-    floor override and config later; for now it is a pass-through. Returns step + the three
+def firmness_knobs(firmness: str | None) -> dict:
+    """The knobs a firmness level dictates — empty for the neutral level or an unknown one."""
+    if not firmness or firmness == NEUTRAL_FIRMNESS:
+        return {}
+    return dict(FIRMNESS_PRESETS.get(firmness, {}))
+
+
+def resolve_knobs(config, floor_record: dict | None = None, firmness: str | None = None) -> dict:
+    """Per-item floor override → firmness preset → config → defaults. Returns step + the three
     anti-probing knobs."""
     floor_record = floor_record or {}
+    preset = firmness_knobs(firmness)
     step = floor_record.get("auto_counter_step")
     max_counters = floor_record.get("auto_counter_rounds")
+    if max_counters is None:
+        max_counters = preset.get("max_counters")
     return {
         "step": step if step is not None else DEFAULT_STEP,
         "max_counters": (
@@ -40,10 +62,13 @@ def resolve_knobs(config, floor_record: dict | None = None) -> dict:
             if max_counters is not None
             else getattr(config, "negotiation_max_counters", DEFAULTS["max_counters"])
         ),
-        "min_offer_ratio": getattr(
-            config, "negotiation_min_offer_ratio", DEFAULTS["min_offer_ratio"]
+        "min_offer_ratio": preset.get(
+            "min_offer_ratio",
+            getattr(config, "negotiation_min_offer_ratio", DEFAULTS["min_offer_ratio"]),
         ),
-        "lowball_cap": getattr(config, "negotiation_lowball_cap", DEFAULTS["lowball_cap"]),
+        "lowball_cap": preset.get(
+            "lowball_cap", getattr(config, "negotiation_lowball_cap", DEFAULTS["lowball_cap"])
+        ),
     }
 
 

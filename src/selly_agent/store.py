@@ -1407,7 +1407,14 @@ class Store:
         return item["list_price"], item["currency"]
 
     def negotiate_offer(
-        self, item_id: str, thread_id: str, handle: str, offer: float, *, config
+        self,
+        item_id: str,
+        thread_id: str,
+        handle: str,
+        offer: float,
+        *,
+        config,
+        firmness: str | None = None,
     ) -> dict:
         """One offer, decided and persisted in a single transaction — the serialization that makes
         FCFS single-inventory hold. Floorless orchestration lives here (not the engine): at/above
@@ -1439,7 +1446,7 @@ class Store:
                 "auto_counter_step": floor_row["auto_counter_step"],
                 "auto_counter_rounds": floor_row["auto_counter_rounds"],
             }
-            knobs = negotiate_engine.resolve_knobs(config, floor_record)
+            knobs = negotiate_engine.resolve_knobs(config, floor_record, firmness)
 
             led = self._load_negotiation(conn, item_id)
             buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)

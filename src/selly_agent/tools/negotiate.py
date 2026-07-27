@@ -5,6 +5,7 @@ needs_floor result carries no number, and the below-floor assert in the engine i
 
 from __future__ import annotations
 
+from selly_agent import settings
 from selly_agent.store import StoreError
 from selly_agent.tools.registry import (
     TIER_ATTENDED,
@@ -27,6 +28,9 @@ def _offer(ctx: ToolContext, params: dict) -> dict:
             params.get("buyer", ""),
             params["offer"],
             config=ctx.config,
+            # read at the decision point, never cached — a firmness change applies to the very
+            # next offer, with no daemon reload
+            firmness=settings.get(ctx.store, "firmness"),
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc

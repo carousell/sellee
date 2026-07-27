@@ -90,14 +90,29 @@ def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
 
 
 def test_card_lists_headline_at_default(fresh_store) -> None:
-    assert settings.card_lines(fresh_store) == ["• Quiet hours: 23:00–08:00"]
+    assert settings.card_lines(fresh_store) == [
+        "• Quiet hours: 23:00–08:00",
+        "2 more settings at defaults — ask me about settings.",
+    ]
 
 
 def test_card_shows_changed_value(fresh_store) -> None:
     fresh_store.apply_setting_now(
         "quiet_hours", [2230, 715], change_id="chg_y", prior_value=[2300, 800], notice_text="ok"
     )
-    assert settings.card_lines(fresh_store) == ["• Quiet hours: 22:30–07:15"]
+    assert settings.card_lines(fresh_store)[0] == "• Quiet hours: 22:30–07:15"
+
+
+def test_card_promotes_a_changed_non_headline_setting(fresh_store) -> None:
+    """A non-headline setting is invisible at its default and appears once changed — the card
+    scales with what the seller has customized, not with the catalog."""
+    assert not any("Persona" in line for line in settings.card_lines(fresh_store))
+    fresh_store.apply_setting_now(
+        "persona", "terse and businesslike", change_id="chg_p", prior_value="", notice_text="ok"
+    )
+    lines = settings.card_lines(fresh_store)
+    assert "• Persona: terse and businesslike" in lines
+    assert "1 more setting at defaults — ask me about settings." in lines
 
 
 def test_describe_carries_policy(fresh_store) -> None:
