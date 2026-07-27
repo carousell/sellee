@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.store import Scope, ScopedStore, ThreadNotFound
+from selly_agent.store import ItemNotFound, Scope, ScopedStore, ThreadNotFound
 from selly_agent.tools.registry import Session, ToolContext, ToolError, dispatch
 
 
@@ -57,6 +57,27 @@ def test_out_of_scope_write_raises_like_missing(store) -> None:
     # appending to an out-of-scope thread raises the same NotFound a truly-missing thread does
     with pytest.raises(ThreadNotFound, match="fb:2"):
         scoped.append_thread_message("fb:2", msg_id="x", direction="in", text="hi")
+
+
+def test_the_browser_layers_accessors_are_scope_guarded(store) -> None:
+    """Every accessor the browser layer adds takes a scoped id, so each needs an entry in both the
+    guard map and the miss-behavior map — a guard without a miss entry crashes at deny time."""
+    i1, i2, _, _ = _two_of_everything(store)
+    scoped = ScopedStore(store, Scope.of(threads={"fb:1"}, items={i1["id"]}))
+    store.qa_add(i2["id"], "Colour?", "Teak.", "seller")
+
+    # in scope: the real thing
+    scoped.record_inbound("fb:1", msg_id="m1", text="hi", ts=1.0)
+    assert store.get_thread("fb:1")["message_count"] == 1
+    scoped.qa_add(i1["id"], "Chips?", "None.", "seller")
+    assert [r["question"] for r in scoped.qa_search(i1["id"])] == ["Chips?"]
+
+    # out of scope: exactly the missing-row behavior, so scope never leaks existence
+    with pytest.raises(ThreadNotFound, match="fb:2"):
+        scoped.record_inbound("fb:2", msg_id="m1", text="hi")
+    with pytest.raises(ItemNotFound, match=i2["id"]):
+        scoped.qa_add(i2["id"], "q", "a", "seller")
+    assert scoped.qa_search(i2["id"]) == []  # another item's taught answers stay invisible
 
 
 def test_list_reads_are_filtered_to_scope(store) -> None:

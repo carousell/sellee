@@ -58,6 +58,22 @@ MAX_PHOTOS = 12
 
 _FLOOR_SOURCES = ("seller", "default")
 
+# A Q&A search returns rows for the LLM to match semantically, so the cap is about prompt budget,
+# not relevance: dozens of entries per item at most.
+_QA_SEARCH_CAP = 20
+QA_GLOBAL_ITEM = "*"
+_QA_SOURCES = ("seller",)
+
+# Sell threads a reply pass may be spawned for: a buyer is mid-conversation, not gone or handed
+# over. A held/escalated thread is deliberately excluded — it is waiting on someone else.
+_REPLY_THREAD_STATUSES = ("active", "liaising", "agreed")
+
+# Selector-cache staleness: a row that failed too often, carries no page guard, or has not been
+# re-verified within the freshness window is a miss (→ vision), never "act anyway".
+UI_CACHE_STALE_FAILS = 3
+UI_CACHE_STALE_DAYS = 30
+_UI_CACHE_STRATEGIES = ("css", "aria", "role", "text")
+
 _PASS_TERMINAL = ("done", "error")
 
 _THREAD_SIDES = ("sell", "buy")
@@ -111,6 +127,28 @@ def _load_scam_registry() -> tuple:
 
 def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
+
+
+def _like_escape(text: str) -> str:
+    """Neutralize LIKE wildcards so a buyer's literal `%` searches for a `%`, not everything."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# Sell threads whose buyer is still waiting on us. Shared by the read accessor and the enqueue
+# transaction, which must run it on its own connection (the read helper takes the same DB lock).
+_UNHANDLED_INBOUND_SQL = (
+    "SELECT t.thread_id, t.item_id FROM threads t "
+    "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
+    "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
+    "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
+    "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
+    "  AND e.status = 'open') "
+    "ORDER BY t.thread_id ASC"
+).format(statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES))
+
+
+def _unhandled_inbound_rows(rows) -> list[dict]:
+    return [{"thread_id": r["thread_id"], "item_id": r["item_id"]} for r in rows]
 
 
 # --- record & ack shapes ---------------------------------------------------------------------
@@ -169,13 +207,15 @@ class FloorRecord(TypedDict):
 
 
 class MessageRecord(TypedDict):
-    """One transcript row (see `get_thread_messages`)."""
+    """One transcript row (see `get_thread_messages`). scam_verdict is stamped by the daemon's
+    pre-scan on marketplace inbound; None on rows that arrived by another path."""
 
     msg_id: str
     dir: str
     text: str
     ts: float
     source: str | None
+    scam_verdict: str | None
 
 
 class ThreadSummary(TypedDict):
@@ -640,6 +680,39 @@ def _decide_pending_in_txn(conn, change_id: str, status: str, now: float, decide
     )
 
 
+def ui_cache_is_stale(entry: dict, now: float) -> bool:
+    """Whether a cached selector must be treated as a miss: it has failed too often, carries no
+    page-URL guard, or has not been re-verified inside the freshness window. Stale never means
+    "act anyway" — the caller falls back to vision exactly as it would on a miss."""
+    if entry.get("fail_count", 0) >= UI_CACHE_STALE_FAILS:
+        return True
+    if not (entry.get("page_url_pattern") or "").strip():
+        return True
+    last_verified = entry.get("last_verified_at")
+    if last_verified is None:
+        return True
+    return (now - last_verified) > UI_CACHE_STALE_DAYS * 86400.0
+
+
+def _ui_cache_from_row(row: sqlite3.Row, now: float) -> dict:
+    entry = {
+        "market": row["market"],
+        "flow": row["flow"],
+        "step": row["step"],
+        "strategy": row["strategy"],
+        "query": row["query"],
+        "action_kind": row["action_kind"],
+        "page_url_pattern": row["page_url_pattern"],
+        "recorded_at": row["recorded_at"],
+        "last_verified_at": row["last_verified_at"],
+        "last_ok_at": row["last_ok_at"],
+        "fail_count": row["fail_count"],
+        "ok_streak": row["ok_streak"],
+    }
+    entry["stale"] = ui_cache_is_stale(entry, now)
+    return entry
+
+
 _ESCALATION_FIELDS = (
     "id",
     "thread_id",
@@ -790,6 +863,169 @@ class Store:
                 (json.dumps(urls, sort_keys=True), _now(), item_id),
             )
         return self.get_item(item_id)  # type: ignore[return-value]
+
+    # --- Q&A bank ---------------------------------------------------------------------------
+
+    def qa_add(self, item_id: str, question: str, answer: str, source: str) -> dict:
+        """Bank one taught answer. item_id '*' is a global entry."""
+        if source not in _QA_SOURCES:
+            raise StoreError(f"qa source must be one of {_QA_SOURCES}")
+        if not (question or "").strip() or not (answer or "").strip():
+            raise StoreError("question and answer must both be non-empty")
+        if item_id != QA_GLOBAL_ITEM and self.get_item(item_id) is None:
+            raise ItemNotFound(f"no item with id {item_id!r}")
+        ts = _now()
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO qa_bank (item_id, question, answer, source, created_ts) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (item_id, question.strip(), answer.strip(), source, ts),
+            )
+            entry_id = cur.lastrowid
+        return {"id": entry_id, "item_id": item_id, "source": source, "created_ts": ts}
+
+    def qa_search(self, item_id: str, query: str | None = None, limit: int = _QA_SEARCH_CAP):
+        """The item's entries plus the global ones, newest first, capped.
+
+        Matching is a deliberately dumb substring filter over question and answer: the rows come
+        back for the LLM to match semantically, so a smarter index would only narrow what it can
+        see. An empty/absent query returns the whole (capped) bank for the item.
+        """
+        limit = max(1, min(int(limit), _QA_SEARCH_CAP))
+        params: list = [item_id, QA_GLOBAL_ITEM]
+        sql = "SELECT * FROM qa_bank WHERE item_id IN (?, ?)"
+        needle = (query or "").strip()
+        if needle:
+            sql += " AND (question LIKE ? ESCAPE '\\' OR answer LIKE ? ESCAPE '\\')"
+            like = f"%{_like_escape(needle)}%"
+            params += [like, like]
+        sql += " ORDER BY created_ts DESC, id DESC LIMIT ?"
+        params.append(limit)
+        return [
+            {
+                "id": r["id"],
+                "item_id": r["item_id"],
+                "question": r["question"],
+                "answer": r["answer"],
+                "source": r["source"],
+                "created_ts": r["created_ts"],
+            }
+            for r in self._db.query(sql, tuple(params))
+        ]
+
+    # --- selector cache ("page memory") -----------------------------------------------------
+    #
+    # An acceleration layer over the browser flows, never a decision input: a hit says only WHERE a
+    # control was last found. Stale == miss == vision, so a drifted selector degrades to the slow
+    # path rather than a confident wrong action, and nothing here ever holds a value or an address.
+
+    def ui_cache_get(self, market: str, flow: str, step: str | None = None) -> dict:
+        """One step's cached selector, or the whole flow's map when no step is named (the batched
+        preplan read). Each entry carries a derived `stale` flag the caller treats as a miss."""
+        now = _now()
+        if step is not None:
+            rows = self._db.query(
+                "SELECT * FROM ui_cache WHERE market = ? AND flow = ? AND step = ?",
+                (market, flow, step),
+            )
+            entry = _ui_cache_from_row(rows[0], now) if rows else None
+            return {
+                "market": market,
+                "flow": flow,
+                "step": step,
+                "hit": entry is not None,
+                "stale": True if entry is None else entry["stale"],
+                "selector": entry,
+            }
+        rows = self._db.query(
+            "SELECT * FROM ui_cache WHERE market = ? AND flow = ? ORDER BY step ASC",
+            (market, flow),
+        )
+        steps = {r["step"]: _ui_cache_from_row(r, now) for r in rows}
+        return {"market": market, "flow": flow, "hit": bool(steps), "steps": steps}
+
+    def ui_cache_record(
+        self,
+        *,
+        market: str,
+        flow: str,
+        step: str,
+        strategy: str,
+        query: str,
+        page_url_pattern: str,
+        action_kind: str = "",
+    ) -> dict:
+        """Upsert a verified selector — the self-heal entry point. Refuses a row with no page-URL
+        guard: without one the selector would be resolved on whatever page happened to be open, so
+        it could never be trusted and would simply read as permanently stale. Recording resets
+        fail_count (this row just worked) and preserves the original recorded_at."""
+        if strategy not in _UI_CACHE_STRATEGIES:
+            raise StoreError(f"ui cache strategy must be one of {_UI_CACHE_STRATEGIES}")
+        if not (query or "").strip():
+            raise StoreError("a ui cache row needs a non-empty query")
+        if not (page_url_pattern or "").strip():
+            raise StoreError(
+                "a ui cache row needs a page_url_pattern — a step with no page guard is never "
+                "trusted, so recording one without it would be a no-op"
+            )
+        now = _now()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO ui_cache "
+                "(market, flow, step, strategy, query, action_kind, page_url_pattern, "
+                " recorded_at, last_verified_at, last_ok_at, fail_count, ok_streak) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 1) "
+                "ON CONFLICT (market, flow, step) DO UPDATE SET "
+                "strategy = excluded.strategy, query = excluded.query, "
+                "action_kind = excluded.action_kind, "
+                "page_url_pattern = excluded.page_url_pattern, "
+                "last_verified_at = excluded.last_verified_at, "
+                "last_ok_at = excluded.last_ok_at, fail_count = 0, "
+                "ok_streak = ui_cache.ok_streak + 1",
+                (
+                    market,
+                    flow,
+                    step,
+                    strategy,
+                    query.strip(),
+                    action_kind,
+                    page_url_pattern.strip(),
+                    now,
+                    now,
+                    now,
+                ),
+            )
+        return {"market": market, "flow": flow, "step": step, "recorded": True}
+
+    def ui_cache_invalidate(self, market: str, flow: str, step: str | None = None) -> dict:
+        """Drop a step (or the whole flow) after a miss or a failed verify, so the next pass
+        re-finds it by vision and re-records what it found."""
+        with self._db.transaction() as conn:
+            if step is None:
+                cur = conn.execute(
+                    "DELETE FROM ui_cache WHERE market = ? AND flow = ?", (market, flow)
+                )
+            else:
+                cur = conn.execute(
+                    "DELETE FROM ui_cache WHERE market = ? AND flow = ? AND step = ?",
+                    (market, flow, step),
+                )
+            return {"market": market, "flow": flow, "step": step, "removed": cur.rowcount}
+
+    def ui_cache_fail(self, market: str, flow: str, step: str) -> dict:
+        """Count a failed resolve against a step. Three failures make it stale, so a selector the
+        page has moved away from stops being offered without needing an explicit invalidate."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE ui_cache SET fail_count = fail_count + 1, ok_streak = 0 "
+                "WHERE market = ? AND flow = ? AND step = ?",
+                (market, flow, step),
+            )
+            row = conn.execute(
+                "SELECT fail_count FROM ui_cache WHERE market = ? AND flow = ? AND step = ?",
+                (market, flow, step),
+            ).fetchone()
+        return {"step": step, "fail_count": row["fail_count"] if row else 0}
 
     # --- floors -----------------------------------------------------------------------------
 
@@ -980,6 +1216,7 @@ class Store:
         text: str,
         ts: float | None = None,
         source: str | None = None,
+        scam_verdict: str | None = None,
     ) -> bool:
         """Fold one transcript row into a thread, deduped by (thread_id, msg_id). Returns True if
         it was newly inserted, False if the constraint dropped a duplicate — dedup by the schema,
@@ -993,10 +1230,47 @@ class Store:
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
             cur = conn.execute(
                 "INSERT OR IGNORE INTO thread_messages "
-                "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, ?, ?, ?, ?)",
-                (thread_id, msg_id, direction, text, ts if ts is not None else _now(), source),
+                "(thread_id, msg_id, dir, text, ts, source, scam_verdict) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    msg_id,
+                    direction,
+                    text,
+                    ts if ts is not None else _now(),
+                    source,
+                    scam_verdict,
+                ),
             )
             return cur.rowcount > 0
+
+    def record_inbound(
+        self,
+        thread_id: str,
+        *,
+        msg_id: str,
+        text: str,
+        ts: float | None = None,
+        direction: str = "in",
+        scam_verdict: str | None = None,
+    ) -> bool:
+        """Record one message the scripted marketplace read saw, idempotent on msg_id.
+
+        This is the daemon's own writer, so inbound persistence no longer rides the outbound send
+        bracket. It deliberately does NOT advance the reply cursor: only a committed reply does, so
+        a crash between reading a message and answering it leaves the thread eligible again rather
+        than silently answered. An outbound bubble we did not write is recorded too — that is the
+        seller replying by hand in their app, and recording it is what stops a double-message.
+        """
+        return self.append_thread_message(
+            thread_id,
+            msg_id=msg_id,
+            direction=direction,
+            text=text,
+            ts=ts,
+            source="marketplace" if direction == "in" else "manual",
+            scam_verdict=scam_verdict,
+        )
 
     def get_thread_messages(
         self, thread_id: str, *, limit: int | None = None
@@ -1004,13 +1278,13 @@ class Store:
         """The transcript in chronological order, capped to the most recent `limit` rows."""
         if limit is None:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source FROM thread_messages "
+                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts ASC, rowid ASC",
                 (thread_id,),
             )
         else:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source FROM thread_messages "
+                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (thread_id, limit),
             )
@@ -1022,6 +1296,7 @@ class Store:
                 "text": r["text"],
                 "ts": r["ts"],
                 "source": r["source"],
+                "scam_verdict": r["scam_verdict"],
             }
             for r in rows
         ]
@@ -2587,6 +2862,68 @@ class Store:
             )
         return pass_id
 
+    def threads_with_unhandled_inbound(self) -> list[dict]:
+        """Sell threads whose buyer is waiting: an inbound message past the reply cursor, a status
+        that is still conversational, and no escalation already open on them.
+
+        The cursor — not a flag — is the source of truth, so a crash between reading a message and
+        replying leaves the thread eligible again rather than silently answered. An open escalation
+        excludes a thread because the seller, not the agent, owns the next move there.
+        """
+        rows = self._db.query(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES)
+        return _unhandled_inbound_rows(rows)
+
+    def enqueue_reply_pass(self) -> dict | None:
+        """Coalescing route for the reply lane, one transaction: claim every sell thread with
+        unhandled inbound into a single queued pass, unless one is already queued or running.
+
+        The claimed thread ids (and their owning items) become the pass's payload — the pass token
+        is minted with exactly that scope, so the spawned pass can read nothing else. Returns
+        {pass_id, thread_ids, item_ids} or None when there is nothing to reply to.
+        """
+        pass_id = _new_id("pass")
+        now = _now()
+        with self._db.transaction() as conn:
+            active = conn.execute(
+                "SELECT 1 FROM passes WHERE type = 'reply' "
+                "AND status IN ('queued', 'running') LIMIT 1"
+            ).fetchone()
+            if active:
+                return None
+            pending = _unhandled_inbound_rows(
+                conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            )
+            if not pending:
+                return None
+            thread_ids = [row["thread_id"] for row in pending]
+            item_ids = sorted({row["item_id"] for row in pending if row["item_id"]})
+            payload = {"thread_ids": thread_ids, "item_ids": item_ids}
+            conn.execute(
+                "INSERT INTO passes (pass_id, type, payload, status, requested_ts) "
+                "VALUES (?, 'reply', ?, 'queued', ?)",
+                (pass_id, json.dumps(payload, sort_keys=True), now),
+            )
+        return {"pass_id": pass_id, **payload}
+
+    def active_passes_of_types(self, types) -> list[dict]:
+        """Queued or running passes of the given types, as {type, payload}.
+
+        The inbox lane reads this at tick start to decide whether to yield the browser: which of
+        these passes actually drives Chrome depends on the marketplace's connector, which is the
+        browser layer's business, not the store's — so this hands back the rows and lets the caller
+        judge rather than encoding market knowledge here.
+        """
+        types = tuple(types)
+        if not types:
+            return []
+        placeholders = ",".join("?" for _ in types)
+        rows = self._db.query(
+            f"SELECT type, payload FROM passes WHERE type IN ({placeholders}) "
+            "AND status IN ('queued', 'running')",
+            types,
+        )
+        return [{"type": r["type"], "payload": json.loads(r["payload"])} for r in rows]
+
     def inbox_for_pass(self, pass_id: str) -> list[InboxRecord]:
         """The inbox rows claimed into a pass — the prompt builder reads these (arrival order)."""
         rows = self._db.query(
@@ -3044,6 +3381,9 @@ _SCOPE_GUARDED = {
     "get_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
+    "record_inbound": (("thread_id", "thread"),),
+    "qa_add": (("item_id", "item"),),
+    "qa_search": (("item_id", "item"),),
     "update_thread": (("thread_id", "thread"),),
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
@@ -3072,10 +3412,12 @@ _SCOPE_GUARDED = {
 # missing-row behavior so the two are indistinguishable. Reads that return None on a missing
 # row return None; the transcript read returns []; row-required writers raise the same NotFound.
 _SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
-_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages"})
+_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
+    "record_inbound": ("thread", ThreadNotFound),
+    "qa_add": ("item", ItemNotFound),
     "update_thread": ("thread", ThreadNotFound),
     "hold_thread": ("thread", ThreadNotFound),
     "release_thread": ("thread", ThreadNotFound),
