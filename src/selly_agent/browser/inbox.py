@@ -1,0 +1,315 @@
+"""The inbox read lane: see what buyers said, without spending a single token on it.
+
+Each tick the lane reads the marketplace's inbox for thread links, opens the threads that look like
+they moved, reads each one's tail, and reconciles it against the rows already stored. Everything
+here is deterministic — a navigate and one JS evaluate per thread — so the reply loop above it can
+stay browser-free: by the time a pass runs, what the buyer said is already durable state.
+
+Three rules keep the lane honest:
+
+  * A market that cannot be seen must never look like a market with no news. A failed read is
+    counted, and a run of them raises one needs-me notice rather than passing for silence.
+  * The skip gate is an optimization, never a correctness input. A thread whose inbox preview still
+    matches its last stored message is left closed this tick — but every Nth tick opens everything
+    regardless, so a preview that lied costs one sweep interval of latency and nothing more.
+  * Reading never advances the reply cursor. Only a committed reply does, so a crash between seeing
+    a message and answering it leaves the buyer waiting rather than silently handled.
+"""
+
+from __future__ import annotations
+
+import logging
+import time
+from dataclasses import dataclass, field
+from typing import Callable
+
+from selly_agent import marketplaces
+from selly_agent.browser import markets as market_adapters
+from selly_agent.browser import reconcile
+from selly_agent.browser.client import BrowserError, BrowserUnavailable
+from selly_agent.engines import hosts
+from selly_agent.engines import scam as scam_engine
+from selly_agent.store import StoreError
+
+log = logging.getLogger(__name__)
+
+# Statuses whose threads are still worth opening. A held or escalated thread is waiting on someone
+# else, and a terminal one is over; reading them would only mark them read on the platform.
+_ACTIVE_STATUSES = ("active", "liaising", "agreed")
+
+# Pass types that drive the browser, and so must not overlap the lane's reads.
+_BROWSER_PASS_TYPES = ("reply", "publish")
+
+BLIND_NOTICE = (
+    "I can't read your {market} inbox right now, so I may be missing buyer messages. "
+    "Check that the agent's Chrome is running and still logged in."
+)
+LOGGED_OUT_NOTICE = (
+    "Your {market} session is logged out, so I've stopped reading that market. "
+    "Log back in in the agent's Chrome and I'll pick up where I left off."
+)
+UNAVAILABLE_NOTICE = (
+    "I can't drive the browser at the moment, so browser marketplaces are paused. "
+    "The carousell.ai side is unaffected. Details: {reason}"
+)
+
+
+@dataclass
+class InboxDeps:
+    store: object
+    bus: object
+    config: object
+    browser_factory: object
+    # Lane state, in process on purpose: it is all counters, and a restart re-arming them errs
+    # toward reading more rather than less.
+    ticks: dict = field(default_factory=dict)
+    blind: dict = field(default_factory=dict)
+    notified: dict = field(default_factory=dict)
+    now: Callable[[], float] = time.time
+
+
+def seller_region(store) -> str | None:
+    basics = store.get_seller_config_section("basics") or {}
+    region = basics.get("region")
+    return str(region) if region else None
+
+
+def _notify_once(deps: InboxDeps, key: str, text: str) -> None:
+    """Queue a needs-me notice at most once per condition, so a lane that keeps failing keeps
+    telling the event log and stops telling the seller."""
+    if deps.notified.get(key):
+        return
+    deps.notified[key] = True
+    deps.store.queue_notice(text)
+
+
+def _clear_notice(deps: InboxDeps, key: str) -> None:
+    deps.notified.pop(key, None)
+
+
+def browser_pass_running(store) -> bool:
+    """Whether a pass that drives Chrome is queued or running.
+
+    A rail publish never touches the browser, so it is not a reason to yield; a browser-market one
+    holds the tab for minutes where the lane holds it for seconds. Worst case the lane notices a
+    buyer message one tick late.
+    """
+    for row in store.active_passes_of_types(_BROWSER_PASS_TYPES):
+        if row["type"] != "publish":
+            return True
+        market = (row.get("payload") or {}).get("market")
+        if market is None or marketplaces.connector_type(market) == "browser":
+            # An unnamed market predates the browser publish path; treat it as browser-touching
+            # rather than assume the safe case.
+            return True
+    return False
+
+
+def inbox_lane(deps: InboxDeps) -> None:
+    """One tick: read every browser market's inbox and fold what is new into durable rows."""
+    if deps.store.is_paused():
+        return
+    if browser_pass_running(deps.store):
+        return
+    try:
+        client = deps.browser_factory()
+    except BrowserUnavailable as exc:
+        deps.bus.publish("browser.unavailable", {"reason": str(exc)})
+        _notify_once(deps, "unavailable", UNAVAILABLE_NOTICE.format(reason=exc))
+        return
+    _clear_notice(deps, "unavailable")
+
+    region = seller_region(deps.store)
+    for market in marketplaces.browser_markets():
+        adapter = market_adapters.get_adapter(market)
+        if adapter is None:
+            continue  # a registry entry with no adapter yet is not a market we can read
+        try:
+            with client.exclusive():
+                _read_market(deps, client, adapter, region)
+        except BrowserError as exc:
+            _count_blind(deps, market, str(exc))
+
+
+def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
+    market = adapter.market
+    inbox_url = marketplaces.market_url(market, "inbox", region)
+    if inbox_url is None:
+        log.warning("no recorded inbox URL for %s — skipping", market)
+        return
+
+    client.navigate(inbox_url)
+    login = client.evaluate(adapter.login_js) or {}
+    state = login.get("state")
+    if state == "logged_out":
+        deps.bus.publish("browser.login", {"market": market, "state": state})
+        _notify_once(deps, f"logged_out:{market}", LOGGED_OUT_NOTICE.format(market=market))
+        return
+    _clear_notice(deps, f"logged_out:{market}")
+
+    rows = client.evaluate(adapter.discovery_js)
+    if not isinstance(rows, list):
+        # The reader abstained (it was not on the inbox, or the page had not rendered). Not an empty
+        # inbox — asserting "clear" from a page we could not read is how an unread gets stranded.
+        _count_blind(deps, market, "inbox rows unreadable")
+        return
+    _clear_blind(deps, market)
+
+    tick = deps.ticks.get(market, 0) + 1
+    deps.ticks[market] = tick
+    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+
+    known = {t["thread_id"]: t for t in deps.store.list_threads(side="sell")}
+    items = deps.store.list_items()
+    opened = 0
+    recorded = 0
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        thread_id = _thread_key(market, row.get("thread_id"))
+        handle = reconcile.split_handle(row.get("text") or "")
+        if handle.lower() in adapter.system_handles:
+            continue  # the platform talking to the seller, not a buyer
+        thread = known.get(thread_id) if thread_id else None
+        if thread is None:
+            if thread_id and _adopt(deps, market, thread_id, row, handle, items):
+                thread = deps.store.get_thread(thread_id)
+            if thread is None:
+                continue
+        if thread["status"] not in _ACTIVE_STATUSES:
+            continue
+        if not full_sweep and _can_skip(deps.store, thread, row):
+            continue
+        opened += 1
+        recorded += _read_thread(deps, client, adapter, thread, region)
+
+    deps.bus.publish(
+        "browser.read",
+        {
+            "market": market,
+            "rows": len(rows),
+            "opened": opened,
+            "recorded": recorded,
+            "full_sweep": full_sweep,
+        },
+    )
+
+
+def _thread_key(market: str, native_id) -> str | None:
+    if not native_id:
+        return None
+    return f"{market}:{native_id}"
+
+
+def _can_skip(store, thread: dict, row: dict) -> bool:
+    """Whether this thread's inbox row is still showing the message we already stored last.
+
+    Only ever used to avoid opening a thread. A thread we have never read is always opened, and so
+    is one whose row is showing something new — the gate errs toward the read.
+    """
+    if row.get("unread"):
+        return False
+    messages = store.get_thread_messages(thread["thread_id"], limit=1)
+    if not messages:
+        return False
+    return reconcile.preview_matches(row.get("text") or "", messages[-1]["text"])
+
+
+def _adopt(deps: InboxDeps, market: str, thread_id: str, row: dict, handle: str, items) -> bool:
+    """Create a thread for a buyer writing about one of our listings for the first time.
+
+    Both halves have to be unambiguous: an id to key and open the thread by, and exactly one of our
+    items named in the row. A thread attached to the wrong item would negotiate against the wrong
+    floor, so anything less is left as unattributed inbound rather than adopted onto a guess.
+    """
+    item_id = reconcile.match_listing(row.get("text") or "", items)
+    if not item_id or not handle:
+        deps.bus.publish(
+            "browser.unmatched", {"market": market, "thread_id": thread_id, "reason": "ambiguous"}
+        )
+        return False
+    try:
+        deps.store.create_thread(
+            thread_id=thread_id,
+            side="sell",
+            market=market,
+            counterpart_handle=handle,
+            item_id=item_id,
+            source="browser_read",
+        )
+    except StoreError as exc:
+        log.warning("could not create thread %s: %s", thread_id, exc)
+        return False
+    deps.bus.publish(
+        "browser.thread_new", {"market": market, "thread_id": thread_id, "item_id": item_id}
+    )
+    return True
+
+
+def _read_thread(deps: InboxDeps, client, adapter, thread: dict, region: str | None) -> int:
+    """Open one thread, reconcile its tail, and return how many rows were new."""
+    market = thread["market"]
+    native = thread["thread_id"].split(":", 1)[1] if ":" in thread["thread_id"] else ""
+    url = marketplaces.market_url(market, "thread", region, thread_id=native)
+    if url is None:
+        log.warning("no recorded thread URL template for %s", market)
+        return 0
+    client.navigate(url)
+    tail = reconcile.classify_tail(client.evaluate(adapter.tail_js) or [])
+    if not tail:
+        return 0
+    stored = deps.store.get_thread_messages(thread["thread_id"], limit=None)
+    fresh = reconcile.new_rows(tail, stored, now=deps.now())
+    for entry in fresh:
+        verdict = None
+        if entry["direction"] == "in":
+            verdict = _scan(deps, thread, entry["text"], stored)["verdict"]
+        deps.store.record_inbound(
+            thread["thread_id"],
+            msg_id=entry["msg_id"],
+            text=entry["text"],
+            ts=entry["ts"],
+            direction=entry["direction"],
+            scam_verdict=verdict,
+        )
+        deps.bus.publish(
+            "browser.inbound",
+            {
+                "market": market,
+                "thread_id": thread["thread_id"],
+                "dir": entry["direction"],
+                "scam_verdict": verdict,
+            },
+        )
+    return len(fresh)
+
+
+def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
+    """Scan one inbound message as it is written, so the verdict is on the row before any model sees
+    it. The engine is deterministic and offline, so this costs nothing and cannot be argued with."""
+    history = "\n".join(row["text"] for row in stored if row["dir"] == "in")
+    merged, registry_ok = deps.store.merged_scam_signatures()
+    return scam_engine.scan(
+        text,
+        history_text=history,
+        allowlist=hosts.build_allowlist(marketplaces.all_marketplaces()),
+        signatures=merged,
+        checkout_base=deps.config.carousell_ai_api_base.rstrip("/") + "/checkout",
+        registry_ok=registry_ok,
+    )
+
+
+def _count_blind(deps: InboxDeps, market: str, reason: str) -> None:
+    """Count a failed read, and raise one notice once a run of them means we are genuinely blind."""
+    failures = deps.blind.get(market, 0) + 1
+    deps.blind[market] = failures
+    deps.bus.publish(
+        "browser.blind", {"market": market, "failures": failures, "reason": reason[:200]}
+    )
+    if failures >= int(deps.config.browser_blind_after):
+        _notify_once(deps, f"blind:{market}", BLIND_NOTICE.format(market=market))
+
+
+def _clear_blind(deps: InboxDeps, market: str) -> None:
+    deps.blind.pop(market, None)
+    _clear_notice(deps, f"blind:{market}")

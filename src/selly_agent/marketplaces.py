@@ -47,6 +47,57 @@ def display_name(market: str) -> str:
     return (entry or {}).get("display_name") or market
 
 
+def connector(market: str) -> dict:
+    """How the agent reaches a market: `{type: mcp|browser, auth: …}`. Empty for an unknown one."""
+    return (get_marketplace(market) or {}).get("connector") or {}
+
+
+def connector_type(market: str) -> str:
+    """`mcp` for a market with a first-party API (the rail), `browser` for one the agent drives in
+    Chrome. The publish path branches on this, so an unknown market resolves to "" and matches
+    neither rather than defaulting into one."""
+    return str(connector(market).get("type") or "")
+
+
+def urls(market: str) -> dict:
+    """The market's recorded page templates (`inbox`, `thread`, `my_listings`, …)."""
+    return (get_marketplace(market) or {}).get("urls") or {}
+
+
+def listing_flow(market: str) -> str:
+    """The skill holding this market's publish recipe, or "" when it has none."""
+    return str((get_marketplace(market) or {}).get("listing_flow") or "")
+
+
+def browser_markets() -> list[str]:
+    """Active markets the agent drives through Chrome, in registry order."""
+    return [
+        entry["id"]
+        for entry in all_marketplaces()
+        if (entry.get("connector") or {}).get("type") == "browser"
+        and entry.get("status") == "active"
+    ]
+
+
+def market_url(market: str, key: str, region: str | None = None, **fields) -> str | None:
+    """A page URL for a market, composed from the registry and nowhere else.
+
+    Every navigation target the agent uses comes from here, a stored listing URL, or a link read off
+    a live page — never from a guess. A composed inbox or chat URL that was remembered rather than
+    recorded is how a pass ends up touring a dead page, so an unrecorded template resolves to None
+    and the caller reports that instead of inventing one.
+    """
+    path = urls(market).get(key)
+    host = resolve_domain(market, region)
+    if not path or not host or host.endswith("."):
+        return None
+    try:
+        path = path.format(**fields) if fields else path
+    except (KeyError, IndexError):
+        return None
+    return f"https://{host}{path}"
+
+
 def resolve_domain(market: str, region: str | None = None) -> str | None:
     """The region-specific host for a market, or None if unresolvable. First match wins:
     the exact regional host, then the "*" default, then the listing_url host suffix."""

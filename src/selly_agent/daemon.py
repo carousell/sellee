@@ -31,6 +31,7 @@ from selly_agent import (
     settings,
 )
 from selly_agent.browser import client as browser_client
+from selly_agent.browser import inbox
 from selly_agent.channel import outbound
 from selly_agent.channel.manager import ChannelManager
 from selly_agent.channel.telegram import provider as telegram_provider
@@ -260,6 +261,21 @@ def run_daemon(*, once: bool) -> int:
             name="settings_expiry_sweep",
             interval_sec=_SETTINGS_EXPIRY_INTERVAL_SEC,
             func=lambda: settings.expire_stale_proposals(store, bus),
+        )
+    )
+    # Read the browser marketplaces' inboxes into durable rows. Deterministic and token-free, which
+    # is what lets the reply loop above it run without any browser access of its own.
+    inbox_deps = inbox.InboxDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+    )
+    scheduler.register(
+        Task(
+            name="inbox_read",
+            interval_sec=float(cfg.inbox_read_interval_sec),
+            func=lambda: inbox.inbox_lane(inbox_deps),
         )
     )
     # Fold settled channel passes' claimed inbox rows from durable state (not a pass.end
