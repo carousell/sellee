@@ -3,7 +3,9 @@
     "allow": [
       "mcp__selly__get_item",
       "mcp__selly__carousell_ai_publish_listing",
-      "mcp__selly__send_message"
+      "mcp__selly__send_message",
+      "Read(//media/store/95059966/photo.jpg)",
+      "Read(//media/store/95059977/photo.jpg)"
     ],
     "deny": [
       "Bash",
@@ -11,8 +13,7 @@
       "Write",
       "NotebookEdit",
       "WebSearch",
-      "WebFetch",
-      "Read"
+      "WebFetch"
     ]
   }
 }

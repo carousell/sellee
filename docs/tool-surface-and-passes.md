@@ -69,10 +69,13 @@ sanitize):
 - **claude** (live) renders the `claude -p` argv plus the workspace's
   `.mcp.json` and `.claude/settings.json`. The no-Bash posture is by
   construction: `--strict-mcp-config` with only our server, and `--allowedTools`
-  listing exactly the tier's `mcp__<server>__*` names (last, since the flag
-  greedily consumes what follows). Stream-json output requires `--verbose` with
-  `-p` (a hard CLI requirement). The spec's composed system prompt rides
-  `--append-system-prompt`.
+  listing exactly the pass's rules (last, since the flag greedily consumes what
+  follows). Stream-json output requires `--verbose` with `-p` (a hard CLI
+  requirement). The spec's composed system prompt rides
+  `--append-system-prompt`. `readable_paths` renders as one `Read(//abs/path)`
+  rule per file; the bare `Read` deny is emitted only when nothing is granted,
+  because a deny overrides any allow. Unmatched reads still fail — a headless
+  session rejects unmatched tools by default.
 
 **Web posture.** `WebSearch`/`WebFetch` are denied by default and allowed only
 for a pass whose type sets `PassSpec.web_tools` — the emitter moves the two names
@@ -81,6 +84,15 @@ validators rather than being hand-written into a config. Two validators cover it
 a pass without web tools must deny them *explicitly* (silence is not a posture),
 and no tool may appear in both lists. Bash and the file-access tools are denied
 whatever the flag says.
+
+**File posture.** A model can only *see* an image by reading the file, so a
+photo-handling pass needs eyes on its photos without gaining file access in
+general. `PassSpec.readable_paths` lists exactly the media files claimed into
+the pass (containment-checked against the media store at spec build); nothing
+else on the filesystem is readable. How that is enforced is each emitter's
+business, but its validators must pin both directions — no grants → file reads
+impossible; grants → those files and nothing wider — so a harness that can't
+express a per-file grant fails at render rather than shipping a looser posture.
 - **codex** (stub) renders `config.toml` pointing at `mcp-proxy`; there is no
   spawn path yet. Keeping a second real emitter forces the internal representation
   to stay genuinely common.

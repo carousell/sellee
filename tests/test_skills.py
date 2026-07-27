@@ -141,6 +141,69 @@ def test_a_real_spec_renders_to_a_valid_workspace_and_argv() -> None:
         assert argv[argv.index("--append-system-prompt") + 1] == spec.append_system_prompt
 
 
+# --- media grants per pass type -------------------------------------------------------------------
+
+
+class _InboxStore:
+    """Just enough store for the media-path builders: claimed rows with media."""
+
+    def __init__(self, rows):
+        self._rows = rows
+
+    def inbox_for_pass(self, pass_id):
+        return self._rows
+
+
+def test_the_channel_pass_grants_exactly_its_claimed_media() -> None:
+    rows = [
+        {"kind": "photo", "media_paths": ["/m/a.jpg", "/m/b.jpg"]},
+        {"kind": "text", "media_paths": []},
+        {"kind": "photo", "media_paths": None},  # a failed download stores no paths
+    ]
+    build = passes.PASS_TYPES["channel"].build_media_paths
+    assert build({}, _InboxStore(rows), "pass_1") == ("/m/a.jpg", "/m/b.jpg")
+
+
+def test_the_publish_pass_grants_no_media() -> None:
+    """Publishing never needs eyes on a photo — the upload is daemon-side — so nothing widens
+    its file access."""
+    build = passes.PASS_TYPES["publish"].build_media_paths
+    assert build({"item_id": "item_1"}, object(), "pass_1") == ()
+
+
+def test_granted_media_reaches_the_spec_resolved(xdg_tmp) -> None:
+    from selly_agent import paths
+
+    photo = paths.media_dir() / "1" / "photo.jpg"
+    photo.parent.mkdir(parents=True, exist_ok=True)
+    photo.write_bytes(b"\xff\xd8\xff")
+    spec = passes.build_spec(
+        "do the thing",
+        "http://127.0.0.1:1/mcp",
+        "TOK",
+        "sonnet",
+        passes.PASS_TYPES["channel"],
+        media_paths=(str(photo),),
+    )
+    assert spec.readable_paths == (str(photo.resolve()),)
+
+
+def test_a_media_grant_outside_the_media_store_is_refused(xdg_tmp, tmp_path) -> None:
+    """The store's containment gate should make this unreachable, so reaching it is a bug — the
+    spec build fails loudly rather than quietly granting a read outside the media store."""
+    outside = tmp_path / "elsewhere.jpg"
+    outside.write_bytes(b"\xff\xd8\xff")
+    with pytest.raises(ValueError, match="escapes the media store"):
+        passes.build_spec(
+            "do the thing",
+            "http://127.0.0.1:1/mcp",
+            "TOK",
+            "sonnet",
+            passes.PASS_TYPES["channel"],
+            media_paths=(str(outside),),
+        )
+
+
 # --- tier membership ----------------------------------------------------------------------------
 
 

@@ -11,8 +11,8 @@
       "Bash",
       "Edit",
       "Write",
-      "Read",
-      "NotebookEdit"
+      "NotebookEdit",
+      "Read"
     ]
   }
 }

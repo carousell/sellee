@@ -18,10 +18,13 @@ from __future__ import annotations
 
 import copy
 import json
+import logging
 from dataclasses import dataclass
 from typing import Callable
 
 from selly_agent.tools.schema import ValidationError, validate
+
+log = logging.getLogger(__name__)
 
 _MASK = "***"
 _RESULT_EVENT_CAP = 4096  # chars of a result's JSON kept in the event payload (not the return)
@@ -156,6 +159,9 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
         )
         raise
     except Exception as exc:  # a handler bug must not leak internals to the caller
+        # The caller only ever sees "internal error" (never leak internals over MCP), so the
+        # traceback has to land somewhere or the failure is undiagnosable — this is that somewhere.
+        log.exception("tool handler raised for %s", name)
         ctx.bus.publish(
             "tool.error", {"tool": name, "error": "internal error"}, pass_id=ctx.session.pass_id
         )

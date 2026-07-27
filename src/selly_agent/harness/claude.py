@@ -1,10 +1,11 @@
 """The Claude Code emitter: `claude -p` argv + the workspace's .mcp.json and .claude/settings.json.
 
 Pure functions of a PassSpec. The permission posture is no-Bash by construction: --strict-mcp-config
-with only our server, and --allowedTools listing exactly the tier's mcp__<server>__* names (last,
-because the flag greedily consumes what follows). stream-json output requires --verbose when used
-with -p (verified against the installed CLI). Each renderer has a parse-back round-trip validator so
-a malformed artifact is caught before a pass ever spawns.
+with only our server, and --allowedTools listing exactly the pass's rules — the tier's
+mcp__<server>__* names, the web tools when granted, a path-scoped Read rule per granted media file
+(last, because the flag greedily consumes what follows). stream-json output requires --verbose when
+used with -p (verified against the installed CLI). Each renderer has a parse-back round-trip
+validator so a malformed artifact is caught before a pass ever spawns.
 """
 
 from __future__ import annotations
@@ -27,21 +28,38 @@ def mcp_config(spec: PassSpec) -> dict:
     }
 
 
-# The harness's own web-research tools. They are the one part of the deny list that moves: a pass
-# whose skills tell it to price against comps needs them, and every other pass must not have them.
+# The harness's own web-research tools. Part of the deny list that moves: a pass whose skills tell
+# it to price against comps needs them, and every other pass must not have them.
 WEB_TOOLS = ("WebSearch", "WebFetch")
-# Never available to any pass, at any tier — the no-Bash posture and the file-access escape vectors.
-_ALWAYS_DENIED = ("Bash", "Edit", "Write", "Read", "NotebookEdit")
+# Never available to any pass, at any tier — the no-Bash posture and the write/exec escape vectors.
+_ALWAYS_DENIED = ("Bash", "Edit", "Write", "NotebookEdit")
+READ_TOOL = "Read"
+
+
+def read_rules(spec: PassSpec) -> tuple:
+    """Path-scoped Read permission rules for the spec's granted files, one per file.
+
+    `Read(//abs/path)` is the harness's rule syntax: gitignore-style, `//` anchoring at the
+    filesystem root (a single `/` would anchor at the settings file). An exact path grants exactly
+    one file — how a pass gets eyes on a claimed photo without any wider file access.
+    """
+    return tuple(f"{READ_TOOL}(/{path})" for path in spec.readable_paths)
 
 
 def allowed_tools(spec: PassSpec) -> tuple:
-    """Every tool name the pass may call: its tier's MCP tools, plus web research when its pass
-    type asked for it."""
-    return tuple(spec.allowed_tools) + (WEB_TOOLS if spec.web_tools else ())
+    """Every tool rule the pass may use: its tier's MCP tools, web research when its pass type
+    asked for it, and a path-scoped Read rule per granted media file."""
+    return tuple(spec.allowed_tools) + (WEB_TOOLS if spec.web_tools else ()) + read_rules(spec)
 
 
 def denied_tools(spec: PassSpec) -> tuple:
-    return _ALWAYS_DENIED + (() if spec.web_tools else WEB_TOOLS)
+    # A deny beats any allow, however specific — so bare Read may appear here only when nothing is
+    # granted. With grants present, everything outside them still fails: a headless pass cannot be
+    # prompted, and an unmatched tool call is rejected by default.
+    denied = _ALWAYS_DENIED + (() if spec.web_tools else WEB_TOOLS)
+    if not spec.readable_paths:
+        denied += (READ_TOOL,)
+    return denied
 
 
 def settings_json(spec: PassSpec) -> dict:
@@ -109,6 +127,16 @@ def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
         raise ValueError("rendered settings.json both allows and denies a tool")
     if not spec.web_tools and not all(name in denied for name in WEB_TOOLS):
         raise ValueError("a pass without web tools must deny them explicitly")
+    if spec.readable_paths:
+        # A bare Read deny would override every path-scoped allow (deny beats allow, regardless
+        # of specificity) — granted files must not be revoked by the same artifact.
+        if READ_TOOL in denied:
+            raise ValueError("a pass with granted media must not deny Read outright")
+        for rule in read_rules(spec):
+            if rule not in settings["permissions"]["allow"]:
+                raise ValueError("a granted media path is missing from the allow-list")
+    elif READ_TOOL not in denied:
+        raise ValueError("a pass with no granted media must deny Read explicitly")
 
 
 def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:

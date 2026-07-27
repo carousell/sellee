@@ -294,6 +294,12 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
 
             script = tmp_path / "listing.py"
             script.write_text(_LISTING_HARNESS)
+            specs: list = []
+
+            def argv_builder(spec):
+                specs.append(spec)
+                return [sys.executable, str(script), spec.prompt]
+
             deps = passes.PassDeps(
                 bus=bus,
                 store=store,
@@ -301,11 +307,16 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
                 auth=server.auth,
                 http_endpoint=f"http://127.0.0.1:{server.port}/mcp",
                 stop_event=threading.Event(),
-                argv_builder=lambda spec: [sys.executable, str(script), spec.prompt],
+                argv_builder=argv_builder,
             )
             passes.pass_lane(deps)
             outbound.fold_settled_passes(store=store)
             outbound.drain_notices(store=store, bus=bus, deliver=_deliver(api))
+
+            # the pass was granted eyes on exactly the photo it was handed — the model views an
+            # image by reading the file, so the stored path must be a Read grant, and nothing else
+            (spec,) = specs
+            assert spec.readable_paths == (str(Path(stored).resolve()),)
 
             (item,) = store.list_items()
             assert [p["path"] for p in item["photos"]] == [stored]
