@@ -166,6 +166,24 @@ def test_recent_transcript_interleaves_by_local_clock(store, monkeypatch) -> Non
     ]
 
 
+def test_recent_transcript_carries_media_paths(store) -> None:
+    """A photo's path has to outlive the pass that claimed its row: the listing flow spans passes,
+    and the window is the only thing a later pass sees of an earlier turn."""
+    photo = {
+        "event_id": 1,
+        "kind": "photo",
+        "text": "list this",
+        "payload": {},
+        "src_ts": 1.0,
+        "media_paths": ["/m/a.jpg", "/m/b.jpg"],
+    }
+    store.ingest_updates([photo, _ev(2, text="how much?")], update_offset=3)
+    window = store.recent_transcript(limit=10)
+    by_text = {e["text"]: e for e in window}
+    assert by_text["list this"]["media_paths"] == ["/m/a.jpg", "/m/b.jpg"]
+    assert by_text["how much?"]["media_paths"] == []  # a text row has none
+
+
 def test_recent_transcript_caps_to_limit(store, monkeypatch) -> None:
     import itertools
 

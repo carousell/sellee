@@ -63,6 +63,27 @@ def test_prompt_separates_history_from_work() -> None:
     assert "1. would you take 70?" in prompt
 
 
+def test_the_window_keeps_a_photo_reachable_after_its_own_pass_ended() -> None:
+    """The failure this prevents: the photo arrives in one pass, the price is agreed in the next,
+    and the second pass drafts a listing with no photo because the path was only ever in the first
+    pass's pending block."""
+    transcript = [
+        {"direction": "in", "kind": "photo", "text": "list this", "media_paths": ["/m/a.jpg"]},
+        {"direction": "out", "kind": "notice", "text": "How does $5 sound?", "ts": 2.0},
+    ]
+    prompt = build_channel_prompt([{"kind": "text", "text": "yes", "media_paths": []}], transcript)
+    assert "/m/a.jpg" in prompt
+
+
+def test_the_window_does_not_repeat_a_photo_the_pending_block_already_lists() -> None:
+    """One authoritative copy: the same path in both blocks reads as two photos to attach."""
+    row = {"kind": "photo", "text": "list this", "media_paths": ["/m/a.jpg"]}
+    transcript = [
+        {"direction": "in", "kind": "photo", "text": "list this", "media_paths": ["/m/a.jpg"]}
+    ]
+    assert build_channel_prompt([row], transcript).count("/m/a.jpg") == 1
+
+
 def test_prompt_photo_rows_carry_their_stored_paths() -> None:
     """The paths are the usable part: they are already in the media store, so a listing flow can
     put them straight onto an item. A count alone would tell the pass photos exist and leave it

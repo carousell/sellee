@@ -369,6 +369,7 @@ class TranscriptEntry(TypedDict):
     direction: str
     kind: str
     text: str
+    media_paths: list
     ts: float
 
 
@@ -2650,9 +2651,14 @@ class Store:
         """The recent conversational window: inbound inbox rows (any status) interleaved with the
         agent's own outbound notices, ordered by the local clock, the most-recent `limit` entries
         oldest-first. A pure read of two already-durable tables — no new state — so a follow-up
-        like "yes, do that" has the prior turn to resolve against."""
+        like "yes, do that" has the prior turn to resolve against.
+
+        Inbound rows carry their media paths, not just their text. A photo's path would otherwise
+        be reachable only by the single pass that claimed its row, so a listing flow spanning more
+        than one pass — research here, confirm there — would lose the photo it was sent.
+        """
         inbox_rows = self._db.query(
-            "SELECT text, kind, received_ts FROM channel_inbox "
+            "SELECT text, kind, media_paths, received_ts FROM channel_inbox "
             "ORDER BY received_ts DESC, id DESC LIMIT ?",
             (limit,),
         )
@@ -2664,11 +2670,23 @@ class Store:
         for r in inbox_rows:
             text = r["text"] or ("[photo]" if r["kind"] == "photo" else "")
             entries.append(
-                {"direction": "in", "kind": r["kind"], "text": text, "ts": r["received_ts"]}
+                {
+                    "direction": "in",
+                    "kind": r["kind"],
+                    "text": text,
+                    "media_paths": json.loads(r["media_paths"]) if r["media_paths"] else [],
+                    "ts": r["received_ts"],
+                }
             )
         for r in notice_rows:
             entries.append(
-                {"direction": "out", "kind": "notice", "text": r["text"], "ts": r["created_ts"]}
+                {
+                    "direction": "out",
+                    "kind": "notice",
+                    "text": r["text"],
+                    "media_paths": [],
+                    "ts": r["created_ts"],
+                }
             )
         entries.sort(key=lambda e: e["ts"])
         return entries[-limit:]

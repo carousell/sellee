@@ -35,12 +35,37 @@ _INSTRUCTIONS = (
 )
 
 
-def _format_transcript(transcript: list, char_cap: int) -> str:
-    """Render the window oldest-first, dropping the oldest lines until it fits the char budget."""
-    lines = [f"[{'seller' if e['direction'] == 'in' else 'you'}] {e['text']}" for e in transcript]
-    while lines and sum(len(line) + 1 for line in lines) > char_cap:
-        lines.pop(0)
-    return "\n".join(lines)
+def _format_transcript(transcript: list, char_cap: int, skip_paths=()) -> str:
+    """Render the window oldest-first, dropping the oldest entries until it fits the char budget.
+
+    A photo from earlier in the conversation keeps its stored paths here. The flow that lists it can
+    span passes — identify now, agree a price next turn, publish after that — and only the pass that
+    claimed the photo's row sees it under "messages to handle now", so without this the paths would
+    vanish the moment the conversation moved on. Paths already in that block are skipped: it is the
+    authoritative copy, and listing the same file twice invites attaching it twice.
+    """
+    skip = set(skip_paths)
+    blocks = []
+    for entry in transcript:
+        who = "seller" if entry["direction"] == "in" else "you"
+        lines = [f"[{who}] {entry['text']}"]
+        for path in entry.get("media_paths") or []:
+            if path not in skip:
+                lines.append(f"     {path}")
+        blocks.append("\n".join(lines))
+    while blocks and sum(len(b) + 1 for b in blocks) > char_cap:
+        blocks.pop(0)
+    return "\n".join(blocks)
+
+
+def transcript_media_paths(transcript: list) -> tuple:
+    """Every media path in the window, oldest first, de-duplicated — the files a pass may need to
+    look at while a listing flow is still in progress."""
+    seen = {}
+    for entry in transcript:
+        for path in entry.get("media_paths") or []:
+            seen[path] = None
+    return tuple(seen)
 
 
 def _format_pending(rows: list) -> str:
@@ -70,7 +95,8 @@ def build_channel_prompt(
     parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS]
     if settings_block:
         parts.append(settings_block)
-    window = _format_transcript(transcript, TRANSCRIPT_CHAR_CAP)
+    claimed_media = {path for row in claimed_rows for path in (row.get("media_paths") or [])}
+    window = _format_transcript(transcript, TRANSCRIPT_CHAR_CAP, skip_paths=claimed_media)
     if window:
         parts.append("Recent conversation (oldest first, for context):\n" + window)
     parts.append("Messages to handle now:\n" + _format_pending(claimed_rows))

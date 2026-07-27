@@ -78,10 +78,19 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
 
 
 def _channel_media_paths(payload: dict, store, pass_id: str) -> tuple:
-    # The same media paths the prompt lists — the model can only *see* a photo by reading the
-    # file, so the pass is granted exactly what was claimed into it and nothing else.
+    """Exactly the media paths this pass's prompt shows it — the rows claimed into it, plus any
+    still in the conversational window.
+
+    The window half is what lets a listing flow span passes: the photo arrives in one pass, the
+    price is agreed in the next, and the publish happens in a third. Scoping the grant to the
+    claimed rows alone would leave the later passes able to see a path they cannot open.
+    """
     claimed = store.inbox_for_pass(pass_id)
-    return tuple(path for row in claimed for path in (row.get("media_paths") or []))
+    transcript = store.recent_transcript(channel_prompt_mod.TRANSCRIPT_WINDOW_LIMIT)
+    paths_seen = {path: None for row in claimed for path in (row.get("media_paths") or [])}
+    for path in channel_prompt_mod.transcript_media_paths(transcript):
+        paths_seen[path] = None
+    return tuple(paths_seen)
 
 
 def _no_media_paths(payload: dict, store, pass_id: str) -> tuple:

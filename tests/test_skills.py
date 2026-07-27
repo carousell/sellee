@@ -145,16 +145,20 @@ def test_a_real_spec_renders_to_a_valid_workspace_and_argv() -> None:
 
 
 class _InboxStore:
-    """Just enough store for the media-path builders: claimed rows with media."""
+    """Just enough store for the media-path builders: claimed rows plus a transcript window."""
 
-    def __init__(self, rows):
+    def __init__(self, rows, transcript=()):
         self._rows = rows
+        self._transcript = list(transcript)
 
     def inbox_for_pass(self, pass_id):
         return self._rows
 
+    def recent_transcript(self, limit):
+        return self._transcript[-limit:]
 
-def test_the_channel_pass_grants_exactly_its_claimed_media() -> None:
+
+def test_the_channel_pass_grants_its_claimed_media() -> None:
     rows = [
         {"kind": "photo", "media_paths": ["/m/a.jpg", "/m/b.jpg"]},
         {"kind": "text", "media_paths": []},
@@ -162,6 +166,25 @@ def test_the_channel_pass_grants_exactly_its_claimed_media() -> None:
     ]
     build = passes.PASS_TYPES["channel"].build_media_paths
     assert build({}, _InboxStore(rows), "pass_1") == ("/m/a.jpg", "/m/b.jpg")
+
+
+def test_the_channel_pass_also_grants_media_still_in_the_window() -> None:
+    """The listing flow spans passes: a photo arrives in one, the price is agreed in the next. The
+    later pass sees the path in its window, so it must be able to open it too."""
+    window = [
+        {"direction": "in", "kind": "photo", "text": "list this", "media_paths": ["/m/old.jpg"]},
+        {"direction": "out", "kind": "notice", "text": "what's your price?", "media_paths": []},
+    ]
+    build = passes.PASS_TYPES["channel"].build_media_paths
+    granted = build({}, _InboxStore([{"kind": "text", "media_paths": []}], window), "pass_2")
+    assert granted == ("/m/old.jpg",)
+
+
+def test_a_photo_in_both_the_claimed_rows_and_the_window_is_granted_once() -> None:
+    rows = [{"kind": "photo", "media_paths": ["/m/a.jpg"]}]
+    window = [{"direction": "in", "kind": "photo", "text": "x", "media_paths": ["/m/a.jpg"]}]
+    build = passes.PASS_TYPES["channel"].build_media_paths
+    assert build({}, _InboxStore(rows, window), "pass_1") == ("/m/a.jpg",)
 
 
 def test_the_publish_pass_grants_no_media() -> None:
