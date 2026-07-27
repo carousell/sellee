@@ -6,6 +6,9 @@
   floor, and replies with send_message; the reply drains to the fake API; a second turn sees the
   first in its transcript window; every server-side tool event is pass_id-correlated; and the
   planted bot token appears in no event payload;
+* photo in, live listing out — a photo message is stored durably by the poller, the channel pass
+  reads its path from the prompt and drives draft → upload → publish with nothing but MCP tools,
+  and the photo is on the listing the rail received;
 * pause under load — /pause lands while a channel pass is queued, acked instantly, and the pass
   lane claims nothing until resume.
 """
@@ -16,6 +19,7 @@ import json
 import sys
 import threading
 import urllib.request
+from pathlib import Path
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import passes, paths, secrets
@@ -33,7 +37,16 @@ _LISTING_URL = "https://www.carousell.ai/listing/lamp"
 
 
 class FakeRail:
+    def __init__(self):
+        self.listing_args: dict | None = None
+        self.uploads: list = []
+
+    def upload_photo(self, data, content_type):
+        self.uploads.append((data, content_type))
+        return f"enc-{len(self.uploads)}"
+
     def create_listing(self, args):
+        self.listing_args = args
         return {"listing_id": "L1", "url": _LISTING_URL}
 
     def verify_listing_url(self, url):
@@ -63,6 +76,40 @@ rpc("tools/call", {"name":"set_floor",
 rpc("tools/call", {"name":"send_message", "arguments":{"text":"Listed your lamp at $80."}}, 4)
 emit({"type":"result","subtype":"success","is_error":False,"num_turns":3,
       "session_id":"chan","usage":{"input_tokens":1}})
+sys.exit(0)
+"""
+
+
+# A fake listing-flow harness: takes the photo paths the prompt handed it and drives the whole
+# flow — draft, attach, upload, publish, confirm — over the real MCP endpoint, using nothing but
+# MCP tools.
+_LISTING_HARNESS = """\
+import json, re, sys, urllib.request
+cfg = json.load(open(".mcp.json"))
+srv = cfg["mcpServers"]["selly"]
+endpoint, auth = srv["url"], srv["headers"]["Authorization"]
+prompt = sys.argv[1]
+def emit(o): print(json.dumps(o), flush=True)
+def rpc(method, params, mid):
+    body = json.dumps({"jsonrpc":"2.0","id":mid,"method":method,"params":params}).encode()
+    req = urllib.request.Request(endpoint, data=body, method="POST", headers={
+        "Content-Type":"application/json","Authorization":auth,"Origin":"http://127.0.0.1"})
+    with urllib.request.urlopen(req, timeout=10) as r: return json.loads(r.read().decode())
+def call(name, args, mid):
+    out = rpc("tools/call", {"name":name,"arguments":args}, mid)
+    assert not out["result"].get("isError"), (name, out)
+    return out["result"].get("structuredContent")
+emit({"type":"system","subtype":"init","session_id":"listing"})
+rpc("initialize", {}, 1)
+photos = re.findall(r"^\\s+(/\\S+\\.jpg)$", prompt, re.M)
+assert photos, prompt
+item = call("create_item",
+    {"title":"Desk lamp","list_price":80.0,"currency":"SGD","photos":photos}, 2)
+call("carousell_ai_upload_photos", {"item_id": item["id"]}, 3)
+published = call("carousell_ai_publish_listing", {"item_id": item["id"]}, 4)
+call("send_message", {"text": "Live: " + published["url"]}, 5)
+emit({"type":"result","subtype":"success","is_error":False,"num_turns":4,
+      "session_id":"listing","usage":{"input_tokens":1}})
 sys.exit(0)
 """
 
@@ -97,14 +144,16 @@ def _poller(store, bus, api, cfg):
     )
 
 
-def _server(bus, store, cfg):
+def _server(bus, store, cfg, rail=None):
+    rail = rail if rail is not None else FakeRail()
+
     def context_factory(session):
         return ToolContext(
             session=session,
             store=ScopedStore(store, getattr(session, "scope", None)),
             bus=bus,
             config=cfg,
-            rail_factory=lambda: FakeRail(),
+            rail_factory=lambda: rail,
             started_ts=1.0,
         )
 
@@ -210,6 +259,75 @@ def test_bind_then_conversation_end_to_end(bus, store, xdg_tmp, tmp_path) -> Non
             # leak sweep: the bot token appears in no recorded event payload
             for event in bus.store.read():
                 assert FAKE_TOKEN not in json.dumps(event.payload)
+        finally:
+            server.stop()
+
+
+# --- photo in, live listing out ---------------------------------------------------------------
+
+
+def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
+    bus, store, xdg_tmp, tmp_path
+) -> None:
+    """The sell slice end to end: a photo arrives on Telegram, the poller stores it durably, the
+    channel pass reads its path out of the prompt and drives draft → upload → publish with nothing
+    but MCP tools, and the photo is on the listing the rail received."""
+    paths.ensure_runtime_dirs()
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind("selly_test_bot", "n1")
+    store.complete_bind(CHAT_ID, update_offset=1)
+    rail = FakeRail()
+
+    with FakeTelegramAPI() as api:
+        cfg = Config(reply_delay_sec=(0, 0), telegram_api_base=api.base_url)
+        server = _server(bus, store, cfg, rail=rail)
+        server.start()
+        try:
+            api.inject_photo("sell this desk lamp")
+            _poller(store, bus, api, cfg).tick()
+
+            # the poller persisted the image before any LLM existed to look at it
+            pass_id = next(e.pass_id for e in bus.store.read() if e.kind == "pass.queued")
+            (row,) = store.inbox_for_pass(pass_id)
+            (stored,) = row["media_paths"]
+            assert paths.media_dir().resolve() in Path(stored).resolve().parents
+
+            script = tmp_path / "listing.py"
+            script.write_text(_LISTING_HARNESS)
+            deps = passes.PassDeps(
+                bus=bus,
+                store=store,
+                config=cfg,
+                auth=server.auth,
+                http_endpoint=f"http://127.0.0.1:{server.port}/mcp",
+                stop_event=threading.Event(),
+                argv_builder=lambda spec: [sys.executable, str(script), spec.prompt],
+            )
+            passes.pass_lane(deps)
+            outbound.fold_settled_passes(store=store)
+            outbound.drain_notices(store=store, bus=bus, deliver=_deliver(api))
+
+            (item,) = store.list_items()
+            assert [p["path"] for p in item["photos"]] == [stored]
+            assert [p["uploaded_url"] for p in item["photos"]] == ["enc-1"]
+            assert item["listing_urls"]["carousell-ai"] == _LISTING_URL
+
+            # the photo reached the rail as media on the listing, not just as an upload
+            assert rail.listing_args["media"] == {"urls": [{"url": "enc-1"}]}
+            assert rail.uploads[0][1] == "image/jpeg"
+            assert any(_LISTING_URL in m["text"] for m in api.outbox)
+
+            tool_calls = [
+                e.payload["tool"]
+                for e in bus.store.read()
+                if e.kind == "tool.call" and e.pass_id == pass_id
+            ]
+            assert tool_calls == [
+                "create_item",
+                "carousell_ai_upload_photos",
+                "carousell_ai_publish_listing",
+                "send_message",
+            ]
         finally:
             server.stop()
 
