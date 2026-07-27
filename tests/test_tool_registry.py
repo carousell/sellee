@@ -74,7 +74,12 @@ def test_tools_for_tier_partitions_the_surface() -> None:
     publish = {s.name for s in tools_for_tier(TIER_PASS_PUBLISH)}
     assert {"create_item", "set_floor", "list_items"} <= attended
     # the publish pass tier is minimal — no floor/create/config surface
-    assert publish == {"get_item", "carousell_ai_publish_listing", "send_message"}
+    assert publish == {
+        "get_item",
+        "carousell_ai_upload_photos",
+        "carousell_ai_publish_listing",
+        "send_message",
+    }
     assert "set_floor" not in publish
     assert "create_item" not in publish
 

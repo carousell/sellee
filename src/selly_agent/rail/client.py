@@ -136,6 +136,36 @@ class RailClient:
             raise RailToolError("create_listing returned no listing URL")
         return {"listing_id": listing_id, "url": url}
 
+    def upload_photo(self, data: bytes, content_type: str) -> str:
+        """Mint a short-lived upload URL, PUT the image bytes to it, and return the encrypted
+        media reference create_listing wants.
+
+        The upload URL is pre-signed and takes no Authorization header — our key never travels
+        to the media host. Both legs are one method because the URL is single-use and useless
+        apart from the bytes it was minted for.
+        """
+        minted = self.call_tool("create_photo_upload_url", {})
+        upload_url = minted.get("upload_url") or minted.get("url")
+        encrypted = minted.get("encrypted_url") or minted.get("media_url")
+        if not upload_url or not encrypted:
+            raise RailToolError("create_photo_upload_url returned no usable upload URL")
+        req = urllib.request.Request(
+            upload_url,
+            data=data,
+            method="PUT",
+            headers={"Content-Type": content_type, "User-Agent": _CLIENT_UA},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+                status = getattr(resp, "status", None) or resp.getcode()
+        except urllib.error.HTTPError as exc:
+            raise RailToolError(f"photo upload returned HTTP {exc.code}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise RailNetworkError(f"photo upload unreachable: {type(exc).__name__}") from exc
+        if status not in (200, 201, 204):
+            raise RailToolError(f"photo upload returned HTTP {status}")
+        return encrypted
+
     def create_checkout(self, args: dict) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
         RailToolError if the rail returns no URL (we never fabricate one)."""

@@ -14,6 +14,7 @@ from selly_agent.tools import (  # noqa: F401  imported for registration
     escalations,
     messaging,
     negotiate,
+    photos,
     publish,
     reads,
     reply,

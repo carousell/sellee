@@ -142,6 +142,13 @@ def telegram_bot_token_path() -> Path:
 # --- platform-owned -----------------------------------------------------------------------
 
 
+def user_path(raw: str) -> Path:
+    """A path a person typed, with a leading `~` expanded. Home expansion is this module's
+    business, so callers hand the raw string here rather than reaching for the home directory
+    themselves."""
+    return Path(raw).expanduser()
+
+
 def claude_bin_candidates() -> list[Path]:
     """Conventional user install locations for the `claude` CLI, resolved here so the pass
     runner never reaches for the home directory itself. PATH is searched separately by the

@@ -1,4 +1,4 @@
-"""macOS platform — launchd supervisor and its per-user auto-start directory.
+"""macOS platform — launchd supervisor, its per-user auto-start directory, and image conversion.
 
 This is the only place launchd knowledge lives. The plist carries the legacy plist's earned
 wisdom: RunAtLoad, KeepAlive on non-clean exit only (a clean duplicate/stop exit is not
@@ -12,9 +12,10 @@ import subprocess
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from selly_agent.platform.base import Platform
+from selly_agent.platform.base import ImageToolUnavailable, Platform
 
 _DEFAULT_LABEL = "com.selly.agent"
+_SIPS_TIMEOUT_SEC = 30.0
 
 
 class MacOSPlatform(Platform):
@@ -22,6 +23,42 @@ class MacOSPlatform(Platform):
 
     def launch_agents_dir(self, home: Path) -> Path:
         return home / "Library" / "LaunchAgents"
+
+    # --- images ------------------------------------------------------------------------------
+
+    def to_jpeg(self, src: Path, dest: Path, max_dim: int) -> None:
+        """`sips`, which ships with macOS and reads HEIC — no pip dependency for the one
+        transform the pipeline needs."""
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        argv = [
+            "sips",
+            "-s",
+            "format",
+            "jpeg",
+            "-Z",
+            str(max_dim),
+            str(src),
+            "--out",
+            str(dest),
+        ]
+        try:
+            proc = subprocess.run(  # noqa: S603 — argv is composed here, not a shell string
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_SIPS_TIMEOUT_SEC,
+            )
+        except FileNotFoundError as exc:
+            raise ImageToolUnavailable(
+                f"cannot convert {src.name}: the `sips` image tool is not available"
+            ) from exc
+        except subprocess.TimeoutExpired as exc:
+            raise ImageToolUnavailable(f"converting {src.name} timed out") from exc
+        if proc.returncode != 0 or not dest.exists():
+            detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+            reason = detail[-1] if detail else f"sips exited {proc.returncode}"
+            raise ImageToolUnavailable(f"cannot convert {src.name}: {reason}")
 
     def default_label(self) -> str:
         return _DEFAULT_LABEL

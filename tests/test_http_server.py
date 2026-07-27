@@ -152,7 +152,12 @@ def test_tools_list_filtered_by_tier(server) -> None:
     pass_token = server.auth.mint_pass_token("pass:publish", "pass_1", expiry_ts=1e18)
     _, passl = _rpc(server, "tools/list", token=pass_token)
     pass_names = {t["name"] for t in passl["result"]["tools"]}
-    assert pass_names == {"get_item", "carousell_ai_publish_listing", "send_message"}
+    assert pass_names == {
+        "get_item",
+        "carousell_ai_upload_photos",
+        "carousell_ai_publish_listing",
+        "send_message",
+    }
 
 
 def test_tools_call_round_trip_and_iserror(server, store) -> None:

@@ -1,10 +1,11 @@
 """carousell_ai_publish_listing — compose a live listing over the wrapped rail, atomically.
 
 The LLM never composes a price in cents or a listing URL. This tool: loads the item, converts
-money in code, calls the rail's create_listing, verifies the returned URL live (fail-closed), and
-only then records it into listing_urls in a store transaction. It is idempotent — an item already
-carrying a carousell-ai URL returns that URL and never double-posts. The rail call runs outside
-any store transaction, so the DB lock is never held across network I/O.
+money in code, attaches whatever photos carousell_ai_upload_photos has already uploaded, calls
+the rail's create_listing, verifies the returned URL live (fail-closed), and only then records it
+into listing_urls in a store transaction. It is idempotent — an item already carrying a
+carousell-ai URL returns that URL and never double-posts. The rail call runs outside any store
+transaction, so the DB lock is never held across network I/O.
 """
 
 from __future__ import annotations
@@ -74,6 +75,15 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         "price_cents": price_cents,
         "currency": item["currency"],
     }
+    # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
+    # is the item's order, so the first photo is the listing's cover. A photo still without an
+    # upload reference is skipped rather than blocking the publish; an item with no photos at all
+    # publishes fine (the listing flow asks for photos, but the tool does not gate on them).
+    media = [
+        {"url": photo["uploaded_url"]} for photo in item["photos"] if photo.get("uploaded_url")
+    ]
+    if media:
+        args["media"] = {"urls": media}
 
     if ctx.rail_factory is None:
         raise ToolError("the carousell.ai rail is not available in this session")
