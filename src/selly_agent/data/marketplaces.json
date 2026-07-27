@@ -49,6 +49,7 @@
       "fulfillment": [
         "ship_only"
       ],
+      "listing_flow": "listing-flow-carousell",
       "listing_url": {
         "host": "carousell.",
         "path": "/p/"
@@ -71,10 +72,7 @@
         "inbox": "/inbox/",
         "thread": "/inbox/{thread_id}/",
         "my_listings": "/manage-listings/"
-      },
-      "scripted_publish": true,
-      "scripted_scan": true,
-      "scripted_inbox": true
+      }
     },
     {
       "id": "carousell-ai",

@@ -1,0 +1,9 @@
+model = "sonnet"
+
+[mcp_servers.selly]
+command = "selly-agent"
+args = ["mcp-proxy"]
+
+[mcp_servers.playwright]
+command = "npx"
+args = ["--yes", "@playwright/mcp", "--cdp-endpoint", "http://127.0.0.1:9222"]

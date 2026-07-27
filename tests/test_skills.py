@@ -13,17 +13,25 @@ from selly_agent import passes, skills
 from selly_agent.harness import claude
 from selly_agent.proc_tree import PASS_PROMPT_MARKER
 
-# The set a pass type is allowed to draw from, and the composition per type. A change here should
-# be a deliberate diff, because every skill is paid on every pass of that type.
+# What each pass type composes, per payload where the payload decides it. A change here should be a
+# deliberate diff, because every skill is paid on every pass of that type.
 EXPECTED_SKILL_SETS = {
-    "publish": ("selly-conventions", "listing-flow"),
-    "channel": ("selly-conventions", "voice-and-style", "seller-comms", "listing-flow"),
+    ("publish", ()): ("selly-conventions", "listing-flow"),
+    ("publish", (("market", "carousell-ai"),)): ("selly-conventions", "listing-flow"),
+    ("publish", (("market", "carousell"),)): ("selly-conventions", "listing-flow-carousell"),
+    ("channel", ()): ("selly-conventions", "voice-and-style", "seller-comms", "listing-flow"),
 }
 
 
-def _spec_for(pass_type_name: str, prompt: str = "do the thing"):
+def _spec_for(pass_type_name: str, prompt: str = "do the thing", payload=None, **kwargs):
     return passes.build_spec(
-        prompt, "http://127.0.0.1:1/mcp", "TOK", "sonnet", passes.PASS_TYPES[pass_type_name]
+        prompt,
+        "http://127.0.0.1:1/mcp",
+        "TOK",
+        "sonnet",
+        passes.PASS_TYPES[pass_type_name],
+        payload=payload or {},
+        **kwargs,
     )
 
 
@@ -67,15 +75,19 @@ def test_the_drafts_ship_without_their_authoring_notes() -> None:
 # --- composition per pass type ------------------------------------------------------------------
 
 
-def test_every_pass_type_declares_resolvable_skills() -> None:
-    for name, pass_type in passes.PASS_TYPES.items():
-        assert pass_type.skills, f"{name} declares no skills"
-        for skill in pass_type.skills:
+def test_every_pass_type_composes_resolvable_skills() -> None:
+    for (name, payload_items), expected in EXPECTED_SKILL_SETS.items():
+        composed = passes.PASS_TYPES[name].skills_for(dict(payload_items))
+        assert composed, f"{name} composes no skills"
+        for skill in composed:
             assert skills.skill_path(skill).exists(), f"{name} names a missing skill {skill!r}"
+        assert composed == expected
 
 
-def test_skill_sets_are_exactly_as_declared() -> None:
-    assert {n: t.skills for n, t in passes.PASS_TYPES.items()} == EXPECTED_SKILL_SETS
+def test_a_market_with_no_recorded_recipe_gets_the_conventions_alone() -> None:
+    """Better a pass with no recipe than one following another marketplace's steps."""
+    composed = passes.PASS_TYPES["publish"].skills_for({"market": "mercari"})
+    assert composed == ("selly-conventions",)
 
 
 def test_composition_concatenates_in_declared_order() -> None:
@@ -107,7 +119,7 @@ def test_the_size_cap_is_enforced_not_decorative(monkeypatch) -> None:
 def test_the_rulebook_rides_the_system_prompt_and_the_task_rides_the_user_prompt() -> None:
     spec = _spec_for("publish", passes.publish_prompt("item_1"))
     assert spec.append_system_prompt == skills.compose_system_prompt(
-        passes.PASS_TYPES["publish"].skills
+        passes.PASS_TYPES["publish"].skills_for({})
     )
     # the task prompt carries the marker the reaper greps for, and the rulebook does not duplicate
     # into it — the whole point of the split is that the stable half can be cached

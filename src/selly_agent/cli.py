@@ -87,6 +87,11 @@ def _build_parser() -> argparse.ArgumentParser:
     prun = psub.add_parser("run", help="enqueue a pass via the running daemon")
     prun.add_argument("pass_type", help="pass type (e.g. publish)")
     prun.add_argument("--item", default=None, help="item id the pass operates on")
+    prun.add_argument(
+        "--market",
+        default=None,
+        help="marketplace to publish to (default: carousell-ai, the rail)",
+    )
     prun.add_argument("--follow", action="store_true", help="tail the pass's events until it ends")
 
     harness = sub.add_parser("harness", help="harness configuration")

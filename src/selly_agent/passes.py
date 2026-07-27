@@ -20,10 +20,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from selly_agent import paths, settings, skills
+from selly_agent import marketplaces, paths, settings, skills
+from selly_agent.browser import client as browser_client
 from selly_agent.channel import prompt as channel_prompt_mod
 from selly_agent.harness import claude
-from selly_agent.harness.model import PassSpec
+from selly_agent.harness.model import PassSpec, StdioServer
 from selly_agent.pass_stream import is_cap_hit, parse_stream_line
 from selly_agent.proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
 from selly_agent.tools import TIER_PASS_CHANNEL, TIER_PASS_PUBLISH, tools_for_tier
@@ -50,21 +51,84 @@ class PassPayloadError(Exception):
     """A pass's payload is missing/invalid — a loud, ledgered spawn_error, never a silent skip."""
 
 
-def publish_prompt(item_id: str) -> str:
+DEFAULT_PUBLISH_MARKET = "carousell-ai"
+
+# The browser tools a publish pass may call — the diet, not the whole Playwright surface. Every tool
+# schema rides every turn of the pass, so a name that no recipe step uses is paid for on every run.
+#
+# Four exclusions are deliberate rather than incidental:
+#   * no browser_close — it would close the seller's warm Chrome out from under everything else;
+#   * no browser_run_code_unsafe — arbitrary Playwright code is the browser's equivalent of a shell,
+#     and this whole surface exists so that a pass has typed verbs instead of one;
+#   * no browser_take_screenshot — every check in the recipe is a DOM read-back, which is both
+#     cheaper and harder to misread than a picture;
+#   * no browser_navigate_back / hover / drag / resize / network reads — nothing in the flow needs
+#     them, and each would ride along on every turn.
+PUBLISH_BROWSER_TOOLS = (
+    "browser_navigate",
+    "browser_snapshot",
+    "browser_click",
+    "browser_type",
+    "browser_fill_form",
+    "browser_select_option",
+    "browser_press_key",
+    "browser_file_upload",
+    "browser_wait_for",
+    "browser_tabs",
+    "browser_handle_dialog",
+    "browser_evaluate",
+)
+BROWSER_SERVER_NAME = "playwright"
+
+
+def publish_prompt(item_id: str, market: str = DEFAULT_PUBLISH_MARKET) -> str:
+    where = (
+        "to carousell.ai, following the listing flow's publish step"
+        if market == DEFAULT_PUBLISH_MARKET
+        else f"to {marketplaces.display_name(market)} in the browser, following its listing recipe"
+    )
     return (
         f"{PASS_PROMPT_MARKER}\n"
-        f"Publish item {item_id} to carousell.ai, following the listing flow's publish step.\n"
+        f"Publish item {item_id} {where}.\n"
         f"Read the item with get_item. It has already been confirmed with the seller, so do not "
         f"re-confirm and do not change its title, price, or description — publish what is there.\n"
         f"Report the live listing URL when it is up, or say what failed."
     )
 
 
+def publish_market(payload: dict) -> str:
+    """Which marketplace a publish pass is for. Absent means the rail, which is what every publish
+    enqueued before browser markets existed meant."""
+    return str(payload.get("market") or DEFAULT_PUBLISH_MARKET)
+
+
 def _publish_prompt(payload: dict, store, pass_id: str) -> str:
     item_id = payload.get("item_id")
     if not item_id:
         raise PassPayloadError("no item_id in payload")
-    return publish_prompt(item_id)
+    return publish_prompt(item_id, publish_market(payload))
+
+
+def _publish_skills(payload: dict, store, pass_id: str) -> tuple:
+    """The conventions plus this market's own publish recipe.
+
+    Which recipe comes from the registry rather than a branch here, so adding a marketplace is a
+    registry entry and a skill file. A market with no recorded recipe gets the conventions alone
+    rather than another market's steps.
+    """
+    recipe = marketplaces.listing_flow(publish_market(payload))
+    return ("selly-conventions",) + ((recipe,) if recipe else ())
+
+
+def _publish_browser_tools(payload: dict, store, pass_id: str) -> tuple:
+    """The browser diet, and only for a market the agent drives in Chrome.
+
+    A rail publish talks to an API and is handed no browser at all — browser authority follows the
+    market, not the pass type.
+    """
+    if marketplaces.connector_type(publish_market(payload)) != "browser":
+        return ()
+    return PUBLISH_BROWSER_TOOLS
 
 
 def _channel_prompt(payload: dict, store, pass_id: str) -> str:
@@ -97,6 +161,10 @@ def _no_media_paths(payload: dict, store, pass_id: str) -> tuple:
     return ()
 
 
+def _no_browser_tools(payload: dict, store, pass_id: str) -> tuple:
+    return ()
+
+
 @dataclass(frozen=True)
 class PassType:
     """A pass type's spec: the tier its token carries (which tools it may call), the skills that
@@ -114,6 +182,17 @@ class PassType:
     skills: tuple = ()
     web_tools: bool = False
     build_media_paths: Callable[[dict, object, str], tuple] = _no_media_paths
+    # Which browser tools this pass may call, decided from its payload — the browser is granted per
+    # flow, and for the publish flow per marketplace, so a rail publish is handed none.
+    build_browser_tools: Callable[[dict, object, str], tuple] = _no_browser_tools
+    # Set when the skill set depends on the payload (which marketplace's recipe a publish needs);
+    # otherwise `skills` is the declaration and stays readable at a glance.
+    build_skills: Callable[[dict, object, str], tuple] | None = None
+
+    def skills_for(self, payload: dict, store=None, pass_id: str = "") -> tuple:
+        if self.build_skills is None:
+            return self.skills
+        return self.build_skills(payload, store, pass_id)
 
 
 PASS_TYPES = {
@@ -121,10 +200,14 @@ PASS_TYPES = {
     # conversation that produced the draft, so this pass needs the flow's publish discipline and
     # nothing about voice — it talks to no one, and the photo upload is daemon-side, so it never
     # needs to see an image either.
+    # One publish type serves both kinds of marketplace: the rail (an API call) and a browser market
+    # (a form the pass fills in Chrome). What differs — the recipe skill and whether a browser is
+    # granted at all — is derived from the payload's market, so a new marketplace needs no new type.
     "publish": PassType(
         tier=TIER_PASS_PUBLISH,
         build_prompt=_publish_prompt,
-        skills=("selly-conventions", "listing-flow"),
+        build_skills=_publish_skills,
+        build_browser_tools=_publish_browser_tools,
     ),
     # The channel pass is the seller conversation: it writes to a human, so it needs voice and the
     # escalation copy, and it runs the listing flow end to end — including the comps research the
@@ -141,6 +224,20 @@ PASS_TYPES = {
 
 def allowed_tools_for(tier: str, server_name: str = "selly") -> tuple:
     return tuple(f"mcp__{server_name}__{spec.name}" for spec in tools_for_tier(tier))
+
+
+def browser_command(config) -> tuple:
+    """The Playwright MCP invocation a browser-driving pass spawns for itself.
+
+    Each pass gets its own instance, spawned by the harness inside the pass's process group, so it
+    dies with the pass and the daemon's own instance is untouched. Both attach to the same warm
+    Chrome over CDP.
+    """
+    configured = getattr(config, "playwright_mcp_cmd", None)
+    if configured:
+        return tuple(configured)
+    port = getattr(config, "chrome_cdp_port", 9222)
+    return tuple(browser_client.default_command(browser_client.cdp_endpoint(port)))
 
 
 def resolve_claude_bin(config) -> str | None:
@@ -204,7 +301,23 @@ def build_spec(
     model: str,
     pass_type: PassType,
     media_paths: tuple = (),
+    payload: dict | None = None,
+    browser_tools: tuple = (),
+    browser_command: tuple = (),
 ) -> PassSpec:
+    browser_server = None
+    if browser_tools:
+        if not browser_command:
+            raise SpawnError(
+                "this pass needs the browser but no Playwright MCP command is configured — "
+                "set playwright_mcp_cmd, or install Node so the npx default resolves"
+            )
+        browser_server = StdioServer(
+            name=BROWSER_SERVER_NAME,
+            command=browser_command[0],
+            args=tuple(browser_command[1:]),
+            tools=tuple(browser_tools),
+        )
     return PassSpec(
         prompt=prompt,
         model=model,
@@ -212,9 +325,11 @@ def build_spec(
         mcp_token=token,
         allowed_tools=allowed_tools_for(pass_type.tier),
         max_turns=PASS_MAX_TURNS,
-        append_system_prompt=skills.compose_system_prompt(pass_type.skills) or None,
+        append_system_prompt=skills.compose_system_prompt(pass_type.skills_for(payload or {}))
+        or None,
         web_tools=pass_type.web_tools,
         readable_paths=_contained_media_paths(media_paths),
+        browser_server=browser_server,
     )
 
 
@@ -291,9 +406,11 @@ def run_pass(deps: PassDeps, claimed) -> str:
     pass_type = PASS_TYPES.get(claimed.type)
     if pass_type is None:
         return _spawn_error(deps, claimed, pass_id, f"unknown pass type {claimed.type!r}")
+    payload = claimed.payload or {}
     try:
-        prompt = pass_type.build_prompt(claimed.payload or {}, deps.store, pass_id)
-        media_paths = pass_type.build_media_paths(claimed.payload or {}, deps.store, pass_id)
+        prompt = pass_type.build_prompt(payload, deps.store, pass_id)
+        media_paths = pass_type.build_media_paths(payload, deps.store, pass_id)
+        browser_tools = pass_type.build_browser_tools(payload, deps.store, pass_id)
     except PassPayloadError as exc:
         return _spawn_error(deps, claimed, pass_id, str(exc))
 
@@ -306,14 +423,28 @@ def run_pass(deps: PassDeps, claimed) -> str:
     proc = None
     pgid = None
     try:
-        spec = build_spec(
-            prompt,
-            deps.http_endpoint,
-            token,
-            deps.config.pass_model,
-            pass_type,
-            media_paths=media_paths,
-        )
+        try:
+            spec = build_spec(
+                prompt,
+                deps.http_endpoint,
+                token,
+                deps.config.pass_model,
+                pass_type,
+                media_paths=media_paths,
+                payload=payload,
+                browser_tools=browser_tools,
+                browser_command=browser_command(deps.config),
+            )
+        except SpawnError as exc:
+            deps.store.finish_pass(
+                pass_id, status="error", rc=None, cls="spawn_error", summary=str(exc)
+            )
+            deps.bus.publish(
+                "pass.end",
+                {"type": claimed.type, "class": "spawn_error", "is_error": True, "error": str(exc)},
+                pass_id=pass_id,
+            )
+            return "spawn_error"
         _write_workspace(workspace, spec)
         try:
             argv = deps.argv_builder(spec)

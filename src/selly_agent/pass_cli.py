@@ -57,7 +57,7 @@ def _require_token() -> str | None:
 
 
 def run(args) -> int:
-    """`selly-agent pass run <type> --item <id> [--follow]`."""
+    """`selly-agent pass run <type> --item <id> [--market <id>] [--follow]`."""
     token = _require_token()
     if not token:
         return 1
@@ -65,6 +65,8 @@ def run(args) -> int:
     payload = {}
     if getattr(args, "item", None):
         payload["item_id"] = args.item
+    if getattr(args, "market", None):
+        payload["market"] = args.market
     try:
         resp = _post(
             f"{_base_url(port)}/control/enqueue-pass",
@@ -139,6 +141,7 @@ _SKILL_BLURBS = (
     ("voice-and-style", "how outbound messages read, and the trust boundary around them"),
     ("seller-comms", "how to frame a decision the seller has to make"),
     ("listing-flow", "photos in, live listing out"),
+    ("listing-flow-carousell", "the same, filled into Carousell's own composer in the browser"),
 )
 
 

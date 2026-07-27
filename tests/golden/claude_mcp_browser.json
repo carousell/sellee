@@ -1,0 +1,21 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "args": [
+        "--yes",
+        "@playwright/mcp",
+        "--cdp-endpoint",
+        "http://127.0.0.1:9222"
+      ],
+      "command": "npx",
+      "type": "stdio"
+    },
+    "selly": {
+      "headers": {
+        "Authorization": "Bearer TESTTOKEN"
+      },
+      "type": "http",
+      "url": "http://127.0.0.1:7355/mcp"
+    }
+  }
+}

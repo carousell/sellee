@@ -8,9 +8,16 @@ from pathlib import Path
 import pytest
 
 from selly_agent.harness import claude, codex
-from selly_agent.harness.model import PassSpec
+from selly_agent.harness.model import PassSpec, StdioServer
 
 GOLDEN = Path(__file__).parent / "golden"
+
+_BROWSER = StdioServer(
+    name="playwright",
+    command="npx",
+    args=("--yes", "@playwright/mcp", "--cdp-endpoint", "http://127.0.0.1:9222"),
+    tools=("browser_navigate", "browser_click"),
+)
 
 
 def _spec(**overrides) -> PassSpec:
@@ -159,6 +166,95 @@ def test_token_is_in_the_header_not_bare() -> None:
     assert cfg["mcpServers"]["selly"]["headers"]["Authorization"] == "Bearer TESTTOKEN"
 
 
+# --- the second (browser) MCP server ------------------------------------------------------------
+
+
+def test_a_browser_pass_renders_both_servers() -> None:
+    from selly_agent import passes
+
+    spec = _spec(
+        browser_server=StdioServer(
+            name="playwright",
+            command="npx",
+            args=("--yes", "@playwright/mcp", "--cdp-endpoint", "http://127.0.0.1:9222"),
+            tools=passes.PUBLISH_BROWSER_TOOLS,
+        )
+    )
+    files = claude.render_workspace(spec)
+    assert files[".mcp.json"] == (GOLDEN / "claude_mcp_browser.json").read_text()
+    assert files[".claude/settings.json"] == (GOLDEN / "claude_settings_browser.json").read_text()
+    assert claude.pass_argv(spec, claude_bin="claude") == json.loads(
+        (GOLDEN / "claude_pass_argv_browser.json").read_text()
+    )
+
+
+def test_a_pass_with_no_browser_renders_only_our_server() -> None:
+    servers = claude.mcp_config(_spec())["mcpServers"]
+    assert set(servers) == {"selly"}
+
+
+def test_the_browser_server_is_stdio_not_a_port() -> None:
+    """A localhost browser-control port would be an unauthenticated way to drive the seller's
+    Chrome; a stdio subprocess is reachable only by its parent."""
+    browser = claude.mcp_config(_spec(browser_server=_BROWSER))["mcpServers"]["playwright"]
+    assert browser["type"] == "stdio" and browser["command"] == "npx"
+    assert "url" not in browser and "headers" not in browser
+
+
+def test_the_browser_diet_becomes_allow_list_rules() -> None:
+    allowed = claude.allowed_tools(_spec(browser_server=_BROWSER))
+    assert "mcp__playwright__browser_navigate" in allowed
+    assert "mcp__playwright__browser_click" in allowed
+    # a tool the diet leaves out has no rule, so the pass cannot call it
+    assert not any(rule.endswith("browser_run_code_unsafe") for rule in allowed)
+
+
+def test_the_diet_excludes_the_tools_that_would_undo_the_posture() -> None:
+    """browser_close would shut the seller's warm Chrome; run_code_unsafe is arbitrary Playwright
+    code — the browser's version of the shell this whole surface exists to replace."""
+    from selly_agent import passes
+
+    assert "browser_close" not in passes.PUBLISH_BROWSER_TOOLS
+    assert "browser_run_code_unsafe" not in passes.PUBLISH_BROWSER_TOOLS
+    assert "browser_take_screenshot" not in passes.PUBLISH_BROWSER_TOOLS
+
+
+def test_a_browser_server_with_no_tools_is_refused_at_the_spec() -> None:
+    """Reaching a server with nothing allowed is authority with no use for it."""
+    with pytest.raises(ValueError, match="at least one tool"):
+        _spec(browser_server=StdioServer(name="playwright", command="npx", tools=()))
+
+
+def test_a_browser_server_may_not_shadow_our_own() -> None:
+    with pytest.raises(ValueError, match="must not share"):
+        _spec(browser_server=StdioServer(name="selly", command="npx", tools=("browser_navigate",)))
+
+
+def test_the_validator_catches_an_unrequested_server() -> None:
+    """With --strict-mcp-config the rendered set IS the reachable surface, so an extra entry is an
+    authority grant no pass type asked for."""
+    spec = _spec()
+    files = claude.render_workspace(spec)
+    tampered = json.loads(files[".mcp.json"])
+    tampered["mcpServers"]["sneaky"] = {"type": "stdio", "command": "sh"}
+    with pytest.raises(ValueError, match="did not ask for"):
+        claude._validate_servers(spec, tampered)
+
+
+def test_a_browser_pass_keeps_the_no_bash_posture() -> None:
+    spec = _spec(browser_server=_BROWSER)
+    deny = claude.settings_json(spec)["permissions"]["deny"]
+    assert {"Bash", "Edit", "Write", "NotebookEdit"} <= set(deny)
+    assert "Bash" not in claude.pass_argv(spec)
+
+
+def test_allowed_tools_stays_last_with_a_browser_server() -> None:
+    spec = _spec(browser_server=_BROWSER, readable_paths=("/media/store/1/a.jpg",))
+    argv = claude.pass_argv(spec)
+    idx = argv.index("--allowedTools")
+    assert list(argv[idx + 1 :]) == list(claude.allowed_tools(spec))
+
+
 # --- codex golden + round trip ----------------------------------------------------------------
 
 
@@ -170,6 +266,24 @@ def test_codex_round_trips_and_points_at_proxy() -> None:
     parsed = codex.parse_toml_min(codex.render_config(_spec(model="opus")))
     assert parsed["model"] == "opus"
     assert parsed["mcp_servers"]["selly"] == {"command": "selly-agent", "args": ["mcp-proxy"]}
+
+
+def test_codex_carries_the_browser_server_too() -> None:
+    """Keeping the second emitter honest is what forces PassSpec to stay genuinely common; Codex has
+    no spawn path yet, but the shape it renders is the same one."""
+    from selly_agent import passes
+
+    spec = _spec(
+        browser_server=StdioServer(
+            name="playwright",
+            command="npx",
+            args=("--yes", "@playwright/mcp", "--cdp-endpoint", "http://127.0.0.1:9222"),
+            tools=passes.PUBLISH_BROWSER_TOOLS,
+        )
+    )
+    assert codex.render_config(spec) == (GOLDEN / "codex_config_browser.toml").read_text()
+    parsed = codex.parse_toml_min(codex.render_config(spec))
+    assert parsed["mcp_servers"]["playwright"]["command"] == "npx"
 
 
 def test_toml_min_parser_handles_the_subset() -> None:

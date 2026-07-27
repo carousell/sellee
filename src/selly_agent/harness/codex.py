@@ -25,6 +25,16 @@ def render_config(spec: PassSpec) -> str:
         'args = ["mcp-proxy"]',
         "",
     ]
+    # A browser-driving pass reaches Playwright over stdio, which Codex supports natively — so the
+    # multi-server shape stays common to both emitters even though only Claude has a spawn path.
+    if spec.browser_server is not None:
+        args = ", ".join(f'"{arg}"' for arg in spec.browser_server.args)
+        lines += [
+            f"[mcp_servers.{spec.browser_server.name}]",
+            f'command = "{spec.browser_server.command}"',
+            f"args = [{args}]",
+            "",
+        ]
     text = "\n".join(lines)
     _validate_round_trip(spec, text)
     return text
@@ -34,9 +44,20 @@ def _validate_round_trip(spec: PassSpec, text: str) -> None:
     parsed = parse_toml_min(text)
     if parsed.get("model") != spec.model:
         raise ValueError("rendered codex config model does not match the spec")
-    server = parsed.get("mcp_servers", {}).get(spec.server_name, {})
+    servers = parsed.get("mcp_servers", {})
+    server = servers.get(spec.server_name, {})
     if server.get("command") != "selly-agent" or server.get("args") != ["mcp-proxy"]:
         raise ValueError("rendered codex config mcp server does not match the proxy invocation")
+    expected = {spec.server_name}
+    if spec.browser_server is not None:
+        expected.add(spec.browser_server.name)
+        browser = servers.get(spec.browser_server.name, {})
+        if browser.get("command") != spec.browser_server.command:
+            raise ValueError("rendered codex browser server command does not match the spec")
+        if browser.get("args") != list(spec.browser_server.args):
+            raise ValueError("rendered codex browser server args do not match the spec")
+    if set(servers) != expected:
+        raise ValueError("rendered codex config carries a server the spec did not ask for")
 
 
 def parse_toml_min(text: str) -> dict:

@@ -16,16 +16,36 @@ from selly_agent.harness.model import PassSpec
 
 
 def mcp_config(spec: PassSpec) -> dict:
-    """The single MCP server the pass may reach — our daemon, over HTTP, bearer-authenticated."""
-    return {
-        "mcpServers": {
-            spec.server_name: {
-                "type": "http",
-                "url": spec.mcp_endpoint,
-                "headers": {"Authorization": f"Bearer {spec.mcp_token}"},
-            }
+    """Every MCP server the pass may reach: our daemon over HTTP, and — for a pass that drives the
+    browser — its own Playwright server over stdio.
+
+    The browser server is spawned by the harness, so it lives inside the pass's process group and
+    dies with it; the daemon's reaper story is unchanged. Because `--strict-mcp-config` is in force,
+    a server absent from here is unreachable, which is what keeps browser authority per-pass-type
+    rather than ambient.
+    """
+    servers = {
+        spec.server_name: {
+            "type": "http",
+            "url": spec.mcp_endpoint,
+            "headers": {"Authorization": f"Bearer {spec.mcp_token}"},
         }
     }
+    if spec.browser_server is not None:
+        servers[spec.browser_server.name] = {
+            "type": "stdio",
+            "command": spec.browser_server.command,
+            "args": list(spec.browser_server.args),
+        }
+    return {"mcpServers": servers}
+
+
+def browser_tool_rules(spec: PassSpec) -> tuple:
+    """The pass's browser tool allow-list rules, or nothing when it has no browser server."""
+    if spec.browser_server is None:
+        return ()
+    name = spec.browser_server.name
+    return tuple(f"mcp__{name}__{tool}" for tool in spec.browser_server.tools)
 
 
 # The harness's own web-research tools. Part of the deny list that moves: a pass whose skills tell
@@ -47,9 +67,15 @@ def read_rules(spec: PassSpec) -> tuple:
 
 
 def allowed_tools(spec: PassSpec) -> tuple:
-    """Every tool rule the pass may use: its tier's MCP tools, web research when its pass type
-    asked for it, and a path-scoped Read rule per granted media file."""
-    return tuple(spec.allowed_tools) + (WEB_TOOLS if spec.web_tools else ()) + read_rules(spec)
+    """Every tool rule the pass may use: its tier's MCP tools, the browser diet when it drives the
+    browser, web research when its pass type asked for it, and a path-scoped Read rule per granted
+    media file. Read rules stay last — the flag greedily consumes what follows."""
+    return (
+        tuple(spec.allowed_tools)
+        + browser_tool_rules(spec)
+        + (WEB_TOOLS if spec.web_tools else ())
+        + read_rules(spec)
+    )
 
 
 def denied_tools(spec: PassSpec) -> tuple:
@@ -112,13 +138,34 @@ def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
 # --- round-trip validators (INV-35): parse our own output back and assert it matches ----------
 
 
-def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
-    parsed = json.loads(files[".mcp.json"])
-    server = parsed["mcpServers"][spec.server_name]
+def _validate_servers(spec: PassSpec, parsed: dict) -> None:
+    """Every rendered server matches the spec, and no server we did not ask for is present.
+
+    The last clause is the load-bearing one: with --strict-mcp-config the rendered set IS the pass's
+    reachable surface, so an extra entry would be an authority grant that no pass type asked for.
+    """
+    servers = parsed["mcpServers"]
+    server = servers[spec.server_name]
     if server["url"] != spec.mcp_endpoint:
-        raise ValueError("rendered .mcp.json url does not match the spec")
+        raise ValueError("rendered mcp config url does not match the spec")
     if server["headers"]["Authorization"] != f"Bearer {spec.mcp_token}":
-        raise ValueError("rendered .mcp.json authorization does not match the spec")
+        raise ValueError("rendered mcp config authorization does not match the spec")
+    expected = {spec.server_name}
+    if spec.browser_server is not None:
+        expected.add(spec.browser_server.name)
+        browser = servers[spec.browser_server.name]
+        if browser["type"] != "stdio":
+            raise ValueError("the browser server must be rendered as a stdio server")
+        if browser["command"] != spec.browser_server.command:
+            raise ValueError("rendered browser server command does not match the spec")
+        if browser["args"] != list(spec.browser_server.args):
+            raise ValueError("rendered browser server args do not match the spec")
+    if set(servers) != expected:
+        raise ValueError("rendered mcp config carries a server the spec did not ask for")
+
+
+def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
+    _validate_servers(spec, json.loads(files[".mcp.json"]))
     settings = json.loads(files[".claude/settings.json"])
     if settings["permissions"]["allow"] != list(allowed_tools(spec)):
         raise ValueError("rendered settings.json allow-list does not match the spec")
@@ -127,6 +174,11 @@ def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
         raise ValueError("rendered settings.json both allows and denies a tool")
     if not spec.web_tools and not all(name in denied for name in WEB_TOOLS):
         raise ValueError("a pass without web tools must deny them explicitly")
+    # The diet is the point of granting a browser server at all: reaching the server is necessary
+    # but the allow-list is what bounds which of its tools the pass can call.
+    for rule in browser_tool_rules(spec):
+        if rule not in settings["permissions"]["allow"]:
+            raise ValueError("a granted browser tool is missing from the allow-list")
     if spec.readable_paths:
         # A bare Read deny would override every path-scoped allow (deny beats allow, regardless
         # of specificity) — granted files must not be revoked by the same artifact.
@@ -144,9 +196,7 @@ def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
         raise ValueError("argv does not lead with -p <prompt>")
     if "--strict-mcp-config" not in argv:
         raise ValueError("argv is missing --strict-mcp-config")
-    cfg_json = argv[argv.index("--mcp-config") + 1]
-    if json.loads(cfg_json)["mcpServers"][spec.server_name]["url"] != spec.mcp_endpoint:
-        raise ValueError("argv --mcp-config does not match the spec")
+    _validate_servers(spec, json.loads(argv[argv.index("--mcp-config") + 1]))
     if spec.output_format == "stream-json" and "--verbose" not in argv:
         raise ValueError("stream-json output requires --verbose")
     allowed = allowed_tools(spec)
