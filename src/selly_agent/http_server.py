@@ -410,9 +410,15 @@ class _Handler(BaseHTTPRequestHandler):
             return
         after_seq = _int_or_none(qs.get("after_seq", [None])[0])
         pass_id = qs.get("pass", [None])[0]
+        # A lookback window, so a page load starts near now instead of replaying the whole
+        # retained history. Nonsense or non-positive values simply mean "no window".
+        since_sec = _int_or_none(qs.get("since_sec", [None])[0])
+        since_ts = time.time() - since_sec if since_sec and since_sec > 0 else None
         conn = connect_reader(self._app.events_db_path)
         try:
-            events = query_events(conn, after_seq=after_seq, pass_id=pass_id, limit=500)
+            events = query_events(
+                conn, after_seq=after_seq, since_ts=since_ts, pass_id=pass_id, limit=500
+            )
         finally:
             conn.close()
         rows = [event_to_wire(e) for e in events]
