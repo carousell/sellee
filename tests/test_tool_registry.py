@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import pytest
 
 import selly_agent.tools  # noqa: F401  ensures every tool is registered
@@ -107,6 +109,8 @@ def test_dispatch_validation_failure_raises_toolerror_and_events(make_ctx, bus) 
     # a rejected call is observable, but never ran a handler (no tool.call)
     assert _events(bus, "tool.error")
     assert not _events(bus, "tool.call")
+    # no call ever happened, so there is nothing for a call id to pair with
+    assert "call_id" not in _events(bus, "tool.error")[0].payload
 
 
 def test_dispatch_happy_path_publishes_call_then_result(make_ctx, bus, store) -> None:
@@ -118,6 +122,23 @@ def test_dispatch_happy_path_publishes_call_then_result(make_ctx, bus, store) ->
     results = _events(bus, "tool.result")
     assert [c.payload["tool"] for c in calls] == ["get_item"]
     assert [r.payload["tool"] for r in results] == ["get_item"]
+
+
+def test_call_and_result_share_one_call_id(make_ctx, bus, store) -> None:
+    ctx = make_ctx(TIER_ATTENDED)
+    item = store.create_item(title="Lamp", list_price=10.0, currency="SGD")
+    dispatch("get_item", {"item_id": item["id"]}, ctx)
+    call_id = _events(bus, "tool.call")[0].payload["call_id"]
+    assert re.match(r"^call_[0-9a-f]{12}$", call_id)
+    assert _events(bus, "tool.result")[0].payload["call_id"] == call_id
+
+
+def test_a_failing_call_pairs_its_error_with_the_same_call_id(make_ctx, bus) -> None:
+    ctx = make_ctx(TIER_ATTENDED)
+    with pytest.raises(ToolError):
+        dispatch("get_item", {"item_id": "item_nope"}, ctx)
+    call_id = _events(bus, "tool.call")[0].payload["call_id"]
+    assert _events(bus, "tool.error")[0].payload["call_id"] == call_id
 
 
 def test_secret_param_is_masked_in_every_event(make_ctx, bus, store) -> None:

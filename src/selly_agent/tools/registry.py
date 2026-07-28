@@ -11,7 +11,7 @@ Dispatch is a single choke point so the load-bearing rules hold for every tool u
   * secret parameters are masked in a copied payload before anything reaches the event bus, so a
     marked value never lands in a sink;
   * every call publishes tool.call then tool.result or tool.error, keyed by the session's pass id
-    — the server-side ground truth against model narration.
+    and a per-call id that pairs the two — the server-side ground truth against model narration.
 """
 
 from __future__ import annotations
@@ -19,6 +19,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import uuid
 from dataclasses import dataclass
 from typing import Callable
 
@@ -146,16 +147,21 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
         )
         raise ToolError(str(exc)) from exc
 
+    # One id per call, stamped on the call and whichever of result/error follows it. A reader
+    # pairing on (pass_id, tool) alone would mis-pair the moment two passes call the same tool.
+    call_id = f"call_{uuid.uuid4().hex[:12]}"
     ctx.bus.publish(
         "tool.call",
-        {"tool": name, "params": masked, "tier": ctx.session.tier},
+        {"call_id": call_id, "tool": name, "params": masked, "tier": ctx.session.tier},
         pass_id=ctx.session.pass_id,
     )
     try:
         result = spec.handler(ctx, params)
     except ToolError as exc:
         ctx.bus.publish(
-            "tool.error", {"tool": name, "error": str(exc)}, pass_id=ctx.session.pass_id
+            "tool.error",
+            {"call_id": call_id, "tool": name, "error": str(exc)},
+            pass_id=ctx.session.pass_id,
         )
         raise
     except Exception as exc:  # a handler bug must not leak internals to the caller
@@ -163,12 +169,16 @@ def dispatch(name: str, params: dict, ctx: ToolContext) -> dict:
         # traceback has to land somewhere or the failure is undiagnosable — this is that somewhere.
         log.exception("tool handler raised for %s", name)
         ctx.bus.publish(
-            "tool.error", {"tool": name, "error": "internal error"}, pass_id=ctx.session.pass_id
+            "tool.error",
+            {"call_id": call_id, "tool": name, "error": "internal error"},
+            pass_id=ctx.session.pass_id,
         )
         raise ToolError("internal error") from exc
 
     ctx.bus.publish(
-        "tool.result", {"tool": name, "result": _capped(result)}, pass_id=ctx.session.pass_id
+        "tool.result",
+        {"call_id": call_id, "tool": name, "result": _capped(result)},
+        pass_id=ctx.session.pass_id,
     )
     return result
 
