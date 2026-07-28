@@ -39,8 +39,10 @@ body.filtering #chip{display:inline-flex}
 body.json #chip,body.json .verbose-toggle{display:none}
 
 #log{padding:.3rem 0}
-.row{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;padding:.1rem .75rem .1rem .55rem;
-  border-left:3px solid #303030}
+/* row-gap 0 so the raw-JSON line adds no height while it is closed; the right padding reserves
+   the column its {} marker is pinned into. */
+.row{position:relative;display:flex;flex-wrap:wrap;align-items:baseline;column-gap:.5rem;row-gap:0;
+  padding:.1rem 2.4rem .1rem .55rem;border-left:3px solid #303030}
 .row:hover{background:#171717}
 .row.warn{background:var(--warn-bg)}
 /* Hidden by default: the routine tier plus the per-kind noise set. `filtered` is pass isolation
@@ -73,11 +75,15 @@ details.tool>summary{list-style:none}
 details.tool>summary::-webkit-details-marker{display:none}
 .toolbody{margin:.15rem 0 .3rem 1.2rem;border-left:1px solid var(--rule);padding-left:.6rem}
 .toolbody pre{margin:.15rem 0;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dim)}
-details.raw{flex:none;align-self:flex-start}
 details.raw>summary{color:#3a3a3a;list-style:none}
 details.raw>summary::-webkit-details-marker{display:none}
-details.raw[open]{flex:1 0 100%}
 details.raw>pre{margin:.2rem 0 .4rem;white-space:pre-wrap;overflow-wrap:anywhere;color:var(--dim)}
+/* A row's own disclosure is always its own full-width flex line, and its {} marker is lifted out
+   of flow into a fixed column at the right edge. Sizing the box only once it opens would re-flow
+   the marker onto the next line — moving the very thing that was just clicked. Scoped to a row's
+   direct child: the copies nested inside a folded tool body are plain blocks in a plain div. */
+.row>details.raw{flex:1 0 100%}
+.row>details.raw>summary{position:absolute;top:.1rem;right:.75rem}
 .jsonline{padding:0 .75rem;white-space:pre-wrap;overflow-wrap:anywhere}
 </style>
 </head>
