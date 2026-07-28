@@ -39,7 +39,7 @@ def parse_stream_line(line: str) -> list:
     if kind == "assistant":
         return _assistant_events(obj)
     if kind == "user":
-        return [("pass.tool_result", {"content": _truncate(_stringify(_message_content(obj)))})]
+        return _user_events(obj)
     if kind == "result":
         return [
             (
@@ -66,10 +66,37 @@ def _assistant_events(obj: dict) -> list:
         if block.get("type") == "text":
             texts.append(block.get("text", ""))
         elif block.get("type") == "tool_use":
-            events.append(("pass.tool_use", {"name": block.get("name")}))
+            events.append(("pass.tool_use", {"name": block.get("name"), "id": block.get("id")}))
     joined = "".join(texts).strip()
     if joined:
         events.insert(0, ("pass.message", {"text": _truncate(joined)}))
+    return events
+
+
+def _user_events(obj: dict) -> list:
+    """One event per tool_result block, carrying the id of the tool_use it answers.
+
+    The harness ids are what let a reader pair a call with its result exactly instead of guessing
+    from adjacency — which stops being reliable the moment two passes interleave. Content that is
+    not a tool_result block (a plain user turn) has nothing to pair with and stays a single blob.
+    """
+    events = []
+    leftover = []
+    for block in _message_content(obj):
+        if isinstance(block, dict) and block.get("type") == "tool_result":
+            events.append(
+                (
+                    "pass.tool_result",
+                    {
+                        "tool_use_id": block.get("tool_use_id"),
+                        "content": _truncate(_stringify(block.get("content"))),
+                    },
+                )
+            )
+        else:
+            leftover.append(block)
+    if leftover or not events:
+        events.append(("pass.tool_result", {"content": _truncate(_stringify(leftover))}))
     return events
 
 

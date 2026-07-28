@@ -28,16 +28,57 @@ def test_assistant_text_and_tool_use() -> None:
     )
     events = parse_stream_line(line)
     assert events[0] == ("pass.message", {"text": "publishing now"})
-    assert events[1] == ("pass.tool_use", {"name": "carousell_ai_publish_listing"})
+    assert events[1] == ("pass.tool_use", {"name": "carousell_ai_publish_listing", "id": None})
+
+
+def test_tool_use_carries_the_block_id() -> None:
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {"content": [{"type": "tool_use", "name": "get_item", "id": "toolu_9"}]},
+        }
+    )
+    ((kind, payload),) = parse_stream_line(line)
+    assert (kind, payload) == ("pass.tool_use", {"name": "get_item", "id": "toolu_9"})
 
 
 def test_user_message_becomes_tool_result() -> None:
     line = json.dumps(
-        {"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}}
+        {
+            "type": "user",
+            "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]},
+        }
     )
     ((kind, payload),) = parse_stream_line(line)
     assert kind == "pass.tool_result"
-    assert "tool_result" in payload["content"]
+    assert payload == {"tool_use_id": "t1", "content": "ok"}
+
+
+def test_multiple_tool_results_become_one_event_each() -> None:
+    line = json.dumps(
+        {
+            "type": "user",
+            "message": {
+                "content": [
+                    {"type": "tool_result", "tool_use_id": "t1", "content": "first"},
+                    {"type": "tool_result", "tool_use_id": "t2", "content": "second"},
+                ]
+            },
+        }
+    )
+    events = parse_stream_line(line)
+    assert [payload["tool_use_id"] for _, payload in events] == ["t1", "t2"]
+    assert [payload["content"] for _, payload in events] == ["first", "second"]
+
+
+def test_non_tool_result_content_keeps_the_single_blob_form() -> None:
+    line = json.dumps(
+        {"type": "user", "message": {"content": [{"type": "text", "text": "carry on"}]}}
+    )
+    ((kind, payload),) = parse_stream_line(line)
+    assert kind == "pass.tool_result"
+    assert "tool_use_id" not in payload
+    assert "carry on" in payload["content"]
 
 
 def test_result_carries_usage_and_flags() -> None:
@@ -97,6 +138,7 @@ def test_an_image_result_is_summarized_not_stored_as_base64() -> None:
     )
     ((kind, payload),) = parse_stream_line(line)
     assert kind == "pass.tool_result"
+    assert payload["tool_use_id"] == "toolu_1"
     assert data[:100] not in payload["content"]  # no base64 prefix survives
     assert "image/jpeg" in payload["content"]
     assert "150000" in payload["content"]  # 200k base64 chars ≈ 150KB decoded
@@ -105,7 +147,15 @@ def test_an_image_result_is_summarized_not_stored_as_base64() -> None:
 
 def test_an_image_block_without_a_usable_source_still_summarizes() -> None:
     for source in (None, {}, "nonsense"):
-        line = _tool_result_line([{"type": "image", "source": source}])
+        line = _tool_result_line(
+            [
+                {
+                    "tool_use_id": "toolu_1",
+                    "type": "tool_result",
+                    "content": [{"type": "image", "source": source}],
+                }
+            ]
+        )
         ((_, payload),) = parse_stream_line(line)
         assert "image" in payload["content"]
 
@@ -115,7 +165,15 @@ def test_text_tool_results_are_unaffected() -> None:
         [{"tool_use_id": "toolu_1", "type": "tool_result", "content": '{"queued":true}'}]
     )
     ((_, payload),) = parse_stream_line(line)
-    assert '{\\"queued\\":true}' in payload["content"] or '"queued":true' in payload["content"]
+    assert payload["content"] == '{"queued":true}'
+
+
+def test_a_tool_result_is_capped_per_block() -> None:
+    line = _tool_result_line(
+        [{"tool_use_id": "toolu_1", "type": "tool_result", "content": "y" * 5000}]
+    )
+    ((_, payload),) = parse_stream_line(line)
+    assert len(payload["content"]) < 5000 and payload["content"].endswith("chars)")
 
 
 def test_is_cap_hit_reads_result_subtype() -> None:
