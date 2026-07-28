@@ -91,6 +91,8 @@ actor it belongs to — a colored pill per pass, a teal `user` pill for what the
 
 - **`&since=`** — the lookback window on load, in the `inspect --since` grammar
   (`30s` / `15m` / `2h` / `1d`). Defaults to `1h`, so a load starts near now.
+- **follow** — on by default: new rows keep the viewport at the bottom. Scrolling up hands control
+  back (the checkbox unticks itself); scrolling to the bottom, or ticking the box, resumes.
 - **verbose** — the checkbox top-right reveals what is hidden by default: the routine scheduler
   heartbeat, thinking-token ticks, and the handful of kinds that are redundant next to the rows
   they accompany.

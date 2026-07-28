@@ -34,8 +34,9 @@ header label{cursor:pointer;user-select:none}
 #chip{display:none;align-items:center;gap:.4rem;padding:.05rem .45rem;cursor:pointer;
   background:transparent;border:1px solid var(--rule);border-radius:.75rem}
 body.filtering #chip{display:inline-flex}
-/* the raw-JSON mode renders no rows, so neither control has anything to act on */
-body.json #chip,body.json header label{display:none}
+/* the raw-JSON mode renders no rows, so neither has anything to act on — but following still
+   does, so its checkbox stays */
+body.json #chip,body.json .verbose-toggle{display:none}
 
 #log{padding:.3rem 0}
 .row{display:flex;flex-wrap:wrap;align-items:baseline;gap:.5rem;padding:.1rem .75rem .1rem .55rem;
@@ -87,7 +88,8 @@ details.raw>pre{margin:.2rem 0 .4rem;white-space:pre-wrap;overflow-wrap:anywhere
     <span id="chip-label"></span><span aria-hidden="true">&#10005;</span>
   </button>
   <span class="spacer"></span>
-  <label><input type="checkbox" id="verbose"> verbose</label>
+  <label class="verbose-toggle"><input type="checkbox" id="verbose"> verbose</label>
+  <label><input type="checkbox" id="follow" checked> follow</label>
 </header>
 <div id="log"></div>
 <script>
@@ -413,6 +415,7 @@ const log = document.getElementById("log");
 const chip = document.getElementById("chip");
 const chipLabel = document.getElementById("chip-label");
 const verbose = document.getElementById("verbose");
+const followBox = document.getElementById("follow");
 let activePass = null;
 
 function applyFilter(row) {
@@ -424,6 +427,7 @@ function setActivePass(passId) {
   document.body.classList.toggle("filtering", Boolean(passId));
   chipLabel.textContent = passId || "";
   for (const row of log.children) applyFilter(row);
+  pinIfFollowing();  // hiding or revealing rows changes the height without firing a scroll
 }
 
 chip.addEventListener("click", function () {
@@ -431,6 +435,56 @@ chip.addEventListener("click", function () {
 });
 verbose.addEventListener("change", function () {
   document.body.classList.toggle("verbose", verbose.checked);
+  pinIfFollowing();
+});
+
+// --- following -------------------------------------------------------------------------------
+
+// Following is a latched state, not a property of the current scroll position: appending rows
+// grows the page under a reader who was at the bottom, and that fires no scroll event, so
+// "am I at the bottom right now?" is the wrong question to ask per batch.
+let following = followBox.checked;
+let lastScrollY = window.scrollY;
+// A few pixels of slack — fractional device pixel ratios mean the arithmetic rarely lands exact.
+const BOTTOM_SLOP_PX = 4;
+
+function atBottom() {
+  const doc = document.documentElement;
+  return doc.scrollHeight - (window.scrollY + window.innerHeight) <= BOTTOM_SLOP_PX;
+}
+
+function scrollToBottom() {
+  window.scrollTo(0, document.documentElement.scrollHeight);
+  lastScrollY = window.scrollY;
+}
+
+function setFollowing(on) {
+  following = on;
+  followBox.checked = on;
+}
+
+function pinIfFollowing() {
+  if (following) scrollToBottom();
+}
+
+window.addEventListener(
+  "scroll",
+  function () {
+    const y = window.scrollY;
+    const wentUp = y < lastScrollY;
+    lastScrollY = y;
+    // Reaching the bottom re-arms following; deliberately scrolling away from it gives up. The
+    // bottom check comes first because an overscroll bounce reports an upward delta while still
+    // pinned there.
+    if (atBottom()) setFollowing(true);
+    else if (wentUp) setFollowing(false);
+  },
+  {passive: true}
+);
+
+followBox.addEventListener("change", function () {
+  setFollowing(followBox.checked);
+  pinIfFollowing();
 });
 
 function renderRow(event) {
@@ -498,7 +552,10 @@ async function poll() {
       const data = await response.json();
       for (const event of data.events) append(event);
       after = data.last_seq;
-      if (data.events.length) windowed = false;
+      if (data.events.length) {
+        windowed = false;
+        pinIfFollowing();  // once per batch, not per row — one layout read instead of hundreds
+      }
     }
   } catch (err) {
     // a poll that fails (daemon restarting, token rotated) just retries on the next tick
