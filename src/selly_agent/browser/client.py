@@ -25,12 +25,17 @@ import threading
 from collections import deque
 from contextlib import contextmanager
 
+from selly_agent import paths
+
 log = logging.getLogger(__name__)
 
 # The npx invocation used when config.playwright_mcp_cmd is unset. The installer pre-installs the
 # package so this resolves locally; a cold npx would fetch from the network on the hot path.
 DEFAULT_MCP_PACKAGE = "@playwright/mcp"
 _PROTOCOL_VERSION = "2025-06-18"
+# How much of its own output the server may keep before evicting the oldest. Small on purpose: these
+# files are page content, useful for diagnosis for a short while and not worth hoarding.
+OUTPUT_MAX_BYTES = 32 * 1024 * 1024
 
 # A tool call is a browser action: a navigate on a slow marketplace page is seconds, so this is
 # generous. It is a backstop against a wedged server, not a latency budget.
@@ -45,6 +50,8 @@ _SHUTDOWN_JOIN_SEC = 5.0
 _SECTION_PREFIX = "### "
 _RESULT_SECTION = "Result"
 _ERROR_SECTION = "Error"
+# What the server writes for a function that returned nothing — the one body that is not JSON.
+_UNDEFINED = "undefined"
 
 
 class BrowserError(Exception):
@@ -70,7 +77,24 @@ class BrowserToolError(BrowserError):
 
 
 def default_command(cdp_endpoint: str) -> list:
-    return ["npx", "--yes", DEFAULT_MCP_PACKAGE, "--cdp-endpoint", cdp_endpoint]
+    """The npx invocation, with the server's own output kept somewhere we chose.
+
+    `--output-dir` is not optional in practice: the server saves a page snapshot per navigation, and
+    left to itself it writes them into whatever directory it started in — a developer's checkout, or
+    wherever the daemon was launched from. The size cap makes it evict its own old files, so this
+    never grows without bound.
+    """
+    return [
+        "npx",
+        "--yes",
+        DEFAULT_MCP_PACKAGE,
+        "--cdp-endpoint",
+        cdp_endpoint,
+        "--output-dir",
+        str(paths.browser_output_dir()),
+        "--output-max-size",
+        str(OUTPUT_MAX_BYTES),
+    ]
 
 
 def cdp_endpoint(port: int) -> str:
@@ -114,7 +138,11 @@ def evaluate_result(text: str):
 
     The server JSON-encodes the function's return value into that section, so a JS artifact can hand
     back a real structure (a list of message bubbles) instead of a string we would have to parse.
-    A function that returns nothing has no Result section, which reads as None.
+
+    A function that returns nothing is the one case that is not JSON: the server writes the literal
+    `undefined`, which reads as None here. That matters beyond tidiness — an artifact that falls off
+    its own end would otherwise look like a transport failure, and for a read that means a market
+    reporting itself blind rather than simply empty.
     """
     body = sections(text).get(_RESULT_SECTION)
     if body is None or not body.strip():
@@ -124,6 +152,8 @@ def evaluate_result(text: str):
     if stripped.startswith("```"):
         lines = stripped.splitlines()
         stripped = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:]).strip()
+    if stripped == _UNDEFINED:
+        return None
     try:
         return json.loads(stripped)
     except ValueError as exc:

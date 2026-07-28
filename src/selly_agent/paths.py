@@ -109,6 +109,18 @@ def heartbeat_path() -> Path:
     return state_dir() / "daemon.heartbeat.json"
 
 
+def browser_output_dir() -> Path:
+    """Where the Playwright MCP server writes its own output files.
+
+    It saves a page snapshot per navigation, so it needs a directory we choose: left to itself it
+    writes into whatever directory the process started in, which for the daemon is arbitrary and for
+    a developer is their checkout. Those snapshots are page content — buyer
+    messages, and on a composer page the seller's own saved address — so they belong under the
+    prunable state tree and nowhere near a repo.
+    """
+    return state_dir() / "browser-output"
+
+
 def passes_dir() -> Path:
     """Ephemeral per-pass workspaces (generated harness config only; swept on pass end)."""
     return state_dir() / "passes"
@@ -208,6 +220,8 @@ def ensure_state_dirs() -> None:
     _ensure(backups_dir(), 0o755)
     _ensure(logs_dir(), 0o755)
     _ensure(passes_dir(), 0o755)
+    # 0700: page snapshots can carry the seller's own address off a composer page.
+    _ensure(browser_output_dir(), 0o700)
 
 
 def ensure_config_dir() -> None:

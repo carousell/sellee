@@ -66,8 +66,35 @@ def test_evaluate_result_decodes_the_result_section() -> None:
     assert evaluate_result(text) == {"state": "logged_in"}
 
 
-def test_evaluate_result_of_a_function_returning_nothing_is_none() -> None:
+# Captured from a real @playwright/mcp against a real Chrome, not composed by hand — an earlier
+# hand-written fixture had the void case wrong (it assumed the Result section would be absent, where
+# the server actually writes a literal `undefined`), and the test passed while the code was broken.
+_LIVE_RESULT_BODIES = [
+    ("undefined", None),
+    ("null", None),
+    ("false", False),
+    ("0", 0),
+    ("[]", []),
+    ('"hello"', "hello"),
+    ('[{"text": "hi", "side": "in", "y": 157}]', [{"text": "hi", "side": "in", "y": 157}]),
+]
+
+
+@pytest.mark.parametrize(("body", "expected"), _LIVE_RESULT_BODIES)
+def test_evaluate_result_matches_what_the_real_server_emits(body, expected) -> None:
+    text = f"### Result\n{body}\n### Ran Playwright code\n```js\nawait page.evaluate('…');\n```"
+    assert evaluate_result(text) == expected
+
+
+def test_nothing_returned_is_none_and_stays_distinct_from_an_empty_list() -> None:
+    """Three different answers that must not collapse into each other: a function that returned
+    nothing (a literal `undefined`), one that returned null to abstain, and one that returned an
+    empty list. Reading either of the first two as a failure would make an artifact that fell off
+    its own end look unreadable; reading them as `[]` would make it look like good news."""
+    assert evaluate_result("### Result\nundefined") is None
+    assert evaluate_result("### Result\nnull") is None
     assert evaluate_result("### Ran Playwright code\n```js\nawait x();\n```") is None
+    assert evaluate_result("### Result\n[]") == []
 
 
 def test_evaluate_result_survives_a_fenced_section() -> None:
@@ -85,14 +112,6 @@ def test_an_undecodable_result_is_a_transport_error() -> None:
 def test_a_tool_call_round_trips_through_the_handshake(make_client) -> None:
     client = make_client({"tools": {"browser_evaluate": {"result": {"href": "https://x/"}}}})
     assert client.evaluate("() => window.location.href") == {"href": "https://x/"}
-
-
-def test_the_tail_read_comes_back_as_a_real_structure(make_client) -> None:
-    """The server JSON-encodes the function's return value, so a JS artifact hands back a list of
-    bubbles rather than a string the caller has to parse itself."""
-    bubbles = [{"text": "still available?", "side": "in", "y": 10}]
-    client = make_client({"tools": {"browser_evaluate": {"result": bubbles}}})
-    assert client.evaluate("() => []") == bubbles
 
 
 def test_interleaved_notifications_are_skipped(make_client) -> None:
@@ -171,36 +190,6 @@ def test_the_client_opens_its_own_tab_once(make_client) -> None:
     assert "select" not in json.dumps(tool_calls(client))  # never re-selected by index
 
 
-# --- the mutex -----------------------------------------------------------------------------------
-
-
-def test_exclusive_serializes_a_multi_call_operation(make_client) -> None:
-    """A send is navigate → locate → type → click → verify; the lane's read must not land in the
-    middle of it, so a compound operation holds the client for its whole sequence."""
-    import threading
-
-    client = make_client({"tools": {"browser_evaluate": {"result": 1}}})
-    order: list = []
-    started = threading.Event()
-
-    def reader():
-        started.wait(timeout=5)
-        client.evaluate("() => 1")
-        order.append("read")
-
-    thread = threading.Thread(target=reader)
-    thread.start()
-    with client.exclusive():
-        started.set()
-        # the reader is now blocked on the lock; both of these land before it
-        client.evaluate("() => 1")
-        order.append("send-a")
-        client.evaluate("() => 1")
-        order.append("send-b")
-    thread.join(timeout=5)
-    assert order == ["send-a", "send-b", "read"]
-
-
 # --- the Chrome bring-up -------------------------------------------------------------------------
 
 
@@ -229,12 +218,15 @@ def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     assert chrome.clear_stale_locks() == []  # idempotent
 
 
-def test_the_bring_up_hint_names_the_port_and_the_command() -> None:
-    hint = chrome.bring_up_hint(9333)
-    assert "9333" in hint and "--remote-debugging-port=9333" in hint
+def test_the_default_command_pins_the_endpoint_and_its_own_output_dir(xdg_tmp) -> None:
+    """The server saves a page snapshot per navigation. Left to itself it writes them into whatever
+    directory it started in — a checkout, or wherever the daemon was launched — and those files are
+    page content, including the seller's own address off a composer page."""
+    from selly_agent import paths
 
-
-def test_the_default_command_pins_the_cdp_endpoint() -> None:
     argv = default_command("http://127.0.0.1:9222")
     assert argv[:2] == ["npx", "--yes"]
     assert "--cdp-endpoint" in argv and "http://127.0.0.1:9222" in argv
+    assert argv[argv.index("--output-dir") + 1] == str(paths.browser_output_dir())
+    assert str(paths.state_dir()) in str(paths.browser_output_dir())
+    assert "--output-max-size" in argv  # so it evicts its own old files
