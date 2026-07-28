@@ -81,24 +81,18 @@ their tests:
   decision ladders, with the never-below-floor / never-above-budget asserts as
   backstops.
 
-Observability:
+Observability — one event record, two readers. Detail in
+[`observability.md`](observability.md):
 
-- **`events.py`** — an in-process bus over a durable store. `publish` stamps the
-  journal clock at write; that timestamp is the sole ordering key. Subscribers
-  may register (the seam a web tail plugs into later).
-- **`retention.py`** — the daily prune (events past a window, snapshots to a
-  keep count, logs to a size cap). Kept kinds (`pass.end`) survive the age prune.
-- **`inspect_cli.py`** — `selly-agent inspect`, a read-only tail of the event
-  store; works whether or not the daemon is running (`--follow` polls). `--json`
-  emits NDJSON via the same `events.event_to_wire` serializer the web tail's
-  `/events.json` uses. Each event carries a derived `level` (`events.level_for`);
-  the tail hides the `routine` heartbeat by default, `--all` shows it.
-- **`data/tail.html`** — the web tail's page, an opinionated *human* view over
-  that same wire shape: a renderer per kind, tool calls paired with their
-  results, per-pass colors, the routine tier and a small noise set hidden behind
-  a verbose toggle. The NDJSON stream stays the machine form and the debugging
-  tool; the page is free to abbreviate because every row expands to its own wire
-  JSON (and `/tail?json=true` is the zero-renderer view).
+- **`events.py`** — an in-process bus over a durable store, and the one wire
+  serializer both readers share. `publish` stamps the journal clock at write;
+  that timestamp is the sole ordering key.
+- **`retention.py`** — the daily prune. The event store is disposable by design;
+  a kept kind (`pass.end`) outlives its own detail.
+- **`inspect_cli.py`** — `selly-agent inspect`, a read-only tail that needs no
+  daemon. `--json` is the machine form.
+- **`data/tail.html`** — the localhost web tail, an opinionated *human* view over
+  the same wire shape.
 
 The tool surface and pass runner — how the LLM touches state and how it runs.
 Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):

@@ -82,24 +82,10 @@ Once bound, the phone is the async channel: buyer escalations push to it, and
 `/pause` · `/resume` · `/status` · `/catchup` · `/selly` are answered instantly
 by the daemon (no LLM); anything else is a conversation with your selling agent.
 
-The daemon serves a localhost web tail at `http://127.0.0.1:<http_port>/tail?token=<attended-token>`
-(the token lives 0600 in the config dir). It is the human-readable surface — a rendered view per
-event kind, not a JSON dump: the seller's messages and the agent's replies read as a conversation,
-each tool call collapses into one row with its result folded in, and every row is labelled with the
-actor it belongs to — a colored pill per pass, a teal `user` pill for what the seller sent, a grey
-`system` one for the daemon acting on its own.
-
-- **`&since=`** — the lookback window on load, in the `inspect --since` grammar
-  (`30s` / `15m` / `2h` / `1d`). Defaults to `1h`, so a load starts near now.
-- **follow** — on by default: new rows keep the viewport at the bottom. Scrolling up hands control
-  back (the checkbox unticks itself); scrolling to the bottom, or ticking the box, resumes.
-- **verbose** — the checkbox top-right reveals what is hidden by default: the routine scheduler
-  heartbeat, thinking-token ticks, and the handful of kinds that are redundant next to the rows
-  they accompany.
-- **click a pass pill** to isolate that pass; the chip in the header clears it.
-- **every row expands** to the raw wire JSON of its own event — the view abbreviates freely
-  because nothing is ever actually lost.
-- **`&json=true`** — the zero-renderer view: one raw JSON line per event, matching `inspect --json`.
+The daemon also serves a localhost web tail at
+`http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token lives 0600 in the config
+dir) — a rendered, human-readable view of the same event log, where `inspect --json` is the
+machine form. Both are covered in [`docs/observability.md`](docs/observability.md).
 
 Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 
