@@ -19,6 +19,12 @@ from selly_agent.platform import get_platform
 
 APP = "selly-agent"
 
+# Shipped package assets — the marketplace/scam registries, the web tail page (the migration SQL
+# and skill markdown resolve the same way from their own modules). They live beside the code, so
+# they resolve package-relative and never through the XDG roots below: those locate user state,
+# which an asset is not.
+PACKAGE_DATA_DIR = Path(__file__).resolve().parent / "data"
+
 
 def _home() -> Path:
     return Path.home()

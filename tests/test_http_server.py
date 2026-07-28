@@ -11,6 +11,7 @@ import pytest
 import selly_agent.tools  # noqa: F401  registration
 from selly_agent.config import Config
 from selly_agent.http_server import HttpServer
+from selly_agent.paths import PACKAGE_DATA_DIR
 from selly_agent.tools.registry import ToolContext
 
 
@@ -246,9 +247,12 @@ def test_events_json_returns_events(server, bus) -> None:
     assert all("@ts" in e for e in body["events"])  # rows share the inspect --json wire shape
 
 
-def test_tail_serves_html(server) -> None:
+def test_tail_serves_the_packaged_page(server) -> None:
     url = f"http://127.0.0.1:{server.port}/tail?token=attended-secret"
     with urllib.request.urlopen(url, timeout=5) as resp:
         assert resp.status == 200
         assert resp.headers["Content-Type"].startswith("text/html")
-        assert b"event tail" in resp.read()
+        served = resp.read()
+    assert b"event tail" in served
+    # the page is a packaged asset, not an inline string — pin that wiring
+    assert served == (PACKAGE_DATA_DIR / "tail.html").read_bytes()

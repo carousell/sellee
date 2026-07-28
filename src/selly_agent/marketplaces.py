@@ -12,11 +12,9 @@ from __future__ import annotations
 
 import json
 from functools import lru_cache
-from pathlib import Path
 
-# Package data lives beside the code (like the migration SQL), read via a package-relative path
-# — never through paths.py, which is the home/XDG authority for user state, not shipped assets.
-PACKAGE_DATA_DIR = Path(__file__).resolve().parent / "data"
+from selly_agent.paths import PACKAGE_DATA_DIR
+
 _REGISTRY_PATH = PACKAGE_DATA_DIR / "marketplaces.json"
 SCAM_REGISTRY_PATH = PACKAGE_DATA_DIR / "scam_registry.json"
 
