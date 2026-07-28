@@ -20,6 +20,7 @@
 :root{
   --bg:#111; --panel:#191919; --rule:#2a2a2a; --fg:#ddd; --bright:#fff;
   --dim:#8a8a8a; --faint:#5a5a5a; --kind:#7cf; --ok:#7bc47f; --warn:#f0a35e; --warn-bg:#2e1f14;
+  --user:hsl(174,48%,58%); --system:#7a7a7a;
 }
 *{box-sizing:border-box}
 body{margin:0;background:var(--bg);color:var(--fg);
@@ -47,10 +48,15 @@ body.json #chip,body.json header label{display:none}
 body.verbose .row.noise:not(.filtered){display:flex}
 
 .t{flex:none;color:var(--faint)}
-.pill{flex:none;padding:0 .4rem;max-width:14ch;overflow:hidden;text-overflow:ellipsis;
-  white-space:nowrap;font:inherit;background:transparent;border:1px solid currentColor;
-  border-radius:.7rem;cursor:pointer}
-.dot{flex:none;width:4.6ch;text-align:center;color:#3a3a3a}
+/* One fixed width for every pill, so each row's text starts at the same column whichever actor
+   the pill names. */
+.pill{flex:none;display:inline-block;width:14ch;padding:0 .4rem;overflow:hidden;
+  text-align:center;text-overflow:ellipsis;white-space:nowrap;font:inherit;background:transparent;
+  border:1px solid currentColor;border-radius:.7rem;cursor:pointer}
+.pill.static{cursor:default}
+.pill.user{color:var(--user)}
+.pill.system{color:var(--system)}
+.row.user{border-left-color:var(--user)}
 .body{flex:1;min-width:0;white-space:pre-wrap;overflow-wrap:anywhere}
 
 .dim{color:var(--dim)}
@@ -160,6 +166,13 @@ function passPill(passId, hue) {
     setActivePass(activePass === passId ? null : passId);
   });
   return node;
+}
+
+// Every row gets a pill, so nothing sits offset from the pass rows. A row with no pass id still
+// has an actor: the seller speaking, or the daemon acting on its own. Neither is a span you can
+// click — only a pass is something to isolate.
+function staticPill(label) {
+  return el("span", "pill static " + label, "(" + label + ")");
 }
 
 function oneLine(value, cap) {
@@ -390,6 +403,10 @@ const NOISE_KINDS = new Set([
   "pass.result",
 ]);
 
+// Pass-less kinds that are the seller's own voice rather than the daemon's. Only inbound channel
+// messages qualify today: everything else without a pass id is the daemon acting on its own.
+const USER_KINDS = new Set(["channel.in"]);
+
 // --- rows ------------------------------------------------------------------------------------
 
 const log = document.getElementById("log");
@@ -425,8 +442,11 @@ function renderRow(event) {
     const hue = hueFor(passId);
     row.style.borderLeftColor = passColor(hue);
     row.appendChild(passPill(passId, hue));
+  } else if (USER_KINDS.has(event.kind)) {
+    row.classList.add("user");
+    row.appendChild(staticPill("user"));
   } else {
-    row.appendChild(el("span", "dot", "·"));
+    row.appendChild(staticPill("system"));
   }
 
   const renderer = RENDERERS[event.kind] || fallbackRow;
