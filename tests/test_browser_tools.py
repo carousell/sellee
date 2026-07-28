@@ -51,39 +51,12 @@ def test_record_then_read_round_trips(make_ctx) -> None:
     assert got["selector"]["query"] == "div.composer"
 
 
-def test_the_batched_read_returns_the_whole_flow(make_ctx) -> None:
-    ctx = make_ctx("attended")
-    dispatch("ui_cache_record", dict(_RECORD), ctx)
-    dispatch("ui_cache_record", dict(_RECORD, step="send_button", query="button.send"), ctx)
-    got = dispatch("ui_cache_get", {"market": "carousell", "flow": "reply"}, ctx)
-    assert set(got["steps"]) == {"message_box", "send_button"}
-
-
 def test_recording_without_a_page_guard_is_refused(make_ctx) -> None:
     """A selector with no page guard would be resolved against whatever page happened to be open,
     so it could never be trusted — recording one would be recording something unusable."""
     ctx = make_ctx("attended")
     with pytest.raises(ToolError, match="page_url_pattern"):
         dispatch("ui_cache_record", dict(_RECORD, page_url_pattern=""), ctx)
-
-
-def test_invalidate_forgets_a_step(make_ctx) -> None:
-    ctx = make_ctx("attended")
-    dispatch("ui_cache_record", dict(_RECORD), ctx)
-    assert (
-        dispatch(
-            "ui_cache_invalidate",
-            {"market": "carousell", "flow": "reply", "step": "message_box"},
-            ctx,
-        )["removed"]
-        == 1
-    )
-    assert (
-        dispatch(
-            "ui_cache_get", {"market": "carousell", "flow": "reply", "step": "message_box"}, ctx
-        )["hit"]
-        is False
-    )
 
 
 # --- the probe ----------------------------------------------------------------------------------

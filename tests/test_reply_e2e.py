@@ -140,10 +140,19 @@ class StubBrowser:
 
         if function == market.LOGIN_JS:
             return {"state": "logged_in"}
-        if function == market.DISCOVERY_JS:
-            return [
-                {"thread_id": "1", "text": f"bob 3:18 PM Teak lamp {self.text}", "unread": True}
-            ]
+        if function == market.CONVERSATIONS_JS:
+            return {
+                "conversations": [
+                    {
+                        "thread_id": "1",
+                        "handle": "bob",
+                        "product_id": "1",
+                        "unread": 1,
+                        "last_message": self.text,
+                        "offer_type": "received",
+                    }
+                ]
+            }
         if function == market.TAIL_JS:
             return [{"text": self.text, "side": "in", "y": 1}]
         raise AssertionError("unexpected evaluate")

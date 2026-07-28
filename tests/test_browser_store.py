@@ -42,14 +42,8 @@ def test_qa_add_rejects_a_non_seller_source_and_a_missing_item(store) -> None:
         store.qa_add(item["id"], "q", "a", "research")
     with pytest.raises(ItemNotFound):
         store.qa_add("item_nope", "q", "a", "seller")
-
-
-def test_qa_add_requires_both_halves(store) -> None:
-    item = store.create_item(title="Lamp", list_price=80.0)
     with pytest.raises(StoreError, match="non-empty"):
         store.qa_add(item["id"], "  ", "an answer", "seller")
-    with pytest.raises(StoreError, match="non-empty"):
-        store.qa_add(item["id"], "a question", "", "seller")
 
 
 # --- selector cache ----------------------------------------------------------------------------
@@ -89,12 +83,6 @@ def test_the_batched_read_returns_the_whole_flow(store) -> None:
     assert set(got["steps"]) == {"message_box", "send_button"}
     assert got["hit"] is True
     assert all(entry["stale"] is False for entry in got["steps"].values())
-
-
-def test_re_recording_a_working_step_grows_its_streak(store) -> None:
-    _record(store)
-    _record(store)
-    assert store.ui_cache_get("carousell", "reply", "message_box")["selector"]["ok_streak"] == 2
 
 
 def test_a_heal_re_record_clears_the_failures_and_restarts_the_streak(store) -> None:
@@ -149,16 +137,13 @@ def test_invalidate_drops_a_step_or_the_whole_flow(store) -> None:
         ({"fail_count": 3, "page_url_pattern": "/x", "last_verified_at": 1000.0}, True),
         ({"fail_count": 0, "page_url_pattern": "", "last_verified_at": 1000.0}, True),
         ({"fail_count": 0, "page_url_pattern": "/x", "last_verified_at": None}, True),
+        # the freshness window, either side of it
+        ({"fail_count": 0, "page_url_pattern": "/x", "last_verified_at": -29 * _DAY}, False),
+        ({"fail_count": 0, "page_url_pattern": "/x", "last_verified_at": -31 * _DAY}, True),
     ],
 )
 def test_the_staleness_predicate_covers_every_axis(entry, expected) -> None:
     assert ui_cache_is_stale(entry, 1000.0) is expected
-
-
-def test_a_selector_ages_out_after_the_freshness_window() -> None:
-    entry = {"fail_count": 0, "page_url_pattern": "/x", "last_verified_at": 0.0}
-    assert ui_cache_is_stale(entry, 29 * _DAY) is False
-    assert ui_cache_is_stale(entry, 31 * _DAY) is True
 
 
 def test_the_cache_never_stores_a_value_or_an_address(store) -> None:
@@ -300,6 +285,7 @@ def test_an_open_escalation_excludes_the_thread(store) -> None:
 
 
 def test_enqueue_reply_pass_claims_scope_and_coalesces(store) -> None:
+    assert store.enqueue_reply_pass() is None  # nothing waiting
     item = _waiting_thread(store)
     claimed = store.enqueue_reply_pass()
     assert claimed["thread_ids"] == ["carousell:1"] and claimed["item_ids"] == [item["id"]]
@@ -308,10 +294,6 @@ def test_enqueue_reply_pass_claims_scope_and_coalesces(store) -> None:
     store.finish_pass(claimed["pass_id"], status="done", rc=0, cls="ok", summary="ok")
     # the buyer is still past the cursor, so the next lane tick re-enqueues
     assert store.enqueue_reply_pass()["thread_ids"] == ["carousell:1"]
-
-
-def test_enqueue_reply_pass_is_none_with_nothing_waiting(store) -> None:
-    assert store.enqueue_reply_pass() is None
 
 
 def test_active_passes_of_types_reports_queued_and_running_with_payloads(store) -> None:

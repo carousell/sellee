@@ -57,9 +57,20 @@ class SlowClient:
             return list(self.bubbles)
         if function == carousell_market.LOGIN_JS:
             return {"state": "logged_in"}
-        if function == carousell_market.DISCOVERY_JS:
-            self._record(("discovery", None))
-            return [{"thread_id": "99", "text": "bob 3:18 PM Teak lamp hi", "unread": True}]
+        if function == carousell_market.CONVERSATIONS_JS:
+            self._record(("conversations", None))
+            return {
+                "conversations": [
+                    {
+                        "thread_id": "99",
+                        "handle": "bob",
+                        "product_id": "1",
+                        "unread": 1,
+                        "last_message": "hi",
+                        "offer_type": "received",
+                    }
+                ]
+            }
         self._record(("probe", None))
         return {"matches": 1, "url": self.url}
 

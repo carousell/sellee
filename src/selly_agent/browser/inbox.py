@@ -1,17 +1,21 @@
 """The inbox read lane: see what buyers said, without spending a single token on it.
 
-Each tick the lane reads the marketplace's inbox for thread links, opens the threads that look like
-they moved, reads each one's tail, and reconciles it against the rows already stored. Everything
-here is deterministic — a navigate and one JS evaluate per thread — so the reply loop above it can
-stay browser-free: by the time a pass runs, what the buyer said is already durable state.
+Each tick the lane asks the marketplace which conversations exist, opens the ones that look like
+they moved, reads each one's messages, and reconciles them against the rows already stored. It costs
+a navigate and one JS evaluate per thread and no model turns at all, which is what lets the reply
+loop above it stay browser-free: by the time a pass runs, what the buyer said is already state.
+
+The conversation list is the marketplace's own API where it has one, and the message read is DOM
+work. That split is deliberate — identity, the counterpart, the listing and the unread count are
+facts we want typed and loudly wrong when they change; message bubbles are only ever on a page.
 
 Three rules keep the lane honest:
 
   * A market that cannot be seen must never look like a market with no news. A failed read is
     counted, and a run of them raises one needs-me notice rather than passing for silence.
-  * The skip gate is an optimization, never a correctness input. A thread whose inbox preview still
-    matches its last stored message is left closed this tick — but every Nth tick opens everything
-    regardless, so a preview that lied costs one sweep interval of latency and nothing more.
+  * The skip gate is an optimization, never a correctness input. A thread whose last message we
+    already hold is left closed this tick — but every Nth tick opens everything regardless, so a
+    stale list costs one sweep interval of latency and nothing more.
   * Reading never advances the reply cursor. Only a committed reply does, so a crash between seeing
     a message and answering it leaves the buyer waiting rather than silently handled.
 """
@@ -147,13 +151,14 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         return
     _clear_notice(deps, f"logged_out:{market}")
 
-    rows = client.evaluate(adapter.discovery_js)
-    if not isinstance(rows, list):
-        # The reader abstained (it was not on the inbox, or the page had not rendered). Not an empty
-        # inbox — asserting "clear" from a page we could not read is how an unread gets stranded.
-        _count_blind(deps, market, "inbox rows unreadable")
+    answer = client.evaluate(adapter.conversations_js)
+    if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
+        # The list came back as a failure rather than as content. Unlike a DOM read that finds
+        # nothing, this cannot be mistaken for an empty inbox, so it is reported as what it is.
+        reason = (answer or {}).get("error") if isinstance(answer, dict) else "unreadable"
+        _count_blind(deps, market, f"conversation list unavailable: {reason}")
         return
-    _clear_blind(deps, market)
+    rows = answer["conversations"]
 
     tick = deps.ticks.get(market, 0) + 1
     deps.ticks[market] = tick
@@ -163,16 +168,17 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     items = deps.store.list_items()
     opened = 0
     recorded = 0
+    unreadable = 0
     for row in rows:
         if not isinstance(row, dict):
             continue
         thread_id = _thread_key(market, row.get("thread_id"))
-        handle = reconcile.split_handle(row.get("text") or "")
-        if handle.lower() in adapter.system_handles:
+        handle = str(row.get("handle") or "")
+        if not thread_id or handle.lower() in adapter.system_handles:
             continue  # the platform talking to the seller, not a buyer
-        thread = known.get(thread_id) if thread_id else None
+        thread = known.get(thread_id)
         if thread is None:
-            if thread_id and _adopt(deps, market, thread_id, row, handle, items):
+            if _adopt(deps, market, adapter, thread_id, row, handle, items):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
                 continue
@@ -181,7 +187,11 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         if not full_sweep and _can_skip(deps.store, thread, row):
             continue
         opened += 1
-        recorded += _read_thread(deps, client, adapter, thread, region)
+        fresh = _read_thread(deps, client, adapter, thread, region)
+        if fresh is None:
+            unreadable += 1
+        else:
+            recorded += fresh
 
     deps.bus.publish(
         "browser.read",
@@ -190,9 +200,17 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             "rows": len(rows),
             "opened": opened,
             "recorded": recorded,
+            "unreadable": unreadable,
             "full_sweep": full_sweep,
         },
     )
+    # Only a read where every opened thread was legible counts as seeing the market. A conversation
+    # whose message list we could not find is the same class of failure as an unreadable inbox: it
+    # would otherwise pass for "this buyer said nothing new", which is how one gets stranded.
+    if unreadable:
+        _count_blind(deps, market, f"{unreadable} conversation(s) unreadable")
+    else:
+        _clear_blind(deps, market)
 
 
 def _thread_key(market: str, native_id) -> str | None:
@@ -202,27 +220,31 @@ def _thread_key(market: str, native_id) -> str | None:
 
 
 def _can_skip(store, thread: dict, row: dict) -> bool:
-    """Whether this thread's inbox row is still showing the message we already stored last.
+    """Whether the conversation list still shows the message we already stored last.
 
-    Only ever used to avoid opening a thread. A thread we have never read is always opened, and so
-    is one whose row is showing something new — the gate errs toward the read.
+    Only ever used to avoid opening a thread. Anything unread, anything whose last message we do not
+    already have, and any thread we have never read is opened — the gate errs toward the read, and
+    the periodic full sweep opens everything regardless.
     """
     if row.get("unread"):
         return False
     messages = store.get_thread_messages(thread["thread_id"], limit=1)
     if not messages:
         return False
-    return reconcile.preview_matches(row.get("text") or "", messages[-1]["text"])
+    return reconcile.preview_matches(row.get("last_message") or "", messages[-1]["text"])
 
 
-def _adopt(deps: InboxDeps, market: str, thread_id: str, row: dict, handle: str, items) -> bool:
+def _adopt(deps: InboxDeps, market: str, adapter, thread_id: str, row: dict, handle: str, items):
     """Create a thread for a buyer writing about one of our listings for the first time.
 
-    Both halves have to be unambiguous: an id to key and open the thread by, and exactly one of our
-    items named in the row. A thread attached to the wrong item would negotiate against the wrong
-    floor, so anything less is left as unattributed inbound rather than adopted onto a guess.
+    Three things have to hold: the buyer approached us (`received` — not an offer we made), the
+    conversation names a listing we recognise, and we know who they are. A thread attached to the
+    wrong item would negotiate against the wrong floor, so anything less is left alone — most often
+    it is simply a listing the seller made outside the agent.
     """
-    item_id = reconcile.match_listing(row.get("text") or "", items)
+    if row.get("offer_type") not in (None, "", "received"):
+        return False
+    item_id = reconcile.match_item(row.get("product_id"), items, market, adapter.listing_id_pattern)
     if not item_id or not handle:
         deps.bus.publish(
             "browser.unmatched", {"market": market, "thread_id": thread_id, "reason": "ambiguous"}
@@ -246,19 +268,29 @@ def _adopt(deps: InboxDeps, market: str, thread_id: str, row: dict, handle: str,
     return True
 
 
-def _read_thread(deps: InboxDeps, client, adapter, thread: dict, region: str | None) -> int:
-    """Open one thread, reconcile its tail, and return how many rows were new."""
+def _read_thread(deps: InboxDeps, client, adapter, thread: dict, region: str | None) -> int | None:
+    """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
+    conversation could not be read at all — which the caller counts as being blind on this market,
+    never as the buyer having said nothing."""
     market = thread["market"]
     native = thread["thread_id"].split(":", 1)[1] if ":" in thread["thread_id"] else ""
     url = marketplaces.market_url(market, "thread", region, thread_id=native)
     if url is None:
         log.warning("no recorded thread URL template for %s", market)
-        return 0
+        return None
     client.navigate(url)
-    tail = reconcile.classify_tail(client.evaluate(adapter.tail_js) or [])
-    if not tail:
-        return 0
+    raw = client.evaluate(adapter.tail_js)
+    if raw is None:
+        # The reader could not find the message list. An empty tail would claim the conversation is
+        # over; this says we could not see it.
+        return None
+    tail = reconcile.classify_tail(raw)
     stored = deps.store.get_thread_messages(thread["thread_id"], limit=None)
+    if not tail:
+        # A thread exists because somebody wrote in it, so a conversation we have already recorded
+        # messages for cannot legitimately read as empty. If it does, the page changed shape under
+        # the reader — report that rather than let it pass for "the buyer said nothing new".
+        return None if stored else 0
     fresh = reconcile.new_rows(tail, stored, now=deps.now())
     for entry in fresh:
         verdict = None

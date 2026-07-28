@@ -35,10 +35,14 @@ class MarketAdapter:
     """One marketplace's browser contract."""
 
     market: str
-    # JS artifacts, each a function expression for browser_evaluate.
-    discovery_js: str
+    # JS artifacts, each a function expression for browser_evaluate. `conversations_js` answers
+    # `{conversations: [...]}` or `{error: …}`; `tail_js` answers a bubble list or null to abstain.
+    conversations_js: str
     tail_js: str
     login_js: str
+    # Where the listing id sits in a permalink, as a regex with one group — what joins a
+    # conversation to one of our items.
+    listing_id_pattern: str = ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # The skill holding this market's publish recipe.
@@ -55,9 +59,10 @@ class MarketAdapter:
 
 CAROUSELL = MarketAdapter(
     market="carousell",
-    discovery_js=carousell.DISCOVERY_JS,
+    conversations_js=carousell.CONVERSATIONS_JS,
     tail_js=carousell.TAIL_JS,
     login_js=carousell.LOGIN_JS,
+    listing_id_pattern=carousell.LISTING_ID_PATTERN,
     composer=tuple(Selector(**row) for row in carousell.COMPOSER_DEFAULTS),
     publish_skill=carousell.PUBLISH_SKILL,
     system_handles=carousell.SYSTEM_HANDLES,

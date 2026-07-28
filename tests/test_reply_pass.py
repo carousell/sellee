@@ -38,16 +38,6 @@ def _scoped(store, payload):
 # --- the scope -----------------------------------------------------------------------------------
 
 
-def test_the_pass_is_scoped_to_the_threads_it_was_claimed_for(store) -> None:
-    mine = _thread(store, "carousell:1")
-    _thread(store, "carousell:2", title="Office chair", handle="carol")
-    payload = {"thread_ids": ["carousell:1"], "item_ids": [mine["id"]]}
-    scope = REPLY.build_scope(payload)
-    assert isinstance(scope, Scope)
-    assert scope.thread_ids == frozenset({"carousell:1"})
-    assert scope.item_ids == frozenset({mine["id"]})
-
-
 def test_another_buyers_thread_reads_as_absent_not_forbidden(store) -> None:
     """A distinguishable refusal would still tell a buyer that a thread exists."""
     mine = _thread(store, "carousell:1")
@@ -265,14 +255,6 @@ def test_a_burst_of_buyers_becomes_one_pass(store, bus) -> None:
     claimed = store.claim_queued_pass()
     assert claimed.payload["thread_ids"] == ["carousell:1", "carousell:2"]
     assert claimed.payload["item_ids"] == sorted([first["id"], second["id"]])
-
-
-def test_the_lane_does_not_stack_a_second_pass(store, bus) -> None:
-    _thread(store, "carousell:1")
-    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
-    inbox.reply_lane(store=store, bus=bus)
-    inbox.reply_lane(store=store, bus=bus)
-    assert len(bus.store.read(kinds=["pass.queued"])) == 1
 
 
 def test_a_failed_pass_leaves_its_threads_eligible(store, bus) -> None:

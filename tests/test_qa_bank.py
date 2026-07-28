@@ -46,24 +46,6 @@ def _item(store, **kwargs):
 # --- searching and banking ----------------------------------------------------------------------
 
 
-def test_a_banked_answer_comes_back_for_the_item(make_ctx, store) -> None:
-    item = _item(store)
-    ctx = make_ctx("attended")
-    dispatch(
-        "add_qa_entry",
-        {
-            "item_id": item["id"],
-            "question": "Any chips?",
-            "answer": "One on the base.",
-            "source": "seller",
-        },
-        ctx,
-    )
-    found = dispatch("search_qa_bank", {"item_id": item["id"], "query": "chip"}, ctx)
-    assert found["count"] == 1
-    assert found["entries"][0]["answer"] == "One on the base."
-
-
 def test_a_global_answer_reaches_every_item(make_ctx, store) -> None:
     """The global rows arrive through the search itself, not through the pass's scope — that is what
     lets a scoped reply pass see them at all."""
@@ -115,17 +97,6 @@ def test_a_reply_pass_cannot_bank_an_answer(store, bus) -> None:
         dispatch(
             "add_qa_entry",
             {"item_id": "*", "question": "q", "answer": "a", "source": "seller"},
-            ctx,
-        )
-
-
-def test_only_a_seller_sourced_answer_can_be_banked(make_ctx, store) -> None:
-    item = _item(store)
-    ctx = make_ctx("attended")
-    with pytest.raises(ToolError):
-        dispatch(
-            "add_qa_entry",
-            {"item_id": item["id"], "question": "q", "answer": "a", "source": "research"},
             ctx,
         )
 

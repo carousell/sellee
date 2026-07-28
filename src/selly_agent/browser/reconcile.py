@@ -28,16 +28,6 @@ _TIME_ROW_RE = re.compile(
     re.IGNORECASE,
 )
 
-# The leading timestamp token in a fused inbox row ("<handle><time><title><preview>", nothing
-# between them). The clock alternative is hour-constrained on purpose: with a bare \d{1,2} a
-# handle's trailing digit fuses with a single-digit hour into a bogus earlier match
-# ("diamond143" + "4:15 PM" matching at "34:15 PM"), which truncated the handle and broke every
-# suppression keyed on it.
-_TS_RE = re.compile(
-    r"((?:1[0-2]|0?[1-9]):\d{2}\s*[AP]M|Today|Yesterday|Sunday|Monday|Tuesday|Wednesday|"
-    r"Thursday|Friday|Saturday|\d{1,2}/\d{1,2})"
-)
-
 # How much of a message has to appear in an inbox row's preview for them to be the same message.
 _PREVIEW_MATCH_CHARS = 40
 # A preview cut mid-message matches on the overlap between its tail and the message's opening; this
@@ -74,19 +64,17 @@ def classify_tail(rows, cap: int = TAIL_BUBBLES) -> list:
     return bubbles[-cap:] if cap else bubbles
 
 
-def split_handle(row_text: str) -> str:
-    """The counterpart handle from a fused inbox row's text, or "" when it cannot be read.
+def listing_id(url: str, pattern: str) -> str | None:
+    """The marketplace's own id for a listing, taken out of its permalink.
 
-    Everything before the row's first timestamp token is the handle. An unreadable handle comes
-    back empty rather than guessed: a wrong handle is worse than no thread, since identity is
-    what the suppression layers key on.
+    This is the join between a conversation and one of our items: the conversation list names the
+    listing by id, and our record of the listing is its URL. Matching on the id is exact, where
+    matching a title against a preview string never can be.
     """
-    text = " ".join((row_text or "").split())
-    if not text:
-        return ""
-    match = _TS_RE.search(text)
-    handle = (text[: match.start()] if match else text).strip()
-    return handle[:80]
+    if not url or not pattern:
+        return None
+    found = re.search(pattern, str(url).split("?", 1)[0].strip())
+    return found.group(1) if found else None
 
 
 def preview_matches(preview: str, message: str) -> bool:
@@ -154,20 +142,18 @@ def new_rows(tail, recorded, *, now: float) -> list:
     return out
 
 
-def match_listing(row_text: str, items) -> str | None:
-    """The one item this inbox row is about, by its title appearing in the row text.
+def match_item(product_id: str | None, items, market: str, pattern: str) -> str | None:
+    """Which of our items a conversation is about, by the marketplace's listing id.
 
-    Exactly one match or nothing. An inbox row carries the listing title, so this is how a buyer's
-    first message becomes a thread — but an ambiguous row (no title matched, or two) is left alone
-    rather than attached to a guess, because a thread on the wrong item would negotiate against the
-    wrong floor.
+    Exactly one match or nothing. A thread attached to the wrong item would negotiate against the
+    wrong floor, so an id we do not recognise is left alone — that is a listing the seller made
+    outside the agent, not something to adopt onto a guess.
     """
-    haystack = normalize(row_text)
-    if not haystack:
+    if not product_id:
         return None
     matched = [
         item["id"]
         for item in items
-        if (item.get("title") or "").strip() and normalize(item["title"]) in haystack
+        if listing_id((item.get("listing_urls") or {}).get(market, ""), pattern) == product_id
     ]
     return matched[0] if len(matched) == 1 else None

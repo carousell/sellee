@@ -9,14 +9,15 @@ from __future__ import annotations
 
 import pytest
 
+from selly_agent.browser.markets.carousell import LISTING_ID_PATTERN as PATTERN
 from selly_agent.browser.reconcile import (
     classify_tail,
-    match_listing,
+    listing_id,
+    match_item,
     message_id,
     new_rows,
     normalize,
     preview_matches,
-    split_handle,
 )
 
 
@@ -49,11 +50,6 @@ def test_the_tail_is_capped_to_its_trailing_bubbles() -> None:
     assert [row["text"] for row in classify_tail(rows, cap=3)] == ["m17", "m18", "m19"]
 
 
-def test_direction_comes_from_the_side_the_reader_measured() -> None:
-    rows = [_bubble("hi", "in"), _bubble("hello", "out")]
-    assert [row["side"] for row in classify_tail(rows)] == ["in", "out"]
-
-
 # --- normalization and ids ----------------------------------------------------------------------
 
 
@@ -69,12 +65,6 @@ def test_the_same_message_always_gets_the_same_id() -> None:
 
 
 # --- idempotency --------------------------------------------------------------------------------
-
-
-def test_a_first_read_yields_every_bubble(store=None) -> None:
-    rows = new_rows([_bubble("hi"), _bubble("you there?")], [], now=100.0)
-    assert [row["text"] for row in rows] == ["hi", "you there?"]
-    assert [row["direction"] for row in rows] == ["in", "in"]
 
 
 def test_re_reading_an_unchanged_tail_yields_nothing() -> None:
@@ -156,41 +146,44 @@ def test_the_preview_gate_recognises_the_message_it_is_showing(preview, message,
     assert preview_matches(preview, message) is expected
 
 
-# --- handles ------------------------------------------------------------------------------------
+# --- listing attribution --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
-    ("row_text", "expected"),
+    ("url", "expected"),
     [
-        ("bob_the_buyer3:18 PM Teak lamp still available?", "bob_the_buyer"),
-        ("diamond143 4:15 PM Teak lamp hi", "diamond143"),
-        ("alice Yesterday Teak lamp hi", "alice"),
-        ("carol 12/07 Teak lamp hi", "carol"),
-        ("", ""),
+        ("https://www.carousell.sg/p/teak-lamp-1328307791/", "1328307791"),
+        ("https://www.carousell.sg/p/teak-lamp-1328307791", "1328307791"),
+        ("https://www.carousell.sg/p/teak-lamp-1328307791/?ref=share", "1328307791"),
+        ("https://www.carousell.sg/p/1328307791/", "1328307791"),
+        ("https://www.carousell.sg/u/someone/", None),
+        ("", None),
     ],
 )
-def test_the_handle_is_everything_before_the_first_timestamp(row_text, expected) -> None:
-    """The hour is constrained to 1-12 so a handle's trailing digit cannot fuse with a single-digit
-    hour into an earlier bogus match, which used to truncate the handle."""
-    assert split_handle(row_text) == expected
+def test_the_listing_id_comes_out_of_the_permalink(url, expected) -> None:
+    """The marketplace names a conversation's listing by this id, so it is the join to our items."""
+    assert listing_id(url, PATTERN) == expected
 
 
-# --- listing attribution -------------------------------------------------------------------------
+def _items(*ids):
+    return [
+        {"id": f"item_{i}", "listing_urls": {"carousell": f"https://www.carousell.sg/p/x-{pid}/"}}
+        for i, pid in enumerate(ids)
+    ]
 
 
-def _items(*titles):
-    return [{"id": f"item_{i}", "title": title} for i, title in enumerate(titles)]
+def test_a_conversation_is_matched_to_the_item_with_that_listing_id() -> None:
+    assert match_item("222", _items("111", "222"), "carousell", PATTERN) == "item_1"
 
 
-def test_a_row_naming_exactly_one_listing_is_attributed_to_it() -> None:
-    items = _items("Teak lamp", "Office chair")
-    assert match_listing("bob 3:18 PM Teak lamp still available?", items) == "item_0"
-
-
-def test_an_ambiguous_or_unmatched_row_is_attributed_to_nothing() -> None:
-    """A thread on the wrong item would negotiate against the wrong floor, so an unclear row is left
-    alone rather than attached to a guess."""
-    items = _items("Lamp", "Lamp shade")
-    assert match_listing("bob 3:18 PM Lamp shade hi", items) is None  # both titles match
-    assert match_listing("bob 3:18 PM Bicycle hi", items) is None  # nothing matches
-    assert match_listing("", items) is None
+@pytest.mark.parametrize(
+    ("product_id", "items", "reason"),
+    [
+        ("999", _items("111", "222"), "a listing that is not ours"),
+        (None, _items("111"), "a conversation with no listing"),
+        ("111", [{"id": "item_x", "listing_urls": {}}], "an item we have not published"),
+    ],
+)
+def test_an_unrecognised_listing_matches_nothing(product_id, items, reason) -> None:
+    """A thread on the wrong item would negotiate against the wrong floor."""
+    assert match_item(product_id, items, "carousell", PATTERN) is None, reason

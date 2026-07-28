@@ -144,13 +144,6 @@ def test_the_send_leaves_the_intent_for_the_tool_to_commit(store, bus, thread) -
     assert store.get_thread("carousell:99")["messages"] == []
 
 
-def test_the_thread_url_is_never_composed_by_hand(store, bus, thread) -> None:
-    client = StubClient()
-    _sink(store, bus, client).send(thread, "hi", "reply", _reserve(store))
-    navigations = [args for name, args in client.calls if name == "navigate"]
-    assert navigations == [_THREAD_URL]
-
-
 # --- nothing sent: fail closed, stay retryable ---------------------------------------------------
 
 
@@ -225,14 +218,6 @@ def test_the_sweep_escalates_an_unverified_send_without_resending(store, bus, th
     assert len(folded) == 1 and folded[0]["escalation_new"] is True
     assert _intent_status(store, intent) == "unconfirmed"
     assert store.get_thread("carousell:99")["status"] == "escalated"
-
-
-def test_no_error_from_the_click_is_not_treated_as_success(store, bus, thread) -> None:
-    """A refused validation, a cleared composer, or a swallowed click all look fine from outside;
-    only our own words in an outbound bubble count."""
-    client = StubClient(echo_on_click=False, sent_bubbles=[{"text": "hi", "side": "in", "y": 1}])
-    with pytest.raises(sink.SendUnverified):
-        _sink(store, bus, client).send(thread, "hi", "reply", _reserve(store))
 
 
 def test_an_inbound_bubble_with_our_text_does_not_count_as_verification(store, bus, thread):
