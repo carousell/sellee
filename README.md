@@ -86,8 +86,8 @@ The daemon serves a localhost web tail at `http://127.0.0.1:<http_port>/tail?tok
 (the token lives 0600 in the config dir). It is the human-readable surface — a rendered view per
 event kind, not a JSON dump: the seller's messages and the agent's replies read as a conversation,
 each tool call collapses into one row with its result folded in, and every row is labelled with the
-actor it belongs to — a colored pill per pass, teal `(user)` for what the seller sent, grey
-`(system)` for the daemon acting on its own.
+actor it belongs to — a colored pill per pass, a teal `user` pill for what the seller sent, a grey
+`system` one for the daemon acting on its own.
 
 - **`&since=`** — the lookback window on load, in the `inspect --since` grammar
   (`30s` / `15m` / `2h` / `1d`). Defaults to `1h`, so a load starts near now.

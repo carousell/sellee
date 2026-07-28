@@ -172,7 +172,7 @@ function passPill(passId, hue) {
 // has an actor: the seller speaking, or the daemon acting on its own. Neither is a span you can
 // click — only a pass is something to isolate.
 function staticPill(label) {
-  return el("span", "pill static " + label, "(" + label + ")");
+  return el("span", "pill static " + label, label);
 }
 
 function oneLine(value, cap) {
