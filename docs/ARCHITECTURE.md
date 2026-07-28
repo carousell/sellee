@@ -93,6 +93,12 @@ Observability:
   emits NDJSON via the same `events.event_to_wire` serializer the web tail's
   `/events.json` uses. Each event carries a derived `level` (`events.level_for`);
   the tail hides the `routine` heartbeat by default, `--all` shows it.
+- **`data/tail.html`** — the web tail's page, an opinionated *human* view over
+  that same wire shape: a renderer per kind, tool calls paired with their
+  results, per-pass colors, the routine tier and a small noise set hidden behind
+  a verbose toggle. The NDJSON stream stays the machine form and the debugging
+  tool; the page is free to abbreviate because every row expands to its own wire
+  JSON (and `/tail?json=true` is the zero-renderer view).
 
 The tool surface and pass runner — how the LLM touches state and how it runs.
 Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):

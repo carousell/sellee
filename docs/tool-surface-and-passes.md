@@ -16,8 +16,10 @@ surfaces:
 - **`GET /events.json` + `GET /tail`** — the localhost web tail, reading the
   event store over a read-only connection. Rows use the shared
   `events.event_to_wire` shape (same as `inspect --json`, incl. the derived
-  `level`); `/tail?...&json=true`
-  renders that raw JSON per line.
+  `level`); `after_seq` pages, `pass` filters, and `since_sec` windows the
+  lookback so a page load starts near now instead of replaying the retention
+  window. `/tail` serves `data/tail.html`, the rendered human view;
+  `/tail?...&json=true` renders that raw JSON per line instead.
 - **`POST /control/enqueue-pass`** — enqueue a pass (attended token only).
 - **`POST /control/connect-telegram`** + **`GET /control/channel-status`** — the
   Telegram bind flow (attended token only): the connect route takes the BotFather
@@ -50,6 +52,10 @@ uniformly:
   tier can't see is indistinguishable from one that doesn't exist.
 - Each call publishes `tool.call`, then `tool.result` or `tool.error`, keyed by
   the session's pass id — the server-side ground truth against model narration.
+  All three carry a `call_id` (`call_<hex12>`) minted per call, so a reader pairs
+  a call with its outcome exactly rather than by adjacency. The one exception is
+  the `tool.error` from a *validation* failure: no call happened, so there is
+  nothing to pair with.
 
 Tool-level failures come back as `tools/call` results with `isError`, not
 transport errors; only malformed/unknown JSON-RPC is a protocol error.
@@ -157,7 +163,11 @@ delivered-via-catchup, while escalations clear only on resolve.
    workspace holding only the generated harness config, and spawns the harness.
 3. The pass calls back over `POST /mcp` with its token; each call is validated,
    tier-filtered, and logged server-side. The pass's stdout is parsed live
-   (`pass_stream.py`) into `pass.*` events.
+   (`pass_stream.py`) into `pass.*` events: `pass.tool_use` carries the harness
+   block's `id`, and a user message becomes one `pass.tool_result` per block
+   carrying its `tool_use_id`, so the harness view pairs on its own ids too.
+   The two id families never mix — a harness `toolu_…` never reaches the server,
+   so `pass.tool_use` and `tool.call` stay separate records of the same call.
 4. A babysitter enforces the deadline and daemon-stop via a process-group kill
    (`proc_tree.py`). On exit the outcome is classified
    (`ok`/`error`/`timeout`/`cap_hit`/`spawn_error`) and ledgered as `pass.end`

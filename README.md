@@ -83,8 +83,22 @@ Once bound, the phone is the async channel: buyer escalations push to it, and
 by the daemon (no LLM); anything else is a conversation with your selling agent.
 
 The daemon serves a localhost web tail at `http://127.0.0.1:<http_port>/tail?token=<attended-token>`
-(the token lives 0600 in the config dir); append `&json=true` for a raw-JSON view matching
-`inspect --json`. Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
+(the token lives 0600 in the config dir). It is the human-readable surface — a rendered view per
+event kind, not a JSON dump: the seller's messages and the agent's replies read as a conversation,
+each tool call collapses into one row with its result folded in, and every pass gets its own color
+on its pill and left border.
+
+- **`&since=`** — the lookback window on load, in the `inspect --since` grammar
+  (`30s` / `15m` / `2h` / `1d`). Defaults to `1h`, so a load starts near now.
+- **verbose** — the checkbox top-right reveals what is hidden by default: the routine scheduler
+  heartbeat, thinking-token ticks, and the handful of kinds that are redundant next to the rows
+  they accompany.
+- **click a pass pill** to isolate that pass; the chip in the header clears it.
+- **every row expands** to the raw wire JSON of its own event — the view abbreviates freely
+  because nothing is ever actually lost.
+- **`&json=true`** — the zero-renderer view: one raw JSON line per event, matching `inspect --json`.
+
+Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 
 ## Layout
 
@@ -119,6 +133,7 @@ src/selly_agent/
   daemon.py                wires it together; the daemon process
   supervisor.py            launchd install/start/stop/status/uninstall
   inspect_cli.py           the event tail
+  data/tail.html           the web tail's page: the rendered human view of the event log
 tests/                     plain pytest (tests/conformance/ = MCP SDK interop, 3.10+)
 ```
 

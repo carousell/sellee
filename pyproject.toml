@@ -30,9 +30,8 @@ version = { attr = "selly_agent.__version__" }
 where = ["src"]
 
 # Non-Python files that must ship with the package: the migration SQL, the marketplace/scam
-# registries, the web tail page, and the prompt layer. A versioned install is an unpacked source
-# tree, so these are
-# already in place there; the stanza is what keeps a wheel build honest.
+# registries, the web tail's page, and the prompt layer. A versioned install is an unpacked
+# source tree, so these are already in place there; the stanza is what keeps a wheel build honest.
 [tool.setuptools.package-data]
 selly_agent = [
     "migrations/*/*.sql",
