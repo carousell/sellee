@@ -38,7 +38,7 @@ you sell and offers marketplace sign-in and Telegram. Both offers are skippable.
 ./setup --dev        # point the install at this working tree instead of copying it
 ./setup --yes --manual --region SG --skip-markets --skip-telegram   # unattended
 
-selly-agent healthcheck            # five checks; exit 1 if anything is actually wrong
+selly-agent healthcheck            # the install's health; exit 1 if anything is actually wrong
 selly-agent update                 # fetch, verify, swap, restart, verify — or roll back
 selly-agent update --check         # exit 10 if there is a newer release
 selly-agent update --rollback      # go back to the previous version
@@ -158,7 +158,7 @@ src/selly_agent/
   control.py               the one client for the daemon's localhost control routes
   connect_cli.py           `connect telegram` + `connect <marketplace>` over those routes
   setup_cli.py             the installer's phase orchestration (no LLM anywhere in it)
-  healthcheck.py           the five checks, and their renderer
+  healthcheck.py           the health checks, and their renderer
   uninstall_cli.py         removal: marked plists, our shim, the roots, --preserve-data
   installer/               ui (setup's voice), preflight gates, the versioned layout, update
   browser/                 the daemon's Playwright MCP client, reconcile, markets/ adapters
