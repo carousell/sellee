@@ -13,6 +13,7 @@ from __future__ import annotations
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -63,6 +64,9 @@ _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
 # throughput.
 _CROSSLIST_LANE_INTERVAL_SEC = 30.0
+# A cold `npx` fetch of the browser server and its dependencies is a download, so minutes. This is
+# off the hot path entirely, so it only has to be longer than a slow connection needs.
+_BROWSER_WARM_TIMEOUT_SEC = 600.0
 
 # Said whenever acquiring the browser had to start Chrome. Deliberately names no flow: any actor
 # that needs the browser may be the one that opens the window, and the seller only needs to know
@@ -87,6 +91,51 @@ def ensure_chrome(cfg, store, bus) -> None:
     if state == chrome.LAUNCHED:
         store.queue_notice(CHROME_STARTED_NOTICE)
         bus.publish("browser.chrome_launched", {"port": cfg.chrome_cdp_port})
+
+
+def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
+    """Fetch the pinned browser server into the npx cache in the background, at startup.
+
+    Two things leave that cache without it, both after the installer warmed it: an update that
+    bumped the pinned version (an update never re-runs setup's gates), and npm pruning a cache we
+    do not own. Either way the next spawn becomes a download, which can outrun the client's startup
+    timeout — turning "the first browser action is slower" into "the first browser action fails".
+
+    A thread, so nothing waits on it, and its failures are only logged: a machine that is offline
+    right now still starts, and still recovers the moment it can fetch.
+
+    Skipped under an override — we do not know a foreign command's warming semantics — and in a
+    single-tick run, which is a smoke check that must not reach the network.
+    """
+    if once or cfg.playwright_mcp_cmd:
+        return None
+
+    def warm() -> None:
+        argv = ["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
+        try:
+            proc = subprocess.run(
+                argv,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=_BROWSER_WARM_TIMEOUT_SEC,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            log.warning("could not warm %s: %s", browser_client.PINNED_MCP_SPEC, exc)
+            return
+        if proc.returncode == 0:
+            log.debug("%s is in the npx cache", browser_client.PINNED_MCP_SPEC)
+        else:
+            log.warning(
+                "could not warm %s (exit %s): %s",
+                browser_client.PINNED_MCP_SPEC,
+                proc.returncode,
+                (proc.stderr or "").strip()[-200:],
+            )
+
+    thread = threading.Thread(target=warm, name="browser-warm", daemon=True)
+    thread.start()
+    return thread
 
 
 def make_browser_factory(cfg, store, bus, holder: dict):
@@ -200,6 +249,7 @@ def run_daemon(*, once: bool) -> int:
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
     browser_factory = make_browser_factory(cfg, store, bus, browser_holder)
+    warm_browser_server(cfg, once=once)
 
     def reply_sink_factory():
         """The marketplace send, built when a send actually needs it — never at context build, so
