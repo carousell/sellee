@@ -13,7 +13,7 @@ Concurrency is a few threads sharing SQLite state.
 
 Everything is reachable from one front door: `bin/selly-agent` resolves the
 package and dispatches argv via `cli.py` (`daemon run/install/start/stop/status/
-uninstall`, `inspect`, `version`). launchd's job points at this launcher.
+uninstall`, `logs`, `version`). launchd's job points at this launcher.
 
 ## Layout
 
@@ -92,7 +92,7 @@ Observability — one event record, two readers. Detail in
   that timestamp is the sole ordering key.
 - **`retention.py`** — the daily prune. The event store is disposable by design;
   a kept kind (`pass.end`) outlives its own detail.
-- **`inspect_cli.py`** — `selly-agent inspect`, a read-only tail that needs no
+- **`logs_cli.py`** — `selly-agent logs`, a read-only tail that needs no
   daemon. `--json` is the machine form.
 - **`data/tail.html`** — the localhost web tail, an opinionated *human* view over
   the same wire shape.

@@ -1,7 +1,7 @@
 """Parse `claude -p --output-format stream-json` output into the common event schema, live.
 
 Each stdout line is one JSON object; this maps it to zero or more (kind, payload) pairs the pass
-runner publishes to the bus as the pass runs — so inspect --follow shows a live pass, not a
+runner publishes to the bus as the pass runs — so logs --follow shows a live pass, not a
 post-mortem of a log tail. Text and tool-result payloads are truncated to a cap, and an image
 block's base64 is summarized to its size (the transcript store is an observability record, not a
 verbatim harness log; the per-pass stderr file keeps the rest). A line that is not parseable JSON
@@ -115,7 +115,7 @@ def _elide_images(value: object) -> object:
     A photo read arrives as a content block carrying ~170KB of base64. Truncating that to the text
     cap would store a couple of KB of meaningless prefix and push the useful part of the result out
     of the event — so the payload is summarized rather than clipped, which is also the only form a
-    person tailing `inspect` can read.
+    person tailing `logs` can read.
     """
     if isinstance(value, list):
         return [_elide_images(item) for item in value]

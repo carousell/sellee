@@ -1,4 +1,4 @@
-"""Command-line dispatch — one front door for the daemon, inspect, and version.
+"""Command-line dispatch — one front door for the daemon, the logs, and version.
 
 argparse subcommands over sys.argv; subcommand implementations are imported lazily so the
 CLI module itself stays cheap to load and free of import cycles.
@@ -123,25 +123,23 @@ def _build_parser() -> argparse.ArgumentParser:
         p = dsub.add_parser(name, help=helptext)
         p.add_argument("--label", default=None, help="override the launchd label")
 
-    inspect = sub.add_parser("inspect", help="tail the event store")
-    inspect.add_argument("--follow", action="store_true", help="poll for new events (~1s)")
-    inspect.add_argument("--pass", dest="pass_id", default=None, help="filter by pass id")
-    inspect.add_argument(
-        "--since", default=None, help="only events newer than a duration (e.g. 30m)"
-    )
-    inspect.add_argument(
+    logs = sub.add_parser("logs", help="tail the event store")
+    logs.add_argument("--follow", action="store_true", help="poll for new events (~1s)")
+    logs.add_argument("--pass", dest="pass_id", default=None, help="filter by pass id")
+    logs.add_argument("--since", default=None, help="only events newer than a duration (e.g. 30m)")
+    logs.add_argument(
         "--kind",
         action="append",
         dest="kinds",
         default=None,
         help="filter by event kind (repeatable)",
     )
-    inspect.add_argument(
+    logs.add_argument(
         "--json",
         action="store_true",
         help="emit NDJSON (one event object per line) instead of the human format",
     )
-    inspect.add_argument(
+    logs.add_argument(
         "--all",
         action="store_true",
         help="include routine (heartbeat) events, hidden by default",
@@ -249,10 +247,10 @@ def main(argv: list[str] | None = None) -> int:
 
         return daemon_cli.dispatch(args)
 
-    if args.command == "inspect":
-        from selly_agent import inspect_cli
+    if args.command == "logs":
+        from selly_agent import logs_cli
 
-        return inspect_cli.run(args)
+        return logs_cli.run(args)
 
     if args.command == "pass":
         from selly_agent import pass_cli

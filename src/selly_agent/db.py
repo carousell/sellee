@@ -1,7 +1,7 @@
 """SQLite access — WAL, one write connection per DB behind a lock, read-only readers.
 
 Zero-pip is load-bearing for the install story, so this is stdlib sqlite3: no ORM. WAL gives
-concurrent readers (inspect / web tail) by construction. The write connection runs in
+concurrent readers (the logs tail / web tail) by construction. The write connection runs in
 autocommit mode (isolation_level=None) with explicit BEGIN IMMEDIATE / COMMIT, because 3.9's
 sqlite3 has no autocommit parameter and implicit transactions muddy DDL. All writes go through
 the one connection serialized by a lock; readers open independent read-only URI connections.
@@ -35,7 +35,7 @@ def connect_writer(path: Path) -> sqlite3.Connection:
 
 def connect_reader(path: Path) -> sqlite3.Connection:
     """A read-only connection. Works whether or not a writer is live — even against a stopped
-    daemon's file (F7's `inspect` tail of history)."""
+    daemon's file (the `logs` tail of history)."""
     uri = f"file:{path}?mode=ro"
     conn = sqlite3.connect(uri, uri=True, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row

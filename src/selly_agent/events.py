@@ -67,7 +67,7 @@ def routine_kinds() -> tuple[str, ...]:
 
 
 def event_to_wire(event: Event) -> dict:
-    """Canonical JSON shape of an event: the `inspect --json` NDJSON line and the web tail's
+    """Canonical JSON shape of an event: the `logs --json` NDJSON line and the web tail's
     /events.json rows share this exactly. `@ts` is a system-local RFC3339 render of `ts`,
     emitted first for legibility; `ts` stays as the raw epoch (the faithful ordering value);
     `level` is derived from kind. The field order here is the wire order — serialize without
@@ -93,7 +93,7 @@ def query_events(
     limit: int | None = None,
 ) -> list[Event]:
     """Read events from any connection (writer or a read-only reader), ordered by seq. The
-    inspect CLI drives this over its own read-only connection, needing no daemon cooperation."""
+    logs CLI drives this over its own read-only connection, needing no daemon cooperation."""
     clauses: list[str] = []
     params: list = []
     if after_seq is not None:

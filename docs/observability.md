@@ -22,7 +22,7 @@ any live subscriber; a subscriber that raises never breaks a publish.
 
 ### Wire shape
 
-`event_to_wire` is the one serializer: `inspect --json` NDJSON lines and the web
+`event_to_wire` is the one serializer: `logs --json` NDJSON lines and the web
 tail's `/events.json` rows are byte-identical in shape.
 
 ```json
@@ -72,7 +72,7 @@ so `pass.tool_use` and `tool.call` are two separate records of the same call, no
 something to fold together. The one `tool.error` with no `call_id` is the
 validation failure — it fires before a call exists, so there is nothing to pair.
 
-## `selly-agent inspect`
+## `selly-agent logs`
 
 A read-only tail over its own connection: it needs no cooperation from the daemon
 and works whether or not one is running, including against a stopped daemon's
@@ -134,7 +134,7 @@ not by escaping.
 | **verbose** | Reveals what is hidden by default — the `routine` tier, thinking-token ticks, and the handful of kinds redundant beside the rows they accompany. |
 | **pass pill** | Isolates one pass (see above). |
 | `?since=` | Lookback window on load, in the `--since` grammar. Defaults to `1h`, so a load starts near now instead of replaying the retention window. |
-| `?json=true` | The zero-renderer view: one raw JSON line per event, matching `inspect --json`. |
+| `?json=true` | The zero-renderer view: one raw JSON line per event, matching `logs --json`. |
 
 Thinking *content* never enters the log at all — the stream parser drops those
 blocks — so the per-tick `pass.raw` marker is the only thinking artifact, and the

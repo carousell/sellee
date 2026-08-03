@@ -12,7 +12,7 @@ greenfield core that ports the battle-tested engines from the legacy repo.
 
 Early. On top of the core skeleton (XDG paths, config, a SQLite state layer with
 a startup migration runner, an event bus + transcript store, a scheduler loop,
-launchd integration, and the `inspect` CLI), the daemon now runs the **vertical
+launchd integration, and the `logs` CLI), the daemon now runs the **vertical
 slice**: a localhost HTTP server exposing a typed MCP tool surface, a pass runner
 that spawns a headless `claude -p` pass and streams it to the event bus, the
 carousell.ai rail wrapped behind a tool, and the harness-config seam. The
@@ -114,13 +114,13 @@ bin/selly-agent connect carousell
 curl -s http://127.0.0.1:9222/json/version
 
 # tail the event store (works whether or not the daemon is running)
-bin/selly-agent inspect --follow
+bin/selly-agent logs --follow
 
 # or NDJSON — one event object per line, pipeable to jq
-bin/selly-agent inspect --follow --json | jq .
+bin/selly-agent logs --follow --json | jq .
 
 # routine heartbeat events (task.start/task.ok) are hidden by default; --all shows them
-bin/selly-agent inspect --all
+bin/selly-agent logs --all
 ```
 
 Once bound, the phone is the async channel: buyer escalations push to it, and
@@ -129,7 +129,7 @@ by the daemon (no LLM); anything else is a conversation with your selling agent.
 
 The daemon also serves a localhost web tail at
 `http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token lives 0600 in the config
-dir) — a rendered, human-readable view of the same event log, where `inspect --json` is the
+dir) — a rendered, human-readable view of the same event log, where `logs --json` is the
 machine form. Both are covered in [`docs/observability.md`](docs/observability.md).
 
 Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
@@ -174,7 +174,7 @@ src/selly_agent/
   scheduler.py             the loop: due tasks -> executor, backoff, task events
   daemon.py                wires it together; the daemon process
   supervisor.py            launchd install/start/stop/status/uninstall
-  inspect_cli.py           the event tail
+  logs_cli.py              the event tail
   data/tail.html           the web tail's page: the rendered human view of the event log
 tests/                     plain pytest (tests/conformance/ = MCP SDK interop, 3.10+)
 ```

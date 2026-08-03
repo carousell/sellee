@@ -1,4 +1,4 @@
-"""`selly-agent inspect` — tail the event store over a read-only connection.
+"""`selly-agent logs` — tail the event store over a read-only connection.
 
 Reads events.db directly (WAL gives concurrent readers by construction), so it needs no
 cooperation from the daemon and works whether or not the daemon is up — it can even tail a

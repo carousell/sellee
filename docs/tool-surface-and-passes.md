@@ -15,7 +15,7 @@ surfaces:
   Responses are plain JSON (no SSE); `GET /mcp` is 405.
 - **`GET /events.json` + `GET /tail`** — the localhost web tail, reading the
   event store over a read-only connection. Rows use the shared
-  `events.event_to_wire` shape (same as `inspect --json`, incl. the derived
+  `events.event_to_wire` shape (same as `logs --json`, incl. the derived
   `level`); `after_seq` pages, `pass` filters, and `since_sec` windows the
   lookback so a page load starts near now instead of replaying the retention
   window. `/tail` serves `data/tail.html`, the rendered human view;
@@ -233,5 +233,5 @@ delivered-via-catchup, while escalations clear only on resolve.
 
 A crash mid-pass is failed loudly by a stale-running sweep (never silently
 re-run), and a stray reaper kills untracked marked pass groups past their
-deadline. `inspect --pass <id>` interleaves the harness stream and the
+deadline. `logs --pass <id>` interleaves the harness stream and the
 server-side tool events by their shared pass id.

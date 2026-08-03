@@ -4,7 +4,7 @@ A fake harness process genuinely calls our MCP endpoint over HTTP with its per-p
 (get_item -> carousell_ai_publish_listing -> send_message), driven by the real daemon pieces:
 enqueue via the control route, the pass lane claims it, run_pass spawns and streams it. We assert
 the listing URL is recorded, every tool.call/tool.result and pass.* event is correlated by one
-pass_id, and inspect --pass renders both streams. A second scenario proves the attended tier can
+pass_id, and logs --pass renders both streams. A second scenario proves the attended tier can
 run create_item -> set_floor -> publish against the same fake rail.
 """
 
