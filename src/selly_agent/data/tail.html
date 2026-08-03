@@ -10,6 +10,12 @@
   is only safe because nothing is ever lost: every row expands to its raw wire JSON, and the
   verbose toggle reveals every row hidden by default.
 
+  One tier never arrives at all: the server does not send `routine` events (the scheduler
+  heartbeat) to this page. They are the bulk of the volume on a busy install and nobody opens a
+  tail to read them, so they are dropped before the wire rather than hidden after it — which is
+  also what lets a page open on a fixed count of events instead of a time window. `logs --all` in
+  the terminal is where that tier is answered.
+
   Two rules hold throughout:
     * payload-derived strings reach the DOM only as textContent — a preview, a reply, or a tool
       result carries text a buyer wrote, and this page never gives it a chance to be markup;
@@ -45,8 +51,9 @@ body.json #chip,body.json .verbose-toggle{display:none}
   padding:.1rem 2.4rem .1rem .55rem;border-left:3px solid #303030}
 .row:hover{background:#171717}
 .row.warn{background:var(--warn-bg)}
-/* Hidden by default: the routine tier plus the per-kind noise set. `filtered` is pass isolation
-   and outranks the verbose reveal, so isolating a pass never drags other passes back in. */
+/* Hidden by default: the per-kind noise set (the routine tier never reaches the page). `filtered`
+   is pass isolation and outranks the verbose reveal, so isolating a pass never drags other
+   passes back in. */
 .row.noise,.row.filtered{display:none}
 body.verbose .row.noise:not(.filtered){display:flex}
 
@@ -112,7 +119,9 @@ function parseSince(raw, fallbackSec) {
   const match = /^(\d+)([smhd])$/.exec((raw || "").trim());
   return match ? Number(match[1]) * UNIT_SEC[match[2]] : fallbackSec;
 }
-const sinceSec = parseSince(params.get("since"), 3600);
+// No default window: the page opens on the newest events whatever their age, the way `tail -n`
+// does, so an agent idle since yesterday still opens on what it last did. ?since= narrows it.
+const sinceSec = parseSince(params.get("since"), 0);
 if (jsonMode) document.body.classList.add("json");
 
 // --- components ------------------------------------------------------------------------------
@@ -402,8 +411,8 @@ const RENDERERS = {
   },
 };
 
-// Kinds the wire calls "info" but a casual reader does not need. The routine tier is hidden by
-// its level, not by name.
+// Kinds the wire calls "info" but a casual reader does not need. The routine tier is not listed
+// here because it never arrives — the server drops it for this page.
 const NOISE_KINDS = new Set([
   "pass.queued",
   "message.delivered",
@@ -525,6 +534,8 @@ function renderRow(event) {
   row.appendChild(rawDetails(event));
 
   const flags = rendered.dataset || {};
+  // The level check is a guard, not the mechanism: the server already withholds the routine tier,
+  // and this keeps the page honest if it is ever pointed at a source that does not.
   if (event.level === "routine" || NOISE_KINDS.has(event.kind) || flags.noise === "1") {
     row.classList.add("noise");
   }
@@ -544,22 +555,24 @@ function append(event) {
 
 // --- polling ---------------------------------------------------------------------------------
 
-let after = 0;
-// The lookback window rides only until the first row lands: an empty window answers last_seq 0,
-// so dropping it before then would restart the next poll at the beginning of the history.
-let windowed = sinceSec > 0;
+// null until the first response has been seen: sending no after_seq is what asks the server for
+// the newest page rather than for everything from the beginning.
+let after = null;
 
 async function poll() {
   try {
-    const query = new URLSearchParams({token: token, after_seq: String(after)});
-    if (windowed) query.set("since_sec", String(sinceSec));
+    const query = new URLSearchParams({token: token});
+    if (after === null) {
+      if (sinceSec > 0) query.set("since_sec", String(sinceSec));
+    } else {
+      query.set("after_seq", String(after));
+    }
     const response = await fetch("events.json?" + query);
     if (response.ok) {
       const data = await response.json();
       for (const event of data.events) append(event);
       after = data.last_seq;
       if (data.events.length) {
-        windowed = false;
         pinIfFollowing();  // once per batch, not per row — one layout read instead of hundreds
       }
     }

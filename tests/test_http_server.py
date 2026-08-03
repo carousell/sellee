@@ -10,7 +10,7 @@ import pytest
 
 import selly_agent.tools  # noqa: F401  registration
 from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
+from selly_agent.http_server import _PAGE_EVENTS, HttpServer
 from selly_agent.paths import PACKAGE_DATA_DIR
 from selly_agent.tools.registry import ToolContext
 
@@ -301,6 +301,49 @@ def test_events_json_since_sec_windows_the_history(server, bus) -> None:
             server, "GET", f"/events.json?token=attended-secret&after_seq=0&since_sec={raw}"
         )
         assert "demo.old" in [e["kind"] for e in body["events"]]
+
+
+def test_events_json_seeds_with_the_newest_page(server, bus) -> None:
+    """No after_seq means a page is opening: it gets the newest events, not the oldest, so a tail
+    shows now instead of paging forward through the history one poll at a time."""
+    for i in range(_PAGE_EVENTS + 20):
+        bus.publish("demo.event", {"i": i})
+    status, body = _request(server, "GET", "/events.json?token=attended-secret")
+    assert status == 200
+    assert len(body["events"]) == _PAGE_EVENTS
+    seen = [e["payload"]["i"] for e in body["events"]]
+    assert seen[-1] == _PAGE_EVENTS + 19  # the newest event is present
+    assert seen == sorted(seen)  # still answered oldest-first within the page
+    # and the cursor is at the ceiling, so following starts clean rather than replaying
+    assert body["last_seq"] == max(e["seq"] for e in body["events"])
+
+
+def test_events_json_never_sends_the_routine_tier(server, bus) -> None:
+    """The heartbeat is the bulk of the volume and none of what a tail is opened to read."""
+    bus.publish("task.start", {"task": "pass_lane"})
+    bus.publish("task.ok", {"task": "pass_lane"})
+    bus.publish("demo.event", {})
+    _, body = _request(server, "GET", "/events.json?token=attended-secret")
+    kinds = [e["kind"] for e in body["events"]]
+    assert "demo.event" in kinds
+    assert "task.start" not in kinds and "task.ok" not in kinds
+    assert all(e["level"] != "routine" for e in body["events"])
+
+
+def test_events_json_cursor_clears_the_routine_it_skipped(server, bus) -> None:
+    """The cursor tracks what was considered, not what was returned: parked below a run of skipped
+    heartbeat rows it would rescan them on every poll for as long as the page stayed open."""
+    bus.publish("demo.event", {})
+    _, first = _request(server, "GET", "/events.json?token=attended-secret")
+    for _ in range(50):
+        bus.publish("task.ok", {"task": "pass_lane"})
+    ceiling = bus.publish("task.ok", {"task": "pass_lane"}).seq
+
+    _, body = _request(
+        server, "GET", f"/events.json?token=attended-secret&after_seq={first['last_seq']}"
+    )
+    assert body["events"] == []  # nothing worth showing happened
+    assert body["last_seq"] == ceiling  # but the cursor moved past all of it
 
 
 def test_tail_serves_the_packaged_page(server) -> None:

@@ -5,8 +5,8 @@ from __future__ import annotations
 import time
 
 from selly_agent import migrations
-from selly_agent.db import Database
-from selly_agent.events import EventBus, EventStore, routine_kinds
+from selly_agent.db import Database, connect_reader
+from selly_agent.events import EventBus, EventStore, latest_seq, routine_kinds
 
 
 def _store(tmp_path) -> EventStore:
@@ -107,3 +107,42 @@ def test_delete_kinds_older_than_targets_only_listed_kinds(tmp_path) -> None:
     deleted = store.delete_kinds_older_than(time.time() + 1000, ("task.ok",))
     assert deleted == 1
     assert [e.seq for e in store.read()] == [keeper.seq]  # the info event is untouched
+
+
+def test_newest_takes_the_last_rows_but_answers_oldest_first(tmp_path) -> None:
+    """What lets a tail open at now: the newest page, still in reading order."""
+    store = _store(tmp_path)
+    for i in range(10):
+        store.record("demo.event", {"i": i}, pass_id=None)
+
+    assert [e.payload["i"] for e in store.read(limit=3, newest=True)] == [7, 8, 9]
+    assert [e.payload["i"] for e in store.read(limit=3)] == [0, 1, 2]
+
+
+def test_exclude_kinds_drops_a_whole_tier(tmp_path) -> None:
+    store = _store(tmp_path)
+    store.record("task.ok", {}, pass_id=None)
+    store.record("demo.event", {}, pass_id=None)
+
+    assert [e.kind for e in store.read(exclude_kinds=routine_kinds())] == ["demo.event"]
+    # an empty exclusion is a no-op, not "exclude everything"
+    assert len(store.read(exclude_kinds=())) == 2
+
+
+def test_upto_seq_bounds_the_read_at_a_ceiling(tmp_path) -> None:
+    """Read against a ceiling taken before the rows, so an event arriving mid-request is left for
+    the next read rather than skipped by a cursor that jumped over it."""
+    store = _store(tmp_path)
+    first = store.record("demo.event", {"i": 0}, pass_id=None)
+    ceiling = latest_seq(connect_reader(tmp_path / "events.db"))
+    store.record("demo.event", {"i": 1}, pass_id=None)  # lands after the ceiling was read
+
+    assert [e.seq for e in store.read(upto_seq=ceiling)] == [first.seq]
+    assert [e.payload["i"] for e in store.read(after_seq=ceiling)] == [1]
+
+
+def test_latest_seq_is_zero_on_an_empty_store(tmp_path) -> None:
+    store = _store(tmp_path)
+    assert latest_seq(connect_reader(tmp_path / "events.db")) == 0
+    recorded = store.record("demo.event", {}, pass_id=None)
+    assert latest_seq(connect_reader(tmp_path / "events.db")) == recorded.seq

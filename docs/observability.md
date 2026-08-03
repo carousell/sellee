@@ -104,6 +104,27 @@ and opens it — the token makes it impractical to type, and printing first keep
 the address useful where no browser can be opened. The page is `data/tail.html`,
 a packaged asset read per request; it polls `/events.json` and appends to the DOM.
 
+### What the page is served, and why it opens instantly
+
+Two things about `/events.json` are load-bearing for a tail that opens at *now*:
+
+- **The `routine` tier is never sent to this page.** It is the bulk of the volume
+  on a running install (the 5s scheduler heartbeat) and none of what a tail is
+  opened to read, so it is dropped before the wire rather than hidden after it.
+  `logs --all` in the terminal is where that tier is answered.
+- **A request with no `after_seq` is a page opening**, and is answered with the
+  *newest* `_PAGE_EVENTS` rows (`ORDER BY seq DESC`, returned oldest-first) rather
+  than the oldest. One round trip seeds the visible tail. Paging forward from the
+  far edge of a window instead meant a poll per 500 events, one second apart —
+  seconds of walking through history before the newest row appeared, minutes with
+  a wide `?since=`.
+
+`last_seq` is the **ceiling of what was considered**, not the last row returned,
+and the ceiling is read *before* the rows so an event landing mid-request gets a
+higher seq and is picked up by the next poll rather than skipped. Advancing the
+cursor past dropped rows is what stops an idle page rescanning the whole
+heartbeat backlog every second.
+
 This is the **human** surface, and the split is deliberate: the NDJSON stream
 above stays the canonical machine form *and* the debugging tool, which is what
 frees the page to hide and abbreviate aggressively. Nothing is lost doing so —
@@ -138,9 +159,9 @@ not by escaping.
 | Control | Behavior |
 |---|---|
 | **follow** | On by default: new rows keep the viewport at the bottom. Scrolling up hands control back; scrolling to the bottom, or ticking the box, resumes. |
-| **verbose** | Reveals what is hidden by default — the `routine` tier, thinking-token ticks, and the handful of kinds redundant beside the rows they accompany. |
+| **verbose** | Reveals what is hidden by default — thinking-token ticks and the handful of kinds redundant beside the rows they accompany. Not the `routine` tier: that never reaches the page at all. |
 | **pass pill** | Isolates one pass (see above). |
-| `?since=` | Lookback window on load, in the `--since` grammar. Defaults to `1h`, so a load starts near now instead of replaying the retention window. |
+| `?since=` | Narrows the load to a lookback window, in the `--since` grammar. **No default** — a load opens on the newest events whatever their age, so an agent idle since yesterday still opens on what it last did. |
 | `?json=true` | The zero-renderer view: one raw JSON line per event, matching `logs --json`. |
 
 Thinking *content* never enters the log at all — the stream parser drops those

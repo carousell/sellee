@@ -83,22 +83,43 @@ def event_to_wire(event: Event) -> dict:
     }
 
 
+def latest_seq(conn) -> int:
+    """The highest seq in the store, 0 when empty.
+
+    This is how far a reader may advance its cursor having *considered* everything up to it —
+    including rows a filter dropped. A reader that excludes a whole tier would otherwise leave its
+    cursor parked below the skipped rows and rescan them on every poll.
+    """
+    row = conn.execute("SELECT MAX(seq) AS seq FROM events").fetchone()
+    return (row["seq"] or 0) if row else 0
+
+
 def query_events(
     conn,
     *,
     after_seq: int | None = None,
+    upto_seq: int | None = None,
     since_ts: float | None = None,
     pass_id: str | None = None,
     kinds: Iterable[str] | None = None,
+    exclude_kinds: Iterable[str] | None = None,
     limit: int | None = None,
+    newest: bool = False,
 ) -> list[Event]:
     """Read events from any connection (writer or a read-only reader), ordered by seq. The
-    logs CLI drives this over its own read-only connection, needing no daemon cooperation."""
+    logs CLI drives this over its own read-only connection, needing no daemon cooperation.
+
+    `newest` takes the last `limit` rows rather than the first, still answered oldest-first: a
+    tail opens at now instead of replaying forward from the far edge of its window.
+    """
     clauses: list[str] = []
     params: list = []
     if after_seq is not None:
         clauses.append("seq > ?")
         params.append(after_seq)
+    if upto_seq is not None:
+        clauses.append("seq <= ?")
+        params.append(upto_seq)
     if since_ts is not None:
         clauses.append("ts >= ?")
         params.append(since_ts)
@@ -109,14 +130,21 @@ def query_events(
     if kinds:
         clauses.append(f"kind IN ({','.join('?' for _ in kinds)})")
         params.extend(kinds)
+    excluded = list(exclude_kinds) if exclude_kinds is not None else None
+    if excluded:
+        clauses.append(f"kind NOT IN ({','.join('?' for _ in excluded)})")
+        params.extend(excluded)
     sql = "SELECT seq, ts, pass_id, kind, payload FROM events"
     if clauses:
         sql += " WHERE " + " AND ".join(clauses)
-    sql += " ORDER BY seq ASC"
+    sql += " ORDER BY seq DESC" if newest else " ORDER BY seq ASC"
     if limit is not None:
         sql += " LIMIT ?"
         params.append(limit)
-    return [_row_to_event(r) for r in conn.execute(sql, tuple(params)).fetchall()]
+    rows = conn.execute(sql, tuple(params)).fetchall()
+    if newest:
+        rows = list(reversed(rows))
+    return [_row_to_event(r) for r in rows]
 
 
 class EventStore:

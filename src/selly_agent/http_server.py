@@ -28,7 +28,7 @@ from urllib.parse import parse_qs, urlparse
 
 from selly_agent import __version__, passes
 from selly_agent.db import connect_reader
-from selly_agent.events import event_to_wire, query_events
+from selly_agent.events import event_to_wire, latest_seq, query_events, routine_kinds
 from selly_agent.paths import PACKAGE_DATA_DIR
 from selly_agent.tools.registry import Session, ToolError, UnknownTool, dispatch, tools_for_tier
 
@@ -48,6 +48,11 @@ _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 # so this is the floor on shutdown latency — the stdlib default of 0.5s is half a second of idling
 # on every daemon stop.
 _SHUTDOWN_POLL_SEC = 0.02
+
+# How many events one response carries: the page a tail opens on, and the burst cap once it is
+# following. A count rather than a time window on purpose — an agent idle since yesterday should
+# still open on what it last did, the way `tail -n` does, instead of on an empty page.
+_PAGE_EVENTS = 500
 
 # JSON-RPC error codes we use.
 _PARSE_ERROR = -32700
@@ -641,19 +646,36 @@ class _Handler(BaseHTTPRequestHandler):
             return
         after_seq = _int_or_none(qs.get("after_seq", [None])[0])
         pass_id = qs.get("pass", [None])[0]
-        # A lookback window, so a page load starts near now instead of replaying the whole
-        # retained history. Nonsense or non-positive values simply mean "no window".
+        # An optional narrowing, not the default: with no after_seq this is a page opening, and it
+        # opens on the newest events whatever their age. Nonsense or non-positive means "no window".
         since_sec = _int_or_none(qs.get("since_sec", [None])[0])
         since_ts = time.time() - since_sec if since_sec and since_sec > 0 else None
+        seeding = after_seq is None
         conn = connect_reader(self._app.events_db_path)
         try:
+            # The ceiling is read before the rows so nothing arriving mid-request is skipped: a
+            # later event gets a higher seq and is simply picked up by the next poll.
+            ceiling = latest_seq(conn)
             events = query_events(
-                conn, after_seq=after_seq, since_ts=since_ts, pass_id=pass_id, limit=500
+                conn,
+                after_seq=after_seq,
+                upto_seq=ceiling,
+                since_ts=since_ts,
+                pass_id=pass_id,
+                # The routine tier never reaches this page. It is ~99% of the volume on a busy
+                # install and none of it is what someone opens a tail to read; `logs --all` is
+                # where that tier is answered.
+                exclude_kinds=routine_kinds(),
+                limit=_PAGE_EVENTS,
+                newest=seeding,
             )
         finally:
             conn.close()
         rows = [event_to_wire(e) for e in events]
-        last_seq = rows[-1]["seq"] if rows else (after_seq or 0)
+        # The cursor advances to the ceiling, not to the last row returned: everything below it has
+        # been considered, and the tier dropped above leaves gaps that would otherwise be rescanned
+        # on every poll for as long as the page stays open.
+        last_seq = ceiling or (after_seq or 0)
         self._send_json(200, {"events": rows, "last_seq": last_seq})
 
     def _handle_tail(self) -> None:
