@@ -11,6 +11,7 @@ import pytest
 
 from selly_agent.browser import chrome
 from selly_agent.browser.client import (
+    PINNED_MCP_SPEC,
     BrowserClient,
     BrowserToolError,
     BrowserTransportError,
@@ -604,3 +605,12 @@ def test_the_default_command_pins_the_endpoint_and_its_own_output_dir(xdg_tmp) -
     assert argv[argv.index("--output-dir") + 1] == str(paths.browser_output_dir())
     assert str(paths.state_dir()) in str(paths.browser_output_dir())
     assert "--output-max-size" in argv  # so it evicts its own old files
+
+
+def test_the_default_command_asks_for_an_exact_version_not_whatever_is_latest() -> None:
+    """An unpinned spec leaves each machine on whatever npm resolved first, with nothing between a
+    broken upstream release and a seller — and no exact npx cache key to warm."""
+    argv = default_command("http://127.0.0.1:9222")
+    assert PINNED_MCP_SPEC in argv
+    assert "@playwright/mcp" not in argv  # the bare name would float
+    assert PINNED_MCP_SPEC.startswith("@playwright/mcp@")

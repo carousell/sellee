@@ -31,9 +31,15 @@ from selly_agent import paths
 
 log = logging.getLogger(__name__)
 
-# The npx invocation used when config.playwright_mcp_cmd is unset. The installer pre-installs the
-# package so this resolves locally; a cold npx would fetch from the network on the hot path.
+# The package spawned via npx when config.playwright_mcp_cmd is unset. The installer verifies the
+# spawn and warms the package, and the daemon re-warms it at startup, so this resolves from the npx
+# cache; a cold npx would fetch from the network on the hot path.
 DEFAULT_MCP_PACKAGE = "@playwright/mcp"
+# Pinned rather than floating. Unpinned, every machine resolves whatever npm called latest the first
+# time it asked, so a bad upstream release reaches sellers with nothing in between — and the npx
+# cache key stops being exact. Bumping this is a one-line change that ships like any other.
+MCP_VERSION = "0.0.78"
+PINNED_MCP_SPEC = f"{DEFAULT_MCP_PACKAGE}@{MCP_VERSION}"
 _PROTOCOL_VERSION = "2025-06-18"
 # How much of its own output the server may keep before evicting the oldest. Small on purpose: these
 # files are page content, useful for diagnosis for a short while and not worth hoarding.
@@ -101,7 +107,7 @@ def default_command(cdp_endpoint: str) -> list:
     return [
         "npx",
         "--yes",
-        DEFAULT_MCP_PACKAGE,
+        PINNED_MCP_SPEC,
         "--cdp-endpoint",
         cdp_endpoint,
         "--output-dir",

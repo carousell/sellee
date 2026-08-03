@@ -308,14 +308,14 @@ def prewarm_playwright(config) -> checks.Check:
     if not npx:
         return checks.warn("playwright", f"{command[0]} is not on PATH — skipped")
     code, out = _run(
-        [npx, "--yes", browser_client.DEFAULT_MCP_PACKAGE, "--version"],
+        [npx, "--yes", browser_client.PINNED_MCP_SPEC, "--version"],
         timeout=_PREWARM_TIMEOUT_SEC,
     )
     if code != 0:
         return checks.warn(
             "playwright",
-            f"could not pre-resolve {browser_client.DEFAULT_MCP_PACKAGE}: {out.strip()[-200:]}",
+            f"could not pre-resolve {browser_client.PINNED_MCP_SPEC}: {out.strip()[-200:]}",
             "The daemon will fetch it on first use instead — the first browser listing will be "
             "slower.",
         )
-    return checks.ok("playwright", f"{browser_client.DEFAULT_MCP_PACKAGE} resolved")
+    return checks.ok("playwright", f"{browser_client.PINNED_MCP_SPEC} resolved")

@@ -435,7 +435,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | --- | --- | --- |
 | `chrome_cdp_port` | `9222` | the warm Chrome's CDP port on loopback |
 | `chrome_bin` | `null` | the Chrome executable to start; `null` means the OS default install path |
-| `playwright_mcp_cmd` | `null` | override the server command; `null` means `npx --yes @playwright/mcp` against the CDP endpoint |
+| `playwright_mcp_cmd` | `null` | override the server command; `null` means `npx --yes @playwright/mcp@<pinned version>` against the CDP endpoint. The pin lives in `browser/client.py` (`MCP_VERSION`) — bump it there |
 | `inbox_read_interval_sec` | `300.0` | how often the read lane ticks |
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
 | `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
