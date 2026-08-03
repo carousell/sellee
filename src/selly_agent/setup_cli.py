@@ -324,14 +324,14 @@ def _record_claude_bin(ui: Ui) -> None:
 
 
 def _record_node_bin_dir(ui: Ui) -> None:
-    """Pin the directory holding node and npx into config.
+    """Pin the PATH fragment reaching node and npx into config.
 
     Same reason as the harness path: the background worker is started by the supervisor with a
     minimal PATH, which carries no version manager's shims. Resolved here, in a real shell, where
     the answer is actually available — and it is the supervisor's job definition that carries it,
     so the worker's browser server can be spawned at all.
     """
-    resolved = preflight.node_bin_dir()
+    resolved = preflight.node_path_fragment()
     if not resolved:
         return
     config.merge_into_file({"node_bin_dir": resolved})

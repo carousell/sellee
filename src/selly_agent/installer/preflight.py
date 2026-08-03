@@ -146,21 +146,33 @@ def binary_arch(path: str) -> str:
     return parse_binary_arch(out) if code == 0 else "unknown"
 
 
-def node_bin_dir() -> str:
-    """The directory holding node and npx, at a path that will still exist tomorrow.
+def node_path_fragment() -> str:
+    """A PATH fragment reaching both `node` and `npx`, at paths that will still exist tomorrow.
 
-    Resolved through symlinks rather than taken as `which` reports it: a version manager may hand
-    out a per-shell directory — fnm names one after the shell's pid — which stops existing when
-    that shell does. What it points at is the installation itself, which persists.
+    Directories rather than the binaries' own paths, because `npx` is usually a wrapper whose
+    shebang looks `node` up on PATH: naming it absolutely would still leave it unable to find its
+    own interpreter.
 
-    A directory rather than the npx path, because `npx` is usually a wrapper whose shebang looks
-    `node` up on PATH: naming the binary absolutely would still leave it unable to find its own
-    interpreter. Both live in this directory, so putting it on PATH answers for both.
+    Resolved through symlinks rather than taken as `which` reports them: a version manager may hand
+    out a per-shell directory — fnm names one after the shell's pid — which stops existing when that
+    shell does. What it points at is the installation itself, which persists.
+
+    Usually one directory holds both. When it does not — a global npm prefix carrying `npx` while
+    `node` lives elsewhere — both are needed, and node's comes first: whatever `node` the gates
+    checked should be the one npx's shebang finds, not a stray build sitting beside npx.
+
+    Empty when either binary is missing; there is nothing to record, and setup's node gate has
+    already refused the machine by then.
     """
-    npx = shutil.which("npx")
-    if not npx:
-        return ""
-    return os.path.realpath(str(Path(npx).parent))
+    directories = []
+    for name in ("node", "npx"):
+        found = shutil.which(name)
+        if not found:
+            return ""
+        resolved = os.path.realpath(str(Path(found).parent))
+        if resolved not in directories:
+            directories.append(resolved)
+    return ":".join(directories)
 
 
 def homebrew_path() -> str:

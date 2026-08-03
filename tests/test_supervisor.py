@@ -70,7 +70,20 @@ def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) ->
 
     plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
     assert "<key>PATH</key>" in plist
-    assert f"<string>/opt/node-versions/v22/bin:{supervisor._SUPERVISED_PATH}</string>" in plist
+    assert f"<string>/opt/node-versions/v22/bin:{supervisor.SUPERVISED_PATH}</string>" in plist
+
+
+def test_a_multi_directory_fragment_reaches_the_jobs_path_whole(xdg_tmp) -> None:
+    # On a machine where `node` and `npx` live apart, the recorded value is already a PATH
+    # fragment; the job needs every entry, not the first one.
+    config.merge_into_file({"node_bin_dir": "/opt/node/bin:/usr/local/npm-global/bin"})
+    assert supervisor.install(mode="manual", platform=FakePlatform()) == 0
+
+    plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
+    assert (
+        f"<string>/opt/node/bin:/usr/local/npm-global/bin:{supervisor.SUPERVISED_PATH}</string>"
+        in plist
+    )
 
 
 def test_no_recorded_node_directory_leaves_the_jobs_path_alone(xdg_tmp) -> None:

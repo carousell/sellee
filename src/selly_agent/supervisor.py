@@ -46,8 +46,9 @@ def _is_ours(path: Path) -> bool:
 
 
 # What a supervised job's PATH is when its definition names none. Spelled out because naming a
-# PATH in the definition replaces this rather than extending it.
-_SUPERVISED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
+# PATH in the definition replaces this rather than extending it — and because the installer's gates
+# verify the browser server can be spawned under exactly this, plus the recorded fragment.
+SUPERVISED_PATH = "/usr/bin:/bin:/usr/sbin:/sbin"
 
 
 def _job_environment() -> dict:
@@ -56,14 +57,15 @@ def _job_environment() -> dict:
     A supervised job inherits nothing from the shell that installed it, so everything the daemon
     cannot work without is pinned into its definition. Two things qualify. The XDG overrides that
     were in force shaped every path this install provisioned, and a daemon resolving different
-    ones would be reading a different machine's state. And the recorded node directory: neither
-    `node` nor `npx` is on the default PATH above — a version manager keeps them somewhere only an
-    interactive shell knows about — so without it the browser server cannot be spawned at all.
+    ones would be reading a different machine's state. And the recorded node path fragment — one or
+    more directories, colon-joined: neither `node` nor `npx` is on the default PATH above (a version
+    manager keeps them somewhere only an interactive shell knows about), so without it the browser
+    server cannot be spawned at all.
     """
     env = dict(paths.xdg_overrides())
     node_bin_dir = config.load().node_bin_dir
     if node_bin_dir:
-        env["PATH"] = f"{node_bin_dir}:{_SUPERVISED_PATH}"
+        env["PATH"] = f"{node_bin_dir}:{SUPERVISED_PATH}"
     return env
 
 

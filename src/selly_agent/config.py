@@ -57,11 +57,11 @@ class Config:
     # Explicit path to the harness CLI; null means resolve from PATH (plus the
     # conventional user install locations) at spawn time.
     claude_bin: str | None = None
-    # The directory holding `node` and `npx`, recorded by the installer. A supervised daemon is
-    # given a minimal PATH that contains no version manager's shims, so without this the browser
-    # server cannot be spawned at all; it goes on the PATH of the job the supervisor installs.
-    # Null means the daemon relies on whatever PATH it inherits, which is right when it is started
-    # from a shell.
+    # One or more directories, colon-joined — a PATH fragment reaching `node` and `npx`, recorded by
+    # the installer. A supervised daemon is given a minimal PATH that contains no version manager's
+    # shims, so without this the browser server cannot be spawned at all; it is prepended to the
+    # PATH of the job the supervisor installs. Null means the daemon relies on whatever PATH it
+    # inherits, which is right when it is started from a shell.
     node_bin_dir: str | None = None
     carousell_ai_api_base: str = "https://api.carousell.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"

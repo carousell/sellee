@@ -598,10 +598,23 @@ def test_an_unset_shell_says_so_rather_than_naming_nothing(world, monkeypatch, c
 def test_setup_pins_the_node_directory_into_the_workers_job(world, monkeypatch) -> None:
     # The ordering is the point: the directory is recorded while a real shell's PATH is available,
     # and the job definition is rendered afterwards, so the worker is started able to find npx.
-    monkeypatch.setattr(preflight, "node_bin_dir", lambda: "/opt/node-versions/v22/bin")
+    monkeypatch.setattr(preflight, "node_path_fragment", lambda: "/opt/node-versions/v22/bin")
 
     assert setup_main("--yes", "--manual") == 0
 
     assert config.load().node_bin_dir == "/opt/node-versions/v22/bin"
     plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
     assert "/opt/node-versions/v22/bin" in plist
+
+
+def test_setup_records_every_directory_the_worker_needs_not_just_the_first(
+    world, monkeypatch
+) -> None:
+    # Where `node` and `npx` live apart, both directories are recorded and both reach the job.
+    fragment = "/opt/node/bin:/usr/local/npm-global/bin"
+    monkeypatch.setattr(preflight, "node_path_fragment", lambda: fragment)
+
+    assert setup_main("--yes", "--manual") == 0
+
+    assert config.load().node_bin_dir == fragment
+    assert fragment in (paths.config_dir() / "com.selly.agent.plist").read_text()

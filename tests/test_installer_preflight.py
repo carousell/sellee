@@ -207,16 +207,39 @@ def test_the_node_directory_is_recorded_at_a_path_that_outlives_the_shell(
     # Recording it verbatim would leave the worker pointed at nothing after the next logout.
     installation = tmp_path / "node-versions" / "v22" / "installation"
     (installation / "bin").mkdir(parents=True)
-    (installation / "bin" / "npx").write_text("#!/bin/sh\n")
+    for name in ("node", "npx"):
+        (installation / "bin" / name).write_text("#!/bin/sh\n")
     per_shell = tmp_path / "fnm_multishells" / "52166_1785491228033"
     per_shell.parent.mkdir(parents=True)
     per_shell.symlink_to(installation)
 
-    monkeypatch.setattr(preflight.shutil, "which", lambda name: str(per_shell / "bin" / "npx"))
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: str(per_shell / "bin" / name))
 
-    assert preflight.node_bin_dir() == str(installation / "bin")
+    # One directory holds both, so the fragment is a single entry — the plist stays as it was.
+    assert preflight.node_path_fragment() == str(installation / "bin")
 
 
-def test_no_npx_records_nothing_rather_than_a_guess(monkeypatch) -> None:
+def test_a_divergent_npx_records_both_directories_with_node_first(tmp_path, monkeypatch) -> None:
+    # A global npm prefix can carry `npx` while `node` lives elsewhere. Recording only npx's
+    # directory passed setup and then failed under the supervisor, where nothing else is on PATH.
+    node_dir = tmp_path / "node" / "bin"
+    npx_dir = tmp_path / "npm-global" / "bin"
+    for directory in (node_dir, npx_dir):
+        directory.mkdir(parents=True)
+    binaries = {"node": str(node_dir / "node"), "npx": str(npx_dir / "npx")}
+    monkeypatch.setattr(preflight.shutil, "which", lambda name: binaries.get(name))
+
+    # Node first: npx's shebang looks `node` up on PATH, and the node the gates checked must win
+    # over any stray build sitting beside npx.
+    assert preflight.node_path_fragment() == f"{node_dir}:{npx_dir}"
+
+
+def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> None:
     monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
-    assert preflight.node_bin_dir() == ""
+    assert preflight.node_path_fragment() == ""
+
+    # npx alone is not enough: the fragment exists to reach both.
+    monkeypatch.setattr(
+        preflight.shutil, "which", lambda name: "/usr/local/bin/npx" if name == "npx" else None
+    )
+    assert preflight.node_path_fragment() == ""
