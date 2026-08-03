@@ -35,6 +35,36 @@ def test_it_launches_claude_in_the_attended_workspace(ready, launched, monkeypat
     assert launched == [("/usr/bin/claude", ["/usr/bin/claude"])]
 
 
+def test_it_says_nothing_on_the_way_to_the_session(ready, launched, monkeypatch, capsys) -> None:
+    """Regenerating is a step of starting a session, not the point of it — the seven paths
+    `harness config` reports are preamble here."""
+    monkeypatch.setattr(pass_cli.os, "chdir", lambda _: None)
+
+    assert pass_cli.chat() == 0
+    assert capsys.readouterr().out == ""
+
+
+def test_buffered_output_is_flushed_before_the_exec(ready, monkeypatch) -> None:
+    """exec inherits the fds but not Python's buffers: whatever is still in them is dropped, and
+    only when stdout is a pipe, so the tty case hides it."""
+    order = []
+    monkeypatch.setattr(pass_cli.os, "chdir", lambda _: None)
+    monkeypatch.setattr(pass_cli.sys.stdout, "flush", lambda: order.append("flush"))
+    monkeypatch.setattr(pass_cli, "_exec", lambda b, a: order.append("exec"))
+
+    assert pass_cli.chat() == 0
+    assert order == ["flush", "exec"]
+
+
+def test_the_explicit_verb_still_reports_what_it_wrote(xdg_tmp, tmp_path, capsys) -> None:
+    """`harness config --attended` is asked to write files; listing them is its whole answer."""
+    paths.ensure_config_dir()
+    secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
+
+    assert pass_cli.harness_config(tmp_path / "project") == 0
+    assert capsys.readouterr().out.count("wrote ") == 7
+
+
 def test_the_workspace_is_regenerated_at_launch(ready, launched, monkeypatch) -> None:
     """An update or a rotated token would otherwise leave the session pointed at nothing."""
     monkeypatch.setattr(pass_cli.os, "chdir", lambda _: None)

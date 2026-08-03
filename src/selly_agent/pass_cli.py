@@ -125,17 +125,20 @@ def _claude_md(skills_dir: Path) -> str:
     return _CLAUDE_MD.format(skill_lines=lines)
 
 
-def harness_config(directory=None) -> int:
+def harness_config(directory=None, *, quiet: bool = False) -> int:
     """`selly-agent harness config --attended [--dir DIR]` — write the attended session's config:
     a .mcp.json pointed at the daemon's MCP server with the attended token, the slash commands,
     and a CLAUDE.md.
 
     Takes the destination directly rather than a parsed-args object, so the installer can
-    generate the same workspace at its own fixed location without fabricating one.
+    generate the same workspace at its own fixed location without fabricating one. `quiet` is for
+    callers this is a step of rather than the point of — listing seven paths is the useful answer
+    to `harness config`, and preamble in front of a session someone asked to start.
 
     No .claude/settings.json: an attended session is the seller's own, and its permissions are
-    theirs to set. Command bodies reference the skill files by path rather than inlining them, so
-    an update changes what they say without the files being rewritten.
+    theirs to set — and this rewrites only the three things it generates, so a permission granted
+    in a past session survives. Command bodies reference the skill files by path rather than
+    inlining them, so an update changes what they say without the files being rewritten.
     """
     token = control.require_token()
     if not token:
@@ -168,8 +171,9 @@ def harness_config(directory=None) -> int:
     claude_md.write_text(_claude_md(skills_dir))
     written.append(claude_md)
 
-    for path in written:
-        print(f"wrote {path}")
+    if not quiet:
+        for path in written:
+            print(f"wrote {path}")
     return 0
 
 
@@ -207,7 +211,7 @@ def chat(args=None) -> int:
         return 1
 
     dest = attended_dir()
-    if harness_config(dest) != 0:
+    if harness_config(dest, quiet=True) != 0:
         return 1
 
     from selly_agent import passes
@@ -220,6 +224,10 @@ def chat(args=None) -> int:
         )
         return 1
 
+    # exec inherits the file descriptors but not Python's own buffers, so anything still sitting
+    # in them is lost rather than printed — silently, and only when stdout is a pipe.
+    sys.stdout.flush()
+    sys.stderr.flush()
     # Replace this process rather than parenting the session: signals and the tty then behave
     # exactly as if the seller had run `claude` themselves. Nothing can run after this line.
     os.chdir(dest)
