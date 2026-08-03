@@ -47,6 +47,9 @@ def world(monkeypatch, xdg_tmp, tree):
     monkeypatch.setattr(preflight, "check_node", lambda: checks.ok("node", "v22"))
     monkeypatch.setattr(preflight, "check_chrome", lambda chrome_bin=None: checks.ok("chrome", "-"))
     monkeypatch.setattr(preflight, "check_claude", lambda cfg: checks.ok("claude CLI", "signed in"))
+    monkeypatch.setattr(
+        preflight, "check_supervised_spawn", lambda cfg: checks.ok("browser server", "-")
+    )
     monkeypatch.setattr(preflight, "prewarm_playwright", lambda cfg: checks.ok("playwright", "-"))
     monkeypatch.setattr(preflight, "agent_context", lambda env=None: "")
     monkeypatch.setattr(passes, "resolve_claude_bin", lambda cfg: "/opt/claude/bin/claude")
@@ -337,6 +340,20 @@ def test_a_failing_prewarm_is_a_warning_not_a_stop(world, monkeypatch, capsys) -
     )
     assert setup_main("--yes", "--manual") == 0
     assert "⚠️ playwright" in capsys.readouterr().out
+
+
+def test_a_browser_server_the_worker_cannot_spawn_stops_setup(world, monkeypatch, capsys) -> None:
+    # The download can fail and still leave a working install; a spawn the worker cannot perform
+    # cannot — it is a dead browser lane at the first publish, with nothing said about it.
+    monkeypatch.setattr(
+        preflight,
+        "check_supervised_spawn",
+        lambda cfg: checks.fail("browser server", "npx is unreachable", "re-run ./setup"),
+    )
+
+    assert setup_main("--yes", "--manual") == 1
+    assert "npx is unreachable" in capsys.readouterr().err
+    assert not paths.current().exists()
 
 
 def test_an_agent_session_stops_setup_asking_questions(world, monkeypatch, capsys) -> None:

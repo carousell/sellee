@@ -187,6 +187,13 @@ def telegram_bot_token_path() -> Path:
 # --- platform-owned -----------------------------------------------------------------------
 
 
+def home_dir() -> Path:
+    """The home directory, for a caller that has to hand `HOME` to a child process it builds the
+    environment for. Home resolution is this module's business, so it is asked here rather than
+    read off the environment at the call site."""
+    return _home()
+
+
 def user_path(raw: str) -> Path:
     """A path a person typed, with a leading `~` expanded. Home expansion is this module's
     business, so callers hand the raw string here rather than reaching for the home directory

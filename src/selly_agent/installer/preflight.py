@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from selly_agent import passes, paths
+from selly_agent import passes, paths, supervisor
 from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
 from selly_agent.installer import checks
@@ -115,8 +115,13 @@ def agent_context(env=None) -> str:
 # --- the world -------------------------------------------------------------------------------
 
 
-def _run(argv, timeout: float = _PROBE_TIMEOUT_SEC):
-    """Run a probe command, answering (returncode, stdout+stderr). Never raises."""
+def _run(argv, timeout: float = _PROBE_TIMEOUT_SEC, env=None):
+    """Run a probe command, answering (returncode, stdout+stderr). Never raises.
+
+    `env` replaces the environment outright rather than extending it — the probes that pass one are
+    the ones asking what the supervised worker can do, and inheriting this shell's would answer for
+    the wrong machine.
+    """
     try:
         proc = subprocess.run(
             argv,
@@ -124,6 +129,7 @@ def _run(argv, timeout: float = _PROBE_TIMEOUT_SEC):
             text=True,
             check=False,
             timeout=timeout,
+            env=env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         return None, f"{type(exc).__name__}: {exc}"
@@ -173,6 +179,27 @@ def node_path_fragment() -> str:
         if resolved not in directories:
             directories.append(resolved)
     return ":".join(directories)
+
+
+def supervised_path(fragment: str | None = None) -> str:
+    """The PATH the supervised worker will actually have: the recorded fragment, then the default.
+
+    The same join the supervisor writes into the job definition, so a check run against this is
+    checking the real thing rather than an approximation of it.
+    """
+    fragment = node_path_fragment() if fragment is None else fragment
+    return f"{fragment}:{supervisor.SUPERVISED_PATH}" if fragment else supervisor.SUPERVISED_PATH
+
+
+def supervised_env(fragment: str | None = None) -> dict:
+    """The environment to run a supervised-worker check under.
+
+    Only PATH and HOME, because that is roughly what launchd hands the job — and deliberately not
+    this shell's environment, which carries a version manager's shims the worker will never see.
+    HOME stays because npm keeps its cache and config under it, so a warm run here lands in the
+    same cache the worker reads.
+    """
+    return {"PATH": supervised_path(fragment), "HOME": str(paths.home_dir())}
 
 
 def homebrew_path() -> str:
@@ -310,6 +337,45 @@ def claude_login(config) -> int:
         return 1
 
 
+def check_supervised_spawn(config) -> checks.Check:
+    """Can the browser server be spawned by the *worker*, not just by this shell?
+
+    Every other node check here asks the question of the interactive shell that ran setup, whose
+    PATH carries a version manager's shims. The worker's does not: it gets the recorded fragment
+    plus a minimal default and nothing else. So this runs the same binaries the daemon will run,
+    under the same PATH the supervisor is about to write into the job definition.
+
+    It is fatal on purpose. Whichever node layout we failed to anticipate becomes a setup failure
+    with a message here, instead of a browser lane that is silently dead at the first publish. And
+    it can afford to be fatal because it needs no network — nothing about it can be tripped by a
+    hiccup.
+    """
+    command = config.playwright_mcp_cmd or browser_client.default_command(
+        browser_client.cdp_endpoint(config.chrome_cdp_port)
+    )
+    fragment = node_path_fragment()
+    path = supervised_path(fragment)
+    env = supervised_env(fragment)
+
+    # The override's own binary is whatever it names; the default's is `npx`, which spawns `node`
+    # through its shebang — so both have to answer under that PATH, not just the one we invoke.
+    probes = [[str(command[0]), "--version"]]
+    if not config.playwright_mcp_cmd:
+        probes.insert(0, ["node", "--version"])
+    for probe in probes:
+        code, out = _run(probe, env=env)
+        if code != 0:
+            return checks.fail(
+                "browser server",
+                f"`{' '.join(probe)}` does not run under the background worker's PATH "
+                f"({path}): {out.strip()[-200:]}",
+                "The worker is started with that PATH and nothing else. Install Node so that "
+                "`node` and `npx` sit in directories setup can record (`brew install node` puts "
+                "both in one), then re-run ./setup.",
+            )
+    return checks.ok("browser server", f"spawns under the worker's PATH ({path})")
+
+
 def prewarm_playwright(config) -> checks.Check:
     """Resolve the Playwright MCP package now, so the daemon's first browser use is not a
     download. A miss is a warning: it costs latency on the first publish, nothing more."""
@@ -319,9 +385,12 @@ def prewarm_playwright(config) -> checks.Check:
     npx = shutil.which(str(command[0]))
     if not npx:
         return checks.warn("playwright", f"{command[0]} is not on PATH — skipped")
+    # Under the worker's environment, like the gate above: the download this fills is the one the
+    # worker will look for, and npm keys its cache off HOME, which that environment keeps.
     code, out = _run(
         [npx, "--yes", browser_client.PINNED_MCP_SPEC, "--version"],
         timeout=_PREWARM_TIMEOUT_SEC,
+        env=supervised_env(),
     )
     if code != 0:
         return checks.warn(

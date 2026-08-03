@@ -160,7 +160,12 @@ def _gates(ui: Ui, tree) -> None:
         cask=True,
     )
 
-    ui.note("resolving the browser server (the first run downloads it)…")
+    # After the node gate, which is the friendly one (it names `brew install node`). This is the
+    # authoritative one: it asks whether the *worker* can spawn the browser server, under the PATH
+    # the worker will actually have rather than this shell's.
+    _require(ui, checks.fail_open("browser server", lambda: preflight.check_supervised_spawn(cfg)))
+
+    ui.note("fetching the browser server package (the first run downloads it)…")
     _report(ui, checks.fail_open("playwright", lambda: preflight.prewarm_playwright(cfg)))
 
 
