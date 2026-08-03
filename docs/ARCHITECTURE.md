@@ -117,7 +117,7 @@ machine:
   restart, health-check, and roll back — restoring the pre-migration database
   snapshot when, and only when, the new version migrated.
 - **`setup_cli.py` / `healthcheck.py` / `uninstall_cli.py`** — the phase
-  orchestration, the five checks, and removal that only ever touches what an
+  orchestration, the six checks, and removal that only ever touches what an
   install put there.
 - **`control.py`** — the client half of the daemon's control routes. Every verb
   that changes state asks the running daemon rather than opening its database, so

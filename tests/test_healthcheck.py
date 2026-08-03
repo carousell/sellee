@@ -1,4 +1,4 @@
-"""The five checks: each decision against fake inputs, plus the render and the exit code.
+"""The six checks: each decision against fake inputs, plus the render and the exit code.
 
 The decisions are pure, so they are tested as such. What the probes do is fetch their arguments,
 and the one thing worth asserting about that is the fail-open contract: a probe that explodes is
@@ -7,7 +7,10 @@ a failed line, never the end of the report.
 
 from __future__ import annotations
 
+import os
+
 from selly_agent import healthcheck, secrets, supervisor
+from selly_agent.config import Config
 from selly_agent.installer import checks
 
 # --- the daemon ---------------------------------------------------------------------------------
@@ -110,6 +113,55 @@ def test_every_enabled_market_signed_in_passes() -> None:
     assert result.status == checks.OK
 
 
+# --- the browser server -------------------------------------------------------------------------
+
+
+def test_a_resolvable_server_binary_is_fine() -> None:
+    result = healthcheck.browser_server_check(
+        binary="npx", fragment="/opt/node/bin", resolved="/opt/node/bin/npx"
+    )
+    assert result.status == checks.OK
+    assert "/opt/node/bin/npx" in result.detail
+
+
+def test_a_recorded_path_that_no_longer_reaches_npx_fails() -> None:
+    # This is what an update's regression gate catches: a release (or a node move) that leaves the
+    # worker unable to spawn the server at all, rolled back rather than found at the next publish.
+    result = healthcheck.browser_server_check(binary="npx", fragment="/opt/node/bin", resolved=None)
+    assert result.status == checks.FAIL
+    assert "/opt/node/bin" in result.detail
+    assert "./setup" in result.fix
+
+
+def test_no_recorded_path_is_not_checked_rather_than_failed() -> None:
+    # A daemon started from a shell inherits a PATH that already reaches node, and the installer
+    # records nothing then. Calling that a fault would fail every such machine forever.
+    result = healthcheck.browser_server_check(binary="npx", fragment="", resolved=None)
+    assert result.status == checks.WARN
+    assert "no recorded node path" in result.detail
+
+
+def test_the_server_binary_is_resolved_against_the_workers_path_not_this_shells(
+    xdg_tmp, tmp_path, monkeypatch
+) -> None:
+    bin_dir = tmp_path / "node" / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "npx").write_text("#!/bin/sh\n")
+    (bin_dir / "npx").chmod(0o755)
+    # An empty directory as the supervised default, so the answer comes from the recorded fragment
+    # rather than from whatever this machine happens to have in /usr/bin.
+    monkeypatch.setattr(healthcheck.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
+
+    reachable = healthcheck._browser_server_probe(Config(node_bin_dir=str(bin_dir)))
+    assert reachable.status == checks.OK
+
+    # A recorded directory that no longer holds npx: this shell can still find one, the worker
+    # cannot, and it is the worker's answer that matters.
+    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    gone = healthcheck._browser_server_probe(Config(node_bin_dir=str(tmp_path / "gone")))
+    assert gone.status == checks.FAIL
+
+
 # --- the rail key -----------------------------------------------------------------------------
 
 
@@ -129,7 +181,7 @@ def test_a_probe_that_explodes_becomes_a_line_not_the_end_of_the_report(monkeypa
 
     monkeypatch.setattr(healthcheck, "_daemon_probe", explode)
     results = healthcheck.run_checks()
-    assert len(results) == 5
+    assert len(results) == 6
     assert results[0].status == checks.FAIL
     assert "launchctl vanished" in results[0].detail
 
