@@ -85,7 +85,7 @@ bin/selly-agent provision carousell-ai --region SG
 bin/selly-agent pass run publish --item <item_id> --follow
 
 # talk to Selly in this terminal: an attended Claude Code session against the same daemon
-# MCP server, with the /sell /selly /catchup /pause /resume commands. `/sell` lists something.
+# MCP server. `/sell` lists something.
 bin/selly-agent chat
 
 # the same session config written somewhere of your choosing, without launching it
@@ -124,7 +124,7 @@ bin/selly-agent logs --follow --json | jq .
 # routine heartbeat events (task.start/task.ok) are hidden by default; --all shows them
 bin/selly-agent logs --all
 
-# or the rendered web view — composes the tokenised URL, prints it, and opens it
+# or open the rendered web view
 bin/selly-agent logs --web
 ```
 

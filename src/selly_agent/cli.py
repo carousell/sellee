@@ -147,7 +147,7 @@ def _build_parser() -> argparse.ArgumentParser:
     logs.add_argument(
         "--web",
         action="store_true",
-        help="open the rendered web tail in a browser (needs the daemon; --since applies)",
+        help="open the rendered web tail in a browser (needs the daemon)",
     )
 
     pass_cmd = sub.add_parser("pass", help="pass lifecycle")

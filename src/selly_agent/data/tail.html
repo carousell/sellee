@@ -7,14 +7,11 @@
   The human-readable face of the event log. The NDJSON stream (`logs --json`, and this page's
   own `?json=true` mode) stays the canonical machine form and the debugging tool; this view is for
   the casual "what is the agent doing?" question, so it hides and abbreviates aggressively. That
-  is only safe because nothing is ever lost: every row expands to its raw wire JSON, and the
+  is only safe because nothing it shows is lost: every row expands to its raw wire JSON, and the
   verbose toggle reveals every row hidden by default.
 
-  One tier never arrives at all: the server does not send `routine` events (the scheduler
-  heartbeat) to this page. They are the bulk of the volume on a busy install and nobody opens a
-  tail to read them, so they are dropped before the wire rather than hidden after it — which is
-  also what lets a page open on a fixed count of events instead of a time window. `logs --all` in
-  the terminal is where that tier is answered.
+  One tier never arrives: the server withholds `routine` events, so this page cannot show them
+  however verbose it is told to be. `logs --all` in the terminal is where that tier is answered.
 
   Two rules hold throughout:
     * payload-derived strings reach the DOM only as textContent — a preview, a reply, or a tool

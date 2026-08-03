@@ -92,43 +92,25 @@ Without `--all` or `--kind`, the floor is `info`: the heartbeat is hidden. The
 text format is one line per event (`time  kind  pass=…  payload`) and is
 deliberately plain — colorized machine output is `--json` piped through `jq -c`.
 
-`--web` composes only with `--since`; the rest are refused rather than ignored,
-since the page follows by default, isolates a pass through its own pill, and has
-no use for a flag whose output is the pipe-friendly form.
+`--web` composes only with `--since`. The other flags are refused rather than
+silently ignored — the page has its own equivalents.
 
 ## The web tail
 
 `http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token is a 0600
-file in the config dir). `selly-agent logs --web` composes that URL, prints it,
-and opens it — the token makes it impractical to type, and printing first keeps
-the address useful where no browser can be opened. The page is `data/tail.html`,
-a packaged asset read per request; it polls `/events.json` and appends to the DOM.
+file in the config dir); `selly-agent logs --web` composes and opens it. The page
+is `data/tail.html`, a packaged asset read per request; it polls `/events.json`
+and appends to the DOM.
 
-### What the page is served, and why it opens instantly
-
-Two things about `/events.json` are load-bearing for a tail that opens at *now*:
-
-- **The `routine` tier is never sent to this page.** It is the bulk of the volume
-  on a running install (the 5s scheduler heartbeat) and none of what a tail is
-  opened to read, so it is dropped before the wire rather than hidden after it.
-  `logs --all` in the terminal is where that tier is answered.
-- **A request with no `after_seq` is a page opening**, and is answered with the
-  *newest* `_PAGE_EVENTS` rows (`ORDER BY seq DESC`, returned oldest-first) rather
-  than the oldest. One round trip seeds the visible tail. Paging forward from the
-  far edge of a window instead meant a poll per 500 events, one second apart —
-  seconds of walking through history before the newest row appeared, minutes with
-  a wide `?since=`.
-
-`last_seq` is the **ceiling of what was considered**, not the last row returned,
-and the ceiling is read *before* the rows so an event landing mid-request gets a
-higher seq and is picked up by the next poll rather than skipped. Advancing the
-cursor past dropped rows is what stops an idle page rescanning the whole
-heartbeat backlog every second.
+It opens on the **newest** events rather than the oldest, so one request seeds
+what you see and an idle agent still opens on what it last did. The `routine`
+tier never reaches this page at all — the heartbeat is most of the volume and none
+of what a tail is opened to read; `logs --all` is where it is answered.
 
 This is the **human** surface, and the split is deliberate: the NDJSON stream
 above stays the canonical machine form *and* the debugging tool, which is what
-frees the page to hide and abbreviate aggressively. Nothing is lost doing so —
-every row expands to its own wire JSON, and one toggle reveals everything hidden.
+frees the page to hide and abbreviate aggressively. Every row it shows expands to
+its own wire JSON, and one toggle reveals the rest.
 
 ### A row
 
@@ -159,9 +141,9 @@ not by escaping.
 | Control | Behavior |
 |---|---|
 | **follow** | On by default: new rows keep the viewport at the bottom. Scrolling up hands control back; scrolling to the bottom, or ticking the box, resumes. |
-| **verbose** | Reveals what is hidden by default — thinking-token ticks and the handful of kinds redundant beside the rows they accompany. Not the `routine` tier: that never reaches the page at all. |
+| **verbose** | Reveals what is hidden by default — thinking-token ticks and the kinds redundant beside the rows they accompany. Not the `routine` tier, which never reaches the page. |
 | **pass pill** | Isolates one pass (see above). |
-| `?since=` | Narrows the load to a lookback window, in the `--since` grammar. **No default** — a load opens on the newest events whatever their age, so an agent idle since yesterday still opens on what it last did. |
+| `?since=` | Narrows the load to a lookback window, in the `--since` grammar. No default: a load opens on the newest events whatever their age. |
 | `?json=true` | The zero-renderer view: one raw JSON line per event, matching `logs --json`. |
 
 Thinking *content* never enters the log at all — the stream parser drops those
