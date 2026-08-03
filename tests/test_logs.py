@@ -30,6 +30,7 @@ def _args(**overrides) -> SimpleNamespace:
         "kinds": None,
         "json": False,
         "all": False,
+        "web": False,
     }
     base.update(overrides)
     return SimpleNamespace(**base)
@@ -193,3 +194,79 @@ def test_follow_sees_live_writer(tmp_path) -> None:
     finally:
         follower.terminate()
         follower.wait(timeout=5)
+
+
+# --- --web -------------------------------------------------------------------------------------
+
+
+@pytest.fixture
+def opened(monkeypatch):
+    """Records what would have been handed to a browser."""
+    urls = []
+    monkeypatch.setattr(logs_cli.webbrowser, "open", lambda url: urls.append(url) or True)
+    return urls
+
+
+@pytest.fixture
+def daemon_up(xdg_tmp, monkeypatch):
+    from selly_agent import control, secrets
+
+    paths.ensure_config_dir()
+    secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
+    monkeypatch.setattr(control, "get", lambda *a, **k: (200, {"bound": False}))
+
+
+def test_web_prints_the_url_and_opens_it(daemon_up, opened, capsys) -> None:
+    assert logs_cli.run(_args(web=True)) == 0
+    printed = capsys.readouterr().out.strip()
+    assert "token=ATTENDEDTOKEN" in printed
+    assert "/tail?" in printed
+    # printed first, opened second — the URL is the output even when opening does nothing
+    assert opened == [printed]
+
+
+def test_web_passes_since_through_in_the_pages_own_grammar(daemon_up, opened) -> None:
+    assert logs_cli.run(_args(web=True, since="15m")) == 0
+    assert "since=15m" in opened[0]
+
+
+def test_web_rejects_a_malformed_since_before_reaching_the_daemon(
+    daemon_up, opened, capsys
+) -> None:
+    assert logs_cli.run(_args(web=True, since="soon")) == 2
+    assert opened == []
+    assert "--since must look like" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "flag",
+    [{"follow": True}, {"pass_id": "p1"}, {"kinds": ["task.ok"]}, {"json": True}, {"all": True}],
+)
+def test_web_refuses_the_flags_the_page_cannot_honour(daemon_up, opened, capsys, flag) -> None:
+    """Silently ignoring a filter would read as though it had applied."""
+    assert logs_cli.run(_args(web=True, **flag)) == 2
+    assert opened == []
+    assert "--web composes only with --since" in capsys.readouterr().err
+
+
+def test_web_needs_a_running_daemon(xdg_tmp, opened, monkeypatch, capsys) -> None:
+    """Unlike the plain tail, the page is served by the daemon — it cannot read the DB directly."""
+    from selly_agent import control, secrets
+
+    paths.ensure_config_dir()
+    secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
+
+    def unreachable(*a, **k):
+        raise control.DaemonUnreachable("connection refused")
+
+    monkeypatch.setattr(control, "get", unreachable)
+
+    assert logs_cli.run(_args(web=True)) == 1
+    assert opened == []
+    assert "daemon start" in capsys.readouterr().err
+
+
+def test_the_plain_tail_still_needs_no_daemon(xdg_tmp, capsys) -> None:
+    """The read-only-tail property is the reason `logs` works on a stopped install."""
+    assert logs_cli.run(_args()) == 0
+    assert "no events yet" in capsys.readouterr().err

@@ -144,6 +144,11 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="include routine (heartbeat) events, hidden by default",
     )
+    logs.add_argument(
+        "--web",
+        action="store_true",
+        help="open the rendered web tail in a browser (needs the daemon; --since applies)",
+    )
 
     pass_cmd = sub.add_parser("pass", help="pass lifecycle")
     psub = pass_cmd.add_subparsers(dest="pass_command", required=True)

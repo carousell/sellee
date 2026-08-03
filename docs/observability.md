@@ -86,16 +86,23 @@ history (WAL gives concurrent readers by construction).
 | `--pass <id>` | one pass's events, harness and server interleaved |
 | `--kind <k>` | an explicit request, so it shows whatever it asks for regardless of level |
 | `--all` | lift the level floor to include the `routine` heartbeat |
+| `--web` | open the web tail below instead of printing (needs the daemon) |
 
 Without `--all` or `--kind`, the floor is `info`: the heartbeat is hidden. The
 text format is one line per event (`time  kind  pass=…  payload`) and is
 deliberately plain — colorized machine output is `--json` piped through `jq -c`.
 
+`--web` composes only with `--since`; the rest are refused rather than ignored,
+since the page follows by default, isolates a pass through its own pill, and has
+no use for a flag whose output is the pipe-friendly form.
+
 ## The web tail
 
 `http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token is a 0600
-file in the config dir). The page is `data/tail.html`, a packaged asset read per
-request; it polls `/events.json` and appends to the DOM.
+file in the config dir). `selly-agent logs --web` composes that URL, prints it,
+and opens it — the token makes it impractical to type, and printing first keeps
+the address useful where no browser can be opened. The page is `data/tail.html`,
+a packaged asset read per request; it polls `/events.json` and appends to the DOM.
 
 This is the **human** surface, and the split is deliberate: the NDJSON stream
 above stays the canonical machine form *and* the debugging tool, which is what

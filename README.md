@@ -123,6 +123,9 @@ bin/selly-agent logs --follow --json | jq .
 
 # routine heartbeat events (task.start/task.ok) are hidden by default; --all shows them
 bin/selly-agent logs --all
+
+# or the rendered web view — composes the tokenised URL, prints it, and opens it
+bin/selly-agent logs --web
 ```
 
 Once bound, the phone is the async channel: buyer escalations push to it, and
@@ -131,8 +134,9 @@ by the daemon (no LLM); anything else is a conversation with your selling agent.
 
 The daemon also serves a localhost web tail at
 `http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token lives 0600 in the config
-dir) — a rendered, human-readable view of the same event log, where `logs --json` is the
-machine form. Both are covered in [`docs/observability.md`](docs/observability.md).
+dir; `logs --web` composes and opens that URL for you) — a rendered, human-readable view of the
+same event log, where `logs --json` is the machine form. Both are covered in
+[`docs/observability.md`](docs/observability.md).
 
 Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 

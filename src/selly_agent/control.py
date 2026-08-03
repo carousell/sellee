@@ -40,6 +40,18 @@ def base_url(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
+def tail_url(port: int, token: str, since: str | None = None) -> str:
+    """The web tail's address, token and all.
+
+    Composed here rather than by the caller because query encoding is this module's business —
+    it is the one place allowed to reach for urllib at all.
+    """
+    query = {"token": token}
+    if since:
+        query["since"] = since
+    return f"{base_url(port)}/tail?{urllib.parse.urlencode(query)}"
+
+
 def require_token():
     """The attended bearer, or None having already explained what to do about its absence.
 
