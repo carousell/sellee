@@ -560,19 +560,19 @@ def _channel_bound(port: int, token: str) -> bool:
 
 
 def _attended_workspace(ui: Ui) -> None:
-    """Generate the Claude Code workspace at a fixed, documented place.
+    """Generate the Claude Code workspace `selly-agent chat` launches.
 
-    A fixed location rather than wherever the terminal happened to be: this is the directory the
-    seller will be told to `cd` into for months afterwards, so it has to have a name.
+    Written here as well as by `chat` so the first session starts instantly, and so a seller who
+    goes looking finds the directory already in place.
     """
-    dest = paths.data_root() / "attended"
+    dest = pass_cli.attended_dir()
     ui.step("Terminal session")
     if pass_cli.harness_config(dest) != 0:
         ui.warn("The attended workspace could not be written.")
         ui.note("create it later with `selly-agent harness config --attended --dir <path>`")
         return
     ui.say("Talk to Selly in a terminal with:")
-    ui.say(f"cd {dest} && claude")
+    ui.say("selly-agent chat")
 
 
 # --- the last word ------------------------------------------------------------------------------
@@ -585,7 +585,8 @@ def _finish(ui: Ui, platform) -> None:
 
     ui.step("Installed")
     ui.say("Selly is running.")
-    ui.say("• Change settings:  `/selly` in the terminal session")
+    ui.say("• Talk to Selly:    selly-agent chat   (`/selly` there changes settings)")
+    ui.say("• Watch it work:    selly-agent logs --follow   (or --web)")
     ui.say("• Check status:     selly-agent daemon status")
     ui.say("• Update:           selly-agent update")
 

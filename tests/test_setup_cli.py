@@ -544,7 +544,8 @@ def test_the_attended_workspace_lands_at_a_documented_path(world, monkeypatch, c
     )
     assert setup_main("--yes", "--manual") == 0
     assert written == [paths.data_root() / "attended"]
-    assert f"cd {paths.data_root() / 'attended'} && claude" in capsys.readouterr().out
+    # The seller is pointed at the command, not at the directory it happens to use.
+    assert "selly-agent chat" in capsys.readouterr().out
 
 
 def test_a_re_run_stops_the_old_worker_before_replacing_its_code(world, capsys) -> None:

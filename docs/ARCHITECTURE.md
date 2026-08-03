@@ -13,7 +13,7 @@ Concurrency is a few threads sharing SQLite state.
 
 Everything is reachable from one front door: `bin/selly-agent` resolves the
 package and dispatches argv via `cli.py` (`daemon run/install/start/stop/status/
-uninstall`, `logs`, `version`). launchd's job points at this launcher.
+uninstall`, `logs`, `chat`, `version`). launchd's job points at this launcher.
 
 ## Layout
 
@@ -195,8 +195,8 @@ instruction for the model. The loader caps the composed size, so a skill added
 later cannot quietly inflate every pass of that type.
 
 Which skills a pass type gets is declared on the pass type itself, keeping "a new
-pass type is one registry entry" true. The attended surface
-(`harness config --attended`) points its slash commands at the same files by
+pass type is one registry entry" true. The attended surface (`chat`, and
+`harness config --attended`) points its slash commands at the same files by
 path, through the `current` symlink, so an update changes what a command says
 without rewriting it.
 

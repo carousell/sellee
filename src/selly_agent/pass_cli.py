@@ -3,18 +3,23 @@
 `pass run` posts to the daemon's control route rather than writing selly.db directly — one writer
 per store holds at the process level too. `harness config --attended` sets up an attended Claude
 Code session against the same daemon MCP server (same tools, same state) as headless passes: the
-.mcp.json, the slash commands, and a CLAUDE.md. Both read the attended token from the config-dir
-secret; the daemon must be running.
+.mcp.json, the slash commands, and a CLAUDE.md. `chat` is the door a seller actually uses: the same
+config, written to a fixed place, then Claude Code launched in it. All three read the attended
+token from the config-dir secret; the daemon must be running.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 from selly_agent import config, control, paths, skills
+
+# The seam tests replace to observe the launch instead of becoming a Claude Code session.
+_exec = os.execvp
 
 
 def run(args) -> int:
@@ -166,6 +171,60 @@ def harness_config(directory=None) -> int:
     for path in written:
         print(f"wrote {path}")
     return 0
+
+
+def attended_dir() -> Path:
+    """Where the attended workspace lives — a fixed, documented place rather than wherever the
+    terminal happened to be, because it is what the installer provisions and `chat` launches."""
+    return paths.data_root() / "attended"
+
+
+def chat(args=None) -> int:
+    """`selly-agent chat` — regenerate the attended workspace, then become a Claude Code session.
+
+    Regenerated per launch rather than trusted from install time: the .mcp.json carries the
+    daemon's port and the attended token, and an update or a rotated token would otherwise leave a
+    session pointed at nothing.
+
+    The daemon is checked before the workspace is written, because every tool this session has is
+    served by it — launched against a stopped daemon, the session comes up with no way to read or
+    change anything and no obvious reason why.
+    """
+    token = control.require_token()
+    if not token:
+        return 1
+    port = config.load().http_port
+    try:
+        status, body = control.get(port, token, "/control/channel-status")
+    except control.DaemonUnreachable:
+        print(
+            "selly-agent: the daemon is not running — start it with `selly-agent daemon start`",
+            file=sys.stderr,
+        )
+        return 1
+    if status != 200:
+        print(f"selly-agent: {body.get('error', f'HTTP {status}')}", file=sys.stderr)
+        return 1
+
+    dest = attended_dir()
+    if harness_config(dest) != 0:
+        return 1
+
+    from selly_agent import passes
+
+    binary = passes.resolve_claude_bin(config.load())
+    if binary is None:
+        print(
+            "selly-agent: claude binary not found — set claude_bin in config or add it to PATH",
+            file=sys.stderr,
+        )
+        return 1
+
+    # Replace this process rather than parenting the session: signals and the tty then behave
+    # exactly as if the seller had run `claude` themselves. Nothing can run after this line.
+    os.chdir(dest)
+    _exec(binary, [binary])
+    return 0  # pragma: no cover — exec does not return
 
 
 def provision(args) -> int:

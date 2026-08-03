@@ -84,9 +84,11 @@ bin/selly-agent daemon run
 bin/selly-agent provision carousell-ai --region SG
 bin/selly-agent pass run publish --item <item_id> --follow
 
-# set up an attended Claude Code session against the same daemon MCP server:
-# .mcp.json, the /sell /selly /catchup /pause /resume commands, and a CLAUDE.md.
-# Then, in that directory: `claude`, and `/sell` to list something.
+# talk to Selly in this terminal: an attended Claude Code session against the same daemon
+# MCP server, with the /sell /selly /catchup /pause /resume commands. `/sell` lists something.
+bin/selly-agent chat
+
+# the same session config written somewhere of your choosing, without launching it
 bin/selly-agent harness config --attended --dir /path/to/session
 
 # connect the optional Telegram channel. Run it interactively and it prints BotFather
@@ -168,7 +170,7 @@ src/selly_agent/
   passes.py                the pass runner (claim -> spawn -> babysit -> classify)
   pass_stream.py           stream-json -> common event schema
   proc_tree.py             process-group kill + stray-pass reaper
-  pass_cli.py              pass run / harness config / provision CLI verbs
+  pass_cli.py              pass run / chat / harness config / provision CLI verbs
   lock.py                  PID-aware single-instance lock
   heartbeat.py             liveness heartbeat file
   scheduler.py             the loop: due tasks -> executor, backoff, task events

@@ -157,6 +157,8 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prun.add_argument("--follow", action="store_true", help="tail the pass's events until it ends")
 
+    sub.add_parser("chat", help="talk to Selly in this terminal")
+
     harness = sub.add_parser("harness", help="harness configuration")
     hsub = harness.add_subparsers(dest="harness_command", required=True)
     hconf = hsub.add_parser("config", help="write harness config for an attended session")
@@ -256,6 +258,11 @@ def main(argv: list[str] | None = None) -> int:
         from selly_agent import pass_cli
 
         return pass_cli.run(args)
+
+    if args.command == "chat":
+        from selly_agent import pass_cli
+
+        return pass_cli.chat(args)
 
     if args.command == "harness":
         from selly_agent import pass_cli
