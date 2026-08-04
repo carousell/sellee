@@ -686,11 +686,12 @@ def _render_crosslist_markets(value: object) -> str:
 
 
 def crosslist_markets(store) -> list:
-    """The external marketplaces the seller has enabled, filtered to the ones still publishable.
+    """The external marketplaces the seller has enabled, filtered to the ones still supported.
 
-    The filter matters after the fact: a stored market can stop being publishable — an adapter
-    withdrawn, or the seller's region changed to one it does not serve — and a stale id must not
-    become an eligible publish.
+    One answer for every direction: where the agent publishes, whose inboxes it reads, and where it
+    will send a reply. The filter matters after the fact: a stored market can stop being usable — an
+    adapter withdrawn, or the seller's region changed to one it does not serve — and a stale id must
+    not become an eligible publish or a market we believe we are reading.
     """
     publishable = market_adapters.publishable_markets(store.seller_region())
     return [market for market in get(store, "crosslist_markets") if market in publishable]
@@ -703,11 +704,12 @@ register(
         parse=_parse_crosslist_markets,
         render=_render_crosslist_markets,
         default=[],
-        description="Other marketplaces to list on as well as carousell.ai. Each one is published "
-        "in the browser after the carousell.ai listing is live, and the link is sent over when it "
-        "is up. Empty means carousell.ai only.",
-        take_effect="applies to items listed from now on; anything already listed is picked up "
-        "too.",
+        description="The marketplaces to work as well as carousell.ai. Each one is published in "
+        "the browser after the carousell.ai listing is live, the link is sent over when it is up, "
+        "and its inbox is read and answered from then on. Removing one stops all of that for it, "
+        "including replies to buyers already talking there. Empty means carousell.ai only.",
+        take_effect="applies to items listed from now on, and anything already listed is picked up "
+        "too; reading and replying on a marketplace start or stop within a minute.",
         requires_approval=True,
     )
 )

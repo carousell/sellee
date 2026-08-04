@@ -192,15 +192,35 @@ Mercari link.
 ## The read lane
 
 `browser/inbox.py`, on the `inbox_read` scheduler task. One tick asks each
-browser market which conversations exist, opens the ones that look like they
-moved, and reconciles each tail against the rows already stored — a navigate and
-one JS evaluate per thread, **no model turns at all**. That is what lets the reply
-pass above it stay browser-free: by the time it runs, what the buyer said is
-already state.
+**enabled** browser market which conversations exist, opens the ones that look
+like they moved, and reconciles each tail against the rows already stored — a
+navigate and one JS evaluate per thread, **no model turns at all**. That is what
+lets the reply pass above it stay browser-free: by the time it runs, what the
+buyer said is already state.
 
 Per market, per tick: navigate the inbox → login probe → conversation list →
 for each row, adopt or match a thread, skip or open it, reconcile → one
 `browser.read` event.
+
+**Which markets, and why the set is resolved first.** `crosslist_markets` — the
+seller's opt-in — is the one predicate for both directions: it decides where the
+agent publishes *and* which inboxes it reads, so disabling a marketplace stops
+both together. The readable set is computed **before the browser is acquired**,
+because acquiring it starts Chrome: a seller who has enabled nothing must never
+have a window opened to read a marketplace they declined. An empty set ends the
+tick with a `browser.read_skipped` event and no acquisition; an enabled market
+with no adapter, or no inbox URL for the seller's region, is dropped from the set
+with `browser.market_unreadable` rather than skipped quietly.
+
+The **reply lane applies the same predicate** at claim time: threads on a market
+the seller has disabled are never claimed into a reply pass, since answering
+where nothing reads the reply would leave the buyer's response unseen. A pass
+already in flight when the setting changes still finishes, and an attended
+`send_reply` is still free to answer anywhere — a seller who asks for a reply by
+name has made that call themselves.
+
+One consequence, accepted deliberately: disabling a market mid-negotiation stops
+its buyers being read *and* answered, so a live conversation there goes quiet.
 
 **Three rules keep it honest:**
 
@@ -241,9 +261,9 @@ Three notices, each queued at most once per condition and cleared on recovery:
 | `BrowserUnavailable` | the browser can't be driven at all; browser markets paused, the rail unaffected |
 
 The reply lane (`reply_lane`, every 10s) is a sibling: it claims every waiting
-thread into **one** coalesced reply pass, refuses to enqueue a second while one is
-in flight, and auto-refires nothing — eligibility comes from the rows, so a failed
-pass's threads are simply picked up next tick.
+thread on an **enabled** market into **one** coalesced reply pass, refuses to
+enqueue a second while one is in flight, and auto-refires nothing — eligibility
+comes from the rows, so a failed pass's threads are simply picked up next tick.
 
 ## Reconcile
 
@@ -420,6 +440,8 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslink.push_failed` | a push the rail refused or never received; retried next tick |
 | `browser.chrome_launched` | the daemon started Chrome because an acquisition needed it |
 | `browser.read` | one market's tick: rows listed, threads opened, rows recorded, unreadable count, whether it was a full sweep |
+| `browser.read_skipped` | a tick that read nothing because no enabled market was readable, with the enabled set (empty ⇒ none enabled) |
+| `browser.market_unreadable` | an enabled market dropped from the tick, and why (`no_adapter`, `no_inbox_url`) |
 | `browser.inbound` | one message folded into a durable row, with its scam verdict |
 | `browser.thread_new` | a buyer's conversation adopted as a thread |
 | `browser.unmatched` | a conversation deliberately not adopted, and which check failed |

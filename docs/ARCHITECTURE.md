@@ -163,9 +163,12 @@ the token-free read lane that folds buyer messages into durable rows, the pure
 reconcile that decides what is new, the scripted verified send, and a per-market
 adapter seam that keeps each marketplace's DOM knowledge in one module. Three
 actors share the one tab — the read lane, the reply sink, and a browser-driving
-pass — serialized by a mutex held for whole operations. A machine with no Node
-runs on with the browser lanes reporting themselves unavailable, rather than every
-market reading as quiet. Detail in [`browser-layer.md`](browser-layer.md).
+pass — serialized by a mutex held for whole operations. Both lanes read the
+seller's `crosslist_markets` opt-in, the same predicate the fan-out publishes by,
+and resolve it before acquiring the browser: enabling nothing opens no window at
+all. A machine with no Node runs on with the browser lanes reporting themselves
+unavailable, rather than every market reading as quiet. Detail in
+[`browser-layer.md`](browser-layer.md).
 
 **`crosslist.py`** is the fan-out lane above it: the seller names the marketplaces
 they sell on in a setting, and a listing that is live on carousell.ai and missing
