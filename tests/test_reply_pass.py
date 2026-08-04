@@ -8,6 +8,7 @@ forbidden, so a buyer can never learn what else the seller is selling by asking.
 from __future__ import annotations
 
 import pytest
+from tests.conftest import enable_markets
 
 from selly_agent import passes, reply_prompt
 from selly_agent.browser import inbox
@@ -20,6 +21,8 @@ REPLY = passes.PASS_TYPES["reply"]
 
 
 def _thread(store, tid="carousell:1", *, title="Teak lamp", handle="bob", price=80.0):
+    # carousell enabled with it: the lane claims replies only for markets the seller opted into.
+    enable_markets(store, "carousell")
     item = store.create_item(title=title, list_price=price, currency="SGD")
     store.create_thread(
         thread_id=tid,

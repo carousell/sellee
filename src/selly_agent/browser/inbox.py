@@ -9,10 +9,17 @@ The conversation list is the marketplace's own API where it has one, and the mes
 work: identity, the counterpart, the listing and the unread count are facts we want typed and loudly
 wrong when they change; message bubbles are only ever on a page.
 
+Which markets get read is the seller's `crosslist_markets` setting — the same predicate that
+decides where the agent publishes. Disabling a marketplace stops reads and writes together, and a
+seller who has enabled none never has Chrome opened: the readable set is resolved before the browser
+is acquired.
+
 Three rules keep the lane honest:
 
   * A market that cannot be seen must never look like a market with no news. A failed read is
-    counted, and a run of them raises one needs-me notice rather than passing for silence.
+    counted, and a run of them raises one needs-me notice rather than passing for silence. A tick
+    that reads nothing at all says so too — an enabled market we cannot reach, and "nothing is
+    enabled", are both events rather than silence.
   * The skip gate is an optimization, never a correctness input. A thread whose last message we
     already hold is left closed this tick — but every Nth tick opens everything regardless, so a
     stale list costs one sweep interval of latency and nothing more.
@@ -27,7 +34,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from selly_agent import marketplaces
+from selly_agent import marketplaces, settings
 from selly_agent.browser import markets as market_adapters
 from selly_agent.browser import reconcile
 from selly_agent.browser.client import BrowserError, BrowserUnavailable
@@ -113,10 +120,52 @@ def browser_pass_running(store) -> bool:
     return False
 
 
+def _unreadable(deps: InboxDeps, market: str, reason: str) -> None:
+    """Report an enabled market this tick cannot read. Every tick it persists, because the condition
+    is the answer to "why is nobody reading my inbox" and one event at the start of a week-long
+    outage is one nobody finds."""
+    deps.bus.publish("browser.market_unreadable", {"market": market, "reason": reason})
+
+
+def _readable_markets(deps: InboxDeps, enabled, region: str | None) -> list:
+    """The adapters for the markets we can actually read this tick, in enabled order.
+
+    Resolved before the browser is acquired, so a seller with nothing readable never has Chrome
+    started on their behalf — the whole point of gating reads on the setting. An enabled market that
+    cannot be read is reported rather than dropped quietly: the lane's rule that blindness must not
+    look like silence applies to its own gaps too.
+    """
+    readable = []
+    for market in enabled:
+        adapter = market_adapters.get_adapter(market)
+        if adapter is None:
+            # Belt and braces: `crosslist_markets` only admits markets with an adapter and a recipe,
+            # so this is unreachable today and stays as the loud version of the old silent skip.
+            _unreadable(deps, market, "no_adapter")
+            continue
+        if marketplaces.market_url(market, "inbox", region) is None:
+            _unreadable(deps, market, "no_inbox_url")
+            continue
+        readable.append(adapter)
+    return readable
+
+
 def inbox_lane(deps: InboxDeps) -> None:
-    """One tick: read every browser market's inbox and fold what is new into durable rows."""
+    """One tick: read the enabled markets' inboxes and fold what is new into durable rows."""
     if deps.store.is_paused():
         return
+
+    # Before acquisition, deliberately: acquiring the browser starts Chrome, and a seller who has
+    # enabled no marketplaces must never have a window opened to read one.
+    region = seller_region(deps.store)
+    enabled = settings.crosslist_markets(deps.store)
+    readable = _readable_markets(deps, enabled, region)
+    if not readable:
+        # Said out loud rather than returning quietly: "no buyer wrote" and "there is no market to
+        # hear a buyer on" are indistinguishable in a log that reports only the first.
+        deps.bus.publish("browser.read_skipped", {"enabled": list(enabled)})
+        return
+
     if browser_pass_running(deps.store):
         return
     try:
@@ -125,11 +174,7 @@ def inbox_lane(deps: InboxDeps) -> None:
         _unavailable(deps, exc)
         return
 
-    region = seller_region(deps.store)
-    for market in marketplaces.browser_markets():
-        adapter = market_adapters.get_adapter(market)
-        if adapter is None:
-            continue  # a registry entry with no adapter yet is not a market we can read
+    for adapter in readable:
         try:
             with client.exclusive():
                 _read_market(deps, client, adapter, region)
@@ -141,7 +186,7 @@ def inbox_lane(deps: InboxDeps) -> None:
             _unavailable(deps, exc)
             return
         except BrowserError as exc:
-            _count_blind(deps, market, str(exc))
+            _count_blind(deps, adapter.market, str(exc))
     # Recovery is a tick that ran into no unavailability, so a condition that persists mid-loop
     # keeps its one notice instead of being re-queued every tick.
     _clear_notice(deps, "unavailable")
@@ -151,7 +196,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     market = adapter.market
     inbox_url = marketplaces.market_url(market, "inbox", region)
     if inbox_url is None:
-        log.warning("no recorded inbox URL for %s — skipping", market)
+        # Unreachable via the lane, which resolves this before acquiring the browser; kept so the
+        # condition is reported the same way from any caller rather than passing for a quiet inbox.
+        _unreadable(deps, market, "no_inbox_url")
         return
 
     client.navigate(inbox_url)
@@ -373,6 +420,18 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
     )
 
 
+def disabled_markets(store) -> list:
+    """Browser markets the seller has not enabled — the ones no reply is claimed for.
+
+    The same predicate as the read lane, applied to the other direction: a market we have stopped
+    reading is one we must stop answering on, because a reply there is a message sent where nothing
+    will see what comes back. Only browser markets are ever named — the rail is not the setting's
+    business, and a market absent from the registry is left to whoever created its threads.
+    """
+    enabled = settings.crosslist_markets(store)
+    return [market for market in marketplaces.browser_markets() if market not in enabled]
+
+
 def reply_lane(*, store, bus) -> None:
     """One tick of the reply lane: spawn a scoped reply pass for the buyers who are waiting.
 
@@ -381,10 +440,15 @@ def reply_lane(*, store, bus) -> None:
     becomes one pass rather than a queue of them. Nothing is auto-refired: a pass that failed
     leaves its threads eligible, and the next tick picks them up because eligibility comes from the
     rows and not from a retry counter.
+
+    Threads on a market the seller has disabled are not claimed. A pass already in flight when that
+    happens still finishes — one pass's worth of window, the same as any setting change — and an
+    attended `send_reply` is still free to answer anywhere, because a seller who asks for a reply by
+    name has made that call themselves.
     """
     if store.is_paused():
         return
-    claimed = store.enqueue_reply_pass()
+    claimed = store.enqueue_reply_pass(exclude_markets=disabled_markets(store))
     if claimed is None:
         return
     bus.publish(

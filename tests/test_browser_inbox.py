@@ -9,6 +9,7 @@ would obscure them. The transport itself is covered in test_browser_client.py.
 from __future__ import annotations
 
 import pytest
+from tests.conftest import enable_markets, seed_setting
 
 from selly_agent.browser import inbox
 from selly_agent.browser.client import BrowserToolError, BrowserUnavailable
@@ -87,8 +88,9 @@ def _deps(store, bus, client, **overrides):
 
 @pytest.fixture
 def seeded(store):
-    """An item published to carousell, so a conversation about it is recognisable by listing id."""
-    store.set_seller_config_section("basics", {"region": "SG"})
+    """An item published to carousell, so a conversation about it is recognisable by listing id —
+    with carousell enabled, since the lane reads only the markets the seller opted into."""
+    enable_markets(store, "carousell")
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell", _LISTING)
     return store.get_item(item["id"])
@@ -474,3 +476,147 @@ def test_a_paused_agent_reads_nothing(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()])
     inbox.inbox_lane(_deps(store, bus, client))
     assert client.navigations == []
+
+
+# --- reading only the markets the seller enabled -------------------------------------------------
+
+
+def _exploding_factory():
+    """A browser factory that fails the test if it is called at all — acquiring the browser starts
+    Chrome, which is the thing a seller with nothing enabled must never have happen."""
+
+    def factory():
+        raise AssertionError("the browser was acquired for a market that is not enabled")
+
+    return factory
+
+
+def test_nothing_enabled_means_no_browser_at_all(store, bus, seeded) -> None:
+    """The exit criterion: no Chrome, no login probe, no notice — and one event saying why."""
+    seed_setting(store, "crosslist_markets", [])
+    _thread(store, seeded)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=_exploding_factory()
+    )
+    inbox.inbox_lane(deps)
+
+    assert store.count_queued_notices() == 0
+    assert not _kinds(bus, "browser.login")
+    assert not _kinds(bus, "browser.blind")
+    skipped = _kinds(bus, "browser.read_skipped")
+    assert [e.payload for e in skipped] == [{"enabled": []}]
+
+
+def test_a_skipped_tick_is_reported_every_tick(store, bus, seeded) -> None:
+    """Blindness is not silence, and neither is having nothing to read: an operator who asks the log
+    why nothing is happening must get an answer for the tick they are looking at, not just the
+    first one of the outage."""
+    seed_setting(store, "crosslist_markets", [])
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=_exploding_factory()
+    )
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+    assert len(_kinds(bus, "browser.read_skipped")) == 2
+
+
+def test_enabling_a_market_starts_reads_and_disabling_stops_them(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    conv = [_conv()]
+    tails = {"99": [_bubble("still available?")]}
+
+    seed_setting(store, "crosslist_markets", [])
+    off = StubClient(conversations=conv, tails=tails)
+    inbox.inbox_lane(_deps(store, bus, off))
+    assert off.navigations == []
+
+    seed_setting(store, "crosslist_markets", ["carousell"])
+    on = StubClient(conversations=conv, tails=tails)
+    inbox.inbox_lane(_deps(store, bus, on))
+    assert on.navigations  # the next tick reads, with no restart in between
+
+    seed_setting(store, "crosslist_markets", [])
+    off_again = StubClient(conversations=conv, tails=tails)
+    inbox.inbox_lane(_deps(store, bus, off_again))
+    assert off_again.navigations == []
+
+
+def test_a_market_with_no_regional_site_is_not_read(store, bus, seeded) -> None:
+    """`crosslist_markets` filters on the seller's region, so a region the marketplace does not
+    serve leaves nothing enabled — and the browser is never acquired to discover that."""
+    store.set_seller_config_section("basics", {"region": "US"})  # Carousell has no US site
+    seed_setting(store, "crosslist_markets", ["carousell"])
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=_exploding_factory()
+    )
+    inbox.inbox_lane(deps)
+    assert [e.payload for e in _kinds(bus, "browser.read_skipped")] == [{"enabled": []}]
+
+
+def test_an_enabled_market_with_no_inbox_url_is_reported_not_skipped_quietly(
+    store, bus, seeded, monkeypatch
+) -> None:
+    """The old behaviour was a `log.warning` and a return, inside a lane whose whole rule is that
+    blindness must not look like quiet. Now it is an event, and it is decided before the browser is
+    acquired rather than one step after."""
+    real_market_url = inbox.marketplaces.market_url
+
+    def no_inbox(market, key, region=None, **fields):
+        if key == "inbox":
+            return None
+        return real_market_url(market, key, region, **fields)
+
+    monkeypatch.setattr(inbox.marketplaces, "market_url", no_inbox)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=_exploding_factory()
+    )
+    inbox.inbox_lane(deps)
+
+    assert [e.payload for e in _kinds(bus, "browser.market_unreadable")] == [
+        {"market": "carousell", "reason": "no_inbox_url"}
+    ]
+    assert [e.payload for e in _kinds(bus, "browser.read_skipped")] == [{"enabled": ["carousell"]}]
+
+
+def test_an_enabled_market_with_no_adapter_is_reported(store, bus, seeded, monkeypatch) -> None:
+    """Unreachable while the setting requires an adapter — kept as the loud version of what used to
+    be a bare `continue`, so the day the two disagree it is visible rather than silent."""
+    monkeypatch.setattr(inbox.market_adapters, "get_adapter", lambda market: None)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=_exploding_factory()
+    )
+    inbox.inbox_lane(deps)
+    assert [e.payload for e in _kinds(bus, "browser.market_unreadable")] == [
+        {"market": "carousell", "reason": "no_adapter"}
+    ]
+
+
+# --- the reply lane reads the same predicate -----------------------------------------------------
+
+
+def test_no_reply_is_claimed_for_a_market_the_seller_disabled(store, bus, seeded) -> None:
+    """The other half of one predicate: a buyer message read before the market was disabled must
+    not become a reply pass afterwards — that would post where nothing reads the answer."""
+    _thread(store, seeded)
+    store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
+    seed_setting(store, "crosslist_markets", [])
+
+    inbox.reply_lane(store=store, bus=bus)
+    assert store.claim_queued_pass() is None
+
+    seed_setting(store, "crosslist_markets", ["carousell"])
+    inbox.reply_lane(store=store, bus=bus)
+    claimed = store.claim_queued_pass()
+    assert claimed is not None
+    assert claimed.payload["thread_ids"] == ["carousell:99"]
+
+
+def test_the_reply_gate_only_ever_names_browser_markets(store, bus, seeded) -> None:
+    """A thread on the rail is not the setting's business — `crosslist_markets` names the external
+    marketplaces, and carousell.ai is the one every listing goes on regardless."""
+    seed_setting(store, "crosslist_markets", [])
+    assert "carousell-ai" not in inbox.disabled_markets(store)
+    assert inbox.disabled_markets(store) == inbox.marketplaces.browser_markets()
+
+    seed_setting(store, "crosslist_markets", ["carousell"])
+    assert "carousell" not in inbox.disabled_markets(store)

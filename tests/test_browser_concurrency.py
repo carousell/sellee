@@ -11,6 +11,7 @@ from __future__ import annotations
 import threading
 
 import pytest
+from tests.conftest import enable_markets
 
 from selly_agent.browser import inbox, sink
 from selly_agent.browser.client import BrowserClient
@@ -98,7 +99,7 @@ class _Held:
 
 @pytest.fixture
 def seeded(store):
-    store.set_seller_config_section("basics", {"region": "SG"})
+    enable_markets(store, "carousell")
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.create_thread(
         thread_id="carousell:99",

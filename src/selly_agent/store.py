@@ -153,6 +153,7 @@ _UNHANDLED_INBOUND_SQL = (
     "     AND mx.dir = 'in') AS newest_in_ts "
     "FROM threads t "
     "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
+    "{markets}"
     "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
     "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
     "AND NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
@@ -162,7 +163,24 @@ _UNHANDLED_INBOUND_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
     "  AND e.status = 'open') "
     "ORDER BY t.thread_id ASC"
-).format(statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES))
+)
+
+
+def _unhandled_inbound_query(exclude_markets=()) -> tuple:
+    """The eligibility query and its parameters, optionally blind to some markets.
+
+    Which markets are in play is the caller's judgement, never the store's: it depends on the
+    seller's settings and on each market's connector, and this layer holds no marketplace knowledge
+    (same division as `active_passes_of_types`).
+    """
+    markets = tuple(exclude_markets)
+    clause = ""
+    if markets:
+        clause = "AND t.market NOT IN ({}) ".format(",".join("?" for _ in markets))
+    sql = _UNHANDLED_INBOUND_SQL.format(
+        statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES), markets=clause
+    )
+    return sql, (*_REPLY_THREAD_STATUSES, *markets)
 
 
 def _unhandled_inbound_rows(rows) -> list[dict]:
@@ -2997,16 +3015,20 @@ class Store:
         """Sell threads whose buyer is waiting: an inbound message past the reply cursor, a status
         that is still conversational, and no escalation already open on them — an escalation means
         the seller, not the agent, owns the next move."""
-        rows = self._db.query(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES)
+        sql, params = _unhandled_inbound_query()
+        rows = self._db.query(sql, params)
         return _unhandled_inbound_rows(rows)
 
-    def enqueue_reply_pass(self) -> dict | None:
+    def enqueue_reply_pass(self, exclude_markets=()) -> dict | None:
         """Coalescing route for the reply lane, one transaction: claim every sell thread with
         unhandled inbound into a single queued pass, unless one is already queued or running.
 
         The claimed thread ids (and their owning items) become the pass's payload — the pass token
         is minted with exactly that scope, so the spawned pass can read nothing else. Returns
         {pass_id, thread_ids, item_ids} or None when there is nothing to reply to.
+
+        `exclude_markets` names markets whose threads must not be claimed at all — the caller's
+        answer to which marketplaces the agent is still working (see `browser.inbox.reply_lane`).
         """
         pass_id = _new_id("pass")
         now = _now()
@@ -3017,7 +3039,8 @@ class Store:
             ).fetchone()
             if active:
                 return None
-            claimable = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            sql, params = _unhandled_inbound_query(exclude_markets)
+            claimable = conn.execute(sql, params).fetchall()
             pending = _unhandled_inbound_rows(claimable)
             if not pending:
                 return None

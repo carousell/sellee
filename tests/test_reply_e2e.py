@@ -15,7 +15,7 @@ import sys
 import threading
 
 import pytest
-from tests.conftest import leak_paths
+from tests.conftest import enable_markets, leak_paths
 
 import selly_agent.tools  # noqa: F401  registration
 from selly_agent import passes
@@ -85,6 +85,7 @@ def wired(bus, store, xdg_tmp):
     from selly_agent import paths
 
     paths.ensure_state_dirs()
+    enable_markets(store, "carousell")  # the lane claims only for markets the seller enabled
     sink = RecordingSink(store)
 
     def context_factory(session):

@@ -59,6 +59,22 @@ def seed_setting(store, key, value) -> None:
         )
 
 
+def enable_markets(store, *markets, region="SG") -> None:
+    """Arrange a seller who has enabled some browser marketplaces — a recorded region *and* the
+    `crosslist_markets` setting.
+
+    The two travel together: a market is only enabled for a seller the marketplace has a site for,
+    so the settings helper filters on region and the setting alone would read as empty. Both browser
+    lanes gate on that answer, so a test wanting them to do anything has to arrange the pair. The
+    region is merged into `basics` rather than replacing it, so a currency a test already set
+    survives.
+    """
+    basics = dict(store.get_seller_config_section("basics") or {})
+    basics.setdefault("region", region)
+    store.set_seller_config_section("basics", basics)
+    seed_setting(store, "crosslist_markets", list(markets))
+
+
 @pytest.fixture
 def bus(tmp_path):
     """A ready EventBus backed by freshly-migrated data/events DBs under tmp_path."""

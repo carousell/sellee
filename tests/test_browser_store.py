@@ -172,12 +172,12 @@ def test_the_cache_never_stores_a_value_or_an_address(store) -> None:
 # --- the daemon's inbound writer ----------------------------------------------------------------
 
 
-def _sell_thread(store, tid="carousell:1"):
+def _sell_thread(store, tid="carousell:1", *, market="carousell"):
     item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
     store.create_thread(
         thread_id=tid,
         side="sell",
-        market="carousell",
+        market=market,
         counterpart_handle="bob",
         item_id=item["id"],
     )
@@ -229,8 +229,8 @@ def test_record_inbound_on_an_unknown_thread_raises(store) -> None:
 # --- the reply lane -----------------------------------------------------------------------------
 
 
-def _waiting_thread(store, tid="carousell:1", *, ts=100.0):
-    item = _sell_thread(store, tid)
+def _waiting_thread(store, tid="carousell:1", *, ts=100.0, market="carousell"):
+    item = _sell_thread(store, tid, market=market)
     store.record_inbound(tid, msg_id="m1", text="still available?", ts=ts)
     return item
 
@@ -353,6 +353,22 @@ def test_enqueue_reply_pass_claims_scope_and_coalesces(store) -> None:
     store.finish_pass(claimed["pass_id"], status="done", rc=0, cls="ok", summary="ok")
     # the buyer is still past the cursor, so the next lane tick re-enqueues
     assert store.enqueue_reply_pass()["thread_ids"] == ["carousell:1"]
+
+
+def test_enqueue_reply_pass_can_be_blind_to_named_markets(store) -> None:
+    """Which markets are in play is the caller's judgement — the store just honours the list."""
+    _waiting_thread(store, "carousell:1")
+    _waiting_thread(store, "fb:2", market="fb")
+
+    assert store.enqueue_reply_pass(exclude_markets=["carousell", "fb"]) is None
+    claimed = store.enqueue_reply_pass(exclude_markets=["fb"])
+    assert claimed["thread_ids"] == ["carousell:1"]  # the excluded thread is not in the payload
+
+
+def test_enqueue_reply_pass_excludes_nothing_by_default(store) -> None:
+    _waiting_thread(store, "carousell:1")
+    _waiting_thread(store, "fb:2", market="fb")
+    assert store.enqueue_reply_pass()["thread_ids"] == ["carousell:1", "fb:2"]
 
 
 def test_active_passes_of_types_reports_queued_and_running_with_payloads(store) -> None:
