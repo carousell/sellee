@@ -27,6 +27,11 @@ log = logging.getLogger(__name__)
 _GRACE_SEC = 10  # a terminated tree gets this long to exit before it is killed outright
 _KILL_WAIT_SEC = 5  # after the kill, how long to wait for confirmation
 
+# Resolved with getattr because the attribute does not exist on Windows — and it must not be
+# spelled at a call site, where it would be evaluated (and raise) before _signal_group could
+# decline. The group is always None there, so the constant is only used where it is defined.
+_SIGKILL = getattr(signal, "SIGKILL", None)
+
 
 def _running(proc) -> bool:
     """Whether a process is still doing something.
@@ -63,8 +68,8 @@ def _process_group(pid: int) -> int | None:
         return None
 
 
-def _signal_group(group: int | None, sig: int) -> None:
-    if group is None:
+def _signal_group(group: int | None, sig: int | None) -> None:
+    if group is None or sig is None:
         return
     with contextlib.suppress(OSError):
         os.killpg(group, sig)
@@ -109,7 +114,7 @@ def confirm_dead(proc, grace: float = _GRACE_SEC) -> None:
     _kill(alive)
     with contextlib.suppress(OSError):
         proc.kill()
-    _signal_group(group, signal.SIGKILL)
+    _signal_group(group, _SIGKILL)
 
     with contextlib.suppress(subprocess.TimeoutExpired):
         proc.wait(timeout=_KILL_WAIT_SEC)
@@ -143,7 +148,7 @@ def kill_tree(pid: int, grace: float = _GRACE_SEC) -> bool:
         return True
 
     _kill(alive)
-    _signal_group(group, signal.SIGKILL)
+    _signal_group(group, _SIGKILL)
     _, survivors = psutil.wait_procs(alive, timeout=_KILL_WAIT_SEC)
     left = [proc for proc in survivors if _running(proc)]
     for proc in left:
@@ -195,7 +200,11 @@ def find_stray_passes(records, now: float | None = None) -> list:
 
 
 def reap_strays(records, now: float | None = None) -> list:
-    """Kill every stray pass found, and answer which ones were killed."""
+    """Kill every stray pass found, and answer which ones are confirmed gone.
+
+    A stray that survives the kill stays out of the answer on purpose: its record is the only
+    thing that lets the next tick find it again, so it must not be forgotten on a failed kill.
+    """
     reaped = []
     for stray in find_stray_passes(records, now=now):
         log.warning(
@@ -203,6 +212,6 @@ def reap_strays(records, now: float | None = None) -> list:
             stray["pass_id"],
             stray["pid"],
         )
-        kill_tree(stray["pid"])
-        reaped.append(stray)
+        if kill_tree(stray["pid"]):
+            reaped.append(stray)
     return reaped

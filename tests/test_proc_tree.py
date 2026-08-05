@@ -166,3 +166,13 @@ def test_reap_strays_kills_and_reports_each_one(monkeypatch) -> None:
 
     assert [r["pass_id"] for r in reaped] == ["pass_old"]
     assert killed == [own]
+
+
+def test_a_stray_that_survives_the_kill_is_not_reported_reaped(monkeypatch) -> None:
+    """The record is the only way the next tick can find the survivor again, so a failed kill
+    must not count as reaped — the caller forgets exactly what this function reports."""
+    monkeypatch.setattr(proc_tree, "kill_tree", lambda pid: False)
+    own = os.getpid()
+    records = [_record("pass_old", own, proc_tree.creation_time(own), reap_after_ts=100.0)]
+
+    assert proc_tree.reap_strays(records, now=500.0) == []

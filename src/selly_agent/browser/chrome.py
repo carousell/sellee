@@ -221,8 +221,9 @@ def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float 
 
         argv = launch_command(port, chrome_bin=chrome_bin)
         try:
-            # Detached, so the daemon's exit — or a pass group being killed — never takes the
-            # seller's browser with it.
+            # Detached, so the daemon's exit — or a pass group being killed — does not take the
+            # browser with it. Not absolute: the forced kill of a wedged daemon still walks its
+            # children, and this Chrome is one; see spawn.survives_us_flags.
             subprocess.Popen(  # noqa: S603 — argv is composed by launch_command, not a shell
                 argv,
                 stdin=subprocess.DEVNULL,

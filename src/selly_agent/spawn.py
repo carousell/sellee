@@ -54,10 +54,13 @@ def detached_flags() -> dict:
 
 
 def survives_us_flags() -> dict:
-    """Popen keywords for a child that must outlive this process — the seller's browser.
+    """Popen keywords for a child meant to outlive this process — the agent's Chrome.
 
-    Chrome belongs to the seller, not to us: it stays up when the daemon stops, and it must not
-    be part of a group the daemon's own shutdown would signal.
+    Chrome stays up across a normal daemon exit or crash, so it must not be part of a group the
+    daemon's own shutdown would signal. This is best-effort, not absolute: the forced kill of a
+    wedged daemon walks its child tree and takes a Chrome that daemon spawned — accepted, because
+    it is the agent's own Chrome on a dedicated profile, and the next launch recovers (sessions
+    persist on disk; stale profile locks are cleared).
     """
     if os.name == "nt":
         return {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}

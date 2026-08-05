@@ -229,6 +229,10 @@ def shutdown(
     if _wait_for_exit(pid, STOP_TIMEOUT_SEC if timeout_sec is None else timeout_sec):
         return True
     log.warning("the worker (pid %s) did not stop when asked; killing it", pid)
+    # The kill takes the daemon's whole tree — including a Chrome this daemon spawned. That is
+    # accepted: it is the agent's own Chrome on a dedicated profile, its sessions persist on
+    # disk, and the next launch clears the stale locks a killed Chrome leaves. (One this daemon
+    # merely re-attached to is not among its children and survives.)
     proc_tree.kill_tree(pid)
     return _wait_for_exit(pid, _FORCED_EXIT_WAIT_SEC)
 
@@ -245,10 +249,13 @@ def _wait_for_exit(pid: int, timeout_sec: float) -> bool:
 def stop(*, label: str | None = None, platform: Platform | None = None) -> int:
     platform = _resolve_platform(platform)
     label = _resolve_label(platform, label)
-    running = platform.is_registered(label) or daemon_pid() is not None
+    pid = daemon_pid()
+    running = platform.is_registered(label) or pid is not None
     if not shutdown(label=label, platform=platform):
+        # The pid is the one read before the stop: re-reading here could name None for a daemon
+        # that died between the failed confirmation window and this message.
         print(
-            f"the worker (pid {daemon_pid()}) is still running after being asked to stop and then "
+            f"the worker (pid {pid}) is still running after being asked to stop and then "
             "killed. Check `selly-agent logs`.",
             file=sys.stderr,
         )
