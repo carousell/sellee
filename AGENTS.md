@@ -136,21 +136,27 @@ Scheduler.
 Everything else per-OS goes in the portable module that owns the concern, with the
 branch inside it — `paths.py` (roots, venv layout), `lock.py`, `pointer.py`
 (`current` and the shim), `spawn.py` (resolution, creation flags, exec),
-`proc_tree.py`, `images.py`. The reason for the split is ordering: `get_platform()`
-refuses an unsupported host, and these have to answer before anything has decided
-whether the host is supported — during a bootstrap, or from a CLI holding no
-platform.
+`proc_tree.py`. (`images.py` earned its way out of the list: Pillow made it
+branch-free.) The reason for the split is ordering: `get_platform()` refuses an
+unsupported host, and these have to answer before anything has decided whether the
+host is supported — during a bootstrap, or from a CLI holding no platform.
 
-Two guards keep this honest: every module must import on any OS (only
-`platform/windows.py` is exempt, by name), and per-OS stdlib imports (`fcntl`,
-`msvcrt`, `winreg`, `_winapi`) are recognised as stdlib whichever OS runs the
-suite, so a verdict never depends on the machine.
+Three guards keep this honest: every module must import on any OS (no exemptions —
+even `platform/windows.py` keeps its module-level imports portable); per-OS stdlib
+imports (`fcntl`, `msvcrt`, `winreg`, `_winapi`) are recognised as stdlib whichever
+OS runs the suite, so a verdict never depends on the machine; and platform
+conditionals (`os.name`, `sys.platform`, the per-OS stdlib modules) may appear only
+in an allowlisted set of owner modules
+(`tests/guard/test_portability.py`) — growing that list is a deliberate,
+visible act.
 
 Windows-specific rules worth stating once: file modes are not applied there
 rather than emulated (privacy rests on the user profile, as it does for Claude
 Code's own credentials); there is no exec that replaces a process, so `spawn.become`
-runs the child and adopts its status; and a bare program name does not resolve, so
-every spawn goes through `spawn.resolve`.
+runs the child and adopts its status; a bare program name does not resolve, so
+every spawn goes through `spawn.resolve`; and the scheduled task's definition
+cannot carry environment variables, so the supervisor writes them to a companion
+`.env.json` beside the task XML and the launcher applies it (`--env-file`).
 
 ## State is two SQLite DBs
 

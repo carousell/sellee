@@ -242,7 +242,9 @@ Lifecycle:
 - **`daemon.py`** — the process: lock, ensure dirs, run startup migrations, open
   the bus, run the scheduler; a signal drains cleanly and exits 0.
 - **`supervisor.py`** — the OS-agnostic orchestration behind
-  `daemon install/start/stop/status/uninstall`.
+  `daemon install/start/stop/status/uninstall`. The job's pinned environment goes
+  into the definition where the format carries one (the plist), and into a
+  companion `.env.json` the launcher applies where it cannot (the task XML).
 
 ## Startup, in order
 

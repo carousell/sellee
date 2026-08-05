@@ -10,6 +10,7 @@ from pathlib import Path
 
 import pytest
 
+from selly_agent import spawn
 from selly_agent.browser import chrome
 from selly_agent.browser.client import (
     PINNED_MCP_SPEC,
@@ -511,9 +512,10 @@ def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatc
 
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome") == chrome.LAUNCHED
     assert launched["argv"][0] == "/bin/chrome"
-    # Its own session: the daemon exiting, or a pass group being killed, must not take the seller's
-    # browser with it.
-    assert launched["kw"]["start_new_session"] is True
+    # Its own session/group: the daemon exiting, or a pass group being killed, must not take the
+    # browser with it. Asked of the helper, so the assertion holds on whichever OS runs the suite.
+    for key, value in spawn.survives_us_flags().items():
+        assert launched["kw"][key] == value
     # The lock only goes once the probe has said nobody is answering.
     assert not (paths.browser_profile_dir() / chrome.singleton_lock_names()[0]).exists()
 

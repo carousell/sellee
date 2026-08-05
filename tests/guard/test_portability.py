@@ -13,7 +13,10 @@ from __future__ import annotations
 
 import ast
 import importlib
+import io
 import pkgutil
+import re
+import tokenize
 from pathlib import Path
 
 import pytest
@@ -24,8 +27,9 @@ ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 
 # Modules that import a platform's own libraries at module level, and so can only be imported on
-# it. Every other module must import anywhere — that is the property under test.
-_PLATFORM_ONLY = {"selly_agent.platform.windows"}
+# it. Empty on purpose — even platform/windows.py keeps its module-level imports portable — and
+# every other module must import anywhere: that is the property under test.
+_PLATFORM_ONLY: set = set()
 
 
 def _module_names() -> list:
@@ -43,10 +47,74 @@ def test_every_module_imports(name) -> None:
     importlib.import_module(name)
 
 
-def test_the_platform_only_list_stays_short() -> None:
+def test_the_platform_only_list_stays_empty() -> None:
     """It is an exemption from the guard above, so growing it is how the guard stops meaning
-    anything. A module that needs one OS's libraries belongs behind the platform seam."""
-    assert _PLATFORM_ONLY == {"selly_agent.platform.windows"}
+    anything. A module that needs one OS's libraries at import time belongs behind the platform
+    seam — with the imports inside the functions that use them, as platform/windows.py does."""
+    assert _PLATFORM_ONLY == set()
+
+
+# --- platform branches stay in their owner modules ------------------------------------------
+
+# Where a platform conditional is allowed to live: the platform/ seam (host integration), plus
+# the portable modules that each own one per-OS concern and hide it behind a neutral API. A hit
+# anywhere else is core logic learning a platform quirk — the scatter that rotted the last port.
+_PLATFORM_OWNERS = {
+    "selly_agent/platform/__init__.py",
+    "selly_agent/platform/base.py",
+    "selly_agent/platform/macos.py",
+    "selly_agent/platform/windows.py",
+    "selly_agent/paths.py",
+    "selly_agent/lock.py",
+    "selly_agent/pointer.py",
+    "selly_agent/spawn.py",
+    "selly_agent/proc_tree.py",
+    "selly_agent/supervisor.py",
+    "selly_agent/http_server.py",
+    "selly_agent/setup_cli.py",
+    "selly_agent/uninstall_cli.py",
+    "selly_agent/browser/chrome.py",
+    "selly_agent/installer/preflight.py",
+    "selly_agent/installer/materialize.py",
+    "selly_agent/installer/runtime.py",
+    "selly_agent/installer/ui.py",
+}
+
+_PLATFORM_TOKENS = re.compile(
+    r"\bos\.name\b|\bsys\.platform\b|\bimport platform\b|"
+    r"\bmsvcrt\b|\bwinreg\b|\b_winapi\b|\bfcntl\b|\bctypes\b"
+)
+
+
+def _without_comments(source: str) -> str:
+    """Comments blanked: prose about a platform is not a platform branch. Strings are still
+    scanned — an os.environ key is a string."""
+    lines = source.splitlines()
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.COMMENT:
+                row = token.start[0] - 1
+                lines[row] = lines[row].replace(token.string, "")
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return source
+    return "\n".join(lines)
+
+
+def test_platform_conditionals_live_in_their_owner_modules() -> None:
+    """The two-place rule from AGENTS.md, made mechanical: a daemon that needs a path, a lock, a
+    spawn or a kill calls a platform-neutral function; only the module that owns the concern may
+    ask what OS this is. Growing the owner list is a deliberate, visible act."""
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = str(path.relative_to(SRC))
+        if rel in _PLATFORM_OWNERS:
+            continue
+        for lineno, line in enumerate(_without_comments(path.read_text()).splitlines(), start=1):
+            if _PLATFORM_TOKENS.search(line):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, "platform conditionals outside their owner modules:\n" + "\n".join(
+        offenders
+    )
 
 
 # --- files the code names -----------------------------------------------------------------------

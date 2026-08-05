@@ -93,8 +93,8 @@ def _import_photos(ctx: ToolContext, params: dict) -> dict:
 
 def _prepared_bytes(path: Path, workdir: Path) -> tuple:
     """(bytes, content_type) ready to upload. A photo the rail already accepts, at a size it will
-    take, is sent untouched — conversion needs a platform image tool, so the common path must not
-    depend on one. Only a rejected format or an oversized file is re-encoded."""
+    take, is sent untouched — re-encoding costs quality and time and buys nothing there. Only a
+    rejected format or an oversized file is re-encoded."""
     kind, _, content_type = _sniff(path)
     if kind in _UPLOADABLE and path.stat().st_size <= MAX_UPLOAD_BYTES:
         return path.read_bytes(), content_type

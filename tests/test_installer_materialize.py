@@ -167,6 +167,7 @@ def test_previous_version_is_none_on_a_first_install(xdg_tmp, tree) -> None:
 # --- the shim -------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_shim_links_through_current_so_updates_do_not_rewrite_it(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
     shim = materialize.install_shim()
@@ -179,6 +180,7 @@ def test_shim_links_through_current_so_updates_do_not_rewrite_it(xdg_tmp, tree) 
     assert shim.resolve() == (paths.versions_dir() / "2.0.0" / "bin" / "selly-agent").resolve()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_shim_install_is_idempotent(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
     materialize.install_shim()
@@ -195,6 +197,7 @@ def test_shim_refuses_to_clobber_a_real_file(xdg_tmp, tree) -> None:
     assert paths.shim_path().read_text() == "someone else's script\n"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_remove_shim_only_removes_our_own(xdg_tmp, tree, tmp_path) -> None:
     materialize.install_version(tree, "1.0.0")
     materialize.install_shim()
