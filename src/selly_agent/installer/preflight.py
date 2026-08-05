@@ -178,7 +178,7 @@ def node_path_fragment() -> str:
         resolved = os.path.realpath(str(Path(found).parent))
         if resolved not in directories:
             directories.append(resolved)
-    return ":".join(directories)
+    return os.pathsep.join(directories)
 
 
 def supervised_path(fragment: str | None = None) -> str:
@@ -188,18 +188,32 @@ def supervised_path(fragment: str | None = None) -> str:
     checking the real thing rather than an approximation of it.
     """
     fragment = node_path_fragment() if fragment is None else fragment
-    return f"{fragment}:{supervisor.SUPERVISED_PATH}" if fragment else supervisor.SUPERVISED_PATH
+    if not fragment:
+        return supervisor.SUPERVISED_PATH
+    return f"{fragment}{os.pathsep}{supervisor.SUPERVISED_PATH}"
+
+
+# Windows reads these during process creation itself, and npm reads the last two: without
+# SystemRoot, CreateProcess fails in ways that look nothing like a missing Node, and without
+# PATHEXT `npx` never resolves to `npx.cmd`.
+_WINDOWS_JOB_VARS = ("SystemRoot", "PATHEXT", "COMSPEC", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")
 
 
 def supervised_env(fragment: str | None = None) -> dict:
     """The environment to run a supervised-worker check under.
 
-    Only PATH and HOME, because that is roughly what launchd hands the job — and deliberately not
-    this shell's environment, which carries a version manager's shims the worker will never see.
-    HOME stays because npm keeps its cache and config under it, so a warm run here lands in the
-    same cache the worker reads.
+    Near-empty, because that is roughly what a supervisor hands the job — and deliberately not this
+    shell's environment, which carries a version manager's shims the worker will never see. The
+    home directory stays because npm keeps its cache and config under it, so a warm run here lands
+    in the same cache the worker reads.
     """
-    return {"PATH": supervised_path(fragment), "HOME": str(paths.home_dir())}
+    env = {"PATH": supervised_path(fragment)}
+    if os.name == "nt":
+        env["USERPROFILE"] = str(paths.home_dir())
+        env.update({k: os.environ[k] for k in _WINDOWS_JOB_VARS if os.environ.get(k)})
+    else:
+        env["HOME"] = str(paths.home_dir())
+    return env
 
 
 def homebrew_path() -> str:
