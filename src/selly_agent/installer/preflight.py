@@ -21,7 +21,7 @@ from pathlib import Path
 from selly_agent import passes, paths, supervisor
 from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
-from selly_agent.installer import checks
+from selly_agent.installer import checks, runtime
 
 # Probes are cheap questions; none of them should ever hang setup.
 _PROBE_TIMEOUT_SEC = 30.0
@@ -235,6 +235,30 @@ def check_platform() -> checks.Check:
             "selly-agent runs on macOS today; Windows is a planned port.",
         )
     return checks.ok("platform", "macOS")
+
+
+def check_runtime(tree) -> checks.Check:
+    """That this tree's dependencies are actually installed and importable.
+
+    No system-Python check sits beside this one, because there is nothing to check: the front
+    door provisions the interpreter. What can still be wrong is the venv — a deleted directory,
+    an interrupted sync — and the honest way to ask is to import a dependency rather than to look
+    for a directory and assume.
+    """
+    report = runtime.describe(tree)
+    if not report["present"]:
+        return checks.fail(
+            "python runtime",
+            "this install has no dependency environment",
+            "Re-run ./setup — it provisions the interpreter and installs dependencies.",
+        )
+    if not report["dependencies_importable"]:
+        return checks.fail(
+            "python runtime",
+            f"dependencies are not importable ({report['detail'] or 'unknown error'})",
+            "Re-run ./setup to reinstall them.",
+        )
+    return checks.ok("python runtime", report["interpreter"])
 
 
 def check_tree_location(tree) -> checks.Check:

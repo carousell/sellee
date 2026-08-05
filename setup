@@ -1,26 +1,159 @@
 #!/bin/sh
 # The installer's front door — and deliberately almost nothing.
 #
-# This does the one job Python cannot do for itself: establish that a usable python3 exists
-# before handing over to it. Every decision, prompt and write lives in the Python installer,
-# where it is readable, testable and shared with `selly-agent update`. POSIX sh, no bashisms:
-# it is five lines of checking, and one shell dialect across both entry points keeps them
-# reviewable together.
+# This does the one job Python cannot do for itself: establish the interpreter to hand over
+# to. It is not the machine's python3 — there may not be one, and if there is, its version and
+# its cert store are not ours to rely on. Instead uv provisions a standalone interpreter at the
+# version .python-version pins, and installs this release's dependencies from uv.lock.
+#
+# Every decision, prompt and write after that lives in the Python installer, where it is
+# readable, testable and shared with `selly-agent update`. The fetch below is duplicated there
+# for updates; both read the same pin file, which is why the version and digests live in data
+# rather than in either copy.
+#
+# POSIX sh, no bashisms: it runs on whatever /bin/sh the machine has, before anything exists.
 
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
+pin="$here/src/selly_agent/data/uv-pin.txt"
 
-if ! command -v python3 >/dev/null 2>&1; then
-	echo "SELLY: python3 is required, and there isn't one on your PATH." >&2
-	echo "SELLY:   macOS can install it for you: xcode-select --install" >&2
-	exit 1
+# --bootstrap-only stops after the runtime is ready, without installing anything on the machine;
+# --with-dev additionally installs the dev dependency group. Together they are how `make
+# bootstrap` reuses this fetch instead of being a second copy of it. Both are stripped from the
+# arguments handed to the installer.
+bootstrap_only=0
+with_dev=0
+for arg in "$@"; do
+	case "$arg" in
+	--bootstrap-only) bootstrap_only=1 ;;
+	--with-dev) with_dev=1 ;;
+	esac
+done
+if [ "$bootstrap_only" -eq 1 ] || [ "$with_dev" -eq 1 ]; then
+	forwarded=""
+	for arg in "$@"; do
+		case "$arg" in
+		--bootstrap-only | --with-dev) ;;
+		*) forwarded="$forwarded $arg" ;;
+		esac
+	done
+	# Word-splitting is the point here: rebuild the argument list without our own flags.
+	# shellcheck disable=SC2086
+	set -- $forwarded
 fi
 
-if ! python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)'; then
-	echo "SELLY: python3 3.9 or newer is required (found: $(python3 -V 2>&1))." >&2
-	echo "SELLY:   Install a newer one (https://www.python.org/downloads/macos/) and re-run ./setup" >&2
+say() {
+	echo "SELLY: $1"
+}
+
+die() {
+	echo "SELLY: $1" >&2
 	exit 1
+}
+
+[ -f "$pin" ] || die "this tree is missing $pin; re-download the release."
+
+uv_version=$(awk '$1 == "version" { print $2 }' "$pin")
+[ -n "$uv_version" ] || die "$pin names no uv version."
+
+# uv's release archives are named by Rust target triple. Kept in step with the table in
+# selly_agent/installer/runtime.py.
+case "$(uname -s)/$(uname -m)" in
+Darwin/arm64 | Darwin/aarch64) triple="aarch64-apple-darwin" ;;
+Darwin/x86_64) triple="x86_64-apple-darwin" ;;
+Linux/aarch64 | Linux/arm64) triple="aarch64-unknown-linux-gnu" ;;
+Linux/x86_64) triple="x86_64-unknown-linux-gnu" ;;
+*) die "no pinned uv build for $(uname -s)/$(uname -m)." ;;
+esac
+
+expected=$(awk -v t="$triple" '$1 == "sha256" && $2 == t { print $3 }' "$pin")
+[ -n "$expected" ] || die "$pin records no digest for $triple; refusing to run an unverified binary."
+
+# Where our own copy of uv goes. Deliberately not ~/.local/bin: the user may have their own uv
+# there, and this installer edits exactly one fenced block in exactly one shell profile — a
+# second thing on PATH that nothing owns is not something its uninstall could clean up.
+data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
+tools="$data_home/selly-agent/tools"
+uv="$tools/uv"
+
+# An older uv is worse than none: it resolves the interpreter pin to a pre-release, because uv
+# only knows the interpreters its own build shipped with. So the floor is checked, not just
+# presence. sort -V is not in POSIX; compare with awk on the dotted fields instead.
+new_enough() {
+	# $1 = candidate, $2 = minimum
+	awk -v have="$1" -v want="$2" '
+		BEGIN {
+			n = split(have, h, "."); m = split(want, w, ".")
+			for (i = 1; i <= 3; i++) {
+				hv = (i <= n) ? h[i] + 0 : 0
+				wv = (i <= m) ? w[i] + 0 : 0
+				if (hv > wv) exit 0
+				if (hv < wv) exit 1
+			}
+			exit 0
+		}'
+}
+
+usable() {
+	[ -x "$1" ] || return 1
+	found=$("$1" --version 2>/dev/null | awk '$1 == "uv" { print $2 }')
+	[ -n "$found" ] || return 1
+	new_enough "$found" "$uv_version"
+}
+
+if usable "$(command -v uv 2>/dev/null || echo /nonexistent)"; then
+	uv="$(command -v uv)"
+	say "using the uv already installed ($("$uv" --version))"
+elif usable "$uv"; then
+	say "using the uv from a previous install ($("$uv" --version))"
+else
+	command -v curl >/dev/null 2>&1 || die "curl is required and isn't on your PATH."
+	command -v shasum >/dev/null 2>&1 || command -v sha256sum >/dev/null 2>&1 ||
+		die "shasum or sha256sum is required and isn't on your PATH."
+
+	say "Fetching uv $uv_version — it provisions the Python this runs on."
+	work="$(mktemp -d)"
+	trap 'rm -rf "$work"' EXIT INT TERM
+	asset="uv-$triple.tar.gz"
+	url="https://github.com/astral-sh/uv/releases/download/$uv_version/$asset"
+	curl -fsSL "$url" -o "$work/$asset" || die "couldn't download $url"
+
+	if command -v shasum >/dev/null 2>&1; then
+		actual=$(shasum -a 256 "$work/$asset" | awk '{ print $1 }')
+	else
+		actual=$(sha256sum "$work/$asset" | awk '{ print $1 }')
+	fi
+	[ "$actual" = "$expected" ] ||
+		die "$asset does not match the digest recorded for uv $uv_version — refusing it."
+
+	# The archive holds uv-<triple>/{uv,uvx}; strip that level and take uv by name rather than
+	# searching for it, so this needs no extra tools and cannot pick the wrong file.
+	tar -xzf "$work/$asset" -C "$work" --strip-components=1 || die "couldn't unpack $asset."
+	[ -f "$work/uv" ] || die "the uv archive doesn't contain a uv binary."
+	mkdir -p "$tools"
+	# Move into place, so a half-extracted binary is never runnable at the final name.
+	chmod 755 "$work/uv" && mv "$work/uv" "$uv.tmp" && mv "$uv.tmp" "$uv"
+	say "uv $uv_version installed at $uv"
 fi
 
-exec python3 "$here/bin/selly-agent" setup "$@"
+say "Preparing the Python runtime and dependencies…"
+"$uv" python install --project "$here" >/dev/null ||
+	die "uv couldn't install the Python version this release pins."
+
+if [ "$with_dev" -eq 1 ]; then
+	"$uv" sync --locked --project "$here" || die "uv couldn't install the dependencies."
+else
+	"$uv" sync --locked --no-dev --project "$here" >/dev/null ||
+		die "uv couldn't install this release's dependencies."
+fi
+
+python="$here/.venv/bin/python"
+[ -x "$python" ] || die "the dependency install left no interpreter at $python."
+
+if [ "$bootstrap_only" -eq 1 ]; then
+	say "runtime ready: $("$python" -V)"
+	exit 0
+fi
+
+exec "$python" "$here/bin/selly-agent" setup "$@"

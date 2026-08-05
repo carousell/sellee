@@ -15,7 +15,7 @@ from pathlib import Path
 import pytest
 
 from selly_agent import paths
-from selly_agent.installer import runtime
+from selly_agent.installer import checks, preflight, runtime
 
 
 def _pin(tmp_path: Path, version: str = "0.12.1", triple: str = "x86_64-unknown-linux-gnu") -> Path:
@@ -298,3 +298,38 @@ def test_describe_reports_an_absent_venv(tmp_path):
 
 def test_describe_knows_whether_this_process_runs_in_the_tree_venv(tmp_path):
     assert runtime.describe(tmp_path)["running_in_venv"] is False
+
+
+# --- the preflight gate --------------------------------------------------------------------
+
+
+def test_the_gate_fails_when_a_tree_has_no_dependency_environment(tmp_path):
+    result = preflight.check_runtime(tmp_path)
+    assert result.status == checks.FAIL
+    assert "no dependency environment" in result.detail
+    assert "./setup" in result.fix
+
+
+def test_the_gate_fails_when_the_interpreter_cannot_run(tmp_path):
+    """A present-but-unusable venv — bad permissions, a truncated copy — is a different failure
+    from an absent one, and asking by importing is what tells them apart."""
+    interpreter = paths.venv_python(tmp_path)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("not a binary\n")
+    interpreter.chmod(0o644)
+    result = preflight.check_runtime(tmp_path)
+    assert result.status == checks.FAIL
+    assert "not importable" in result.detail
+
+
+def test_the_gate_passes_on_a_real_provisioned_tree():
+    """This very tree: the suite is running on the interpreter it describes."""
+    result = preflight.check_runtime(Path(__file__).resolve().parents[1])
+    assert result.status == checks.OK
+
+
+def test_describe_reports_a_working_dependency_on_this_tree():
+    report = runtime.describe(Path(__file__).resolve().parents[1])
+    assert report["present"] is True
+    assert report["dependencies_importable"] is True
+    assert report["running_in_venv"] is True

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from pathlib import Path
 
 import pytest
 
@@ -345,3 +346,16 @@ def test_a_leftover_from_a_crashed_swap_is_swept(xdg_tmp, tree) -> None:
 def test_rc_candidates_cover_every_shell_we_might_have_written_to(xdg_tmp) -> None:
     names = {path.name for path in materialize.rc_candidates()}
     assert {".zshrc", ".bash_profile", ".profile"} <= names
+
+
+def test_the_release_archive_carries_what_a_version_directory_needs() -> None:
+    """`make dist` and staging must agree. They are separate lists in separate languages, so a
+    file added to one and not the other yields a release that installs but cannot run."""
+    makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text()
+    packed = " ".join(line for line in makefile.splitlines() if line.strip().startswith("@cp"))
+    for name in materialize.VERSION_FILES:
+        if name == "LICENSE":
+            continue  # copied conditionally; absent from the repo today
+        assert name in packed, f"{name} is staged into a version but not packed by `make dist`"
+    for name in materialize.VERSION_DIRS:
+        assert name in packed, name

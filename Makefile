@@ -1,41 +1,38 @@
 # Local entry points; CI (owner-managed, outside this repo's plans) calls these.
-PY ?= python3
-PY39 ?= python3.9
-RUFF ?= ruff
-PYRIGHT ?= pyright
+#
+# Everything runs through `uv run`, so the interpreter is the one .python-version pins and the
+# dependencies are the ones uv.lock pins — the same pair a user's install gets. `make bootstrap`
+# is the only target that works before that exists; CI must run it first, or have uv present.
+UV ?= uv
+RUN ?= $(UV) run
 
 DIST ?= dist
-VERSION = $(shell $(PY) -c "import sys; sys.path.insert(0, 'src'); \
+VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
 	import selly_agent; print(selly_agent.__version__)")
 STAGE = $(DIST)/selly-agent-$(VERSION)
 
-.PHONY: test test-3.9 lint fmt typecheck dist
+.PHONY: bootstrap test lint fmt typecheck dist
+
+# Provision the toolchain this repo builds against: uv itself if it is missing or too old, the
+# pinned interpreter, then the dev dependency set. ./setup does the same thing for a user, from
+# the same pin file — this target is the developer's door to it.
+bootstrap:
+	@./setup --bootstrap-only --with-dev
 
 test:
-	$(PY) -m pytest
-
-# The 3.9 runtime floor is checked by running the suite on a 3.9 interpreter,
-# not by convention. Point PY39 at one (with pytest available) if it is not on PATH.
-test-3.9:
-	@if command -v $(PY39) >/dev/null 2>&1; then \
-		$(PY39) -m pytest; \
-	else \
-		echo "SKIP: no Python 3.9 interpreter found — the 3.9 floor was NOT checked."; \
-		echo "      Install one and re-run, e.g.: make test-3.9 PY39=/path/to/python3.9"; \
-	fi
+	$(RUN) python -m pytest
 
 lint:
-	$(RUFF) check .
-	$(RUFF) format --check .
+	$(RUN) ruff check .
+	$(RUN) ruff format --check .
 
-# Static type check (dev-only; the runtime stays stdlib-only). Scoped to the annotated
-# store surface via [tool.pyright] in pyproject.toml. Point PYRIGHT at a binary if it is
-# not on PATH.
+# Static type check (dev-only, never shipped). Scoped to the annotated store surface via
+# [tool.pyright] in pyproject.toml.
 typecheck:
-	$(PYRIGHT)
+	$(RUN) pyright
 
 fmt:
-	$(RUFF) format .
+	$(RUN) ruff format .
 
 # The release artifact: the same tree ./setup stages into versions/<v>, plus the checksum file
 # that both `selly-agent update` and install.sh read the version out of. Publishing is manual
@@ -47,6 +44,9 @@ dist:
 	@cp README.md $(STAGE)/ 2>/dev/null || true
 	@cp LICENSE $(STAGE)/ 2>/dev/null || true
 	@cp setup $(STAGE)/
+# The runtime description travels with the release: without these a version cannot install its
+# own dependencies. Kept in step with VERSION_FILES in installer/materialize.py, which a test pins.
+	@cp pyproject.toml uv.lock .python-version $(STAGE)/
 	@find $(STAGE) -name '__pycache__' -type d -prune -exec rm -rf {} +
 	@find $(STAGE) -name '*.py[co]' -delete
 # COPYFILE_DISABLE: macOS tar otherwise writes an AppleDouble `._name` entry beside every file

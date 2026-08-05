@@ -47,19 +47,19 @@ say "Here's what this does, before it does any of it:"
 say "  1. Download $BASE_URL/SHA256SUMS"
 say "  2. Download the selly-agent archive it names, and check it against that checksum"
 say "  3. Unpack it into a temporary directory, deleted when this finishes"
-say "  4. Run the unpacked ./setup, which lists everywhere it writes before writing"
+say "  4. Run the unpacked ./setup, which fetches the Python it runs on and then lists"
+say "     everywhere it writes before writing"
 say ""
 
 # --- prerequisites ---------------------------------------------------------------------------
 
 [ "$(uname -s)" = "Darwin" ] || die "selly-agent runs on macOS today (this is $(uname -s))."
 
-for tool in curl tar shasum python3; do
+# No python3 here: the release's own ./setup provisions the interpreter it needs, so the machine
+# having one — or having a usable one — is not a precondition for installing.
+for tool in curl tar shasum; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool is required and isn't on your PATH."
 done
-
-python3 -c 'import sys; raise SystemExit(0 if sys.version_info >= (3, 9) else 1)' ||
-	die "python3 3.9 or newer is required (found: $(python3 -V 2>&1))."
 
 # --- fetch, checksums first -------------------------------------------------------------------
 

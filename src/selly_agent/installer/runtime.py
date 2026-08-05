@@ -176,10 +176,12 @@ def _run(argv, *, cwd=None, timeout: float = _PROBE_TIMEOUT_SEC) -> tuple:
             timeout=timeout,
             check=False,
         )
-    except FileNotFoundError:
-        return 127, "", f"{argv[0]}: not found"
     except subprocess.TimeoutExpired:
         return 124, "", f"{argv[0]}: timed out after {timeout:.0f}s"
+    except OSError as exc:
+        # Missing, or present but not executable — a botched copy or a half-extracted binary.
+        # Both are answers about the runtime, not exceptions for a caller to handle.
+        return 127, "", f"{argv[0]}: {exc}"
     return completed.returncode, completed.stdout, completed.stderr
 
 

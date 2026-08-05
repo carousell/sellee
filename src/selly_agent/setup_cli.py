@@ -150,6 +150,7 @@ def _gates(ui: Ui, tree) -> None:
     cfg = config.load()
 
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
+    _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
     _gate_claude(ui, cfg)
     _gate_dependency(ui, "node", lambda: preflight.check_node(), package="node")
     _gate_dependency(

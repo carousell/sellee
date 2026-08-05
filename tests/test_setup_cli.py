@@ -34,6 +34,9 @@ def world(monkeypatch, xdg_tmp, tree):
     monkeypatch.setattr(setup_cli, "get_platform", lambda: platform)
     monkeypatch.setattr(materialize, "source_tree", lambda: tree)
     monkeypatch.setattr(preflight, "check_platform", lambda: checks.ok("platform", "macOS"))
+    monkeypatch.setattr(
+        preflight, "check_runtime", lambda tree: checks.ok("python runtime", "3.14.6")
+    )
     monkeypatch.setattr(preflight, "check_node", lambda: checks.ok("node", "v22"))
     monkeypatch.setattr(preflight, "check_chrome", lambda chrome_bin=None: checks.ok("chrome", "-"))
     monkeypatch.setattr(preflight, "check_claude", lambda cfg: checks.ok("claude CLI", "signed in"))
