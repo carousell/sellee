@@ -26,10 +26,14 @@ DIGIT_RUN_RE = re.compile(r"\d{6,}")
 IDENTIFIER_LINE_RE = re.compile(r"chat|update_offset")
 
 SELF = Path(__file__).resolve()
-# Directories that are not our source: VCS metadata, virtualenvs, build/test caches.
+# Directories that are not our source: VCS metadata, virtualenvs, build/test caches, and the
+# scratch tree. `.local` is excluded from version control and is where manual install sessions
+# put their data root — so it holds real tokens and real page dumps *on purpose*, and scanning
+# it turns a live install test into a failing suite for everyone afterwards.
 _EXCLUDED_DIRS = {
     ".git",
     ".jj",
+    ".local",
     "__pycache__",
     ".pytest_cache",
     ".ruff_cache",

@@ -416,8 +416,15 @@ def test_market_logins_filters_to_what_is_still_publishable(
     assert body["enabled"] == []
 
 
-def test_a_login_read_never_opens_a_window_when_chrome_is_closed(server, store, browser) -> None:
+def test_a_login_read_never_opens_a_window_when_chrome_is_closed(
+    server, store, browser, monkeypatch
+) -> None:
     # Probing acquires the browser, and acquiring starts Chrome. A read must not do that.
+    # The port has to be silenced explicitly: is_ready does a real loopback GET, so left alone
+    # this passes or fails on whether the machine running the suite has a Chrome of its own.
+    from selly_agent.browser import chrome
+
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: False)
     store.set_seller_config_section("basics", {"region": "SG"})
     _status, body = _call(server, "GET", "/control/market-login?market=carousell")
     assert body["state"] == "unknown"
