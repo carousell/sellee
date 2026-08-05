@@ -20,7 +20,7 @@ import time
 import urllib.error
 import urllib.request
 
-from selly_agent import paths
+from selly_agent import paths, spawn
 
 log = logging.getLogger(__name__)
 
@@ -158,14 +158,14 @@ def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float 
 
         argv = launch_command(port, chrome_bin=chrome_bin)
         try:
-            # Its own session, so the daemon's exit — or a pass group being killed — never takes the
+            # Detached, so the daemon's exit — or a pass group being killed — never takes the
             # seller's browser with it.
             subprocess.Popen(  # noqa: S603 — argv is composed by launch_command, not a shell
                 argv,
                 stdin=subprocess.DEVNULL,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
-                start_new_session=True,
+                **spawn.survives_us_flags(),
             )
         except OSError as exc:
             log.warning("could not start Chrome (%s): %s", argv[0], exc)
