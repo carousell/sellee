@@ -173,6 +173,8 @@ def tree(tmp_path):
     (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '9.9.9'\n")
     (root / "src" / "selly_agent" / "__pycache__" / "stale.pyc").write_text("junk")
     (root / "README.md").write_text("docs\n")
+    (root / "setup").write_text("#!/bin/sh\n")
+    (root / "setup.ps1").write_text("# windows front door\n")
     (root / "pyproject.toml").write_text("[project]\nname = 'selly-agent'\n")
     (root / "uv.lock").write_text("version = 1\n")
     (root / ".python-version").write_text("3.14\n")

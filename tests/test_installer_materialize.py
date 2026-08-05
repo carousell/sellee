@@ -31,6 +31,15 @@ def test_staging_leaves_dev_scaffolding_behind(xdg_tmp, tree) -> None:
     assert not (dest / "src" / "selly_agent" / "__pycache__").exists()
 
 
+def test_a_staged_version_carries_both_front_doors(xdg_tmp, tree) -> None:
+    """A version has to be re-runnable on the platform it is installed on, and `update` stages the
+    same tree on either — so the Windows entry point travels with every release, not just Windows
+    ones."""
+    dest = materialize.install_version(tree, "1.0.0")
+    assert (dest / "setup").is_file()
+    assert (dest / "setup.ps1").is_file()
+
+
 def test_a_version_carries_the_files_it_needs_to_build_its_own_venv(xdg_tmp, tree) -> None:
     """Without these three a version cannot install its dependencies, which means it cannot be
     rolled back to either."""

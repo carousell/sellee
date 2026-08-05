@@ -23,6 +23,11 @@ class Platform(ABC):
     # Windows task definition rejects one that is not UTF-16.
     definition_encoding: str = "utf-8"
 
+    # Whether the directory holding job definitions belongs to us. False where it is the system's
+    # own — ~/Library/LaunchAgents holds every application's, so an uninstall must leave it standing
+    # even when ours was the only file in it.
+    owns_job_directory: bool = False
+
     @abstractmethod
     def launch_agents_dir(self, home: Path) -> Path:
         """The per-user auto-start directory the supervisor reads at login."""

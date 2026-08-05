@@ -254,6 +254,20 @@ def test_install_refuses_a_real_directory_at_current(xdg_tmp) -> None:
     assert fake.register_calls == []
 
 
+def test_uninstall_leaves_the_system_job_directory_standing(xdg_tmp) -> None:
+    """It holds every application's job on macOS, so removing it — even when ours was the only file
+    in it — would be taking something that is not ours."""
+    fake = FakePlatform()
+    assert supervisor.install(mode="login-start", platform=fake) == 0
+    job_dir = paths.launch_agents_dir(platform=fake)
+    assert job_dir.is_dir()
+
+    supervisor.uninstall(platform=fake)
+
+    assert job_dir.is_dir()
+    assert not (job_dir / "com.selly.agent.plist").exists()
+
+
 # --- the confirmed stop -------------------------------------------------------------------
 
 

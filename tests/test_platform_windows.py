@@ -170,3 +170,13 @@ def test_unregistering_does_not_prompt() -> None:
 @pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, False)])
 def test_registration_is_read_from_the_query_result(returncode, expected) -> None:
     assert RecordingPlatform(returncode).is_registered("SellyAgent") is expected
+
+
+def test_the_task_directory_is_ours_to_clean_up() -> None:
+    """Unlike ~/Library/LaunchAgents, which holds every application's job and must be left standing,
+    this directory exists only because we made it — so an empty one left behind is our litter."""
+    assert WindowsPlatform().owns_job_directory is True
+    assert WindowsPlatform().launch_agents_dir(Path(r"C:\Users\seller")).parts[-2:] == (
+        ".selly-agent",
+        "tasks",
+    )

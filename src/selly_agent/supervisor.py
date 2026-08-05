@@ -9,6 +9,7 @@ dir and registers it on demand. Crash keep-alive is identical in both modes once
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import sys
@@ -264,6 +265,10 @@ def uninstall(*, label: str | None = None, platform: Platform | None = None) -> 
     for location in _plist_locations(platform, label).values():
         if location.exists() and _is_ours(location):
             location.unlink()
+    if platform.owns_job_directory:
+        # A directory we created for this purpose, so an empty one left behind is our litter.
+        with contextlib.suppress(OSError):
+            paths.launch_agents_dir(platform=platform).rmdir()
     print("uninstalled supervisor")
     return 0
 

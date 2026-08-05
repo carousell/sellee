@@ -31,6 +31,9 @@ from selly_agent.installer import runtime
 VERSION_DIRS = ("bin", "src")
 VERSION_FILES = (
     "setup",
+    # The Windows front door ships in every version too, so a tree installed from a release can be
+    # re-run there — and so `update` stages a version that is runnable on either platform.
+    "setup.ps1",
     "README.md",
     "LICENSE",
     "pyproject.toml",

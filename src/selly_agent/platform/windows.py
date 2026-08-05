@@ -43,6 +43,7 @@ _TASK_NAMESPACE = "http://schemas.microsoft.com/windows/2004/02/mit/task"
 class WindowsPlatform(Platform):
     name = "windows"
     definition_encoding = "utf-16"
+    owns_job_directory = True
 
     def launch_agents_dir(self, home: Path) -> Path:
         """Where a task definition is kept before it is registered.
