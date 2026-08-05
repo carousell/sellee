@@ -156,14 +156,8 @@ def _gates(ui: Ui, tree) -> None:
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
     _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
     _gate_claude(ui, cfg)
-    _gate_dependency(ui, "node", lambda: preflight.check_node(), package="node")
-    _gate_dependency(
-        ui,
-        "chrome",
-        lambda: preflight.check_chrome(cfg.chrome_bin),
-        package="google-chrome",
-        cask=True,
-    )
+    _gate_dependency(ui, "node", lambda: preflight.check_node())
+    _gate_dependency(ui, "chrome", lambda: preflight.check_chrome(cfg.chrome_bin))
 
     # After the node gate, which is the friendly one (it names `brew install node`). This is the
     # authoritative one: it asks whether the *worker* can spawn the browser server, under the PATH
@@ -211,25 +205,30 @@ def _gate_claude(ui: Ui, cfg) -> None:
         preflight.claude_login(cfg)
 
 
-def _gate_dependency(ui: Ui, name: str, probe, *, package: str, cask: bool = False) -> None:
-    """A dependency we can offer to install, once. Homebrew itself is never bootstrapped —
-    piping a remote installer into a shell is a trust decision the machine's owner owns."""
+def _gate_dependency(ui: Ui, name: str, probe) -> None:
+    """A dependency we can offer to install, once.
+
+    Homebrew is never bootstrapped — piping a remote installer into a shell is a trust decision the
+    machine's owner owns — so a Mac without it gets the instruction instead of an offer. winget
+    ships with Windows, so there the offer is always available.
+    """
     check = _report(ui, checks.fail_open(name, probe))
     if not check.failed:
         return
 
-    brew = preflight.homebrew_path()
-    if not brew:
+    command = preflight.install_command(name)
+    if not command:
         raise Abort(
             f"{name}: {check.detail}",
-            f"{check.fix}\n(Homebrew isn't installed — get it from https://brew.sh, or install "
-            f"{name} however you prefer, then re-run ./setup.)",
+            f"{check.fix}\n(Nothing here can install it for you — install {name} however you "
+            f"prefer, then re-run ./setup.)",
         )
-    if not ui.confirm(f"Install {name} with Homebrew now?", default=True, lead=False):
+    manager = preflight.package_manager_name()
+    if not ui.confirm(f"Install {name} with {manager} now?", default=True, lead=False):
         raise Abort(f"{name}: {check.detail}", check.fix)
 
-    ui.say(f"Running `brew install {package}` — this can take a few minutes…")
-    ok, detail = preflight.brew_install(package, cask=cask)
+    ui.say(f"Running `{' '.join(command)}` — this can take a few minutes…")
+    ok, detail = preflight.install_dependency(name)
     if not ok:
         raise Abort(f"installing {name} failed: {detail}", check.fix)
     _require(ui, checks.fail_open(name, probe))

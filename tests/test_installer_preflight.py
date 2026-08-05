@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from selly_agent.config import Config
 from selly_agent.installer import checks, preflight
 
@@ -85,7 +87,26 @@ def test_node_gate_reports_a_missing_node(monkeypatch) -> None:
     monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
     result = preflight.check_node()
     assert result.status == checks.FAIL
-    assert result.fix == "brew install node"
+    assert result.fix == preflight.install_hint("node")
+
+
+@pytest.mark.parametrize("platform", ["darwin", "win32"])
+def test_the_remediation_is_the_command_setup_would_run(platform, monkeypatch) -> None:
+    """A gate that printed one command while setup ran another is how somebody ends up pasting
+    something that does not work."""
+    monkeypatch.setattr(preflight.sys, "platform", platform)
+    monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
+
+    command = preflight.install_command("node")
+
+    assert command, f"{platform} should have a way to install node"
+    assert preflight.install_hint("node") == " ".join(command)
+
+
+def test_a_platform_with_no_package_manager_says_so_rather_than_naming_one(monkeypatch) -> None:
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    assert preflight.install_command("node") == []
+    assert "re-run ./setup" in preflight.install_hint("node")
 
 
 def test_node_gate_refuses_an_intel_node_on_apple_silicon(monkeypatch) -> None:

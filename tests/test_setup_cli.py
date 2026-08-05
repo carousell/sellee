@@ -292,7 +292,7 @@ def test_a_missing_claude_cli_is_fatal_and_never_installed_for_you(world, monkey
     assert setup_main("--yes", "--manual") == 1
 
 
-def test_a_missing_dependency_offers_brew_then_re_probes(world, monkeypatch, capsys) -> None:
+def test_a_missing_dependency_is_offered_and_then_re_probed(world, monkeypatch, capsys) -> None:
     probes = iter(
         [
             checks.fail("node", "not installed", "brew install node"),
@@ -300,30 +300,35 @@ def test_a_missing_dependency_offers_brew_then_re_probes(world, monkeypatch, cap
         ]
     )
     monkeypatch.setattr(preflight, "check_node", lambda: next(probes))
-    monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(preflight, "install_command", lambda name: ["brew", "install", name])
     installed = []
     monkeypatch.setattr(
         preflight,
-        "brew_install",
-        lambda package, cask=False: (installed.append((package, cask)), (True, ""))[1],
+        "install_dependency",
+        lambda name: (installed.append(name), (True, ""))[1],
     )
 
     assert setup_main("--yes", "--manual") == 0
-    assert installed == [("node", False)]
+    assert installed == ["node"]
     assert "brew install node" in capsys.readouterr().out
 
 
-def test_without_homebrew_a_missing_dependency_is_fatal_and_brew_is_never_bootstrapped(
+def test_with_no_installer_available_a_missing_dependency_is_fatal_and_nothing_is_bootstrapped(
     world, monkeypatch, capsys
 ) -> None:
+    """Homebrew is the case that motivates this: installing it is piping a remote script into a
+    shell, which belongs to whoever owns the machine."""
+    fix = "brew install node"
+    monkeypatch.setattr(preflight, "check_node", lambda: checks.fail("node", "not installed", fix))
+    monkeypatch.setattr(preflight, "install_command", lambda _name: [])
     monkeypatch.setattr(
-        preflight, "check_node", lambda: checks.fail("node", "not installed", "brew install node")
+        preflight, "install_dependency", lambda _name: pytest.fail("must not install")
     )
-    monkeypatch.setattr(preflight, "homebrew_path", lambda: "")
 
     assert setup_main("--yes", "--manual") == 1
     err = capsys.readouterr().err
-    assert "https://brew.sh" in err
+    assert fix in err
+    assert "however you prefer" in err
     assert not paths.current().exists()
 
 

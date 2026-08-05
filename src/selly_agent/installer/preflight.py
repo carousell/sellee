@@ -143,6 +143,8 @@ def is_apple_silicon() -> bool:
     which is precisely the situation this gate exists to catch: a translated shell whose PATH
     Node is an Intel build. The sysctl answers for the machine either way.
     """
+    if sys.platform != "darwin":
+        return False  # the question is about Rosetta, which nothing else has
     code, out = _run(["sysctl", "-n", "hw.optional.arm64"])
     return code == 0 and out.strip() == "1"
 
@@ -203,6 +205,65 @@ def supervised_env(fragment: str | None = None) -> dict:
     return {"PATH": supervised_path(fragment), **paths.supervised_env_base()}
 
 
+# What each dependency is called to the tool that installs it, and how that tool is named to a
+# person. macOS gets Homebrew, Windows gets winget — which ships with Windows, so unlike Homebrew
+# there is nothing to bootstrap before it can be offered.
+_PACKAGE_MANAGERS = {
+    "darwin": {
+        "name": "Homebrew",
+        "packages": {"node": ("node", False), "chrome": ("google-chrome", True)},
+    },
+    "win32": {
+        "name": "winget",
+        "packages": {"node": ("OpenJS.NodeJS.LTS", False), "chrome": ("Google.Chrome", False)},
+    },
+}
+
+
+def package_manager_name() -> str:
+    """What to call the installer this platform uses, or "" where we know of none."""
+    return _PACKAGE_MANAGERS.get(sys.platform, {}).get("name", "")
+
+
+def install_command(dependency: str) -> list:
+    """The argv that installs `dependency`, or [] when this platform has no manager for it.
+
+    One place so a gate's remediation text and the command setup actually runs cannot disagree,
+    which is the way a person ends up pasting something that does not work.
+    """
+    manager = _PACKAGE_MANAGERS.get(sys.platform)
+    if manager is None:
+        return []
+    entry = manager["packages"].get(dependency)
+    if entry is None:
+        return []
+    package, cask = entry
+    if sys.platform == "win32":
+        return ["winget", "install", "--exact", "--id", package]
+    brew = homebrew_path()
+    if not brew:
+        return []
+    return [brew, "install", *(["--cask"] if cask else []), package]
+
+
+def install_hint(dependency: str) -> str:
+    """The remediation line for a missing dependency: the command, if there is one."""
+    argv = install_command(dependency)
+    return " ".join(argv) if argv else f"Install {dependency} and re-run ./setup."
+
+
+def install_dependency(dependency: str) -> tuple:
+    """Install one dependency with this platform's manager, answering (ok, output tail).
+
+    Consent is the caller's business, not this function's.
+    """
+    argv = install_command(dependency)
+    if not argv:
+        return False, f"{package_manager_name() or 'a package manager'} is not available"
+    code, out = _run(argv, timeout=_BREW_TIMEOUT_SEC)
+    return code == 0, out.strip()[-500:]
+
+
 def homebrew_path() -> str:
     """Homebrew's binary, or "" when it is not installed.
 
@@ -228,14 +289,18 @@ def brew_install(package: str, *, cask: bool = False) -> tuple:
 # --- gates -----------------------------------------------------------------------------------
 
 
+_PLATFORM_NAMES = {"darwin": "macOS", "win32": "Windows"}
+
+
 def check_platform() -> checks.Check:
-    if sys.platform != "darwin":
+    name = _PLATFORM_NAMES.get(sys.platform)
+    if name is None:
         return checks.fail(
             "platform",
             f"{sys.platform} is not supported yet",
-            "selly-agent runs on macOS today; Windows is a planned port.",
+            "selly-agent runs on macOS and Windows today; Linux is a planned port.",
         )
-    return checks.ok("platform", "macOS")
+    return checks.ok("platform", name)
 
 
 def check_runtime(tree) -> checks.Check:
@@ -263,7 +328,11 @@ def check_runtime(tree) -> checks.Check:
 
 
 def check_tree_location(tree) -> checks.Check:
-    """Refuse to install from a tree macOS will not let the daemon read."""
+    """Refuse to install from a tree the daemon will not be allowed to read.
+
+    macOS-shaped, and passes everywhere else by construction: the protected roots are empty off
+    macOS, so there is nothing for a tree to be under.
+    """
     roots = paths.tcc_protected_roots()
     if is_tcc_blocked(tree, roots):
         names = ", ".join(f"~/{root.name}" for root in roots)
@@ -280,7 +349,7 @@ def check_node() -> checks.Check:
     """Node must be present, recent enough for Playwright MCP, and native to this machine."""
     node = shutil.which("node")
     if not node:
-        return checks.fail("node", "not installed", "brew install node")
+        return checks.fail("node", "not installed", install_hint("node"))
     code, out = _run([node, "--version"])
     major = parse_node_major(out) if code == 0 else 0
     if major < NODE_MIN_MAJOR:
@@ -288,7 +357,7 @@ def check_node() -> checks.Check:
         return checks.fail(
             "node",
             f"{node} reports {found}, below the v{NODE_MIN_MAJOR} the browser layer needs",
-            "brew install node",
+            install_hint("node"),
         )
     if is_apple_silicon():
         arch = binary_arch(node)
@@ -302,7 +371,7 @@ def check_node() -> checks.Check:
             )
     if not shutil.which("npx"):
         return checks.fail(
-            "node", f"{node} is installed but npx is not on PATH", "brew install node"
+            "node", f"{node} is installed but npx is not on PATH", install_hint("node")
         )
     return checks.ok("node", f"v{major} at {node}")
 
@@ -313,7 +382,7 @@ def check_chrome(chrome_bin=None) -> checks.Check:
         return checks.fail(
             "chrome",
             f"not found at {binary}",
-            "brew install --cask google-chrome",
+            install_hint("chrome"),
         )
     return checks.ok("chrome", binary)
 
