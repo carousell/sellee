@@ -43,10 +43,16 @@ def _resolve_label(platform: Platform, label: str | None) -> str:
     return config.load().daemon_label or platform.default_label()
 
 
-def _is_ours(path: Path) -> bool:
+def _is_ours(path: Path, platform: Platform) -> bool:
+    """Whether a definition file was written by us — read in the encoding we write.
+
+    A foreign file that does not decode is simply not ours; on Windows the definition is UTF-16,
+    which the platform-default read would turn into NUL-interleaved garbage the marker never
+    matches.
+    """
     try:
-        return MARKER in path.read_text()
-    except OSError:
+        return MARKER in path.read_text(encoding=platform.definition_encoding)
+    except (OSError, UnicodeError):
         return False
 
 
@@ -96,7 +102,7 @@ def _plist_locations(platform: Platform, label: str) -> dict:
 
 def _find_installed(platform: Platform, label: str) -> Path | None:
     for location in _plist_locations(platform, label).values():
-        if location.exists() and _is_ours(location):
+        if location.exists() and _is_ours(location, platform):
             return location
     return None
 
@@ -111,7 +117,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
 
     # Refuse if a foreign plist with our label already occupies either target location.
     for location in locations.values():
-        if location.exists() and not _is_ours(location):
+        if location.exists() and not _is_ours(location, platform):
             print(
                 f"refusing to install: a plist labelled {label!r} at {location} was not written "
                 f"by selly-agent — remove it first (never replacing a foreign daemon's plist).",
@@ -145,7 +151,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
 
     # Remove any of our own plists from the other location (a mode flip moves the plist).
     for other_mode, location in locations.items():
-        if other_mode != mode and location.exists() and _is_ours(location):
+        if other_mode != mode and location.exists() and _is_ours(location, platform):
             if platform.is_registered(label):
                 platform.unregister(label)
             location.unlink()
@@ -270,7 +276,7 @@ def uninstall(*, label: str | None = None, platform: Platform | None = None) -> 
     # Drained rather than just deregistered: the files about to be removed are the ones it has open.
     shutdown(label=label, platform=platform)
     for location in _plist_locations(platform, label).values():
-        if location.exists() and _is_ours(location):
+        if location.exists() and _is_ours(location, platform):
             location.unlink()
     if platform.owns_job_directory:
         # A directory we created for this purpose, so an empty one left behind is our litter.

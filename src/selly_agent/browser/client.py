@@ -271,6 +271,9 @@ class BrowserClient:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                # The server frames UTF-8 JSON; the locale default would decode it in a Windows
+                # code page and kill the reader thread on the first byte it cannot map.
+                encoding="utf-8",
                 bufsize=1,
             )
         except (OSError, ValueError) as exc:

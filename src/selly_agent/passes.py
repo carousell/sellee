@@ -630,6 +630,9 @@ def run_pass(deps: PassDeps, claimed) -> str:
                 stdout=subprocess.PIPE,
                 stderr=errf,
                 text=True,
+                # Explicit, not the locale's: the harness speaks UTF-8 on both pipes, and the
+                # Windows locale default is a code page that cannot carry a seller's message.
+                encoding="utf-8",
                 bufsize=1,
                 **spawn.detached_flags(),
             )
@@ -683,13 +686,21 @@ def _send_prompt(proc, prompt: str) -> None:
     """Hand the harness its prompt and close stdin, which is what tells it the prompt is complete.
 
     A harness that has already died is not an error here: it exits on its own terms and the
-    classifier reads the return code.
+    classifier reads the return code. Any other write failure is loud — a live harness whose
+    prompt was lost would otherwise sit reading stdin until the babysitter kills it. stdin is
+    closed no matter what, so it at least reads EOF rather than waiting.
     """
     try:
         proc.stdin.write(prompt)
-        proc.stdin.close()
-    except (OSError, ValueError):
+    except OSError:
         log.debug("could not write the prompt to the harness; it is no longer reading")
+    except ValueError:
+        log.warning("the prompt was not delivered to the harness", exc_info=True)
+    finally:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
 
 
 def _record_process(deps: PassDeps, pass_id: str, pid: int, *, reap_after_ts: float) -> None:

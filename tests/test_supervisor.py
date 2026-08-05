@@ -349,3 +349,27 @@ def test_an_unreachable_daemon_still_settles_when_its_process_goes(xdg_tmp, monk
     _pretend_holder(monkeypatch, 4242, True, True, False)
 
     assert supervisor.shutdown(platform=fake) is True
+
+
+# --- ours-marker reading ------------------------------------------------------------------
+
+
+def test_ours_check_reads_the_definition_in_the_platform_encoding(tmp_path) -> None:
+    """The Windows definition is UTF-16. A platform-default read decodes it to NUL-interleaved
+    garbage the marker never matches — after which every lifecycle operation refuses to
+    recognise the file it wrote itself."""
+
+    class Utf16Platform(FakePlatform):
+        definition_encoding = "utf-16"
+
+    path = tmp_path / "SellyAgent.xml"
+    path.write_text(f"<Description>{supervisor.MARKER}</Description>", encoding="utf-16")
+
+    assert supervisor._is_ours(path, Utf16Platform())
+
+
+def test_a_file_that_does_not_decode_is_not_ours(tmp_path) -> None:
+    path = tmp_path / "SellyAgent.xml"
+    path.write_bytes(b"\xff\xfe\x00")  # a truncated UTF-16 stream no encoding accepts
+
+    assert not supervisor._is_ours(path, FakePlatform())
