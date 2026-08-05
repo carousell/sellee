@@ -13,7 +13,7 @@ nothing they list can go anywhere.
 
 from __future__ import annotations
 
-import os
+import tzlocal
 
 from selly_agent import marketplaces
 
@@ -66,18 +66,18 @@ def region_for_zone(zone: str):
 
 
 def system_timezone() -> str:
-    """The machine's IANA zone name, or "" when it cannot be read.
+    """The machine's IANA zone name, or "" when it cannot be determined.
 
-    Read from where /etc/localtime points rather than from `time.tzname`, which gives an
-    abbreviation ("+08") that names no zone and cannot be stored or looked up.
+    An IANA name specifically, not `time.tzname`, which gives an abbreviation ("+08") that names no
+    zone and cannot be stored or looked up. Where that name comes from differs per platform —
+    /etc/localtime on POSIX, a registry key that has to be mapped on Windows — which is why it is
+    asked of tzlocal rather than read here. Returning "" is a supported answer: the installer then
+    asks the seller instead of guessing.
     """
     try:
-        resolved = os.path.realpath("/etc/localtime")
-    except OSError:
+        return tzlocal.get_localzone_name() or ""
+    except Exception:  # noqa: BLE001 — any failure to read the machine's zone means "ask instead"
         return ""
-    marker = "/zoneinfo/"
-    index = resolved.find(marker)
-    return resolved[index + len(marker) :] if index >= 0 else ""
 
 
 def guess(zone: str | None = None):

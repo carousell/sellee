@@ -122,11 +122,26 @@ class Ui:
         print(self._paint(f"warn: {text}", _YELLOW), file=self.stream)
 
     def banner(self, version: str) -> None:
-        if self.width < BANNER_MIN_COLUMNS:
+        if self.width < BANNER_MIN_COLUMNS or not self._can_encode(BANNER[0]):
             print(self._paint(f"Selly v{version}", _BOLD_TEAL), file=self.stream)
             return
         for line in BANNER:
             print(self._paint(line, _TEAL), file=self.stream)
+
+    def _can_encode(self, text: str) -> bool:
+        """Whether this terminal can print `text` at all.
+
+        A legacy Windows console runs a code page that has none of the box-drawing characters, and
+        printing them there does not degrade — it raises UnicodeEncodeError partway through the
+        first line of the installer. Asked rather than assumed, so a console that *can* show them
+        still does.
+        """
+        encoding = getattr(self.stream, "encoding", None) or "utf-8"
+        try:
+            text.encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            return False
+        return True
 
     def fatal(self, exc: Abort) -> None:
         """Render an Abort. The only place a fatal error is printed."""

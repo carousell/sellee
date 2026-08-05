@@ -14,11 +14,15 @@ from __future__ import annotations
 
 import json
 import logging
+import os
+import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from selly_agent import paths, spawn
 
@@ -46,23 +50,82 @@ _last_failed_launch_ts: float | None = None
 
 _CHROME_MACOS = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+# Windows installs Chrome per-machine or per-user, so there is no single path to name — and the
+# registry entry is what an installer of either kind writes.
+_CHROME_WINDOWS_APP_PATHS = r"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\chrome.exe"
+_CHROME_WINDOWS_RELATIVE = r"Google\Chrome\Application\chrome.exe"
+
 # What ensure_running found or did.
 READY = "ready"
 LAUNCHED = "launched"
 UNAVAILABLE = "unavailable"
 
-# Locks a SIGKILLed Chrome leaves behind. They make the next launch on the same profile hang, so the
-# bring-up clears them — safe only because it has already established that no Chrome is answering.
-SINGLETON_LOCKS = ("SingletonLock", "SingletonCookie", "SingletonSocket")
-
 
 def resolve_binary(chrome_bin: str | None = None) -> str:
-    """The Chrome executable to drive: the configured path, or the OS default install location.
+    """The Chrome executable to drive: the configured path, or where this OS keeps it.
 
     One answer for the launch, the by-hand hint, and the installer's "is Chrome even here" gate —
     a gate that checked a different path from the one the launch uses would pass and then fail.
+
+    The last candidate is returned even when nothing exists, so the caller reports a path that was
+    actually looked for rather than an empty string.
     """
-    return chrome_bin or _CHROME_MACOS
+    if chrome_bin:
+        return chrome_bin
+    candidates = chrome_candidates()
+    for candidate in candidates:
+        if Path(candidate).is_file():
+            return candidate
+    return candidates[-1]
+
+
+def chrome_candidates() -> list:
+    """Where Chrome might be, most authoritative first.
+
+    macOS has one install location worth naming. Windows has several, because an install can be
+    per-machine or per-user, so the registry entry that either kind writes is asked first and the
+    conventional directories are the fallback. Elsewhere it is a name on PATH, under any of the
+    three the distributions use.
+    """
+    if sys.platform == "darwin":
+        return [_CHROME_MACOS]
+    if os.name == "nt":
+        found = _registered_chrome()
+        roots = [
+            os.environ.get("PROGRAMFILES"),
+            os.environ.get("PROGRAMFILES(X86)"),
+            str(paths.local_app_data()),
+        ]
+        conventional = [str(Path(root) / _CHROME_WINDOWS_RELATIVE) for root in roots if root]
+        return ([found] if found else []) + conventional
+    on_path = [shutil.which(name) for name in ("google-chrome", "chromium", "chromium-browser")]
+    return [found for found in on_path if found] or ["google-chrome"]
+
+
+def _registered_chrome() -> str | None:
+    """Chrome's path as its own installer recorded it, or None when nothing did."""
+    import winreg
+
+    for root in (winreg.HKEY_CURRENT_USER, winreg.HKEY_LOCAL_MACHINE):
+        try:
+            with winreg.OpenKey(root, _CHROME_WINDOWS_APP_PATHS) as key:
+                value, _kind = winreg.QueryValueEx(key, "")
+                if value:
+                    return str(Path(value.strip('"')))
+        except OSError:
+            continue
+    return None
+
+
+def singleton_lock_names() -> tuple:
+    """The lock names a Chrome killed before it could clean up leaves in its profile.
+
+    Per-OS because they differ, and clearing the wrong names is worse than clearing none: the next
+    launch on the profile hangs, which is the failure this clearing exists to prevent.
+    """
+    if os.name == "nt":
+        return ("lockfile",)
+    return ("SingletonLock", "SingletonCookie", "SingletonSocket")
 
 
 def version_url(port: int) -> str:
@@ -87,7 +150,7 @@ def clear_stale_locks() -> list:
     """
     removed = []
     profile = paths.browser_profile_dir()
-    for name in SINGLETON_LOCKS:
+    for name in singleton_lock_names():
         lock = profile / name
         try:
             lock.unlink()

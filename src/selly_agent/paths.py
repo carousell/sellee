@@ -43,6 +43,13 @@ def _local_app_data() -> Path:
     return Path(os.environ.get("LOCALAPPDATA") or _home() / "AppData" / "Local")
 
 
+def local_app_data() -> Path:
+    """Windows' per-user application directory, for a caller looking for *someone else's* install
+    under it — Chrome's, which can be per-user. Exposed so that this module stays the only reader
+    of the variable, which is what the path-authority guard is protecting."""
+    return _local_app_data()
+
+
 def _root(var: str, xdg_rel: str, windows_leaf: str) -> Path:
     """A root directory: the XDG-style override if set, else the OS convention.
 

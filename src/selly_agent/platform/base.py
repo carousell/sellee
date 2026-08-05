@@ -10,10 +10,6 @@ class UnsupportedPlatform(Exception):
     """Raised by get_platform() when the host OS has no implementation yet."""
 
 
-class ImageToolUnavailable(Exception):
-    """The platform's image converter is missing or failed. Its message names the file."""
-
-
 class Platform(ABC):
     """OS-specific operations the daemon needs. Keep this surface small.
 
@@ -26,18 +22,6 @@ class Platform(ABC):
     @abstractmethod
     def launch_agents_dir(self, home: Path) -> Path:
         """The per-user auto-start directory the supervisor reads at login."""
-
-    # --- images ----------------------------------------------------------------------------
-
-    @abstractmethod
-    def to_jpeg(self, src: Path, dest: Path, max_dim: int) -> None:
-        """Write src to dest as a JPEG no larger than max_dim on its longest side.
-
-        The runtime is stdlib-only and stdlib cannot transform images, so this shells out to
-        whatever the OS ships. Raises ImageToolUnavailable — naming the file — when the tool is
-        absent or the conversion fails, so the caller can escalate something actionable rather
-        than upload a file the marketplace will reject.
-        """
 
     # --- supervisor (keep-alive job) ------------------------------------------------------
 

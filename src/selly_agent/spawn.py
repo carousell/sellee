@@ -26,6 +26,21 @@ def resolve(argv) -> list:
     return [found, *parts[1:]] if found else parts
 
 
+def become(argv) -> int:
+    """Hand this process's work to `argv` and do not come back — or the nearest thing available.
+
+    POSIX replaces the process, so signals and the terminal behave exactly as if the person had run
+    the program themselves; nothing after the call runs. Windows has no such thing: exec there
+    starts a *new* process and lets this one return, which would drop the caller back at a prompt
+    while a detached child owned their terminal. So the child is run to completion instead and its
+    exit status becomes ours, which costs one lingering parent process and keeps the terminal sane.
+    """
+    resolved = resolve(argv)
+    if os.name != "nt":
+        os.execv(resolved[0], resolved)  # never returns
+    return subprocess.run(resolved).returncode  # noqa: S603 — argv is composed by the caller
+
+
 def detached_flags() -> dict:
     """Popen keywords that put a child in its own group, so it can be stopped as a unit.
 

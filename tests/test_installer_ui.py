@@ -67,6 +67,21 @@ def test_wide_terminal_draws_the_banner() -> None:
     assert len(out.getvalue().splitlines()) > 1
 
 
+def test_a_terminal_that_cannot_encode_the_art_gets_the_one_line_banner() -> None:
+    """A legacy Windows console runs a code page with none of these characters, where printing them
+    does not degrade — it raises partway through the installer's first line of output."""
+
+    class LegacyConsole(io.StringIO):
+        encoding = "cp1252"
+
+    out = LegacyConsole()
+    ui = Ui(stream=out, err=io.StringIO(), interactive=False, color=False, width=100)
+
+    ui.banner("1.2.3")
+
+    assert out.getvalue() == "Selly v1.2.3\n"
+
+
 def test_banner_art_fits_its_own_width_gate() -> None:
     from selly_agent.installer import ui as ui_module
 

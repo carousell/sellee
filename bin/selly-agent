@@ -47,7 +47,14 @@ _tree = os.path.dirname(_here)
 
 _target = reexec_target(_tree)
 if _target is not None:
-    os.execv(_target, [_target, os.path.realpath(__file__), *sys.argv[1:]])
+    _argv = [_target, os.path.realpath(__file__), *sys.argv[1:]]
+    if os.name == "nt":
+        # Windows has no exec that replaces the caller: it would start the real process and let
+        # this one return, so the command would appear to finish while the work was elsewhere.
+        import subprocess
+
+        raise SystemExit(subprocess.run(_argv).returncode)
+    os.execv(_target, _argv)
 
 _src = os.path.join(_tree, "src")
 if _src not in sys.path:

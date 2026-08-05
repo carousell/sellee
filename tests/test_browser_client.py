@@ -4,6 +4,7 @@ and the response framing Playwright MCP actually uses."""
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -441,14 +442,46 @@ def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_t
     assert "--disable-backgrounding-occluded-windows" in chrome.launch_command(9222)
 
 
+def test_a_configured_chrome_path_wins_over_discovery(monkeypatch) -> None:
+    """Discovery is a fallback; a seller who named a path meant it."""
+    monkeypatch.setattr(chrome, "chrome_candidates", lambda: ["/never/consulted"])
+    assert chrome.resolve_binary("/opt/my-chrome") == "/opt/my-chrome"
+
+
+def test_discovery_prefers_a_candidate_that_exists(tmp_path, monkeypatch) -> None:
+    absent, present = tmp_path / "nope" / "chrome", tmp_path / "chrome"
+    present.write_text("")
+    monkeypatch.setattr(chrome, "chrome_candidates", lambda: [str(absent), str(present)])
+
+    assert chrome.resolve_binary() == str(present)
+
+
+def test_discovery_with_nothing_installed_still_names_a_path(tmp_path, monkeypatch) -> None:
+    """The caller reports this in "Chrome is not installed", so it has to be a path somebody can
+    read and check rather than an empty string."""
+    monkeypatch.setattr(chrome, "chrome_candidates", lambda: ["/a/chrome", "/b/chrome"])
+
+    assert chrome.resolve_binary() == "/b/chrome"
+
+
+def test_the_lock_names_match_what_this_platform_leaves_behind() -> None:
+    """Clearing the wrong names is worse than clearing none: the launch afterwards hangs."""
+    names = chrome.singleton_lock_names()
+    assert names == (
+        ("lockfile",)
+        if os.name == "nt"
+        else ("SingletonLock", "SingletonCookie", "SingletonSocket")
+    )
+
+
 def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     """A SIGKILLed Chrome leaves these behind and the next launch hangs on them."""
     from selly_agent import paths
 
     paths.ensure_data_dirs()
-    for name in chrome.SINGLETON_LOCKS:
+    for name in chrome.singleton_lock_names():
         (paths.browser_profile_dir() / name).write_text("")
-    assert sorted(chrome.clear_stale_locks()) == sorted(chrome.SINGLETON_LOCKS)
+    assert sorted(chrome.clear_stale_locks()) == sorted(chrome.singleton_lock_names())
     assert chrome.clear_stale_locks() == []  # idempotent
 
 
@@ -466,7 +499,7 @@ def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatc
     from selly_agent import paths
 
     paths.ensure_data_dirs()
-    (paths.browser_profile_dir() / chrome.SINGLETON_LOCKS[0]).write_text("")
+    (paths.browser_profile_dir() / chrome.singleton_lock_names()[0]).write_text("")
     answers = iter([False, False, True])
     launched = {}
 
@@ -482,7 +515,7 @@ def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatc
     # browser with it.
     assert launched["kw"]["start_new_session"] is True
     # The lock only goes once the probe has said nobody is answering.
-    assert not (paths.browser_profile_dir() / chrome.SINGLETON_LOCKS[0]).exists()
+    assert not (paths.browser_profile_dir() / chrome.singleton_lock_names()[0]).exists()
 
 
 def test_ensure_running_reports_unavailable_when_chrome_never_answers(monkeypatch) -> None:

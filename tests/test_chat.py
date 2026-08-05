@@ -13,7 +13,7 @@ from selly_agent import config, control, pass_cli, paths, secrets
 def launched(monkeypatch):
     """Records the exec instead of becoming a Claude Code session."""
     calls = []
-    monkeypatch.setattr(pass_cli, "_exec", lambda binary, argv: calls.append((binary, argv)))
+    monkeypatch.setattr(pass_cli, "_exec", lambda argv: calls.append(argv) or 0)
     return calls
 
 
@@ -32,7 +32,7 @@ def test_it_launches_claude_in_the_attended_workspace(ready, launched, monkeypat
 
     assert pass_cli.chat() == 0
     assert chdir_to == [pass_cli.attended_dir()]
-    assert launched == [("/usr/bin/claude", ["/usr/bin/claude"])]
+    assert launched == [["/usr/bin/claude"]]
 
 
 def test_it_says_nothing_on_the_way_to_the_session(ready, launched, monkeypatch, capsys) -> None:
@@ -50,7 +50,7 @@ def test_buffered_output_is_flushed_before_the_exec(ready, monkeypatch) -> None:
     order = []
     monkeypatch.setattr(pass_cli.os, "chdir", lambda _: None)
     monkeypatch.setattr(pass_cli.sys.stdout, "flush", lambda: order.append("flush"))
-    monkeypatch.setattr(pass_cli, "_exec", lambda b, a: order.append("exec"))
+    monkeypatch.setattr(pass_cli, "_exec", lambda argv: order.append("exec") or 0)
 
     assert pass_cli.chat() == 0
     assert order == ["flush", "exec"]

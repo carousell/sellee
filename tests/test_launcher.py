@@ -149,4 +149,4 @@ def test_launcher_imports_nothing_beyond_the_stdlib():
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported == {"__future__", "os", "sys", "selly_agent"}
+    assert imported == {"__future__", "os", "subprocess", "sys", "selly_agent"}

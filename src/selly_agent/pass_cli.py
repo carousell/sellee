@@ -16,10 +16,10 @@ import sys
 import time
 from pathlib import Path
 
-from selly_agent import config, control, paths, pointer, skills
+from selly_agent import config, control, paths, pointer, skills, spawn
 
 # The seam tests replace to observe the launch instead of becoming a Claude Code session.
-_exec = os.execvp
+_exec = spawn.become
 
 
 def run(args) -> int:
@@ -228,11 +228,11 @@ def chat(args=None) -> int:
     # in them is lost rather than printed — silently, and only when stdout is a pipe.
     sys.stdout.flush()
     sys.stderr.flush()
-    # Replace this process rather than parenting the session: signals and the tty then behave
-    # exactly as if the seller had run `claude` themselves. Nothing can run after this line.
+    # Where the platform allows it this process is replaced, so signals and the tty behave exactly
+    # as if the seller had run `claude` themselves; where it does not, the session is run to
+    # completion and its status returned.
     os.chdir(dest)
-    _exec(binary, [binary])
-    return 0  # pragma: no cover — exec does not return
+    return _exec([binary])
 
 
 def provision(args) -> int:
