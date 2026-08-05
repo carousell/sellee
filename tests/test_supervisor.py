@@ -294,11 +294,28 @@ def test_stopping_deregisters_before_asking_the_daemon_to_drain(xdg_tmp, monkeyp
     assert happened == ["deregistered", "asked"]
 
 
-def test_a_daemon_that_will_not_go_is_not_reported_as_stopped(xdg_tmp, monkeypatch) -> None:
-    """Nothing is forced: whatever it is still doing, it is doing to the seller's databases."""
+def test_a_daemon_that_ignores_the_request_is_killed(xdg_tmp, monkeypatch) -> None:
+    """Past the deadline it is wedged rather than busy, and one stuck daemon must not block every
+    future update. The databases are written under WAL, so a kill costs a recovery, not data."""
+    fake = FakePlatform()
+    killed = []
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: None)
+    monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
+    monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda pid: killed.append(pid) or True)
+    _pretend_holder(monkeypatch, 4242, True, True, False)
+
+    assert supervisor.shutdown(platform=fake) is True
+    assert killed == [4242]
+
+
+def test_a_daemon_that_survives_even_the_kill_is_not_reported_as_stopped(
+    xdg_tmp, monkeypatch
+) -> None:
     fake = FakePlatform()
     monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: None)
     monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
+    monkeypatch.setattr(supervisor, "_FORCED_EXIT_WAIT_SEC", 0.0)
+    monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda _pid: False)
     _pretend_holder(monkeypatch, 4242, True)
 
     assert supervisor.shutdown(platform=fake) is False

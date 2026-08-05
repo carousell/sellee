@@ -9,17 +9,20 @@ and registers it only on demand. Crash keep-alive is identical in both modes onc
 
 from __future__ import annotations
 
+import logging
 import os
 import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from selly_agent import config, control, heartbeat, lock, paths, secrets
+from selly_agent import config, control, heartbeat, lock, paths, proc_tree, secrets
 from selly_agent.db import connect_reader
 from selly_agent.events import query_events
 from selly_agent.installer import materialize
 from selly_agent.platform import Platform, get_platform
+
+log = logging.getLogger(__name__)
 
 # Embedded in every plist we render, so a re-install/flip only ever touches our own file and
 # never silently replaces a foreign (e.g. legacy) daemon's plist with the same label.
@@ -193,6 +196,8 @@ def start(*, label: str | None = None, platform: Platform | None = None) -> int:
 # case; the drain does not wait for one, so this covers the lanes settling and the files closing.
 STOP_TIMEOUT_SEC = 30.0
 _STOP_POLL_SEC = 0.2
+# After the kill: only long enough to confirm it landed.
+_FORCED_EXIT_WAIT_SEC = 10.0
 
 
 def daemon_pid() -> int | None:
@@ -211,8 +216,10 @@ def shutdown(
     nothing delivers a signal on Windows — and because callers that go on to replace files the
     daemon holds open need a stop that is settled, not merely requested.
 
-    False means a process is still there after being asked, which is a refusal to proceed rather
-    than something to force: whatever it is doing, it is doing it to the seller's databases.
+    A daemon that has not gone by the deadline is wedged rather than busy — the drain does not wait
+    on a pass — so it is killed outright, tree and all. That is safe for the databases, which are
+    written under WAL and recovered by whoever opens them next, and it is what keeps one stuck
+    daemon from blocking every future update. False means even that did not work.
     """
     platform = _resolve_platform(platform)
     label = _resolve_label(platform, label)
@@ -230,7 +237,15 @@ def shutdown(
             # Already going, or already gone. The wait below is the answer either way.
             pass
 
-    deadline = time.monotonic() + (STOP_TIMEOUT_SEC if timeout_sec is None else timeout_sec)
+    if _wait_for_exit(pid, STOP_TIMEOUT_SEC if timeout_sec is None else timeout_sec):
+        return True
+    log.warning("the worker (pid %s) did not stop when asked; killing it", pid)
+    proc_tree.kill_tree(pid)
+    return _wait_for_exit(pid, _FORCED_EXIT_WAIT_SEC)
+
+
+def _wait_for_exit(pid: int, timeout_sec: float) -> bool:
+    deadline = time.monotonic() + timeout_sec
     while lock.is_pid_alive(pid):
         if time.monotonic() >= deadline:
             return False
@@ -244,8 +259,8 @@ def stop(*, label: str | None = None, platform: Platform | None = None) -> int:
     running = platform.is_registered(label) or daemon_pid() is not None
     if not shutdown(label=label, platform=platform):
         print(
-            f"the worker (pid {daemon_pid()}) did not stop within {STOP_TIMEOUT_SEC:.0f}s — it is "
-            "still writing, so nothing has been forced. Check `selly-agent logs`.",
+            f"the worker (pid {daemon_pid()}) is still running after being asked to stop and then "
+            "killed. Check `selly-agent logs`.",
             file=sys.stderr,
         )
         return 1
