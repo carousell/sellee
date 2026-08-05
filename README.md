@@ -28,6 +28,11 @@ git clone https://github.com/carousell/selly-agent && cd selly-agent
 ./setup
 ```
 
+On Windows, `.\setup.ps1` instead — with one caveat worth stating plainly: the
+Windows port is implemented and covered by the suite, but it has not yet been run
+on a Windows machine. Until that live checklist passes, treat it as unverified
+rather than supported.
+
 One command, one terminal, no LLM anywhere in it. It checks the machine (Node,
 Chrome, and the `claude` CLI signed in), prints every location it will write to
 before writing anything, copies this version into `~/.local/share/selly-agent/versions/`,
@@ -157,7 +162,7 @@ bin/selly-agent            single CLI launcher (resolves src/, dispatches argv)
 src/selly_agent/
   cli.py                   argparse dispatch (setup, daemon, update, healthcheck, pass, …)
   paths.py                 the one path authority (XDG; only module touching home/XDG)
-  platform/                OS seam (macOS launchd; Windows is a later port)
+  platform/                host-integration seam (launchd; Windows scheduled task)
   config.py                read-only config.json loader (+ installer-side writer)
   secrets.py               config-dir secret files (0600): MCP token, carousell.ai key
   db.py                    SQLite: WAL, one write connection per DB, readers
@@ -193,7 +198,9 @@ src/selly_agent/
 tests/                     plain pytest (tests/conformance/ = MCP SDK interop, 3.10+)
 ```
 
-## Filesystem locations (XDG)
+## Filesystem locations
+
+POSIX follows the XDG base directories:
 
 ```
 ~/.local/share/selly-agent/   versions/, current -> …, data/selly.db, media/, browser-profile/
@@ -201,3 +208,22 @@ tests/                     plain pytest (tests/conformance/ = MCP SDK interop, 3
 ~/.config/selly-agent/        config.json + secrets 0600 (MCP, carousell.ai, telegram token)
 ~/.cache/selly-agent/         downloaded release tarballs
 ```
+
+Windows has no equivalent split, so the same four roots become four subtrees of one
+local application directory — one tree to install, inspect and remove:
+
+```
+%LOCALAPPDATA%\selly-agent\share\    versions/, current (a junction), data, media, browser-profile
+%LOCALAPPDATA%\selly-agent\state\    events.db, backups, logs, heartbeat, lock
+%LOCALAPPDATA%\selly-agent\config\   config.json + secrets (see below)
+%LOCALAPPDATA%\selly-agent\cache\    downloaded release tarballs
+```
+
+Local rather than roaming, deliberately: a roaming profile is copied between
+machines and can be redirected onto a network share, and these hold the browser
+profile with live marketplace sessions, SQLite databases in WAL mode, and the
+secrets. Those secrets are not given a mode there — Windows would ignore it — so
+their privacy is the user profile's, which is what Claude Code relies on for its
+own credentials too.
+
+The `XDG_*_HOME` overrides are honoured on every platform.

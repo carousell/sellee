@@ -122,9 +122,35 @@ never touch a real install. Ported legacy tests are converted to plain pytest.
 ## Path authority
 
 `paths.py` is the only module allowed to resolve the home directory or read an
-`XDG_*` variable. Everything else routes through it. A guard test
+`XDG_*` variable — or their Windows spellings, `USERPROFILE`, `LOCALAPPDATA` and
+`APPDATA`. Everything else routes through it. A guard test
 (`tests/guard/test_path_authority.py`) enforces this — it is the structural
 defense against writing to a location the running daemon never reads.
+
+## Platform differences live in one of two places, never scattered
+
+`platform/` is the seam for *host integration*: where a job definition lives, how
+it is registered, what it is called. Nothing else may name launchd or Task
+Scheduler.
+
+Everything else per-OS goes in the portable module that owns the concern, with the
+branch inside it — `paths.py` (roots, venv layout), `lock.py`, `pointer.py`
+(`current` and the shim), `spawn.py` (resolution, creation flags, exec),
+`proc_tree.py`, `images.py`. The reason for the split is ordering: `get_platform()`
+refuses an unsupported host, and these have to answer before anything has decided
+whether the host is supported — during a bootstrap, or from a CLI holding no
+platform.
+
+Two guards keep this honest: every module must import on any OS (only
+`platform/windows.py` is exempt, by name), and per-OS stdlib imports (`fcntl`,
+`msvcrt`, `winreg`, `_winapi`) are recognised as stdlib whichever OS runs the
+suite, so a verdict never depends on the machine.
+
+Windows-specific rules worth stating once: file modes are not applied there
+rather than emulated (privacy rests on the user profile, as it does for Claude
+Code's own credentials); there is no exec that replaces a process, so `spawn.become`
+runs the child and adopts its status; and a bare program name does not resolve, so
+every spawn goes through `spawn.resolve`.
 
 ## State is two SQLite DBs
 
