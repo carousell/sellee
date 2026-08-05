@@ -12,7 +12,7 @@ stamped travels with the message that earned it.
 
 from __future__ import annotations
 
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 
 # How much of each conversation to show. A buyer thread is short by nature; the cap is here so one
 # pathological thread cannot crowd out the others claimed into the same pass.

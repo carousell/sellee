@@ -19,7 +19,7 @@ from selly_agent.channel.prompt import (
 from selly_agent.channel.telegram.poller import Poller
 from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 from selly_agent.tools import TIER_PASS_CHANNEL, tools_for_tier
 
 

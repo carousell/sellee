@@ -11,7 +11,7 @@ context (capped by count and chars), not a memory system; long-term facts stay b
 
 from __future__ import annotations
 
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 
 # The conversational window caps (F13): the most recent N entries, further trimmed to a char budget.
 TRANSCRIPT_WINDOW_LIMIT = 40
