@@ -18,6 +18,7 @@ dependencies = [
     "platformdirs>=4,<5",
     "pillow>=12,<13",
     "pillow-heif>=1,<2",
+    "tzlocal>=5,<6",
 ]
 
 # Dev tooling. A dependency *group* rather than an extra, because uv installs groups by default

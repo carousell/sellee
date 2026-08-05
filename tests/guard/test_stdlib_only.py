@@ -26,7 +26,7 @@ OWN_TOP_LEVEL = "selly_agent"
 # Third-party packages runtime code may import. Keep in sync with [project].dependencies in
 # pyproject.toml — this set is the review gate, so a name appears here only alongside a
 # relocked uv.lock and a reviewer who accepted the dependency.
-ALLOWED_RUNTIME_DEPS = {"psutil", "platformdirs", "PIL", "pillow_heif"}
+ALLOWED_RUNTIME_DEPS = {"psutil", "platformdirs", "PIL", "pillow_heif", "tzlocal"}
 
 # Network / async modules a runtime module may not import unless its src-relative path is
 # listed here. Every entry is a deliberate decision: adding a module here means it is allowed
