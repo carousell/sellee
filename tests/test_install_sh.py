@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import threading
 from functools import partial
@@ -127,7 +128,7 @@ def test_a_host_serving_nothing_fails_before_it_writes_anything(macos_shims) -> 
 def test_it_refuses_to_run_anywhere_but_macos(release) -> None:
     # No shims, so `uname -s` answers whatever this machine really is.
     _served, base, _receipt = release
-    if os.uname().sysname == "Darwin":
+    if sys.platform == "darwin":
         pytest.skip("this machine really is a Mac")
     result = run_install(base_url=base)
     assert result.returncode == 1
