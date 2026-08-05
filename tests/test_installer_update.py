@@ -20,7 +20,7 @@ from tests.test_supervisor import FakePlatform
 
 from selly_agent import healthcheck, heartbeat, paths, supervisor
 from selly_agent.config import Config
-from selly_agent.installer import checks, materialize
+from selly_agent.installer import checks, materialize, runtime
 from selly_agent.installer import update as update_mod
 from selly_agent.installer.update import Release, UpdateError
 
@@ -541,3 +541,21 @@ def test_a_successful_update_clears_the_download_cache(installed, served) -> Non
     assert not (stale / "selly-agent-0.0.9.tar.gz").exists()
     assert not (stale / "unpacked").exists()
     assert (stale / "selly-agent-0.2.0.tar.gz").exists()
+
+
+def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(
+    xdg_tmp, monkeypatch, capsys
+) -> None:
+    """Provisioning failures reach this seam from several frames down inside install_version. The
+    update itself already handles them safely — it fails before the swap and leaves the running
+    version alone — so all that is left is saying so like every other refusal."""
+
+    def fail(*_args, **_kwargs):
+        raise runtime.RuntimeSetupError("uv could not install Python 3.14: no network")
+
+    monkeypatch.setattr(update_mod, "perform", fail)
+
+    assert update_mod.run(Args(url="https://example.test")) == 1
+    printed = capsys.readouterr()
+    assert printed.err.startswith("selly-agent: uv could not install Python 3.14")
+    assert "Traceback" not in printed.err

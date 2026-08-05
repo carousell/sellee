@@ -8,6 +8,7 @@ that does not match the recorded digest must not end up installed.
 from __future__ import annotations
 
 import hashlib
+import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -339,6 +340,21 @@ def test_describe_reports_an_absent_venv(tmp_path):
 
 def test_describe_knows_whether_this_process_runs_in_the_tree_venv(tmp_path):
     assert runtime.describe(tmp_path)["running_in_venv"] is False
+
+
+@pytest.mark.skipif(os.name == "nt", reason="writes a #! stub interpreter")
+def test_describe_survives_an_interpreter_that_fails_saying_nothing(tmp_path):
+    """A failure with blank stderr must report no detail, not raise — the report is what a
+    preflight check turns into a message, so a crash here reads as a broken checker."""
+    interpreter = paths.venv_python(tmp_path)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\nprintf '\\n\\n' >&2\nexit 1\n")
+    interpreter.chmod(0o755)
+
+    report = runtime.describe(tmp_path)
+    assert report["present"] is True
+    assert report["dependencies_importable"] is False
+    assert report["detail"] == ""
 
 
 # --- the preflight gate --------------------------------------------------------------------

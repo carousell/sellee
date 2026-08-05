@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from selly_agent import __version__, config, heartbeat, paths, supervisor
-from selly_agent.installer import materialize
+from selly_agent.installer import materialize, runtime
 
 log = logging.getLogger(__name__)
 
@@ -500,7 +500,7 @@ def run(args) -> int:
         if getattr(args, "rollback", False):
             return rollback(args, cfg, out)
         return perform(args, cfg, out)
-    except UpdateError as exc:
+    except (UpdateError, runtime.RuntimeSetupError) as exc:
         print(f"selly-agent: {exc}", file=sys.stderr)
         return 1
     except materialize.LayoutError as exc:

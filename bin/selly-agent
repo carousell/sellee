@@ -55,5 +55,26 @@ if _src not in sys.path:
 
 from selly_agent.cli import main  # noqa: E402 — sys.path must be set first
 
+
+def dispatch(argv):
+    """Run the CLI, turning a missing dependency into the instruction that fixes it.
+
+    Subcommands import lazily, so a tree whose venv was never built fails several frames into a
+    command with a traceback naming psutil — and nothing naming setup. Our own modules are
+    re-raised, since a missing one of those is a broken install rather than an unbuilt one.
+    """
+    try:
+        return main(argv)
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").startswith("selly_agent"):
+            raise
+        sys.stderr.write(
+            f"selly-agent: cannot import {exc.name} — this install's dependencies are not in "
+            f"place yet.\nRun {os.path.join(_tree, 'setup')} to build them, or `make bootstrap` "
+            f"in a checkout.\n"
+        )
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(dispatch(sys.argv))

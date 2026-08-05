@@ -32,7 +32,7 @@ from selly_agent import (
     supervisor,
 )
 from selly_agent.browser import markets as market_adapters
-from selly_agent.installer import checks, materialize, preflight
+from selly_agent.installer import checks, materialize, preflight, runtime
 from selly_agent.installer import region as region_guess
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -53,6 +53,9 @@ def run(args) -> int:
         return 1
     except materialize.LayoutError as exc:
         ui.fatal(Abort(exc.message, exc.fix))
+        return 1
+    except runtime.RuntimeSetupError as exc:
+        ui.fatal(Abort(str(exc), "Check the network and disk space, then run setup again."))
         return 1
     except control.DaemonUnreachable as exc:
         ui.fatal(

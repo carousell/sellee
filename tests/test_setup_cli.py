@@ -23,7 +23,7 @@ from selly_agent import (
     settings_cli,
     setup_cli,
 )
-from selly_agent.installer import checks, materialize, preflight
+from selly_agent.installer import checks, materialize, preflight, runtime
 from selly_agent.installer import region as region_guess
 
 
@@ -629,3 +629,24 @@ def test_setup_records_every_directory_the_worker_needs_not_just_the_first(
 
     assert config.load().node_bin_dir == fragment
     assert fragment in (paths.config_dir() / "com.selly.agent.plist").read_text()
+
+
+def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(monkeypatch, capsys) -> None:
+    """Provisioning runs several frames down inside the install, and a first-time installer who
+    hits a network failure gets the one line about it rather than a stack."""
+
+    def fail(*_args, **_kwargs):
+        raise runtime.RuntimeSetupError("could not download uv 0.12.1: connection refused")
+
+    monkeypatch.setattr(setup_cli, "_run", fail)
+
+    assert setup_cli.run(_Args()) == 1
+    printed = capsys.readouterr()
+    assert "could not download uv" in printed.out + printed.err
+    assert "Traceback" not in printed.out + printed.err
+
+
+class _Args:
+    yes = True
+    dev = False
+    mode = None

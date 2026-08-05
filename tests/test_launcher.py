@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,28 @@ def launcher():
     namespace = {"__name__": "launcher_under_test", "os": os}
     exec(compile(head, str(LAUNCHER), "exec"), namespace)
     return namespace
+
+
+@pytest.fixture
+def loaded_launcher():
+    """The launcher loaded whole, so the dispatch wrapper can be called directly.
+
+    Safe because __name__ is not __main__ (nothing dispatches) and the re-exec is a no-op when the
+    suite is already on this tree's venv interpreter — which the skip below insists on, since
+    otherwise loading the file would replace the test process.
+    """
+    if os.path.realpath(sys.prefix) != os.path.realpath(REPO_ROOT / ".venv"):
+        pytest.skip("the suite is not running on this tree's venv, so loading would re-exec")
+    namespace = {"__name__": "launcher_loaded", "__file__": str(LAUNCHER)}
+    exec(compile(LAUNCHER.read_text(), str(LAUNCHER), "exec"), namespace)
+    return namespace
+
+
+def _raises(exc):
+    def fail(_argv):
+        raise exc
+
+    return fail
 
 
 def _make_venv(tree: Path) -> Path:
@@ -95,6 +118,25 @@ def test_venv_interpreter_follows_virtualenv_layout(launcher, tmp_path):
     expected = "Scripts" if os.name == "nt" else "bin"
     assert Path(resolved).parent.name == expected
     assert Path(resolved).parent.parent.name == ".venv"
+
+
+def test_a_tree_without_dependencies_says_how_to_build_them(loaded_launcher, capsys):
+    """Subcommands import lazily, so the failure lands mid-command and the traceback names psutil
+    rather than setup."""
+    loaded_launcher["main"] = _raises(ModuleNotFoundError("no psutil", name="psutil"))
+
+    assert loaded_launcher["dispatch"](["selly-agent", "daemon", "run"]) == 1
+    printed = capsys.readouterr().err
+    assert "cannot import psutil" in printed
+    assert str(REPO_ROOT / "setup") in printed
+
+
+def test_one_of_our_own_modules_going_missing_is_not_disguised(loaded_launcher):
+    """That is a broken install, not an unbuilt one, and the traceback is the useful answer."""
+    loaded_launcher["main"] = _raises(ModuleNotFoundError("gone", name="selly_agent.passes"))
+
+    with pytest.raises(ModuleNotFoundError):
+        loaded_launcher["dispatch"](["selly-agent", "version"])
 
 
 def test_launcher_imports_nothing_beyond_the_stdlib():
