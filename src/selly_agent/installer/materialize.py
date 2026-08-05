@@ -4,9 +4,10 @@ Install and update are the same operation here — an install is an update into 
 `versions/` — so both go through one module and the default install exercises, on every machine,
 exactly the path an update will later take.
 
-Two invariants shape everything below. `current` is *always* a symlink we own: a real directory
-there is someone else's (or a half-finished copy), and replacing it silently is how an install
-eats a tree it did not create, so it is refused with a remediation instead. And a version
+Two invariants shape everything below. `current` is *always* a pointer we own — a symlink, or a
+junction where symlinks need privileges: a real directory there is someone else's (or a
+half-finished copy), and replacing it silently is how an install eats a tree it did not create, so
+it is refused with a remediation instead. And a version
 directory becomes visible only by rename: the copy lands beside its destination and is moved into
 place in one step, so a crash mid-copy leaves a stray `.tmp` and a still-working install rather
 than a half-populated version that `current` already points at.
@@ -16,9 +17,10 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
-from selly_agent import paths
+from selly_agent import paths, pointer
 from selly_agent.installer import runtime
 
 # What a version directory holds: the launcher and the package (whose migrations, registries and
@@ -74,12 +76,23 @@ def source_tree() -> Path:
 # --- reading the layout -------------------------------------------------------------------
 
 
+def install_interpreter() -> Path:
+    """The interpreter this install runs on, for whoever has to name one: the supervised job and
+    the Windows shim.
+
+    Named through `current` rather than the version behind it, so the name stays true across an
+    update. Falls back to whatever is running us when there is no venv — a checkout pointed at by
+    `./setup --dev` before bootstrapping — because naming an interpreter that does not exist gives
+    a job that fails to start with nothing explaining why, and the launcher re-execs onto the venv
+    by itself once there is one.
+    """
+    interpreter = paths.venv_python(paths.current())
+    return interpreter if interpreter.exists() else Path(os.path.realpath(sys.executable))
+
+
 def current_target():
     """What `current` points at, or None when it does not exist. Never follows further."""
-    current = paths.current()
-    if not current.is_symlink():
-        return None
-    return Path(os.path.realpath(current))
+    return pointer.read(paths.current())
 
 
 def current_version():
@@ -129,9 +142,9 @@ def previous_version():
 
 def _guard_current_is_ours() -> None:
     current = paths.current()
-    if current.exists() and not current.is_symlink():
+    if current.exists() and not pointer.is_pointer(current):
         raise LayoutError(
-            f"{current} is a real directory, not the symlink selly-agent manages",
+            f"{current} is a real directory, not the pointer selly-agent manages",
             f"Move or remove it (it was not created by selly-agent), then re-run:\n"
             f"  mv {current} {current}.bak",
         )
@@ -196,20 +209,15 @@ def stage_version(tree, version: str) -> Path:
 
 
 def swap_current(target) -> Path:
-    """Point `current` at `target` in one step: a temporary symlink beside it, then a rename.
+    """Point `current` at `target`.
 
-    Never unlink-then-relink — that leaves a window where `current` does not exist, and the
-    launchd job, the shim and every generated harness config all resolve through it.
+    The supervised job, the shim and every generated harness config resolve through this pointer,
+    so the swap is the whole of an update as far as they are concerned. Where the platform allows
+    it the change is a rename and the pointer is never absent; where it does not, callers swap with
+    the daemon stopped (see pointer.swap).
     """
     _guard_current_is_ours()
-    current = paths.current()
-    current.parent.mkdir(parents=True, exist_ok=True)
-    staging = current.with_name(current.name + ".new")
-    if staging.is_symlink() or staging.exists():
-        staging.unlink()
-    staging.symlink_to(target)
-    os.replace(staging, current)
-    return current
+    return pointer.swap(paths.current(), target)
 
 
 def ensure_current(checkout) -> None:
@@ -222,7 +230,7 @@ def ensure_current(checkout) -> None:
     """
     paths.ensure_runtime_dirs()
     _guard_current_is_ours()
-    if paths.current().is_symlink():
+    if pointer.is_pointer(paths.current()):
         return
     swap_current(Path(checkout).resolve())
 
@@ -277,23 +285,24 @@ def shim_target() -> Path:
 
 
 def _shim_is_ours(shim: Path) -> bool:
-    """Whether the name at `~/.local/bin/selly-agent` is one we installed.
+    """Whether the name at the shim path is one we installed.
 
-    Two ways to be ours, because a dev install has neither the same link text nor a target under
-    the data root as a versioned one: the link says exactly what `install_shim` writes, or it
-    resolves inside our data root.
+    Two ways to be ours, because a dev install has neither the same recorded target nor a resolved
+    one under the data root as a versioned install: what it names is exactly what `install_shim`
+    writes, or it resolves inside our data root.
     """
-    if not shim.is_symlink():
+    named = pointer.shim_target(shim)
+    if named is None:
         return False
-    if os.readlink(shim) == str(shim_target()):
+    if named == shim_target():
         return True
-    resolved = Path(os.path.realpath(shim))
+    resolved = Path(os.path.realpath(named))
     root = paths.data_root().resolve()
     return root == resolved or root in resolved.parents
 
 
 def install_shim() -> Path:
-    """Link `~/.local/bin/selly-agent` at the launcher inside `current`."""
+    """Put `selly-agent` on the user's PATH, pointing at the launcher inside `current`."""
     shim = paths.shim_path()
     target = shim_target()
     shim.parent.mkdir(parents=True, exist_ok=True)
@@ -304,12 +313,7 @@ def install_shim() -> Path:
             f"{shim} already exists and was not created by selly-agent",
             "Something else owns that name. Move it aside and re-run ./setup.",
         )
-    staging = shim.with_name(shim.name + ".new")
-    if staging.is_symlink() or staging.exists():
-        staging.unlink()
-    staging.symlink_to(target)
-    os.replace(staging, shim)
-    return shim
+    return pointer.write_shim(shim, target, install_interpreter())
 
 
 def remove_shim() -> bool:

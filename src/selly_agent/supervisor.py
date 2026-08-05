@@ -1,10 +1,10 @@
-"""launchd integration — install/start/stop/status/uninstall (OS-agnostic orchestration).
+"""Supervisor integration — install/start/stop/status/uninstall (OS-agnostic orchestration).
 
-The OS-specific bits (plist render, launchctl) live behind the platform seam; everything here
-(mode logic, config recording, ours-vs-foreign refusal) is portable. Start-on-login is
-expressed by plist *placement*, not a RunAtLoad toggle: login-start mode places the plist in
-the launch-agents dir (launchd auto-loads it at login); manual mode keeps it in the config dir
-and registers it only on demand. Crash keep-alive is identical in both modes once registered.
+The OS-specific bits (rendering the job definition, registering it) live behind the platform seam;
+everything here (mode logic, config recording, ours-vs-foreign refusal, the confirmed stop) is
+portable. On macOS start-on-login is expressed by plist *placement* rather than a RunAtLoad toggle:
+login-start mode places it where launchd auto-loads it at login, manual mode keeps it in the config
+dir and registers it on demand. Crash keep-alive is identical in both modes once registered.
 """
 
 from __future__ import annotations
@@ -34,19 +34,6 @@ MANUAL = "manual"
 
 def _resolve_platform(platform: Platform | None) -> Platform:
     return platform if platform is not None else get_platform()
-
-
-def job_interpreter() -> Path:
-    """The interpreter to name in the job definition.
-
-    Through `current` rather than the version behind it, so the definition stays true across an
-    update. Falls back to whatever is running us when there is no venv — a checkout pointed at by
-    `./setup --dev` before bootstrapping — because naming an interpreter that does not exist gives
-    a job that fails to start with nothing explaining why, and the launcher re-execs onto the venv
-    by itself once there is one.
-    """
-    interpreter = paths.venv_python(paths.current())
-    return interpreter if interpreter.exists() else Path(os.path.realpath(sys.executable))
 
 
 def _resolve_label(platform: Platform, label: str | None) -> str:
@@ -140,7 +127,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
         return 2
 
     program_args = [
-        str(job_interpreter()),
+        str(materialize.install_interpreter()),
         str(paths.current() / "bin" / "selly-agent"),
         "daemon",
         "run",

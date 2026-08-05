@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import shutil
 
-from selly_agent import paths, supervisor
+from selly_agent import paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -82,13 +82,17 @@ def _plan(preserve: bool) -> list:
 
 def _roots_to_remove(preserve: bool) -> list:
     if preserve:
-        # The version trees and the swap symlink go; the data beside them stays.
+        # The version trees and the pointer go; the data beside them stays.
         return [paths.versions_dir(), paths.current(), paths.state_dir(), paths.cache_dir()]
     return [paths.data_root(), paths.state_dir(), paths.config_dir(), paths.cache_dir()]
 
 
 def _remove(target) -> None:
-    if target.is_symlink() or target.is_file():
+    # A pointer is removed, never followed: deleting through `current` would take the version it
+    # names with it. On Windows that pointer is a junction, which is a directory entry.
+    if pointer.is_pointer(target):
+        pointer.discard(target)
+    elif target.is_file():
         target.unlink()
     elif target.is_dir():
         shutil.rmtree(target, ignore_errors=True)

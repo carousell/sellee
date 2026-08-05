@@ -15,6 +15,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+from selly_agent import pointer
 from selly_agent.platform import get_platform
 
 APP = "selly-agent"
@@ -253,9 +254,9 @@ def user_bin_dir() -> Path:
 
 
 def shim_path() -> Path:
-    """The user-facing `selly-agent` command: a symlink through `current`, so it survives
-    updates."""
-    return user_bin_dir() / APP
+    """The user-facing `selly-agent` command, resolving through `current` so it survives updates.
+    Carries an extension where the OS needs one to consider a file runnable."""
+    return user_bin_dir() / f"{APP}{pointer.SHIM_SUFFIX}"
 
 
 def shell_rc_path(shell: str) -> Path | None:

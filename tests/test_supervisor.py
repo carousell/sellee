@@ -69,7 +69,7 @@ def test_the_job_runs_on_the_installs_own_venv_interpreter(xdg_tmp, tree) -> Non
     materialize.install_version(tree, "1.0.0")
     interpreter = paths.venv_python(paths.current())
 
-    assert supervisor.job_interpreter() == interpreter
+    assert materialize.install_interpreter() == interpreter
 
     fake = FakePlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0
@@ -81,7 +81,7 @@ def test_the_job_names_the_interpreter_through_current_not_a_version(xdg_tmp, tr
     # Named through the swap point, so the definition does not go stale the moment a version is
     # replaced underneath it — and so an update's re-register writes the same path back.
     materialize.install_version(tree, "1.0.0")
-    named = str(supervisor.job_interpreter())
+    named = str(materialize.install_interpreter())
     assert named.startswith(str(paths.current()))
     assert "versions" not in named
 
@@ -89,7 +89,7 @@ def test_the_job_names_the_interpreter_through_current_not_a_version(xdg_tmp, tr
 def test_a_checkout_without_a_venv_still_gets_a_startable_job(xdg_tmp) -> None:
     # `./setup --dev` before a bootstrap: naming an interpreter that does not exist would give a
     # job that fails to start with nothing saying why.
-    assert supervisor.job_interpreter() == Path(os.path.realpath(sys.executable))
+    assert materialize.install_interpreter() == Path(os.path.realpath(sys.executable))
 
 
 def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) -> None:

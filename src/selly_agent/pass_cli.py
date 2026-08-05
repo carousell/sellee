@@ -16,7 +16,7 @@ import sys
 import time
 from pathlib import Path
 
-from selly_agent import config, control, paths, skills
+from selly_agent import config, control, paths, pointer, skills
 
 # The seam tests replace to observe the launch instead of becoming a Claude Code session.
 _exec = os.execvp
@@ -76,12 +76,12 @@ def _follow(port: int, token: str, pass_id: str) -> None:
 def _skills_dir() -> Path:
     """Where a command body should point a reader at the skill files.
 
-    Through the `current` symlink when there is one, so an update swaps the content underneath a
+    Through the `current` pointer when there is one, so an update swaps the content underneath a
     command that was written months ago. Falling back to the package's own location covers a
     checkout with no provisioned layout.
     """
     via_current = paths.current() / "src" / "selly_agent" / "skills"
-    if paths.current().is_symlink() and via_current.is_dir():
+    if pointer.is_pointer(paths.current()) and via_current.is_dir():
         return via_current
     return skills.SKILLS_DIR
 
