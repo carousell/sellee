@@ -15,7 +15,6 @@ dynamic = ["version"]
 # The major bound keeps a major bump a reviewed diff rather than a relock.
 dependencies = [
     "psutil>=7,<8",
-    "platformdirs>=4,<5",
     "pillow>=12,<13",
     "pillow-heif>=1,<2",
     "tzlocal>=5,<6",

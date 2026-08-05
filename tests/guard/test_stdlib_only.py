@@ -26,7 +26,7 @@ OWN_TOP_LEVEL = "selly_agent"
 # Third-party packages runtime code may import. Keep in sync with [project].dependencies in
 # pyproject.toml — this set is the review gate, so a name appears here only alongside a
 # relocked uv.lock and a reviewer who accepted the dependency.
-ALLOWED_RUNTIME_DEPS = {"psutil", "platformdirs", "PIL", "pillow_heif", "tzlocal"}
+ALLOWED_RUNTIME_DEPS = {"psutil", "PIL", "pillow_heif", "tzlocal"}
 
 # Stdlib modules that exist on only one OS. find_spec cannot recognise them — it answers for the
 # OS running the suite, which would make `msvcrt` third-party on POSIX and `fcntl` third-party on
