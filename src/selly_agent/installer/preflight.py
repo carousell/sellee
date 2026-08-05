@@ -193,27 +193,14 @@ def supervised_path(fragment: str | None = None) -> str:
     return f"{fragment}{os.pathsep}{supervisor.SUPERVISED_PATH}"
 
 
-# Windows reads these during process creation itself, and npm reads the last two: without
-# SystemRoot, CreateProcess fails in ways that look nothing like a missing Node, and without
-# PATHEXT `npx` never resolves to `npx.cmd`.
-_WINDOWS_JOB_VARS = ("SystemRoot", "PATHEXT", "COMSPEC", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")
-
-
 def supervised_env(fragment: str | None = None) -> dict:
     """The environment to run a supervised-worker check under.
 
     Near-empty, because that is roughly what a supervisor hands the job — and deliberately not this
-    shell's environment, which carries a version manager's shims the worker will never see. The
-    home directory stays because npm keeps its cache and config under it, so a warm run here lands
-    in the same cache the worker reads.
+    shell's environment, which carries a version manager's shims the worker will never see. What
+    counts as the bare minimum differs per platform, so paths answers that.
     """
-    env = {"PATH": supervised_path(fragment)}
-    if os.name == "nt":
-        env["USERPROFILE"] = str(paths.home_dir())
-        env.update({k: os.environ[k] for k in _WINDOWS_JOB_VARS if os.environ.get(k)})
-    else:
-        env["HOME"] = str(paths.home_dir())
-    return env
+    return {"PATH": supervised_path(fragment), **paths.supervised_env_base()}
 
 
 def homebrew_path() -> str:

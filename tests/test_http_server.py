@@ -366,7 +366,9 @@ def test_shutdown_sets_the_stop_flag_the_signal_handlers_set(server) -> None:
 
     assert status == 202
     assert body["stopping"] is True
-    assert stop.is_set()
+    # Waited for, not asserted outright: the reply is flushed before the flag is set, so the client
+    # can be back here first. That ordering is the point — the drain closes this very server.
+    assert stop.wait(timeout=5)
 
 
 def test_shutdown_without_a_loop_to_stop_says_so(server) -> None:

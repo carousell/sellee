@@ -13,6 +13,7 @@ environment) always takes effect.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from selly_agent import pointer
@@ -31,13 +32,56 @@ def _home() -> Path:
     return Path.home()
 
 
-def _xdg_base(var: str, default_rel: str) -> Path:
+def _local_app_data() -> Path:
+    """The Windows per-user, per-machine application directory.
+
+    Local rather than roaming, deliberately and permanently: a roaming profile is copied between
+    machines and can be redirected onto a network share or a synced folder, and everything under
+    these roots is either machine-specific or must not leave the machine at all — the browser
+    profile holding live marketplace sessions, SQLite databases in WAL mode, and the secrets.
+    """
+    return Path(os.environ.get("LOCALAPPDATA") or _home() / "AppData" / "Local")
+
+
+def _root(var: str, xdg_rel: str, windows_leaf: str) -> Path:
+    """A root directory: the XDG-style override if set, else the OS convention.
+
+    The override comes first on every platform. It is how a power user relocates state, and it is
+    the test seam — a suite that could not redirect these would be writing into the real profile.
+
+    Windows has no equivalent of the XDG split, so the four roots become four subtrees of one
+    %LOCALAPPDATA% directory rather than four locations. That keeps a single tree to install,
+    inspect and remove, and keeps the code below identical on every platform.
+    """
     override = os.environ.get(var)
-    base = Path(override) if override else _home() / default_rel
-    return base / APP
+    if override:
+        return Path(override) / APP
+    if os.name == "nt":
+        return _local_app_data() / APP / windows_leaf
+    return _home() / xdg_rel / APP
 
 
 _XDG_VARS = ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME")
+
+
+def supervised_env_base() -> dict:
+    """The environment a supervised job needs before it can locate anything at all.
+
+    A job inherits nothing from the shell that installed it, so what it must be handed is decided
+    here with the rest of the "where do things live" rules rather than at the call site.
+
+    POSIX needs the home directory, because npm keeps its cache and config under it and a warm run
+    should land in the cache the worker reads. Windows needs that plus the variables process
+    creation itself consults: without SystemRoot a child cannot be started at all, and without
+    PATHEXT a bare `npx` never resolves to `npx.cmd`. Those come from this process, where the
+    machine is the authority — the home directory does not, so that a test can redirect it.
+    """
+    if os.name != "nt":
+        return {"HOME": str(_home())}
+    passthrough = ("SystemRoot", "PATHEXT", "COMSPEC", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")
+    env = {"USERPROFILE": str(_home())}
+    env.update({name: os.environ[name] for name in passthrough if os.environ.get(name)})
+    return env
 
 
 def xdg_overrides() -> dict:
@@ -55,22 +99,22 @@ def xdg_overrides() -> dict:
 
 def data_root() -> Path:
     """Immutable installs + business data live here (never pruned)."""
-    return _xdg_base("XDG_DATA_HOME", ".local/share")
+    return _root("XDG_DATA_HOME", ".local/share", "share")
 
 
 def state_dir() -> Path:
     """Transcripts, DB backups, logs — prunable by definition; safe to delete wholesale."""
-    return _xdg_base("XDG_STATE_HOME", ".local/state")
+    return _root("XDG_STATE_HOME", ".local/state", "state")
 
 
 def config_dir() -> Path:
-    """config.json + secrets (0700)."""
-    return _xdg_base("XDG_CONFIG_HOME", ".config")
+    """config.json + secrets (0700 where the OS enforces it)."""
+    return _root("XDG_CONFIG_HOME", ".config", "config")
 
 
 def cache_dir() -> Path:
     """Downloaded release tarballs (regenerable)."""
-    return _xdg_base("XDG_CACHE_HOME", ".cache")
+    return _root("XDG_CACHE_HOME", ".cache", "cache")
 
 
 # --- data_root children --------------------------------------------------------------------
@@ -81,7 +125,7 @@ def versions_dir() -> Path:
 
 
 def current() -> Path:
-    """The atomic swap point: a symlink into versions/<v> (dev mode: into the checkout)."""
+    """The swap point: a pointer into versions/<v> (dev mode: into the checkout)."""
     return data_root() / "current"
 
 
@@ -239,6 +283,14 @@ def claude_bin_candidates() -> list[Path]:
     runner never reaches for the home directory itself. PATH is searched separately by the
     caller (shutil.which); these cover the common non-PATH installs."""
     home = _home()
+    if os.name == "nt":
+        # Where Claude Code's own Windows installer puts it, with and without the extension a
+        # bare name would need PATHEXT to find.
+        return [
+            home / ".local" / "bin" / "claude.exe",
+            home / ".local" / "bin" / "claude.cmd",
+            home / ".claude" / "local" / "claude.exe",
+        ]
     return [
         home / ".local" / "bin" / "claude",
         home / ".claude" / "local" / "claude",
@@ -249,7 +301,12 @@ def claude_bin_candidates() -> list[Path]:
 
 def user_bin_dir() -> Path:
     """~/.local/bin — where the entry-point shim lands. A PATH convention rather than an XDG
-    data home, so it is home-relative and not overridable."""
+    data home, so it is home-relative and not overridable.
+
+    The same location on Windows, which has no convention of its own for a user-level command
+    directory — and which is where Claude Code installs itself, so on a machine that passed the
+    claude gate this is very likely already on PATH.
+    """
     return _home() / ".local" / "bin"
 
 
@@ -289,7 +346,13 @@ def shell_rc_candidates() -> list[Path]:
 
 def tcc_protected_roots() -> list[Path]:
     """The user dirs macOS gates behind per-app TCC consent. A launchd job gets no consent
-    prompt — it just fails to read — so an install tree must not live under any of these."""
+    prompt — it just fails to read — so an install tree must not live under any of these.
+
+    Empty elsewhere: nothing else has this concept, and a check against a list that means nothing
+    would refuse install locations for no reason.
+    """
+    if sys.platform != "darwin":
+        return []
     home = _home()
     return [home / "Documents", home / "Desktop", home / "Downloads"]
 
@@ -313,7 +376,16 @@ def ensure_private_dir(path: Path) -> Path:
 
 def _ensure(path: Path, mode: int) -> Path:
     """Create a directory with an exact mode, from creation (umask neutralized so a sensitive
-    mode like 0700 is never widened, and never applied via a post-creation chmod window)."""
+    mode like 0700 is never widened, and never applied via a post-creation chmod window).
+
+    Windows ignores the mode, and there is no attempt to emulate it. Privacy there rests on the
+    profile: %LOCALAPPDATA% is already unreadable by other non-administrator users, which is the
+    same protection Claude Code relies on for its own credentials. Faking a chmod that enforced
+    nothing would only make the code look like it had done something.
+    """
+    if os.name == "nt":
+        path.mkdir(parents=True, exist_ok=True)
+        return path
     old_umask = os.umask(0)
     try:
         path.mkdir(mode=mode, parents=True, exist_ok=True)

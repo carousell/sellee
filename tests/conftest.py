@@ -141,10 +141,16 @@ def make_ctx(bus, store, xdg_tmp):
 
 @pytest.fixture
 def xdg_tmp(tmp_path, monkeypatch):
-    """Point HOME and every XDG_*_HOME at a fresh tmpdir so path resolution is hermetic."""
+    """Point the home directory and every XDG_*_HOME at a fresh tmpdir so path resolution is
+    hermetic.
+
+    Both spellings of home, because Path.home() reads USERPROFILE on Windows: setting only HOME
+    there would leave nearly every test writing into the real profile.
+    """
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))

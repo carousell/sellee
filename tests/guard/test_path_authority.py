@@ -23,6 +23,11 @@ FORBIDDEN = (
     re.compile(r"\.expanduser\b"),
     re.compile(r"\bXDG_[A-Z_]+\b"),
     re.compile(r"\bos\.environ\b.*\bHOME\b"),
+    # The Windows spellings of the same thing. Without these the guard would hold on macOS and
+    # quietly permit a second path authority to grow on Windows.
+    re.compile(r"\bUSERPROFILE\b"),
+    re.compile(r"\bLOCALAPPDATA\b"),
+    re.compile(r"\bAPPDATA\b"),
 )
 
 
