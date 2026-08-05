@@ -4,14 +4,40 @@ Conventions for anyone (human or agent) writing code in this repo. This
 codebase must stand on its own; the design plans live in a separate projects
 repo and are not present here.
 
-## Runtime is stdlib-only
+## Runtime is the stdlib plus a small, reviewed dependency set
 
-Nothing under `src/` may import a non-stdlib package — the user's own `python3`
-is the only runtime dependency, and there is no pip install step on a user
-machine. This is enforced mechanically: `tests/guard/test_stdlib_only.py`
-walks every import under `src/` and fails on any third-party module (and on
-network imports outside an explicit allowlist). Dev/test dependencies (pytest,
-ruff) live in the `[dev]` extra and never appear under `src/`.
+The runtime is not the user's `python3`. `uv` provisions a standalone CPython at
+the version `.python-version` pins, and installs dependencies from `uv.lock`
+into a venv that belongs to the install. Nothing about the machine's own Python
+matters — that is the point, and it is what removed the largest class of install
+failure.
+
+Code under `src/` may import the stdlib and the packages in
+`ALLOWED_RUNTIME_DEPS` (`tests/guard/test_stdlib_only.py`), and nothing else.
+Adding a runtime dependency means all three of:
+
+1. an entry in `[project].dependencies` in `pyproject.toml`,
+2. a relocked, committed `uv.lock`,
+3. an entry in `ALLOWED_RUNTIME_DEPS`.
+
+Do all three in one commit and say in the message why the dependency is worth
+it. This is a supply-chain grant on a machine holding marketplace credentials
+and a logged-in browser, so it is a review decision, not a convenience. The
+guard fails any import that skipped the path, and also fails an allowlisted name
+that is not actually installed.
+
+Dev tooling (pytest, ruff, pyright, the MCP SDK) lives in the `dev`
+**dependency group** and never appears under `src/`. `uv sync` includes it;
+`uv sync --no-dev` is what a user's install runs.
+
+Our own package is deliberately *not* installed into the venv
+(`tool.uv.package = false`): the launcher and pytest put `src/` on the path
+themselves. An editable install would build this package on a user's machine
+during setup and leave a path pinned into a version directory that `update`
+prunes.
+
+`make bootstrap` sets all of this up locally; it calls the same `./setup` path a
+user does.
 
 ## Network access is allowlisted
 
@@ -29,20 +55,23 @@ what makes "an unbound channel consumes nothing" a state of one thread rather
 than a convention; keep it that way (a guard also pins that the channel *core*
 imports no provider).
 
-## Python 3.9 floor
+## The interpreter is pinned; the syntax floor deliberately lags it
 
-The runtime floor is Python 3.9 (macOS Command Line Tools). The suite must pass
-on it — run `make test-3.9`. Syntax discipline:
+The runtime is the CPython version in `.python-version` (3.14), provisioned by
+uv. There is no older interpreter to stay compatible with.
 
-- `from __future__ import annotations` at the top of every module.
-- No `match` statements.
-- No runtime `X | Y` unions. In annotations they are fine (postponed
-  annotations make them strings); ruff is pinned to `py39` and will flag
-  runtime uses.
-- No `tomllib` (3.11+).
+The **syntax** floor has not moved yet, though: `ruff` is still pinned to
+`target-version = "py39"`, and the tree is still written that way —
+`from __future__ import annotations` everywhere, no `match`, no runtime `X | Y`
+unions, no `tomllib`. That is on purpose. Modernizing is a mechanical sweep worth
+doing as one reviewable diff rather than drifting in a file at a time, so until
+that sweep happens, keep writing to the existing style and let ruff hold the
+line.
 
-`ruff` with `target-version = "py39"` is a second mechanical enforcer of the
-floor — it flags 3.10+ syntax at lint time.
+Two things follow from the pin that you *can* rely on: the interpreter is always
+a final release (setup asks it directly, so a pre-release can never be what got
+provisioned), and dev tooling no longer needs version markers — the MCP
+conformance suite runs everywhere rather than skipping under an old floor.
 
 ## Imports are absolute
 
@@ -54,7 +83,7 @@ module never forces rewriting its own imports. Relative imports fail `make lint`
 ## Types are checked, not just written
 
 A static type checker runs via `make typecheck` (pyright, dev-only — it never
-ships, the runtime stays stdlib-only). It is scoped to the annotated store surface;
+ships). It is scoped to the annotated store surface;
 widening it to the rest of the tree is a separate decision. The store's stable
 record and ack returns are `TypedDict`s (a dict at runtime, a checked shape under
 the checker) — new store returns of that shape should be too. Two conventions the
@@ -73,10 +102,14 @@ checker now enforces rather than documents:
 Run these, green:
 
 ```sh
+make bootstrap  # once, or after a dependency change: uv, the interpreter, the deps
 make lint       # ruff check + ruff format --check
 make typecheck  # pyright over the annotated store surface
-make test       # and make test-3.9 if a 3.9 interpreter is available
+make test
 ```
+
+Every target runs through `uv run`, so what you test on is what a user's install
+runs on.
 
 Do **not** add GitHub Actions / CI workflows — CI is owner-managed to org
 conventions. The Makefile targets are the seam CI will call.
@@ -148,7 +181,7 @@ import tool or server modules, must not touch the store or the network, and must
 not read the clock except through a `now` parameter. A tool composes an engine
 with the store (one transaction per decision); the engine only decides. This is
 what keeps the money/safety logic unit-testable in isolation and the network-free
-guarantee structural (the stdlib-only guard would flag a stray `urllib`).
+guarantee structural (the import guard would flag a stray `urllib`).
 
 ## Secrets never cross the tool-read boundary
 

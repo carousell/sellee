@@ -7,8 +7,10 @@ subsystems land, this page becomes the index that links out to their docs.
 ## The one-process model
 
 selly-agent is a single long-running Python process, kept alive by the OS
-(launchd on macOS). It is stdlib-only at runtime: the user's own `python3` is
-the only runtime dependency, enforced by a guard test over `src/` imports.
+(launchd on macOS). Its runtime is provisioned rather than assumed: uv installs a
+standalone CPython at a pinned version plus a short, hash-locked dependency set
+into a venv owned by the install, and a guard test over `src/` imports fails
+anything outside the stdlib and that reviewed list.
 Concurrency is a few threads sharing SQLite state.
 
 Everything is reachable from one front door: `bin/selly-agent` resolves the
@@ -18,7 +20,7 @@ uninstall`, `logs`, `chat`, `version`). launchd's job points at this launcher.
 ## Layout
 
 ```
-setup                     the installer's front door (POSIX sh; checks python3, then hands over)
+setup                     the installer's front door (POSIX sh; provisions uv + Python, hands over)
 install.sh                the curl bootstrap (verify a release, run its own ./setup)
 bin/selly-agent          CLI launcher
 src/selly_agent/          the package
@@ -268,11 +270,15 @@ variables at a temporary directory.
 
 ## Conventions
 
-- Stdlib only at runtime; dev tools (pytest, ruff, the MCP SDK conformance
-  client) live in the `[dev]` extra. A module under `src/` that imports a network
-  stdlib package must be added to the guard's network allowlist deliberately.
-- Python 3.9 is the floor; ruff is pinned to `py39`. The MCP conformance tests
-  need 3.10+ and skip on the floor.
+- The stdlib plus an allowlisted dependency set at runtime; dev tools (pytest,
+  ruff, pyright, the MCP SDK conformance client) live in the `dev` dependency
+  group. Adding a runtime dependency takes `pyproject.toml`, a relocked
+  `uv.lock`, and the guard's allowlist. A module under `src/` that imports a
+  network stdlib package must be added to the guard's network allowlist
+  deliberately.
+- The interpreter is pinned by `.python-version`; ruff stays on `py39` because
+  the syntax sweep is deliberately separate. The MCP conformance tests run
+  everywhere now.
 - State changes go through typed code, one writer per store; the LLM reaches
   state only through the typed MCP tools (no Bash in headless passes).
 - Guard tests under `tests/guard/` enforce the load-bearing rules.

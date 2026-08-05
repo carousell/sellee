@@ -58,22 +58,30 @@ of how this repo is put together, see [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE
 
 ## Runtime constraints
 
-- **Python stdlib only at runtime.** The user's own `python3` is the only
-  runtime dependency — there is no pip install step on a user machine. A guard
-  test fails the suite if any module under `src/` imports a non-stdlib package.
-- **Python 3.9 is the floor.** macOS Command Line Tools ship 3.9; the suite
-  must pass on it. In practice: `from __future__ import annotations` in every
-  module, no `match`, no runtime `X | Y` unions (annotations are fine), no
-  `tomllib`.
+- **The runtime is provisioned, not assumed.** `uv` installs a standalone
+  CPython at the version `.python-version` pins and the dependencies `uv.lock`
+  pins, into a venv belonging to the install. A machine needs no Python of its
+  own, and whatever it has is not used — which is what removed the biggest
+  source of failed installs.
+- **Runtime dependencies are a short reviewed list.** Code under `src/` may
+  import the stdlib and the packages in `ALLOWED_RUNTIME_DEPS`; a guard test
+  fails the suite on anything else. Adding one means `pyproject.toml`, a
+  relocked `uv.lock`, and that allowlist — treated as a supply-chain decision,
+  since this process holds marketplace credentials and drives a logged-in
+  browser.
+- **The syntax floor lags the interpreter on purpose.** The tree is still
+  written 3.9-style (`from __future__ import annotations`, no `match`, no
+  runtime `X | Y` unions, no `tomllib`) with ruff pinned to `py39`; modernizing
+  it is a single deliberate sweep, not a drift.
 
 ## Dev quickstart
 
-Dev/test tooling (pytest, ruff) lives in the `[dev]` extra — never under
-`src/`.
+Dev/test tooling (pytest, ruff, pyright, the MCP SDK) lives in the `dev`
+dependency group — never under `src/`.
 
 ```sh
-make test            # pytest on the current interpreter
-make test-3.9        # the suite on a 3.9 interpreter (skips with a note if absent)
+make bootstrap       # uv, the pinned interpreter, and the dependencies
+make test            # pytest on the pinned interpreter
 make lint            # ruff check + ruff format --check
 make fmt             # ruff format
 
@@ -143,7 +151,7 @@ Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 ## Layout
 
 ```
-setup                      the installer's front door: check python3, exec bin/selly-agent setup
+setup                      the installer's front door: provision uv + the pinned Python, exec bin/selly-agent setup
 install.sh                 the curl bootstrap: verify a release, hand off to its own ./setup
 bin/selly-agent            single CLI launcher (resolves src/, dispatches argv)
 src/selly_agent/

@@ -57,7 +57,7 @@ token.
 ## The tool registry
 
 A `ToolSpec` is declarative data: name, an input schema (a small hand-rolled
-JSON-Schema subset — stdlib-only rules out `jsonschema`), the names of its secret
+JSON-Schema subset — not worth a dependency), the names of its secret
 parameters, the session tiers allowed to see it, and a handler. Tools register at
 import.
 
