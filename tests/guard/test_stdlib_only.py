@@ -37,6 +37,7 @@ NETWORK_ALLOWLIST: set[str] = {
     "selly_agent/mcp_proxy.py",  # stdio shim forwarding JSON-RPC to the daemon over HTTP
     "selly_agent/control.py",  # the one client for the daemon's localhost control routes
     "selly_agent/installer/update.py",  # fetches the release archive and its checksums
+    "selly_agent/installer/runtime.py",  # fetches the pinned uv release archive
     "selly_agent/rail/client.py",  # carousell.ai MCP client + live listing verify
     "selly_agent/rail/provision.py",  # carousell.ai guest-key provisioning
     "selly_agent/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)

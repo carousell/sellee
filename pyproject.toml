@@ -56,6 +56,7 @@ selly_agent = [
     "migrations/*/*.sql",
     "data/*.json",
     "data/*.html",
+    "data/*.txt",
     "skills/*.md",
     "skills/commands/*.md",
 ]
