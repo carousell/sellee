@@ -10,16 +10,6 @@ from selly_agent.installer import materialize
 
 
 @pytest.fixture
-def tree(tmp_path):
-    root = tmp_path / "checkout"
-    (root / "bin").mkdir(parents=True)
-    (root / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
-    (root / "src" / "selly_agent").mkdir(parents=True)
-    (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '1.0.0'\n")
-    return root
-
-
-@pytest.fixture
 def installed(xdg_tmp, tree, monkeypatch):
     """A complete install: a version, a shim, a launchd job, data, secrets and an rc block."""
     platform = FakePlatform()

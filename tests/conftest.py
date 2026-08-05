@@ -8,7 +8,7 @@ import time
 
 import pytest
 
-from selly_agent import migrations
+from selly_agent import migrations, paths
 from selly_agent.config import Config
 from selly_agent.db import Database
 from selly_agent.events import EventBus, EventStore
@@ -150,3 +150,51 @@ def xdg_tmp(tmp_path, monkeypatch):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(tmp_path / "cache"))
     return tmp_path
+
+
+@pytest.fixture
+def tree(tmp_path):
+    """A minimal selly-agent tree: what a checkout or an unpacked release looks like.
+
+    Lives here rather than in each installer test module because it has to stay in step with
+    what a version directory is required to contain — miss a file and staging produces a version
+    that cannot build its own dependencies.
+    """
+    root = tmp_path / "checkout"
+    (root / "bin").mkdir(parents=True)
+    (root / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
+    (root / "src" / "selly_agent" / "__pycache__").mkdir(parents=True)
+    (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '9.9.9'\n")
+    (root / "src" / "selly_agent" / "__pycache__" / "stale.pyc").write_text("junk")
+    (root / "README.md").write_text("docs\n")
+    (root / "pyproject.toml").write_text("[project]\nname = 'selly-agent'\n")
+    (root / "uv.lock").write_text("version = 1\n")
+    (root / ".python-version").write_text("3.14\n")
+    (root / ".git").mkdir()
+    (root / ".git" / "HEAD").write_text("ref: refs/heads/master\n")
+    # A dev checkout has its own venv, holding absolute paths that would be wrong once copied.
+    (root / ".venv" / "bin").mkdir(parents=True)
+    (root / ".venv" / "bin" / "python").write_text("#!/bin/sh\n")
+    return root
+
+
+@pytest.fixture(autouse=True)
+def stub_provision(monkeypatch):
+    """Stand in for building a version's venv.
+
+    Autouse so no test can accidentally download an interpreter and a wheel set: provisioning
+    against real uv belongs in tests/integration. Records what it was asked to provision.
+    """
+    from selly_agent.installer import runtime
+
+    provisioned = []
+
+    def fake(dest, **kwargs):
+        provisioned.append(dest)
+        interpreter = paths.venv_python(dest)
+        interpreter.parent.mkdir(parents=True, exist_ok=True)
+        interpreter.write_text("#!/bin/sh\n")
+        return interpreter
+
+    monkeypatch.setattr(runtime, "provision", fake)
+    return provisioned

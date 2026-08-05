@@ -28,16 +28,6 @@ from selly_agent.installer import region as region_guess
 
 
 @pytest.fixture
-def tree(tmp_path):
-    root = tmp_path / "checkout"
-    (root / "bin").mkdir(parents=True)
-    (root / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
-    (root / "src" / "selly_agent").mkdir(parents=True)
-    (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '9.9.9'\n")
-    return root
-
-
-@pytest.fixture
 def world(monkeypatch, xdg_tmp, tree):
     """Every gate passing, a launchctl that only records, and a daemon that comes up."""
     platform = FakePlatform()
