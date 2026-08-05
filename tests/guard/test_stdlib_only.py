@@ -1,11 +1,14 @@
-"""Runtime code must be stdlib-only, and plan-02 code must do no network I/O.
+"""Runtime code may import the stdlib plus an explicit dependency allowlist, and nothing else.
 
-The install story depends on the user's own python3 being the only runtime dependency,
-so a stray pip import has to fail here — in the suite — not on a tester's machine. This
-walks every import under src/ and fails on any module that is neither our own package nor
-part of the standard library. It also enforces that no network module is imported outside
-an explicit allowlist (empty today; later workstreams that add the update check / channel
-poller extend it).
+Dependencies arrive through a uv-managed runtime, which makes adding one easy — so the
+guard is what keeps it deliberate. Every runtime dependency is a capability grant on a
+machine holding marketplace credentials and a logged-in browser, and it has to appear in
+three places to work: pyproject's dependencies, a relocked uv.lock, and ALLOWED_RUNTIME_DEPS
+below. An import that skipped that path fails here, in the suite, rather than on a seller's
+machine. This walks every import under src/ and flags anything that is neither ours, nor
+stdlib, nor allowlisted.
+
+It also enforces that no network module is imported outside a separate explicit allowlist.
 """
 
 from __future__ import annotations
@@ -19,6 +22,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 OWN_TOP_LEVEL = "selly_agent"
+
+# Third-party packages runtime code may import. Keep in sync with [project].dependencies in
+# pyproject.toml — this set is the review gate, so a name appears here only alongside a
+# relocked uv.lock and a reviewer who accepted the dependency.
+ALLOWED_RUNTIME_DEPS = {"psutil"}
 
 # Network / async modules a runtime module may not import unless its src-relative path is
 # listed here. Every entry is a deliberate decision: adding a module here means it is allowed
@@ -86,15 +94,41 @@ def _src_files() -> list[Path]:
     return sorted(SRC.rglob("*.py"))
 
 
+def _disallowed_imports(tree: ast.AST, allowed: set) -> set:
+    """The imported top-level names a module may not use, given the allowed dependency set."""
+    return {
+        top
+        for top in _imported_top_levels(tree)
+        if top != OWN_TOP_LEVEL and top not in allowed and not _is_stdlib(top)
+    }
+
+
 def test_no_non_stdlib_imports_under_src() -> None:
     offenders: list[str] = []
     for path in _src_files():
         tree = ast.parse(path.read_text(), filename=str(path))
-        for top in _imported_top_levels(tree):
-            if top == OWN_TOP_LEVEL or _is_stdlib(top):
-                continue
+        for top in sorted(_disallowed_imports(tree, ALLOWED_RUNTIME_DEPS)):
             offenders.append(f"{path.relative_to(ROOT)}: {top}")
-    assert not offenders, "non-stdlib imports under src/:\n" + "\n".join(offenders)
+    assert not offenders, (
+        "imports under src/ that are neither stdlib nor an allowlisted dependency:\n"
+        + "\n".join(offenders)
+    )
+
+
+def test_allowlisted_dependency_is_importable() -> None:
+    """An allowlisted name must actually resolve — otherwise the allowlist is documentation
+    and the runtime it describes was never provisioned."""
+    unresolvable = [name for name in ALLOWED_RUNTIME_DEPS if importlib.util.find_spec(name) is None]
+    assert not unresolvable, f"allowlisted but not installed: {unresolvable} — run `make bootstrap`"
+
+
+def test_guard_still_rejects_a_non_allowlisted_dependency() -> None:
+    """The allowlist widened the guard by exactly its own contents, and no further."""
+    source = "import psutil\nimport requests\nfrom flask import Flask\n"
+    tree = ast.parse(source)
+    assert _disallowed_imports(tree, ALLOWED_RUNTIME_DEPS) == {"requests", "flask"}
+    # With an empty allowlist even psutil is an offender, so the set is doing the work.
+    assert "psutil" in _disallowed_imports(tree, set())
 
 
 def test_no_network_imports_outside_allowlist() -> None:

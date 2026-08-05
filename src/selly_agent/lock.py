@@ -19,6 +19,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+import psutil
+
 log = logging.getLogger(__name__)
 
 
@@ -32,19 +34,11 @@ class LockResult:
 
 
 def is_pid_alive(pid: int | None) -> bool:
-    """True if a process with `pid` exists. Signal 0 is the standard liveness probe:
-    ProcessLookupError → dead; PermissionError → alive but another user's. Garbage → dead."""
+    """True if a process with `pid` exists — including one owned by another user, and including
+    a zombie the daemon has not been reaped yet. Garbage (None, 0, negative) → dead."""
     if not isinstance(pid, int) or pid <= 0:
         return False
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
+    return psutil.pid_exists(pid)
 
 
 def read_holder_pid(lock_path: Path) -> int | None:
