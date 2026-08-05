@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 
 
@@ -38,7 +39,14 @@ def become(argv) -> int:
     resolved = resolve(argv)
     if os.name != "nt":
         os.execv(resolved[0], resolved)  # never returns
-    return subprocess.run(resolved).returncode  # noqa: S603 — argv is composed by the caller
+    # Ctrl+C belongs to the child while it runs: it shares the console and gets the event
+    # itself, and run() would answer the parent's KeyboardInterrupt by killing the very child
+    # it handed the terminal to — so the waiting parent ignores the interrupt instead.
+    previous = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        return subprocess.run(resolved).returncode  # noqa: S603 — argv is composed by the caller
+    finally:
+        signal.signal(signal.SIGINT, previous)
 
 
 def detached_flags() -> dict:

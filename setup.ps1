@@ -27,8 +27,9 @@ $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
 # The output is a transcript someone reads while deciding whether to continue, so it has to be
-# legible: UTF-8 for the box-drawing and the ticks, and virtual-terminal processing for the colour.
-# Both are per-process, so nothing about the machine's console is changed permanently.
+# legible: UTF-8 for the box-drawing and the ticks. Per-process, so nothing about the machine's
+# console is changed permanently. (Colour is the installer's own business — it only emits VT
+# sequences where the host is known to render them.)
 [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
 $env:PYTHONUTF8 = '1'
 $env:PYTHONIOENCODING = 'utf-8'

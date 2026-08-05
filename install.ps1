@@ -17,20 +17,18 @@ $RepoUrl = 'https://github.com/carousell/selly-agent'
 $BaseUrl = $env:SELLY_INSTALL_BASE_URL
 
 function Say([string]$Message) { Write-Output $Message }
-function Die([string]$Message) {
-    [Console]::Error.WriteLine($Message)
-    exit 1
-}
+# `throw`, never `exit`: the advertised invocation is `irm | iex`, which runs this text inside
+# the person's own session — `exit` there closes their window rather than returning to a prompt.
+function Die([string]$Message) { throw $Message }
 
 # --- not yet ---------------------------------------------------------------------------------
 # Release hosting is not public yet, so the honest answer is that this path does not work rather
 # than a 404 halfway through. Setting a base URL is how an end-to-end test exercises the real code
 # path. REMOVE THIS BLOCK at cutover, when releases are published.
 if (-not $BaseUrl) {
-    [Console]::Error.WriteLine("installing with this script isn't supported yet.")
     [Console]::Error.WriteLine('  Clone the repo and run .\setup.ps1 instead:')
     [Console]::Error.WriteLine("    git clone $RepoUrl; cd selly-agent; .\setup.ps1")
-    exit 1
+    Die "installing with this script isn't supported yet."
 }
 
 # --dev points the install at the tree it was run from, and this one is a temp directory deleted
@@ -104,8 +102,10 @@ try {
     # No stdin juggling: `irm | iex` runs this script from a string rather than piping it through
     # stdin, so the console is still attached and setup's prompts reach the person at it.
     & $entry @Forwarded
-    exit $LASTEXITCODE
+    $setupExit = $LASTEXITCODE
 }
 finally {
     Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
 }
+# Reported as an error rather than `exit`ed for the same session-survival reason as Die above.
+if ($setupExit -ne 0) { Die "setup.ps1 exited with status $setupExit." }

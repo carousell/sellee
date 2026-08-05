@@ -61,11 +61,24 @@ def _run(args, ui: Ui) -> int:
             if materialize.remove_rc_block(rc_file):
                 ui.say(f"removed the PATH line from {rc_file}")
 
+    residue = []
     for target in _roots_to_remove(preserve):
         _remove(target)
-        ui.say(f"removed {target}")
+        if target.exists():
+            residue.append(target)
+        else:
+            ui.say(f"removed {target}")
     ui.say("")
-    ui.say("Done.")
+    if residue:
+        # Named rather than silent: rmtree swallows what it cannot delete, and on Windows that
+        # is guaranteed to include the interpreter this very uninstall runs on — the OS will not
+        # remove a running executable.
+        ui.warn("could not remove everything; still there:")
+        for target in residue:
+            ui.say(f"  {target}")
+        ui.say("Delete these by hand once nothing of selly-agent is running.")
+        ui.say("")
+    ui.say("Done." if not residue else "Done, with the leftovers named above.")
     return 0
 
 

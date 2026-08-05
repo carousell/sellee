@@ -83,8 +83,12 @@ if _target is not None:
     if os.name == "nt":
         # Windows has no exec that replaces the caller: it would start the real process and let
         # this one return, so the command would appear to finish while the work was elsewhere.
+        # Ctrl+C belongs to the child while this parent waits — run() would otherwise answer the
+        # interrupt by killing the child it handed the terminal to.
+        import signal
         import subprocess
 
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         raise SystemExit(subprocess.run(_argv).returncode)
     os.execv(_target, _argv)
 

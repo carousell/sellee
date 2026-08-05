@@ -29,10 +29,16 @@ _CMD_SHIM = """\
 @echo off
 setlocal
 set "SELLY_LAUNCHER={target}"
-if not exist "%SELLY_LAUNCHER%" (
-  rem An update is mid-swap: the pointer is gone for a moment. Wait rather than fail.
-  timeout /t 1 /nobreak >nul 2>&1
-)
+set /a SELLY_TRIES=0
+:selly_wait
+if exist "%SELLY_LAUNCHER%" goto selly_run
+rem An update is mid-swap: the pointer is gone for a moment. Wait rather than fail — and keep
+rem waiting a few rounds, because a scanner holding the old target can stretch the moment.
+set /a SELLY_TRIES+=1
+if %SELLY_TRIES% geq 5 goto selly_run
+timeout /t 1 /nobreak >nul 2>&1
+goto selly_wait
+:selly_run
 "{interpreter}" "%SELLY_LAUNCHER%" %*
 """
 

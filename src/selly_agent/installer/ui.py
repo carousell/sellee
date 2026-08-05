@@ -83,7 +83,20 @@ class Ui:
     def _detect_color(self) -> bool:
         if os.environ.get("NO_COLOR"):
             return False
-        return bool(getattr(self.stream, "isatty", lambda: False)())
+        if not getattr(self.stream, "isatty", lambda: False)():
+            return False
+        if os.name != "nt":
+            return True
+        # A classic Windows console does not process VT sequences unless its host enabled them,
+        # and raw escape bytes are worse than no colour. These are the hosts known to render
+        # them; a bare conhost/cmd.exe gets plain text.
+        return bool(
+            os.environ.get("WT_SESSION")
+            or os.environ.get("TERM_PROGRAM")
+            or os.environ.get("ANSICON")
+            or os.environ.get("ConEmuANSI") == "ON"
+            or "xterm" in (os.environ.get("TERM") or "")
+        )
 
     @property
     def width(self) -> int:

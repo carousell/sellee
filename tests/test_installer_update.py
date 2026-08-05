@@ -577,3 +577,75 @@ def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(
     printed = capsys.readouterr()
     assert printed.err.startswith("selly-agent: uv could not install Python 3.14")
     assert "Traceback" not in printed.err
+
+
+# --- safe_members shape refusals ----------------------------------------------------------------
+
+
+def _archive_with_member(tmp_path, name: str):
+    import io
+
+    archive_path = tmp_path / "hostile.tar.gz"
+    with tarfile.open(archive_path, "w:gz") as tar:
+        info = tarfile.TarInfo(name=name)
+        info.size = 1
+        tar.addfile(info, io.BytesIO(b"x"))
+    return archive_path
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "../outside",
+        "/abs/path",
+        r"C:\evil.txt",
+        "C:/evil.txt",
+        r"\\server\share\evil.txt",
+    ],
+)
+def test_extraction_refuses_members_that_escape_the_destination(tmp_path, name) -> None:
+    """Absolute, drive-lettered and UNC member names are refused by shape — what a hostile join
+    yields depends on the host's path rules, and this property must not."""
+    archive = _archive_with_member(tmp_path, name)
+    with tarfile.open(archive) as tar, pytest.raises(UpdateError):
+        list(update_mod.safe_members(tar, tmp_path / "dest"))
+
+
+def test_extraction_accepts_an_ordinary_relative_member(tmp_path) -> None:
+    archive = _archive_with_member(tmp_path, "selly-agent-1.0.0/bin/selly-agent")
+    with tarfile.open(archive) as tar:
+        assert [m.name for m in update_mod.safe_members(tar, tmp_path / "dest")] == [
+            "selly-agent-1.0.0/bin/selly-agent"
+        ]
+
+
+# --- rollback under a scanner's grip --------------------------------------------------------------
+
+
+def test_restore_retries_while_a_scanner_holds_the_file(xdg_tmp, monkeypatch) -> None:
+    """An antivirus scanner can hold a just-closed database for a moment; a rollback that dies on
+    that moment leaves the install half-restored."""
+    paths.ensure_runtime_dirs()
+    snapshot = paths.backups_dir()
+    snapshot.mkdir(parents=True, exist_ok=True)
+    snapshot = snapshot / "selly-1.0.0-pre-1.db"
+    snapshot.write_text("the snapshot")
+
+    import shutil as shutil_mod
+
+    real_copy2 = shutil_mod.copy2
+    attempts = {"n": 0}
+
+    def flaky_copy2(src, dst):
+        attempts["n"] += 1
+        if attempts["n"] < 3:
+            raise PermissionError("held by a scanner")
+        return real_copy2(src, dst)
+
+    monkeypatch.setattr(update_mod.shutil, "copy2", flaky_copy2)
+    monkeypatch.setattr(update_mod.time, "sleep", lambda _s: None)
+
+    update_mod.restore_snapshot(snapshot)
+
+    assert attempts["n"] == 3
+    assert paths.selly_db().read_text() == "the snapshot"

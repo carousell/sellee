@@ -194,9 +194,7 @@ class WindowsPlatform(Platform):
             )
         created = self._schtasks("/Create", "/TN", label, "/XML", str(config_path), "/F")
         if created.returncode != 0:
-            raise RegistrationError(
-                f"the task definition was not accepted: {_last_line(created)}"
-            )
+            raise RegistrationError(f"the task definition was not accepted: {_last_line(created)}")
         run = self._schtasks("/Run", "/TN", label)
         if run.returncode != 0:
             raise RegistrationError(f"the task was registered but did not start: {_last_line(run)}")

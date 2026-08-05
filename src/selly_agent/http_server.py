@@ -130,7 +130,7 @@ class HttpServer:
         # does. None in a single-tick run, which has nothing to interrupt.
         self.stop_event = stop_event
         self.auth = Auth(attended_token)
-        self._httpd = ThreadingHTTPServer((host, port), _Handler)
+        self._httpd = _Server((host, port), _Handler)
         self._httpd.daemon_threads = True
         self._httpd.app = self  # the handler reaches shared state via self.server.app
         self._thread: threading.Thread | None = None
@@ -170,6 +170,13 @@ def _localhost_origin(header: str | None) -> bool:
         return True
     parsed = urlparse(header)
     return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _LOCALHOST_NAMES
+
+
+class _Server(ThreadingHTTPServer):
+    # The default (SO_REUSEADDR on) is harmless on POSIX, but on Windows it lets this bind land
+    # on a port another process is actively using — and a second daemon sharing the port is
+    # exactly the double-bind the loud startup failure exists to surface.
+    allow_reuse_address = os.name != "nt"
 
 
 class _Handler(BaseHTTPRequestHandler):

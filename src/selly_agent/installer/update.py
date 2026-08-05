@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from selly_agent import __version__, config, heartbeat, paths, supervisor
-from selly_agent.installer import materialize, runtime
+from selly_agent.installer import checks, materialize, runtime
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +132,12 @@ def safe_members(archive: tarfile.TarFile, dest: Path):
     """
     dest = dest.resolve()
     for member in archive.getmembers():
+        # Absolute, drive-lettered and UNC names are refused by shape, not just by containment:
+        # joining an absolute segment discards the base entirely, and what that yields depends
+        # on the host's path rules — a property this explicit check does not lean on.
+        raw = member.name.replace("\\", "/")
+        if raw.startswith("/") or ":" in raw.split("/", 1)[0]:
+            raise UpdateError(f"refusing archive: {member.name!r} is not a relative path")
         target = (dest / member.name).resolve()
         if target != dest and dest not in target.parents:
             raise UpdateError(f"refusing archive: {member.name!r} would write outside {dest}")
@@ -222,16 +228,36 @@ def latest_snapshot():
     return found[-1] if found else None
 
 
+_RESTORE_ATTEMPTS = 5
+_RESTORE_BACKOFF_SEC = 0.5
+
+
+def _retry_permission_denied(operation):
+    """Run `operation`, retrying briefly on PermissionError.
+
+    On Windows an antivirus scanner holds a just-closed file for a moment; a rollback that dies
+    on that moment leaves the install half-restored, which is the one state this whole path
+    exists to prevent.
+    """
+    for attempt in range(_RESTORE_ATTEMPTS):
+        try:
+            return operation()
+        except PermissionError:
+            if attempt == _RESTORE_ATTEMPTS - 1:
+                raise
+            time.sleep(_RESTORE_BACKOFF_SEC * (attempt + 1))
+
+
 def restore_snapshot(snapshot: Path) -> None:
     """Put a snapshot back as selly.db. The daemon must be stopped: this replaces the file it
     would otherwise be holding open."""
-    shutil.copy2(snapshot, paths.selly_db())
+    _retry_permission_denied(lambda: shutil.copy2(snapshot, paths.selly_db()))
     # A WAL alongside a restored database describes the *replaced* one, and replaying it would
     # undo the restore. The snapshot is a complete, checkpointed copy, so they can go.
     for suffix in ("-wal", "-shm"):
         sidecar = paths.selly_db().with_name(paths.selly_db().name + suffix)
         if sidecar.exists():
-            sidecar.unlink()
+            _retry_permission_denied(sidecar.unlink)
 
 
 # --- the daemon around the swap -------------------------------------------------------------------
@@ -440,8 +466,7 @@ def _clear_cache(*, keep) -> None:
 
 
 def _summarise(result) -> str:
-    glyph = {"ok": "✅", "warn": "⚠️", "fail": "❌"}.get(result.status, "•")
-    return f"{glyph} {result.name}"
+    return f"{checks.glyph(result.status)} {result.name}"
 
 
 def _roll_back_to(target, mode: str, out, *, migrated_after: float, platform=None) -> None:

@@ -99,3 +99,16 @@ def test_a_foreign_plist_with_our_label_is_left_alone(installed) -> None:
     uninstall_main("--yes")
 
     assert plist.read_text() == "<plist>someone else's daemon</plist>"
+
+
+def test_what_cannot_be_removed_is_named_rather_than_silent(installed, monkeypatch, capsys) -> None:
+    """rmtree swallows what it cannot delete — and on Windows that is guaranteed to include the
+    interpreter the uninstall itself runs on, so the report is the honesty, not an edge case."""
+    monkeypatch.setattr(uninstall_cli, "_remove", lambda target: None)
+
+    assert uninstall_main("--yes") == 0
+
+    out = capsys.readouterr().out
+    assert "could not remove everything" in out
+    assert str(paths.state_dir()) in out
+    assert "Done, with the leftovers named above." in out
