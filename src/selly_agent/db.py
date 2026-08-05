@@ -1,10 +1,10 @@
 """SQLite access — WAL, one write connection per DB behind a lock, read-only readers.
 
-Zero-pip is load-bearing for the install story, so this is stdlib sqlite3: no ORM. WAL gives
-concurrent readers (the logs tail / web tail) by construction. The write connection runs in
-autocommit mode (isolation_level=None) with explicit BEGIN IMMEDIATE / COMMIT, because 3.9's
-sqlite3 has no autocommit parameter and implicit transactions muddy DDL. All writes go through
-the one connection serialized by a lock; readers open independent read-only URI connections.
+State is stdlib sqlite3 and no ORM: the schema is small and the migrations are explicit SQL. WAL
+gives concurrent readers (the logs tail / web tail) by construction. The write connection runs in
+autocommit mode (isolation_level=None) with explicit BEGIN IMMEDIATE / COMMIT, because implicit
+transactions muddy DDL. All writes go through the one connection serialized by a lock; readers
+open independent read-only URI connections.
 """
 
 from __future__ import annotations
@@ -33,10 +33,20 @@ def connect_writer(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def read_only_uri(path: Path) -> str:
+    """The `file:` URI addressing `path` read-only.
+
+    Built rather than interpolated: `file:C:\\Users\\...` is not a URI — SQLite reads the drive
+    letter as a scheme and the backslashes as literal characters, and opens the wrong database or
+    none. as_uri() gives the `file:///C:/...` form, and escapes what needs escaping.
+    """
+    return f"{Path(path).absolute().as_uri()}?mode=ro"
+
+
 def connect_reader(path: Path) -> sqlite3.Connection:
     """A read-only connection. Works whether or not a writer is live — even against a stopped
     daemon's file (the `logs` tail of history)."""
-    uri = f"file:{path}?mode=ro"
+    uri = read_only_uri(path)
     conn = sqlite3.connect(uri, uri=True, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _apply_pragmas(conn, writable=False)
