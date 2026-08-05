@@ -10,14 +10,10 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sys
 
 import pytest
 
 pytest.importorskip("mcp", reason="the MCP SDK is a dev-only conformance client")
-pytestmark = pytest.mark.skipif(
-    sys.version_info < (3, 10), reason="the MCP SDK requires Python 3.10+"
-)
 
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamablehttp_client  # noqa: E402
