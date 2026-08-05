@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import time
+from pathlib import Path
 
 import pytest
 
@@ -137,6 +140,18 @@ def make_ctx(bus, store, xdg_tmp):
         )
 
     return _make
+
+
+def assert_private(path, mode: int = 0o600) -> None:
+    """Assert that only the owner can reach `path`, where the OS enforces that with a mode.
+
+    Windows has none to assert: privacy there rests on the user profile that %LOCALAPPDATA% sits
+    inside, which is the same protection Claude Code relies on for its own credentials. Asserting
+    0600 there would fail on a file that is already as private as the platform makes files.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(Path(path).stat().st_mode) == mode
 
 
 @pytest.fixture

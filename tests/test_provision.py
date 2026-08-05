@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import stat
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from tests.conftest import assert_private
 
 from selly_agent import paths, secrets
 from selly_agent.rail import provision
@@ -52,7 +52,7 @@ def test_ensure_provisions_stores_0600_and_hides_key(xdg_tmp, guests_server) -> 
     assert status["status"] == "ok" and status["provisioned"] is True
     assert "api_key" not in status and "guest-abc" not in json.dumps(status)
     assert secrets.read_carousell_ai_api_key() == "guest-abc"
-    assert stat.S_IMODE(paths.carousell_ai_api_key_path().stat().st_mode) == 0o600
+    assert_private(paths.carousell_ai_api_key_path())
     assert server.last_country == "SG"  # normalized upper-case
 
 
