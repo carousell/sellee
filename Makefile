@@ -11,7 +11,7 @@ VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
 	import selly_agent; print(selly_agent.__version__)")
 STAGE = $(DIST)/selly-agent-$(VERSION)
 
-.PHONY: bootstrap test lint fmt typecheck dist
+.PHONY: bootstrap test lint fmt typecheck dist diagrams
 
 # Provision the toolchain this repo builds against: uv itself if it is missing or too old, the
 # pinned interpreter, then the dev dependency set. ./setup does the same thing for a user, from
@@ -21,6 +21,10 @@ bootstrap:
 
 test:
 	$(RUN) python -m pytest
+
+# Regenerate all diagrams (SVG + PNG) under docs/.
+diagrams:
+	docs/generate-diagrams.sh
 
 lint:
 	$(RUN) ruff check .
