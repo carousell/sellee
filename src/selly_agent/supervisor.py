@@ -35,14 +35,11 @@ def _resolve_platform(platform: Platform | None) -> Platform:
 def job_interpreter() -> Path:
     """The interpreter to name in the job definition.
 
-    Through `current`, not through the version it points at, so the definition stays true across
-    an update — and the update re-registers the job anyway, since the definition also names the
-    launcher's path.
-
-    Falls back to whatever is running us when there is no venv yet, which is the case for a
-    checkout pointed at by `./setup --dev` before it has been bootstrapped. Naming a
-    non-existent interpreter would produce a job that fails to start with nothing explaining
-    why; the launcher re-execs onto the venv on its own once one exists.
+    Through `current` rather than the version behind it, so the definition stays true across an
+    update. Falls back to whatever is running us when there is no venv — a checkout pointed at by
+    `./setup --dev` before bootstrapping — because naming an interpreter that does not exist gives
+    a job that fails to start with nothing explaining why, and the launcher re-execs onto the venv
+    by itself once there is one.
     """
     interpreter = paths.venv_python(paths.current())
     return interpreter if interpreter.exists() else Path(os.path.realpath(sys.executable))

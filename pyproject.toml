@@ -5,23 +5,20 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "selly-agent"
 description = "Local single-tenant agent that sells/buys on P2P marketplaces from the user's own machine"
-# The runtime is the interpreter uv pins (see .python-version), not whatever python3 a
-# machine happens to have — so this floor is a statement about the code, not an install
-# constraint a user could fail to meet.
+# uv pins the interpreter (see .python-version), so this floor describes the code, not a
+# precondition a user's machine could fail to meet.
 requires-python = ">=3.14"
 dynamic = ["version"]
-# Runtime dependencies are a short, deliberate list. Each one is a supply-chain grant on a
-# machine holding marketplace credentials and a logged-in browser, so adding one means:
-# an entry here, a relocked uv.lock, and a matching entry in ALLOWED_RUNTIME_DEPS in
-# tests/guard/test_stdlib_only.py — which fails the suite for any import not on that list.
-# The major bound is deliberate: a major bump should be a reviewed diff, not a relock.
+# Each runtime dependency is a supply-chain grant on a machine holding marketplace credentials
+# and a logged-in browser, so adding one takes three edits: here, a relocked uv.lock, and
+# ALLOWED_RUNTIME_DEPS in tests/guard/test_stdlib_only.py, which fails the suite otherwise.
+# The major bound keeps a major bump a reviewed diff rather than a relock.
 dependencies = [
     "psutil>=7,<8",
 ]
 
-# Dev tooling. A dependency *group* rather than an optional-dependencies extra, because
-# uv installs groups by default and excludes them with --no-dev: `uv sync` gives a working
-# dev tree, and the installer's `uv sync --no-dev` gives a user exactly the runtime deps.
+# Dev tooling. A dependency *group* rather than an extra, because uv installs groups by default
+# and drops them with --no-dev: one flag separates a dev tree from what a user's install gets.
 [dependency-groups]
 dev = [
     "pytest",
@@ -36,10 +33,9 @@ dev = [
 ]
 
 [tool.uv]
-# Dependencies only — never install selly-agent itself into the venv. An editable install
-# would run a build of this package on the user's machine mid-install and leave a .pth
-# holding an absolute path into a version directory that update prunes. The launcher and
-# pytest both put src/ on the path themselves, so nothing needs the install.
+# Dependencies only — never selly-agent itself. An editable install would build this package on
+# the user's machine mid-install and leave a .pth holding an absolute path into a version
+# directory that update prunes. The launcher and pytest both put src/ on the path already.
 package = false
 
 [tool.setuptools.dynamic]
@@ -66,9 +62,8 @@ pythonpath = ["src"]
 testpaths = ["tests"]
 
 [tool.ruff]
-# Deliberately behind requires-python. The runtime floor moved to 3.14, but the tree is
-# still written in 3.9-compatible syntax and modernizing it is its own sweep; pinning ruff
-# here keeps that sweep a single reviewable diff instead of drip-feeding new syntax in.
+# Deliberately behind requires-python: the tree is still written in 3.9-compatible syntax, and
+# pinning ruff here keeps modernizing it one reviewable sweep rather than a drip of new syntax.
 target-version = "py39"
 line-length = 100
 src = ["src", "tests"]

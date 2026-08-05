@@ -116,9 +116,8 @@ def tools_dir() -> Path:
 def uv_path() -> Path:
     """Our own copy of uv, invoked by absolute path.
 
-    Deliberately not ~/.local/bin: a user may have their own uv there, and taking that name — or
-    editing a shell profile to add another — is not ours to do. Living under the data root also
-    means an uninstall removes it by removing that root.
+    Deliberately not ~/.local/bin: a user may have their own uv there, and taking that name is not
+    ours to do. Under the data root, an uninstall removes it by removing that root.
     """
     return tools_dir() / ("uv.exe" if os.name == "nt" else "uv")
 
@@ -132,9 +131,9 @@ def venv_python(tree: Path) -> Path:
     """The interpreter inside a tree's venv: what the launcher re-execs onto and what the
     supervised job's definition names.
 
-    The bin/ vs Scripts/ split is the virtual-environment layout itself, not host integration, so
-    it is answered here rather than behind the platform seam — this has to resolve while a runtime
-    is still being established, before anything has decided the host is one we support.
+    bin/ vs Scripts/ is virtual-environment layout, not host integration, which is why it is
+    answered here and not behind the platform seam — that seam refuses an unsupported host, and
+    this has to resolve while a runtime is still being established.
     """
     scripts = "Scripts" if os.name == "nt" else "bin"
     name = "python.exe" if os.name == "nt" else "python"

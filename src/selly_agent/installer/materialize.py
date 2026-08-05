@@ -22,11 +22,10 @@ from selly_agent import paths
 from selly_agent.installer import runtime
 
 # What a version directory holds: the launcher and the package (whose migrations, registries and
-# skills ship as package data inside it), plus the three files that describe the runtime — the
-# dependency set, the lock that pins it, and the interpreter version. Those three are what let a
-# version build its own venv, which is what makes a version self-contained enough to roll back to.
-# A checkout's .git, tests and dev Makefile are not part of a running install. `make dist` packs
-# this same set, so installing from a checkout and from a release tarball produce identical trees.
+# skills ship as package data inside it), plus the three files describing the runtime — which are
+# what let a version build its own venv, and so what makes it self-contained enough to roll back
+# to. A checkout's .git, tests and dev Makefile are not part of a running install. `make dist`
+# packs this same set, so installing from a checkout and from a release tarball match.
 VERSION_DIRS = ("bin", "src")
 VERSION_FILES = (
     "setup",
@@ -37,8 +36,7 @@ VERSION_FILES = (
     ".python-version",
 )
 
-# .venv is deliberately not copied: a dev checkout has one, and it holds absolute paths that
-# would be wrong in the destination. Every version builds its own.
+# .venv holds absolute paths, so a dev checkout's would be wrong here. Every version builds its own.
 _IGNORED = shutil.ignore_patterns("__pycache__", "*.pyc", "*.pyo", ".venv")
 
 # How many installed versions to keep. Enough that a rollback has somewhere to go and the one
@@ -240,13 +238,11 @@ def install_version(tree, version: str, *, provision=None) -> Path:
     """The default install and every update: stage the tree as a version, give it its
     dependencies, then make it current.
 
-    The venv is built after the rename into versions/<v> and before the swap, in that order for
-    two different reasons. After the rename, because a venv records absolute paths and would
-    describe the wrong directory if built in the staging one. Before the swap, because a version
-    with no dependencies must never become the live one — a failure here leaves the previous
-    version running and untouched, which is what makes a failed update recoverable.
-
-    `provision` is injectable so tests can exercise the layout without downloading a toolchain.
+    The venv is built after the rename into versions/<v> and before the swap, for two separate
+    reasons. After, because a venv records absolute paths and one built in the staging directory
+    would describe the wrong place. Before, because a version without dependencies must never
+    become the live one: a failure here leaves the previous version running, which is what makes
+    a failed update recoverable.
     """
     paths.ensure_runtime_dirs()
     _guard_current_is_ours()

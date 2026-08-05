@@ -17,6 +17,10 @@ import pytest
 from selly_agent import paths
 from selly_agent.installer import checks, preflight, runtime
 
+# Captured before the autouse fixture that stubs provisioning for every other test replaces it —
+# this module is where provision itself is under test.
+_REAL_PROVISION = runtime.provision
+
 
 def _pin(tmp_path: Path, version: str = "0.12.1", triple: str = "x86_64-unknown-linux-gnu") -> Path:
     path = tmp_path / "uv-pin.txt"
@@ -110,47 +114,47 @@ def test_download_url_needs_no_api_call():
     )
 
 
-# --- version comparison -------------------------------------------------------------------
+# --- is a given uv good enough? ------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("output", "expected"),
-    [
-        ("uv 0.12.1 (abc123 2026-01-01)\n", "0.12.1"),
-        ("uv 0.7.12\n", "0.7.12"),
-        ("", ""),
-        ("something else\n", ""),
-    ],
-)
-def test_parse_uv_version(output, expected):
-    assert runtime.parse_uv_version(output) == expected
-
-
-def test_version_ordering_gates_the_floor():
-    assert runtime.version_key("0.12.1") >= runtime.version_key("0.12.1")
-    assert runtime.version_key("0.13.0") > runtime.version_key("0.12.1")
-    # The sandbox-era uv, which serves only a 3.14 pre-release, must read as below the floor.
-    assert runtime.version_key("0.7.12") < runtime.version_key("0.12.1")
-    # Unparseable sorts lowest, so a strange build is replaced rather than trusted.
-    assert runtime.version_key("garbage") < runtime.version_key("0.12.1")
-
-
-def test_usable_uv_is_false_for_a_missing_binary(tmp_path):
-    assert runtime.usable_uv(tmp_path / "uv", "0.12.1") is False
-
-
-def test_usable_uv_rejects_a_too_old_binary(tmp_path):
+def _fake_uv(tmp_path: Path, listing: str) -> Path:
+    """A stand-in uv whose `python list` prints whatever a test wants it to."""
     fake = tmp_path / "uv"
-    fake.write_text("#!/bin/sh\necho 'uv 0.7.12'\n")
+    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\n")
     fake.chmod(0o755)
-    assert runtime.usable_uv(fake, "0.12.1") is False
+    return fake
 
 
-def test_usable_uv_accepts_a_new_enough_binary(tmp_path):
-    fake = tmp_path / "uv"
-    fake.write_text("#!/bin/sh\necho 'uv 0.12.4 (abc 2026-02-02)'\n")
-    fake.chmod(0o755)
-    assert runtime.usable_uv(fake, "0.12.1") is True
+def test_serves_pin_is_false_for_a_missing_binary(tmp_path):
+    assert runtime.serves_pin(tmp_path / "uv", "3.14") is False
+
+
+def test_serves_pin_accepts_a_uv_offering_a_final_release(tmp_path):
+    fake = _fake_uv(tmp_path, "cpython-3.14.6-macos-aarch64-none    <download available>")
+    assert runtime.serves_pin(fake, "3.14") is True
+
+
+def test_serves_pin_rejects_a_uv_offering_only_a_pre_release(tmp_path):
+    """The case the whole probe exists for: an old uv that cannot refresh its list of
+    interpreters offers a beta, and shipping a seller onto one is not acceptable."""
+    fake = _fake_uv(tmp_path, "cpython-3.14.0b1-macos-aarch64-none    <download available>")
+    assert runtime.serves_pin(fake, "3.14") is False
+
+
+def test_serves_pin_rejects_a_uv_that_knows_nothing_about_the_pin(tmp_path):
+    fake = _fake_uv(tmp_path, "cpython-3.13.14-macos-aarch64-none    <download available>")
+    assert runtime.serves_pin(fake, "3.14") is False
+
+
+def test_serves_pin_is_not_fooled_by_a_longer_version(tmp_path):
+    """3.1 must not be satisfied by 3.14 — the boundary has to be a real separator."""
+    fake = _fake_uv(tmp_path, "cpython-3.14.6-macos-aarch64-none    <download available>")
+    assert runtime.serves_pin(fake, "3.1") is False
+
+
+def test_serves_pin_accepts_a_fully_qualified_pin(tmp_path):
+    fake = _fake_uv(tmp_path, "cpython-3.14.6-macos-aarch64-none    <download available>")
+    assert runtime.serves_pin(fake, "3.14.6") is True
 
 
 # --- extraction and the digest gate --------------------------------------------------------
@@ -176,8 +180,6 @@ def test_extract_binary_takes_the_uv_entry_from_a_nested_tar(tmp_path):
 
 
 def test_extract_binary_ignores_a_traversing_member_name(tmp_path):
-    """Only the matching entry's *content* is used; its path is never a write destination, so a
-    crafted name has nothing to aim at."""
     archive = _tar_with(tmp_path, {"../../../../tmp/evil/uv": b"BINARY"})
     dest = tmp_path / "out" / "uv"
     runtime._extract_binary(archive, dest)
@@ -248,42 +250,81 @@ def test_fetch_uv_refuses_a_host_with_no_recorded_digest(tmp_path, monkeypatch, 
 
 # --- choosing which uv to use --------------------------------------------------------------
 
+_FINAL = "cpython-3.14.6-macos-aarch64-none    <download available>"
+_PRERELEASE = "cpython-3.14.0b1-macos-aarch64-none    <download available>"
 
-def test_ensure_uv_prefers_a_new_enough_uv_already_on_path(tmp_path, monkeypatch, xdg_tmp):
-    existing = tmp_path / "uv"
-    existing.write_text("#!/bin/sh\necho 'uv 0.12.9'\n")
-    existing.chmod(0o755)
+
+@pytest.fixture
+def pinned_tree(tmp_path):
+    tree = tmp_path / "tree"
+    tree.mkdir()
+    (tree / ".python-version").write_text("3.14\n")
+    return tree
+
+
+def test_ensure_uv_uses_the_machines_own_uv_when_it_can_serve_the_pin(
+    tmp_path, pinned_tree, monkeypatch, xdg_tmp
+):
+    """A capable uv is reused whatever its version — installing a second copy of a tool the
+    machine already has is exactly what this avoids."""
+    existing = _fake_uv(tmp_path, _FINAL)
     monkeypatch.setattr(runtime.shutil, "which", lambda name: str(existing))
 
     def refuse(**kwargs):
-        raise AssertionError("should not fetch when a usable uv is already installed")
+        raise AssertionError("should not fetch when the machine's uv can serve the pin")
 
     monkeypatch.setattr(runtime, "fetch_uv", refuse)
-    assert runtime.ensure_uv(pin_file=_pin(tmp_path)) == existing
+    assert runtime.ensure_uv(pinned_tree, pin_file=_pin(tmp_path)) == existing
 
 
-def test_ensure_uv_ignores_a_too_old_uv_on_path(tmp_path, monkeypatch, xdg_tmp):
-    """An old uv is worse than no uv: it resolves the interpreter pin to a pre-release."""
-    stale = tmp_path / "uv"
-    stale.write_text("#!/bin/sh\necho 'uv 0.7.12'\n")
-    stale.chmod(0o755)
+def test_ensure_uv_falls_back_when_the_machines_uv_offers_only_a_pre_release(
+    tmp_path, pinned_tree, monkeypatch, xdg_tmp
+):
+    stale = _fake_uv(tmp_path, _PRERELEASE)
     monkeypatch.setattr(runtime.shutil, "which", lambda name: str(stale))
     monkeypatch.setattr(runtime, "fetch_uv", lambda **kwargs: Path("/fetched/uv"))
-    assert runtime.ensure_uv(pin_file=_pin(tmp_path)) == Path("/fetched/uv")
+    assert runtime.ensure_uv(pinned_tree, pin_file=_pin(tmp_path)) == Path("/fetched/uv")
 
 
-def test_ensure_uv_reuses_our_own_previously_fetched_copy(tmp_path, monkeypatch, xdg_tmp):
+def test_ensure_uv_reuses_our_own_previously_fetched_copy(
+    tmp_path, pinned_tree, monkeypatch, xdg_tmp
+):
     monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
     ours = paths.uv_path()
     ours.parent.mkdir(parents=True, exist_ok=True)
-    ours.write_text("#!/bin/sh\necho 'uv 0.12.1'\n")
+    ours.write_text(f"#!/bin/sh\ncat <<'EOF'\n{_FINAL}\nEOF\n")
     ours.chmod(0o755)
 
     def refuse(**kwargs):
         raise AssertionError("should not re-fetch a uv we already installed")
 
     monkeypatch.setattr(runtime, "fetch_uv", refuse)
-    assert runtime.ensure_uv(pin_file=_pin(tmp_path)) == ours
+    assert runtime.ensure_uv(pinned_tree, pin_file=_pin(tmp_path)) == ours
+
+
+def test_provision_replaces_a_borrowed_uv_that_cannot_deliver_a_final_release(
+    tmp_path, pinned_tree, monkeypatch, xdg_tmp
+):
+    """The probe can be satisfied and the install still come up short. Rather than failing, our
+    own pinned uv takes over — the seller did not choose the uv on their machine."""
+    borrowed = _fake_uv(tmp_path, _FINAL)
+    monkeypatch.setattr(runtime.shutil, "which", lambda name: str(borrowed))
+    ours = tmp_path / "ours-uv"
+    monkeypatch.setattr(runtime, "fetch_uv", lambda **kwargs: ours)
+
+    attempts = []
+
+    def interpreter(uv, tree):
+        attempts.append(uv)
+        if uv == borrowed:
+            raise runtime.RuntimeSetupError("provisioned a pre-release")
+        return "3.14.6"
+
+    monkeypatch.setattr(runtime, "ensure_interpreter", interpreter)
+    monkeypatch.setattr(runtime, "sync", lambda uv, tree, dev=False: Path("/venv/python"))
+
+    _REAL_PROVISION(pinned_tree, pin_file=_pin(tmp_path))
+    assert attempts == [borrowed, ours]
 
 
 # --- reporting ----------------------------------------------------------------------------

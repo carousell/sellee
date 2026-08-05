@@ -21,9 +21,8 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 def _available_uv():
-    version, _ = runtime.read_pin()
     found = shutil.which("uv")
-    if found and runtime.usable_uv(Path(found), version):
+    if found and runtime.serves_pin(Path(found), runtime.read_python_pin(ROOT)):
         return Path(found)
     return None
 
@@ -32,7 +31,7 @@ uv_binary = _available_uv()
 
 pytestmark = pytest.mark.skipif(
     uv_binary is None,
-    reason="needs a uv at or above the pinned floor on PATH (run `make bootstrap`)",
+    reason="needs a uv on PATH that can serve the pinned interpreter (run `make bootstrap`)",
 )
 
 

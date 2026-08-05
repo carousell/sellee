@@ -1,15 +1,14 @@
 #!/bin/sh
 # The installer's front door — and deliberately almost nothing.
 #
-# This does the one job Python cannot do for itself: establish the interpreter to hand over
-# to. It is not the machine's python3 — there may not be one, and if there is, its version and
-# its cert store are not ours to rely on. Instead uv provisions a standalone interpreter at the
-# version .python-version pins, and installs this release's dependencies from uv.lock.
+# It does the one job Python cannot do for itself: establish the interpreter to hand over to.
+# Not the machine's python3, which may not exist and whose version and cert store are not ours
+# to rely on — uv provisions a standalone one at the version .python-version pins, then installs
+# this release's dependencies from uv.lock. Every decision, prompt and write after that lives in
+# the Python installer, shared with `selly-agent update`.
 #
-# Every decision, prompt and write after that lives in the Python installer, where it is
-# readable, testable and shared with `selly-agent update`. The fetch below is duplicated there
-# for updates; both read the same pin file, which is why the version and digests live in data
-# rather than in either copy.
+# installer/runtime.py fetches uv the same way for updates. Both read the pin file, so the
+# version and digests are not duplicated even though this logic is.
 #
 # POSIX sh, no bashisms: it runs on whatever /bin/sh the machine has, before anything exists.
 
@@ -18,10 +17,9 @@ set -eu
 here=$(cd "$(dirname "$0")" && pwd)
 pin="$here/src/selly_agent/data/uv-pin.txt"
 
-# --bootstrap-only stops after the runtime is ready, without installing anything on the machine;
-# --with-dev additionally installs the dev dependency group. Together they are how `make
-# bootstrap` reuses this fetch instead of being a second copy of it. Both are stripped from the
-# arguments handed to the installer.
+# --bootstrap-only stops once the runtime is ready, without installing anything on the machine;
+# --with-dev also installs the dev dependency group. Together they let `make bootstrap` reuse
+# this fetch. Both are stripped from what the installer receives.
 bootstrap_only=0
 with_dev=0
 for arg in "$@"; do
@@ -44,11 +42,11 @@ if [ "$bootstrap_only" -eq 1 ] || [ "$with_dev" -eq 1 ]; then
 fi
 
 say() {
-	echo "SELLY: $1"
+	echo "$1"
 }
 
 die() {
-	echo "SELLY: $1" >&2
+	echo "$1" >&2
 	exit 1
 }
 
@@ -70,42 +68,32 @@ esac
 expected=$(awk -v t="$triple" '$1 == "sha256" && $2 == t { print $3 }' "$pin")
 [ -n "$expected" ] || die "$pin records no digest for $triple; refusing to run an unverified binary."
 
-# Where our own copy of uv goes. Deliberately not ~/.local/bin: the user may have their own uv
-# there, and this installer edits exactly one fenced block in exactly one shell profile — a
-# second thing on PATH that nothing owns is not something its uninstall could clean up.
+# Deliberately not ~/.local/bin: the user may have their own uv there, and a second thing on
+# PATH that nothing owns is not something an uninstall could clean up. Mirrors paths.uv_path().
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
 tools="$data_home/selly-agent/tools"
 uv="$tools/uv"
 
-# An older uv is worse than none: it resolves the interpreter pin to a pre-release, because uv
-# only knows the interpreters its own build shipped with. So the floor is checked, not just
-# presence. sort -V is not in POSIX; compare with awk on the dotted fields instead.
-new_enough() {
-	# $1 = candidate, $2 = minimum
-	awk -v have="$1" -v want="$2" '
-		BEGIN {
-			n = split(have, h, "."); m = split(want, w, ".")
-			for (i = 1; i <= 3; i++) {
-				hv = (i <= n) ? h[i] + 0 : 0
-				wv = (i <= m) ? w[i] + 0 : 0
-				if (hv > wv) exit 0
-				if (hv < wv) exit 1
-			}
-			exit 0
-		}'
-}
-
-usable() {
+# Whether a uv can offer a *final* build of the interpreter we pin — asked, not inferred from
+# uv's own version. uv refreshes its list of downloadable interpreters over the network, so an
+# old uv usually knows about new releases; one that cannot reach that list falls back to what was
+# baked in when it was built, which for an old enough uv is a pre-release. A final release reads
+# `cpython-3.14.6-<platform>` and a pre-release puts a marker before the dash, so requiring
+# digits-then-dash tells them apart.
+serves_pin() {
 	[ -x "$1" ] || return 1
-	found=$("$1" --version 2>/dev/null | awk '$1 == "uv" { print $2 }')
-	[ -n "$found" ] || return 1
-	new_enough "$found" "$uv_version"
+	"$1" python list 2>/dev/null | grep -qE "^cpython-$(echo "$pinned" | sed 's/\./\\./g')(\.[0-9]+)*-"
 }
 
-if usable "$(command -v uv 2>/dev/null || echo /nonexistent)"; then
+# `read` rather than cat|tr: this runs before anything is installed, so every external tool it
+# needs is one more thing that can be missing. It also strips the trailing newline for us.
+read -r pinned <"$here/.python-version" 2>/dev/null || pinned=""
+[ -n "$pinned" ] || die "this tree is missing .python-version; re-download the release."
+
+if serves_pin "$(command -v uv 2>/dev/null || echo /nonexistent)"; then
 	uv="$(command -v uv)"
-	say "using the uv already installed ($("$uv" --version))"
-elif usable "$uv"; then
+	say "using the uv already on your PATH ($("$uv" --version))"
+elif serves_pin "$uv"; then
 	say "using the uv from a previous install ($("$uv" --version))"
 else
 	command -v curl >/dev/null 2>&1 || die "curl is required and isn't on your PATH."
@@ -127,8 +115,8 @@ else
 	[ "$actual" = "$expected" ] ||
 		die "$asset does not match the digest recorded for uv $uv_version — refusing it."
 
-	# The archive holds uv-<triple>/{uv,uvx}; strip that level and take uv by name rather than
-	# searching for it, so this needs no extra tools and cannot pick the wrong file.
+	# The archive holds uv-<triple>/{uv,uvx}: strip that level and take uv by name, which needs
+	# no extra tools and cannot pick the wrong file.
 	tar -xzf "$work/$asset" -C "$work" --strip-components=1 || die "couldn't unpack $asset."
 	[ -f "$work/uv" ] || die "the uv archive doesn't contain a uv binary."
 	mkdir -p "$tools"

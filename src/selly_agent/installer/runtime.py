@@ -1,26 +1,23 @@
 """Establishing the Python runtime: get uv, get the pinned interpreter, build the venv.
 
-This is the one module that answers "what does this code run on". The answer is never the
-user's own python3 — it is a standalone interpreter uv provisions at a version we pin, with a
-dependency set replayed from a lock file. That removes an entire class of install failure
-(system Python too old, built against a broken cert store, or a Store stub) by not depending
-on system Python at all.
+What this code runs on is never the user's own python3 — it is a standalone interpreter uv
+provisions at a pinned version, with dependencies replayed from a lock file. Not depending on
+system Python removes a whole class of install failure: too old, broken cert store, Store stub.
 
-uv itself is fetched as a release archive and checked against a digest recorded in the repo.
-Deliberately not the vendor's install script: that script edits shell startup files, and this
-installer already owns exactly one fenced block in exactly one of those files, which its own
-uninstall removes. A second writer we do not control would leave residue nothing can clean
-up. So uv lands under our data root, is invoked by absolute path, and disappears when the
-data root does.
+uv is fetched as a release archive and held to a digest recorded in the repo, deliberately not
+installed by the vendor's script — that script edits shell startup files, and this installer
+already owns one fenced block in one of them that its uninstall removes precisely. So uv lands
+under our data root, is invoked by absolute path, and goes away when the data root does.
 
-Every command here is a subprocess against that binary — this module stays stdlib-only, since
-it is what makes the dependencies importable in the first place.
+This module must stay stdlib-only: it is what makes the dependencies importable, so it cannot
+use them.
 """
 
 from __future__ import annotations
 
 import hashlib
 import logging
+import re
 import shutil
 import subprocess
 import sys
@@ -90,22 +87,23 @@ def read_python_pin(tree: Path) -> str:
 
 # --- platform → asset ---------------------------------------------------------------------
 
-# Rust target triples, which is how uv names its release archives. Kept as data so a new
-# platform is one row plus a digest, not a new branch.
+# uv names its release archives by Rust target triple.
 _TRIPLES = {
     ("darwin", "arm64"): "aarch64-apple-darwin",
     ("darwin", "x86_64"): "x86_64-apple-darwin",
-    ("linux", "aarch64"): "aarch64-unknown-linux-gnu",
+    ("linux", "arm64"): "aarch64-unknown-linux-gnu",
     ("linux", "x86_64"): "x86_64-unknown-linux-gnu",
     ("windows", "arm64"): "aarch64-pc-windows-msvc",
     ("windows", "x86_64"): "x86_64-pc-windows-msvc",
 }
 
-_MACHINE_ALIASES = {
+# Every spelling of those two architectures that a host might report for itself.
+_ARCHITECTURES = {
+    "aarch64": "arm64",
+    "arm64": "arm64",
     "amd64": "x86_64",
     "x64": "x86_64",
-    "arm64": "arm64",
-    "aarch64": "aarch64",
+    "x86_64": "x86_64",
 }
 
 
@@ -114,19 +112,11 @@ def target_triple(system: str | None = None, machine: str | None = None) -> str:
     import platform as platform_module
 
     os_name = (system or platform_module.system()).lower()
-    arch = (machine or platform_module.machine()).lower()
-    arch = _MACHINE_ALIASES.get(arch, arch)
-    # macOS and Windows name the same 64-bit ARM differently; normalise onto each table key.
-    if os_name == "darwin" and arch == "aarch64":
-        arch = "arm64"
-    elif os_name == "windows" and arch == "aarch64":
-        arch = "arm64"
-    elif os_name == "linux" and arch == "arm64":
-        arch = "aarch64"
-    triple = _TRIPLES.get((os_name, arch))
+    reported = (machine or platform_module.machine()).lower()
+    triple = _TRIPLES.get((os_name, _ARCHITECTURES.get(reported, "")))
     if triple is None:
         raise RuntimeSetupError(
-            f"no pinned uv build for {os_name}/{arch} — supported: "
+            f"no pinned uv build for {os_name}/{reported} — supported: "
             + ", ".join(sorted(f"{a}/{b}" for a, b in _TRIPLES))
         )
     return triple
@@ -138,29 +128,6 @@ def asset_name(triple: str) -> str:
 
 def download_url(version: str, asset: str) -> str:
     return _RELEASE_URL.format(version=version, asset=asset)
-
-
-# --- version comparison -------------------------------------------------------------------
-
-
-def version_key(text: str) -> tuple:
-    """A sortable key for a uv version string. Unparseable reads as oldest, so an odd build
-    string is refused in favour of our own pinned copy rather than trusted."""
-    parts = []
-    for chunk in (text or "").strip().split("."):
-        digits = ""
-        for char in chunk:
-            if not char.isdigit():
-                break
-            digits += char
-        parts.append(int(digits) if digits else 0)
-    return tuple((parts + [0, 0, 0])[:3])
-
-
-def parse_uv_version(output: str) -> str:
-    """The version out of `uv --version` ("uv 0.12.1 (abcdef 2026-01-01)")."""
-    fields = (output or "").split()
-    return fields[1] if len(fields) >= 2 and fields[0] == "uv" else ""
 
 
 # --- subprocess ---------------------------------------------------------------------------
@@ -179,53 +146,51 @@ def _run(argv, *, cwd=None, timeout: float = _PROBE_TIMEOUT_SEC) -> tuple:
     except subprocess.TimeoutExpired:
         return 124, "", f"{argv[0]}: timed out after {timeout:.0f}s"
     except OSError as exc:
-        # Missing, or present but not executable — a botched copy or a half-extracted binary.
-        # Both are answers about the runtime, not exceptions for a caller to handle.
+        # Absent, or present but not executable: both are answers about the runtime.
         return 127, "", f"{argv[0]}: {exc}"
     return completed.returncode, completed.stdout, completed.stderr
-
-
-def uv_version(binary: Path) -> str:
-    code, out, _ = _run([binary, "--version"])
-    return parse_uv_version(out) if code == 0 else ""
 
 
 # --- acquiring uv -------------------------------------------------------------------------
 
 
-def usable_uv(binary: Path, minimum: str) -> bool:
-    """Whether a uv binary exists and is new enough to know the interpreter we pin."""
+def serves_pin(binary: Path, pinned: str) -> bool:
+    """Whether a uv can offer a *final* build of the interpreter version we pin.
+
+    Asked rather than inferred from uv's own version, because the two are only loosely related:
+    uv refreshes its list of downloadable interpreters over the network, so an old uv usually
+    knows about new releases — but one that cannot reach that list falls back to whatever was
+    baked in when it was built, which for an old enough uv is a pre-release. The question that
+    matters is what this uv can actually provide now, so that is the question.
+    """
     if not Path(binary).exists():
         return False
-    found = uv_version(Path(binary))
-    return bool(found) and version_key(found) >= version_key(minimum)
+    code, out, _ = _run([binary, "python", "list"])
+    if code != 0:
+        return False
+    # A final release is `cpython-3.14.6-<platform>`; a pre-release puts a marker before the
+    # dash (`cpython-3.14.0b1-<platform>`), so requiring digits-then-dash excludes it.
+    pattern = re.compile(rf"^cpython-{re.escape(pinned)}(\.\d+)*-", re.MULTILINE)
+    return bool(pattern.search(out))
 
 
 def _fetch(url: str, dest: Path) -> None:
     dest.parent.mkdir(parents=True, exist_ok=True)
-    digest = hashlib.sha256()
     try:
         with (
             urllib.request.urlopen(url, timeout=_FETCH_TIMEOUT_SEC) as response,
             dest.open("wb") as out,
         ):
-            while True:
-                chunk = response.read(_DOWNLOAD_CHUNK)
-                if not chunk:
-                    break
-                digest.update(chunk)
-                out.write(chunk)
+            shutil.copyfileobj(response, out, _DOWNLOAD_CHUNK)
     except (urllib.error.URLError, OSError) as exc:
         raise RuntimeSetupError(f"could not download {url}: {exc}") from exc
-    dest.with_suffix(dest.suffix + ".sha256").write_text(digest.hexdigest())
 
 
 def _extract_binary(archive: Path, dest: Path) -> None:
     """Pull just the uv executable out of an archive, by name.
 
-    Only the *content* of the matching entry is used — never its path as a write destination —
-    so a crafted archive has nothing to aim at. That is stronger than sanitising an
-    extract-everything call, and we want exactly one file.
+    Only the matching entry's *content* is used, never its path as a write destination — so a
+    crafted member name has nothing to aim at, which beats sanitising an extract-everything call.
     """
     wanted = {"uv", "uv.exe"}
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -280,18 +245,15 @@ def fetch_uv(*, pin_file: Path | None = None) -> Path:
     return destination
 
 
-def ensure_uv(*, pin_file: Path | None = None) -> Path:
-    """The uv to use: one already on PATH if it is new enough, else our own pinned copy.
-
-    Preferring an existing uv keeps us from installing a second copy of a tool the machine
-    already has — but only when it can actually serve the interpreter we pin.
-    """
-    version, _ = read_pin(pin_file)
+def ensure_uv(tree: Path, *, pin_file: Path | None = None) -> Path:
+    """The uv to use: whichever already-present one can serve the interpreter this tree pins,
+    preferring the machine's own; otherwise our pinned copy, fetched if it is not here yet."""
+    pinned = read_python_pin(tree)
     found = shutil.which("uv")
-    if found and usable_uv(Path(found), version):
+    if found and serves_pin(Path(found), pinned):
         return Path(found)
     ours = paths.uv_path()
-    if usable_uv(ours, version):
+    if serves_pin(ours, pinned):
         return ours
     return fetch_uv(pin_file=pin_file)
 
@@ -300,10 +262,10 @@ def ensure_uv(*, pin_file: Path | None = None) -> Path:
 
 
 def ensure_interpreter(uv: Path, tree: Path) -> str:
-    """Provision the pinned interpreter and confirm it is a real release.
+    """Provision the pinned interpreter, and ask it whether it is a real release.
 
-    A pre-release would satisfy a bare "3.14" request on an older uv, and shipping sellers onto
-    a beta interpreter is not a thing to discover later, so this asks the interpreter itself.
+    An older uv answers a bare "3.14" with a pre-release, which is not something to discover
+    after shipping sellers onto it.
     """
     pinned = read_python_pin(tree)
     code, _, err = _run([uv, "python", "install", pinned], timeout=_SYNC_TIMEOUT_SEC)
@@ -329,8 +291,8 @@ def ensure_interpreter(uv: Path, tree: Path) -> str:
 def sync(uv: Path, tree: Path, *, dev: bool = False) -> Path:
     """Build the tree's venv from its lock file, and answer the venv's interpreter.
 
-    --locked, so this replays the lock and fails rather than quietly resolving something new:
-    what a seller installs is what was reviewed and tested.
+    --locked replays the lock and fails rather than resolving something new, so what a seller
+    installs is what was reviewed.
     """
     argv = [uv, "sync", "--locked"]
     if not dev:
@@ -345,9 +307,21 @@ def sync(uv: Path, tree: Path, *, dev: bool = False) -> Path:
 
 
 def provision(tree: Path, *, dev: bool = False, pin_file: Path | None = None) -> Path:
-    """Everything a tree needs to be runnable: uv, the pinned interpreter, its venv."""
-    uv = ensure_uv(pin_file=pin_file)
-    ensure_interpreter(uv, tree)
+    """Everything a tree needs to be runnable: uv, the pinned interpreter, its venv.
+
+    A uv we borrowed from the machine that turns out not to deliver a final release is replaced
+    by our own pinned copy rather than failing the install — the seller did not choose their uv,
+    and we have one we know the answer for.
+    """
+    uv = ensure_uv(tree, pin_file=pin_file)
+    try:
+        ensure_interpreter(uv, tree)
+    except RuntimeSetupError:
+        if uv == paths.uv_path():
+            raise
+        log.info("%s could not provide the pinned interpreter; using our own uv", uv)
+        uv = fetch_uv(pin_file=pin_file)
+        ensure_interpreter(uv, tree)
     return sync(uv, tree, dev=dev)
 
 

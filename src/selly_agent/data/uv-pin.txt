@@ -1,4 +1,9 @@
-# The pinned uv release, and the digest of every archive we are willing to run.
+# The uv release to install when the machine has none that can serve our interpreter pin, and
+# the digest of every archive we are willing to run.
+#
+# This is not a minimum version. A uv already on the machine is judged by asking what it can
+# actually provide (see serves_pin), not by its version number, so an older uv is used as-is
+# whenever it works — no second copy of a tool somebody already has.
 #
 # Read by ./setup (POSIX sh, before any interpreter exists) and by
 # selly_agent/installer/runtime.py. Both parse it line by line, so this stays plain data —
@@ -7,10 +12,6 @@
 # Digests are recorded here rather than fetched next to the download: a checksum served by
 # whoever served the archive vouches for nothing. Bumping uv means editing this file, which
 # makes it a reviewed diff.
-#
-# The version floor and the interpreter pin are coupled — uv can only install interpreters its
-# own build knows about, and an older uv will quietly hand back a pre-release instead of the
-# version in .python-version. Do not lower this without checking `uv python list`.
 #
 #   version <uv version>
 #   sha256  <rust target triple> <digest>

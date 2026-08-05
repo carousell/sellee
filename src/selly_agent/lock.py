@@ -34,8 +34,8 @@ class LockResult:
 
 
 def is_pid_alive(pid: int | None) -> bool:
-    """True if a process with `pid` exists — including one owned by another user, and including
-    a zombie the daemon has not been reaped yet. Garbage (None, 0, negative) → dead."""
+    """True if a process with `pid` exists — including one owned by another user, and including a
+    zombie nobody has reaped yet. Garbage (None, 0, negative) → dead."""
     if not isinstance(pid, int) or pid <= 0:
         return False
     return psutil.pid_exists(pid)
