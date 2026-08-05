@@ -1,0 +1,42 @@
+"""Spawn-time program resolution: found programs become full paths, missing ones are left alone."""
+
+from __future__ import annotations
+
+import stat
+
+from selly_agent import spawn
+
+
+def _executable(path, body: str = "#!/bin/sh\nexit 0\n"):
+    path.write_text(body)
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
+def test_a_program_on_path_is_resolved_to_its_full_path(tmp_path, monkeypatch) -> None:
+    binary = _executable(tmp_path / "npx")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert spawn.resolve(["npx", "--yes", "pkg"]) == [str(binary), "--yes", "pkg"]
+
+
+def test_a_missing_program_is_left_for_the_caller_to_report(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("PATH", str(tmp_path))
+    assert spawn.resolve(["npx", "--yes"]) == ["npx", "--yes"]
+
+
+def test_arguments_are_stringified_but_never_resolved(tmp_path, monkeypatch) -> None:
+    _executable(tmp_path / "npx")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    resolved = spawn.resolve(["npx", tmp_path / "npx"])
+    assert resolved[1] == str(tmp_path / "npx")
+
+
+def test_an_empty_argv_is_returned_unchanged() -> None:
+    assert spawn.resolve([]) == []
+
+
+def test_an_absolute_program_survives_resolution(tmp_path, monkeypatch) -> None:
+    """The recorded values setup writes are already absolute, and must not need PATH to work."""
+    binary = _executable(tmp_path / "claude")
+    monkeypatch.setenv("PATH", "")
+    assert spawn.resolve([str(binary), "-p"]) == [str(binary), "-p"]

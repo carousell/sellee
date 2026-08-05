@@ -31,6 +31,7 @@ from selly_agent import (
     retention,
     secrets,
     settings,
+    spawn,
 )
 from selly_agent.browser import chrome, inbox
 from selly_agent.browser import client as browser_client
@@ -111,7 +112,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
         return None
 
     def warm() -> None:
-        argv = ["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
+        argv = spawn.resolve(["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"])
         try:
             proc = subprocess.run(
                 argv,

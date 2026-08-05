@@ -80,4 +80,7 @@ def main(args) -> int:
         return 1
     port = config.load().http_port
     endpoint = f"http://127.0.0.1:{port}/mcp"
+    # One JSON message per "\n": reconfigured so Windows does not write "\r\n" and leave the
+    # client to guess whether the carriage return is framing or payload.
+    sys.stdout.reconfigure(newline="")
     return run_loop(sys.stdin, sys.stdout, endpoint, token)
