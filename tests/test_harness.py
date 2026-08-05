@@ -290,3 +290,17 @@ def test_toml_min_parser_handles_the_subset() -> None:
     text = 'a = "x"\nn = 3\n[s.t]\narr = ["p", "q"]\n'
     parsed = codex.parse_toml_min(text)
     assert parsed == {"a": "x", "n": 3, "s": {"t": {"arr": ["p", "q"]}}}
+
+
+def test_a_windows_media_path_becomes_a_forward_slash_read_rule() -> None:
+    """The rules are gitignore-style patterns, where a backslash is an escape — a rule spelled
+    C:\\Users would grant nothing. Provisional until checked against the matcher on a real PC."""
+    assert claude.read_rules(_spec_with_paths((r"C:\media\store\photo.jpg",))) == (
+        "Read(//C:/media/store/photo.jpg)",
+    )
+
+
+def _spec_with_paths(paths_tuple):
+    spec = _spec()
+    object.__setattr__(spec, "readable_paths", paths_tuple)
+    return spec

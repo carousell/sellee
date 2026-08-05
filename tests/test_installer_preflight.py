@@ -250,7 +250,7 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
     assert result.status == checks.FAIL
     # The PATH it was tried under is the whole diagnosis — without it the message is unactionable.
     assert str(tmp_path / "system") in result.detail
-    assert "node --version" in result.detail
+    assert "`node` is not on" in result.detail
     assert "re-run ./setup" in result.fix
 
 
@@ -348,3 +348,30 @@ def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> No
         preflight.shutil, "which", lambda name: "/usr/local/bin/npx" if name == "npx" else None
     )
     assert preflight.node_path_fragment() == ""
+
+
+def test_the_state_store_probe_passes_on_a_local_disk(xdg_tmp) -> None:
+    from selly_agent import paths
+
+    result = preflight.check_state_store()
+
+    assert result.status == checks.OK
+    # The probe cleans up after itself — a leftover database would look like state.
+    assert list(paths.state_dir().glob(".preflight-wal-probe*")) == []
+
+
+def test_the_state_store_probe_fails_loud_where_a_database_cannot_live(
+    xdg_tmp, monkeypatch
+) -> None:
+    from selly_agent import paths
+
+    blocked = paths.state_dir()
+    blocked.mkdir(parents=True, exist_ok=True)
+    blocked.chmod(0o500)
+    try:
+        result = preflight.check_state_store()
+    finally:
+        blocked.chmod(0o700)
+
+    assert result.status == checks.FAIL
+    assert "local disk" in result.fix

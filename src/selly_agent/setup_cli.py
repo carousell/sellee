@@ -107,7 +107,7 @@ def _intro(ui: Ui, platform) -> None:
     ui.banner(__version__)
     ui.say("")
     ui.say("Selly is a marketplace agent: it lists items, answers buyers, and negotiates within")
-    ui.say(f"limits you set. This installs version {__version__} on this Mac.")
+    ui.say(f"limits you set. This installs version {__version__} on this machine.")
     ui.say("")
     ui.say("The installer will:")
     ui.say("  • check for Node, Chrome, and the claude CLI (installed and signed in)")
@@ -155,6 +155,7 @@ def _gates(ui: Ui, tree) -> None:
 
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
     _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
+    _require(ui, checks.fail_open("state store", lambda: preflight.check_state_store()))
     _gate_claude(ui, cfg)
     _gate_dependency(ui, "node", lambda: preflight.check_node())
     _gate_dependency(ui, "chrome", lambda: preflight.check_chrome(cfg.chrome_bin))

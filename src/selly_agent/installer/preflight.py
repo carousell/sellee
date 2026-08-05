@@ -11,9 +11,11 @@ Nothing here installs anything or signs anyone in. It reports; setup asks; the p
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import shutil
+import sqlite3
 import subprocess
 import sys
 from pathlib import Path
@@ -220,6 +222,11 @@ _PACKAGE_MANAGERS = {
 }
 
 
+def setup_door() -> str:
+    """How a person re-runs setup, spelled for this platform's front door."""
+    return r".\setup.ps1" if os.name == "nt" else "./setup"
+
+
 def package_manager_name() -> str:
     """What to call the installer this platform uses, or "" where we know of none."""
     return _PACKAGE_MANAGERS.get(sys.platform, {}).get("name", "")
@@ -249,7 +256,7 @@ def install_command(dependency: str) -> list:
 def install_hint(dependency: str) -> str:
     """The remediation line for a missing dependency: the command, if there is one."""
     argv = install_command(dependency)
-    return " ".join(argv) if argv else f"Install {dependency} and re-run ./setup."
+    return " ".join(argv) if argv else f"Install {dependency} and re-run {setup_door()}."
 
 
 def install_dependency(dependency: str) -> tuple:
@@ -316,15 +323,53 @@ def check_runtime(tree) -> checks.Check:
         return checks.fail(
             "python runtime",
             "this install has no dependency environment",
-            "Re-run ./setup — it provisions the interpreter and installs dependencies.",
+            f"Re-run {setup_door()} — it provisions the interpreter and installs dependencies.",
         )
     if not report["dependencies_importable"]:
         return checks.fail(
             "python runtime",
             f"dependencies are not importable ({report['detail'] or 'unknown error'})",
-            "Re-run ./setup to reinstall them.",
+            f"Re-run {setup_door()} to reinstall them.",
         )
     return checks.ok("python runtime", report["interpreter"])
+
+
+def check_state_store() -> checks.Check:
+    """That a SQLite database in WAL mode can live where the store does.
+
+    WAL keeps shared-memory files beside the database, which a folder-redirected profile — a
+    network share, a sync service — can refuse even where plain files write fine. A broken store
+    must never be a quiet store, so this fails setup rather than the first write.
+    """
+    target = paths.state_dir()
+    probe = target / ".preflight-wal-probe.sqlite3"
+    fix = (
+        "The state directory must be on a local disk — a redirected or synced profile cannot "
+        "hold the agent's live databases."
+    )
+    try:
+        target.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(probe))
+        try:
+            mode = conn.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+            conn.execute("CREATE TABLE probe (x)")
+            conn.execute("INSERT INTO probe VALUES (1)")
+            conn.commit()
+        finally:
+            conn.close()
+        if str(mode).lower() != "wal":
+            return checks.fail(
+                "state store",
+                f"{target} cannot hold a WAL database (journal mode came back {mode!r})",
+                fix,
+            )
+    except (OSError, sqlite3.Error) as exc:
+        return checks.fail("state store", f"cannot write a database under {target}: {exc}", fix)
+    finally:
+        for suffix in ("", "-wal", "-shm"):
+            with contextlib.suppress(OSError):
+                os.remove(f"{probe}{suffix}")
+    return checks.ok("state store", f"WAL database writable under {target}")
 
 
 def check_tree_location(tree) -> checks.Check:
@@ -453,19 +498,32 @@ def check_supervised_spawn(config) -> checks.Check:
 
     # The override's own binary is whatever it names; the default's is `npx`, which spawns `node`
     # through its shebang — so both have to answer under that PATH, not just the one we invoke.
+    fix = (
+        "The worker is started with that PATH and nothing else. Install Node so that `node` and "
+        f"`npx` sit in directories setup can record, then re-run {setup_door()}."
+    )
     probes = [[str(command[0]), "--version"]]
     if not config.playwright_mcp_cmd:
         probes.insert(0, ["node", "--version"])
     for probe in probes:
-        code, out = _run(probe, env=env)
+        # Resolved against the worker's PATH the way the daemon resolves at spawn time. A bare
+        # name would ask the wrong question twice on Windows: process creation ignores PATHEXT
+        # (so `npx` never finds npx.cmd even when it is right there), and a spawn with env=
+        # replaced still searches the *caller's* PATH rather than the passed one.
+        resolved = shutil.which(probe[0], path=env.get("PATH"))
+        if resolved is None:
+            return checks.fail(
+                "browser server",
+                f"`{probe[0]}` is not on the background worker's PATH ({path})",
+                fix,
+            )
+        code, out = _run([resolved, *probe[1:]], env=env)
         if code != 0:
             return checks.fail(
                 "browser server",
                 f"`{' '.join(probe)}` does not run under the background worker's PATH "
                 f"({path}): {out.strip()[-200:]}",
-                "The worker is started with that PATH and nothing else. Install Node so that "
-                "`node` and `npx` sit in directories setup can record (`brew install node` puts "
-                "both in one), then re-run ./setup.",
+                fix,
             )
     return checks.ok("browser server", f"spawns under the worker's PATH ({path})")
 

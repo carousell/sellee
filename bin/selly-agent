@@ -107,9 +107,10 @@ def dispatch(argv):
     except ModuleNotFoundError as exc:
         if (exc.name or "").startswith("selly_agent"):
             raise
+        door = "setup.ps1" if os.name == "nt" else "setup"
         sys.stderr.write(
             f"selly-agent: cannot import {exc.name} — this install's dependencies are not in "
-            f"place yet.\nRun {os.path.join(_tree, 'setup')} to build them, or `make bootstrap` "
+            f"place yet.\nRun {os.path.join(_tree, door)} to build them, or `make bootstrap` "
             f"in a checkout.\n"
         )
         return 1

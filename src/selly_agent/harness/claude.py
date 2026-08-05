@@ -61,8 +61,18 @@ def read_rules(spec: PassSpec) -> tuple:
     `Read(//abs/path)` is the harness's rule syntax: gitignore-style, `//` anchoring at the
     filesystem root (a single `/` would anchor at the settings file). An exact path grants exactly
     one file — how a pass gets eyes on a claimed photo without any wider file access.
+
+    Always spelled with forward slashes: the patterns are gitignore-style, where a backslash is
+    an escape, so a Windows path is converted before it becomes a rule. That form
+    (`Read(//C:/Users/...)`) is provisional until verified against the harness's matcher on a
+    real Windows machine.
     """
-    return tuple(f"{READ_TOOL}(/{path})" for path in spec.readable_paths)
+    return tuple(f"{READ_TOOL}({_rule_path(path)})" for path in spec.readable_paths)
+
+
+def _rule_path(path: str) -> str:
+    slashed = str(path).replace("\\", "/")
+    return f"/{slashed}" if slashed.startswith("/") else f"//{slashed}"
 
 
 def allowed_tools(spec: PassSpec) -> tuple:
