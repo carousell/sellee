@@ -28,6 +28,11 @@ OWN_TOP_LEVEL = "selly_agent"
 # relocked uv.lock and a reviewer who accepted the dependency.
 ALLOWED_RUNTIME_DEPS = {"psutil", "platformdirs", "PIL", "pillow_heif", "tzlocal"}
 
+# Stdlib modules that exist on only one OS. find_spec cannot recognise them — it answers for the
+# OS running the suite, which would make `msvcrt` third-party on POSIX and `fcntl` third-party on
+# Windows. All ship with CPython.
+PLATFORM_STDLIB = {"fcntl", "msvcrt", "winreg", "_winapi"}
+
 # Network / async modules a runtime module may not import unless its src-relative path is
 # listed here. Every entry is a deliberate decision: adding a module here means it is allowed
 # to open sockets, and a review should treat that as a real capability grant.
@@ -59,7 +64,7 @@ def _site_dirs() -> tuple[str, ...]:
 
 def _is_stdlib(name: str) -> bool:
     top = name.split(".")[0]
-    if top in sys.builtin_module_names:
+    if top in sys.builtin_module_names or top in PLATFORM_STDLIB:
         return True
     try:
         spec = importlib.util.find_spec(top)
@@ -130,6 +135,13 @@ def test_guard_still_rejects_a_non_allowlisted_dependency() -> None:
     assert _disallowed_imports(tree, ALLOWED_RUNTIME_DEPS) == {"requests", "flask"}
     # With an empty allowlist even psutil is an offender, so the set is doing the work.
     assert "psutil" in _disallowed_imports(tree, set())
+
+
+def test_platform_stdlib_is_accepted_on_every_os() -> None:
+    """This walk reads source, not the imports that ran, so both halves of a platform branch are
+    always visible — and the verdict must not depend on the machine running the suite."""
+    source = "import fcntl\nimport msvcrt\nimport winreg\n"
+    assert _disallowed_imports(ast.parse(source), set()) == set()
 
 
 def test_no_network_imports_outside_allowlist() -> None:

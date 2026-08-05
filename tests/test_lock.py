@@ -64,6 +64,18 @@ def test_clear_holder_only_clears_our_own(tmp_path) -> None:
         os.close(result.fd)
 
 
+def test_holder_body_stays_readable_while_the_lock_is_held(tmp_path) -> None:
+    """Free on POSIX, but a Windows lock covering the body would fail this read — and the
+    duplicate that loses the race is the one that needs it."""
+    lock_path = tmp_path / "daemon.lock"
+    result = lock.acquire(lock_path)
+    try:
+        assert lock_path.read_text().strip() == str(os.getpid())
+        assert lock.read_holder_pid(lock_path) == os.getpid()
+    finally:
+        os.close(result.fd)
+
+
 def test_is_pid_alive(tmp_path) -> None:
     assert lock.is_pid_alive(os.getpid())
     assert not lock.is_pid_alive(2**31 - 1)

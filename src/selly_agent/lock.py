@@ -1,19 +1,24 @@
-"""Single-instance lock — PID-aware, so launchd never storms a respawn.
+"""Single-instance lock — PID-aware, so the supervisor never storms a respawn.
 
-launchd keeps the daemon alive, so a second instance can collide with a live one. The rules
+A supervisor keeps the daemon alive, so a second instance can collide with a live one. The rules
 that keep that from becoming a respawn storm: a duplicate colliding with a live holder reports
-the truthful holder and the caller exits 0 (a clean exit KeepAlive won't respawn); a lock left
-by a dead PID is reclaimed, not refused (a restart on fresh code never wedges behind a corpse);
-a clean shutdown clears the body only when we are the recorded holder. The fd stays referenced
-for the process lifetime — the OS releases the flock on exit/crash.
+the truthful holder and the caller exits 0 (a clean exit is not the failure a supervisor
+restarts on); a lock left by a dead PID is reclaimed, not refused (a restart on fresh code never
+wedges behind a corpse); a clean shutdown clears the body only when we are the recorded holder.
+The fd stays referenced for the process lifetime — the OS releases the lock on exit/crash, which
+is what makes a crashed holder's lock reclaimable instead of permanent.
+
+A Windows byte-range lock is mandatory rather than advisory: another process cannot read a locked
+region. So the lock is taken on a reserved byte past the PID body, which has to stay readable by
+the duplicate that loses the race. Not portalocker, which needs pywin32 on Windows and locks the
+first 64KB — the body with it.
 
 Simplified from the legacy primitive: there is no watchdog here, so no heartbeat
-cross-stamping — just the flock, the PID body, and the reclaim rule.
+cross-stamping — just the lock, the PID body, and the reclaim rule.
 """
 
 from __future__ import annotations
 
-import fcntl
 import logging
 import os
 from dataclasses import dataclass
@@ -22,6 +27,32 @@ from pathlib import Path
 import psutil
 
 log = logging.getLogger(__name__)
+
+# Past any PID body we would write, and past EOF, which both platforms allow locking.
+_LOCK_BYTE_OFFSET = 4096
+
+# O_BINARY exists only on Windows, where it stops the body being newline-translated.
+_OPEN_FLAGS = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
+
+
+if os.name == "nt":
+    import msvcrt
+
+    def _take_exclusive(fd: int) -> None:
+        """Take the lock, or raise OSError when another handle holds it."""
+        os.lseek(fd, _LOCK_BYTE_OFFSET, os.SEEK_SET)
+        try:
+            # LK_NBLCK fails immediately; LK_LOCK would retry for ten seconds.
+            msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+        finally:
+            os.lseek(fd, 0, os.SEEK_SET)
+
+else:
+    import fcntl
+
+    def _take_exclusive(fd: int) -> None:
+        """Take the lock, or raise OSError when another descriptor holds it."""
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
 
 
 @dataclass(frozen=True)
@@ -69,9 +100,9 @@ def acquire(lock_path: Path) -> LockResult:
     path = Path(lock_path)
     path.parent.mkdir(parents=True, exist_ok=True)
     prior_pid = read_holder_pid(path)
-    fd = os.open(str(path), os.O_RDWR | os.O_CREAT, 0o600)
+    fd = os.open(str(path), _OPEN_FLAGS, 0o600)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        _take_exclusive(fd)
     except OSError:
         os.close(fd)
         holder = read_holder_pid(path)
@@ -97,8 +128,11 @@ def clear_holder(lock_path: Path) -> bool:
     """On a clean shutdown, empty the lock body — but only if OUR pid is the recorded holder, so
     we never clear a lock another live process holds. Returns True only when we cleared our own.
 
-    Precondition: the caller still holds the flock (true at a clean shutdown, before fd close),
-    so no other process can rewrite the body between the ownership read and the truncate."""
+    Precondition: the caller still holds the lock (true at a clean shutdown, before fd close),
+    so no other process can rewrite the body between the ownership read and the truncate.
+
+    Failing is safe rather than sticky: the body then names a dead PID, which the next start
+    reclaims."""
     holder = read_holder_pid(lock_path)
     if holder is None or holder != os.getpid():
         return False
