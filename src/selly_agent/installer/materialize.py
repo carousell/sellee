@@ -90,6 +90,16 @@ def install_interpreter() -> Path:
     return interpreter if interpreter.exists() else Path(os.path.realpath(sys.executable))
 
 
+def supervised_interpreter() -> Path:
+    """The interpreter to name in the background job's definition.
+
+    install_interpreter answers for a person at a terminal; a job wants the same interpreter
+    without a console attached, which on Windows is a different executable beside it.
+    """
+    interpreter = paths.venv_windowless_python(paths.current())
+    return interpreter if interpreter.exists() else install_interpreter()
+
+
 def current_target():
     """What `current` points at, or None when it does not exist. Never follows further."""
     return pointer.read(paths.current())

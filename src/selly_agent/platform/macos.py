@@ -38,7 +38,11 @@ class MacOSPlatform(Platform):
         stderr_path: Path,
         marker: str,
         environment: dict,
+        start_at_login: bool = True,
     ) -> str:
+        # Not consulted: on macOS the mode is the plist's location, and launchd auto-loads only
+        # what is in the launch-agents directory. RunAtLoad below is what a bootstrap does now.
+        del start_at_login
         args_xml = "\n".join(f"    <string>{escape(a)}</string>" for a in program_args)
         env_xml = ""
         if environment:

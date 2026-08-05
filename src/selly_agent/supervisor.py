@@ -127,7 +127,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
         return 2
 
     program_args = [
-        str(materialize.install_interpreter()),
+        str(materialize.supervised_interpreter()),
         str(paths.current() / "bin" / "selly-agent"),
         "daemon",
         "run",
@@ -139,6 +139,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
         stderr_path=paths.logs_dir() / "agent.err.log",
         marker=MARKER,
         environment=_job_environment(),
+        start_at_login=mode == LOGIN_START,
     )
 
     # Remove any of our own plists from the other location (a mode flip moves the plist).
@@ -150,7 +151,7 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
 
     dest = locations[mode]
     dest.parent.mkdir(parents=True, exist_ok=True)
-    dest.write_text(plist_text)
+    dest.write_text(plist_text, encoding=platform.definition_encoding)
     config.merge_into_file({"daemon_mode": mode, "daemon_label": label})
 
     if mode == LOGIN_START:

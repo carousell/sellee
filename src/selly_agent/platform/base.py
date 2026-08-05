@@ -19,6 +19,10 @@ class Platform(ABC):
 
     name: str = "base"
 
+    # What render_supervisor's text must be written as. Not cosmetic: the tool that imports a
+    # Windows task definition rejects one that is not UTF-16.
+    definition_encoding: str = "utf-8"
+
     @abstractmethod
     def launch_agents_dir(self, home: Path) -> Path:
         """The per-user auto-start directory the supervisor reads at login."""
@@ -43,11 +47,16 @@ class Platform(ABC):
         stderr_path: Path,
         marker: str,
         environment: dict,
+        start_at_login: bool,
     ) -> str:
         """Render the job definition (carries the marker so ours-vs-foreign is decidable).
 
         `environment` is pinned into the definition: a supervised job inherits nothing from the
-        shell that installed it, so anything the daemon must see (XDG overrides) goes here."""
+        shell that installed it, so anything the daemon must see (XDG overrides) goes here.
+
+        `start_at_login` is asked because not every supervisor can express it by *where* the
+        definition is put — a registered scheduled task persists across logins wherever its XML
+        came from, so it has to say so in the definition itself."""
 
     @abstractmethod
     def register(self, config_path: Path) -> None:

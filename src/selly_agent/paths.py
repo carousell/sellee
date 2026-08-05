@@ -192,6 +192,18 @@ def venv_python(tree: Path) -> Path:
     return venv_dir(tree) / scripts / name
 
 
+def venv_windowless_python(tree: Path) -> Path:
+    """The interpreter for a job that must not own a console — pythonw.exe on Windows.
+
+    Started with the ordinary interpreter, a supervised daemon flashes a console window onto the
+    desktop; with a keep-alive that starts it every few minutes, that is a window every few
+    minutes. Nothing else differs. POSIX makes no such distinction.
+    """
+    if os.name != "nt":
+        return venv_python(tree)
+    return venv_dir(tree) / "Scripts" / "pythonw.exe"
+
+
 # --- state_dir children --------------------------------------------------------------------
 
 
