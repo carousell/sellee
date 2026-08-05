@@ -13,9 +13,10 @@ nobody can act on again.
 
 from __future__ import annotations
 
+import os
 import shutil
 
-from selly_agent import paths, pointer, supervisor
+from selly_agent import config, paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -49,11 +50,16 @@ def _run(args, ui: Ui) -> int:
 
     if materialize.remove_shim():
         ui.say(f"removed {paths.shim_path()}")
-    for rc_file in materialize.rc_candidates():
-        # Every shell we might have written to, not just the one running now: install under zsh
-        # and uninstall from bash, and checking only the current shell leaves the block behind.
-        if materialize.remove_rc_block(rc_file):
-            ui.say(f"removed the PATH line from {rc_file}")
+    if os.name == "nt":
+        # Only if setup recorded adding it: a directory the seller already had on PATH is theirs.
+        if config.load().path_entry_added and materialize.remove_user_path_entry():
+            ui.say("removed our entry from your account's PATH")
+    else:
+        for rc_file in materialize.rc_candidates():
+            # Every shell we might have written to, not just the one running now: install under zsh
+            # and uninstall from bash, and checking only the current shell leaves the block behind.
+            if materialize.remove_rc_block(rc_file):
+                ui.say(f"removed the PATH line from {rc_file}")
 
     for target in _roots_to_remove(preserve):
         _remove(target)

@@ -9,7 +9,9 @@ src/ other than paths.py does.
 
 from __future__ import annotations
 
+import io
 import re
+import tokenize
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -31,13 +33,32 @@ FORBIDDEN = (
 )
 
 
+def _code_lines(source: str) -> dict:
+    """The source with comments blanked out, keyed by line number.
+
+    Prose about a platform's variables is not path resolution, and a guard that cannot tell the
+    difference gets worked around by rewording rather than by fixing anything. String literals are
+    deliberately still scanned: `os.environ["USERPROFILE"]` is one.
+    """
+    lines = dict(enumerate(source.splitlines(), start=1))
+    try:
+        for token in tokenize.generate_tokens(io.StringIO(source).readline):
+            if token.type == tokenize.COMMENT:
+                start, end = token.start[0], token.end[0]
+                for lineno in range(start, end + 1):
+                    lines[lineno] = lines[lineno].replace(token.string, "")
+    except (tokenize.TokenError, IndentationError, SyntaxError):
+        return dict(enumerate(source.splitlines(), start=1))  # unparsable: scan it whole
+    return lines
+
+
 def test_only_paths_module_resolves_home_or_xdg() -> None:
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
         rel = str(path.relative_to(SRC))
         if rel == AUTHORITY:
             continue
-        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+        for lineno, line in _code_lines(path.read_text()).items():
             if any(pat.search(line) for pat in FORBIDDEN):
                 offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
     assert not offenders, (

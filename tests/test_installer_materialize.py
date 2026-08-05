@@ -239,6 +239,38 @@ def test_removing_the_rc_block_restores_the_surrounding_file(tmp_path) -> None:
     assert materialize.remove_rc_block(rc) is False
 
 
+def test_the_user_path_entry_is_added_once_and_removed_exactly(xdg_tmp, monkeypatch) -> None:
+    """The Windows counterpart of the rc block. Registry access is stubbed — what is under test is
+    the arithmetic on the PATH value, which is where an install can damage something."""
+    stored = {"value": r"C:\Tools;%USERPROFILE%\bin"}
+    monkeypatch.setattr(materialize, "_read_user_path", lambda: stored["value"])
+    monkeypatch.setattr(
+        materialize, "_write_user_path", lambda value: stored.__setitem__("value", value)
+    )
+    ours = str(paths.user_bin_dir())
+
+    assert materialize.add_user_path_entry() is True
+    assert stored["value"].split(";") == [r"C:\Tools", r"%USERPROFILE%\bin", ours]
+    assert materialize.add_user_path_entry() is False  # idempotent
+
+    assert materialize.remove_user_path_entry() is True
+    assert stored["value"] == r"C:\Tools;%USERPROFILE%\bin"  # everything else untouched
+    assert materialize.remove_user_path_entry() is False
+
+
+def test_an_entry_differing_only_in_case_or_a_trailing_slash_is_not_added_twice(
+    xdg_tmp, monkeypatch
+) -> None:
+    """Windows paths are case-insensitive and people's PATH entries end in a backslash as often as
+    not, so a naive compare would append a second copy of the same directory on every install."""
+    ours = str(paths.user_bin_dir())
+    stored = {"value": f"{ours.upper()}\\"}
+    monkeypatch.setattr(materialize, "_read_user_path", lambda: stored["value"])
+    monkeypatch.setattr(materialize, "_write_user_path", lambda value: pytest.fail("wrote anyway"))
+
+    assert materialize.add_user_path_entry() is False
+
+
 def test_removing_a_block_leaves_anything_written_after_it_alone(tmp_path) -> None:
     rc = tmp_path / ".zshrc"
     rc.write_text("first\n")

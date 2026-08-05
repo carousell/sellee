@@ -63,6 +63,9 @@ class Config:
     # PATH of the job the supervisor installs. Null means the daemon relies on whatever PATH it
     # inherits, which is right when it is started from a shell.
     node_bin_dir: str | None = None
+    # Set when setup added our bin directory to the account's own PATH — the receipt an uninstall
+    # reads before touching it, so a directory the seller had on PATH already is left alone.
+    path_entry_added: bool = False
     carousell_ai_api_base: str = "https://api.carousell.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"
     # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
@@ -209,6 +212,12 @@ def _validate(raw: dict) -> Config:
                 f"node_bin_dir must be a directory path or null, got {node_bin_dir!r}"
             )
         values["node_bin_dir"] = node_bin_dir.strip() if node_bin_dir is not None else None
+
+    if "path_entry_added" in raw:
+        added = raw["path_entry_added"]
+        if not isinstance(added, bool):
+            raise ConfigError(f"path_entry_added must be true or false, got {added!r}")
+        values["path_entry_added"] = added
 
     for key in ("carousell_ai_api_base", "carousell_ai_web_base_url", "telegram_api_base"):
         if key in raw:

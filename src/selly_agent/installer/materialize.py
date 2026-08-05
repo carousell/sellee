@@ -7,10 +7,10 @@ exactly the path an update will later take.
 Two invariants shape everything below. `current` is *always* a pointer we own — a symlink, or a
 junction where symlinks need privileges: a real directory there is someone else's (or a
 half-finished copy), and replacing it silently is how an install eats a tree it did not create, so
-it is refused with a remediation instead. And a version
-directory becomes visible only by rename: the copy lands beside its destination and is moved into
-place in one step, so a crash mid-copy leaves a stray `.tmp` and a still-working install rather
-than a half-populated version that `current` already points at.
+it is refused with a remediation instead. And a version directory becomes visible only by rename:
+the copy lands beside its destination and is moved into place in one step, so a crash mid-copy
+leaves a stray `.tmp` and a still-working install rather than a half-populated version that
+`current` already points at.
 """
 
 from __future__ import annotations
@@ -336,6 +336,95 @@ def user_bin_on_path(path_value=None) -> bool:
         if entry and Path(entry) == target:
             return True
     return False
+
+
+# --- the user PATH on Windows ----------------------------------------------------------------
+
+# Where a user's own PATH lives. Per-user, so no elevation is needed and nothing machine-wide is
+# touched. A separate value from the machine PATH, which the session concatenates with this one.
+_USER_ENVIRONMENT_KEY = "Environment"
+
+# Windows' own rules, written out rather than taken from this host: the value being edited is a
+# Windows registry value whichever machine reads the code, so borrowing os.pathsep and normcase
+# would make the logic mean different things in a test and in production.
+_WINDOWS_PATH_SEP = ";"
+
+
+def _same_directory(left: str, right: str) -> bool:
+    """Whether two PATH entries name one directory, by Windows' rules: case-insensitive, and a
+    trailing separator is not a difference. Without this an install appends a second copy of the
+    same directory every time somebody's PATH happens to spell it differently."""
+    return left.strip().rstrip("\\/").lower() == right.strip().rstrip("\\/").lower()
+
+
+def _read_user_path() -> str:
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _USER_ENVIRONMENT_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "Path")
+            return value or ""
+    except FileNotFoundError:
+        return ""  # an account that has never had a user PATH of its own
+
+
+def _write_user_path(value: str) -> None:
+    import winreg
+
+    key_args = (winreg.HKEY_CURRENT_USER, _USER_ENVIRONMENT_KEY, 0, winreg.KEY_WRITE)
+    with winreg.CreateKeyEx(*key_args) as key:
+        # REG_EXPAND_SZ, because a user PATH conventionally holds entries like %USERPROFILE%\... and
+        # writing it as a plain string would stop those from expanding for everyone else's entries.
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, value)
+    _broadcast_environment_change()
+
+
+def _broadcast_environment_change() -> None:
+    """Tell running programs the environment changed, so a new terminal sees the entry.
+
+    Without this the registry holds the new PATH but nothing reads it until the next sign-in, and
+    the seller is told to reopen a terminal that would not have helped. Explorer is what propagates
+    it to the terminals it launches. Best-effort: a failure here costs a sign-in, not the install.
+    """
+    import ctypes
+
+    HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
+    try:
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", SMTO_ABORTIFHUNG, 1000, None
+        )
+    except OSError:
+        pass
+
+
+def user_path_entries(value=None) -> list:
+    raw = _read_user_path() if value is None else value
+    return [entry for entry in raw.split(_WINDOWS_PATH_SEP) if entry.strip()]
+
+
+def add_user_path_entry() -> bool:
+    """Put our bin dir on the account's own PATH. Answers whether anything was written.
+
+    Appended rather than prepended: this is not a directory that should shadow the seller's own
+    tools, and the only thing in it is ours.
+    """
+    target = str(paths.user_bin_dir())
+    existing = user_path_entries()
+    if any(_same_directory(entry, target) for entry in existing):
+        return False
+    _write_user_path(_WINDOWS_PATH_SEP.join([*existing, target]))
+    return True
+
+
+def remove_user_path_entry() -> bool:
+    """Take our bin dir off the account's PATH, leaving every other entry exactly as it was."""
+    target = str(paths.user_bin_dir())
+    existing = user_path_entries()
+    kept = [entry for entry in existing if not _same_directory(entry, target)]
+    if len(kept) == len(existing):
+        return False
+    _write_user_path(_WINDOWS_PATH_SEP.join(kept))
+    return True
 
 
 def rc_block() -> str:

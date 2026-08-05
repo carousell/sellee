@@ -14,6 +14,7 @@ than writing state behind its back.
 from __future__ import annotations
 
 import json
+import os
 import time
 
 from selly_agent import (
@@ -279,6 +280,10 @@ def _offer_path(ui: Ui, args) -> None:
     ui.say("")
     ui.warn(f"{bin_dir} is not on your PATH, so `selly-agent` will not be found yet.")
 
+    if os.name == "nt":
+        _offer_user_path_entry(ui, args, bin_dir)
+        return
+
     rc_path = materialize.shell_rc_target()
     if rc_path is None:
         # A shell we do not write config for. Someone running something other than the macOS
@@ -305,6 +310,27 @@ def _offer_path(ui: Ui, args) -> None:
         ui.say(f"added to {rc_path} — open a new terminal, or run: source {rc_path}")
     else:
         ui.say(f"{rc_path} already had it")
+
+
+def _offer_user_path_entry(ui: Ui, args, bin_dir) -> None:
+    """The Windows equivalent of the rc-file offer: the account's own PATH, in the registry.
+
+    Same contract as the dotfile — offered, declinable, and recorded so an uninstall removes only
+    what was added. There is no shell to ask about here: one value serves every terminal.
+    """
+    by_hand = f'Add {bin_dir} to your PATH: setx PATH "%PATH%;{bin_dir}"'
+    consented = ui.interactive or ui.assume_yes
+    if args.no_modify_path or not consented:
+        ui.say(by_hand)
+        return
+    if not ui.confirm("Add it to your account's PATH?", default=True, lead=False):
+        ui.say(f"Left unchanged. {by_hand}")
+        return
+    if materialize.add_user_path_entry():
+        config.merge_into_file({"path_entry_added": True})
+        ui.say("added to your account's PATH — open a new terminal to pick it up")
+    else:
+        ui.say("your account's PATH already had it")
 
 
 def _explain_path_by_hand(ui: Ui, shell: str, bin_dir) -> None:
