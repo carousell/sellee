@@ -38,7 +38,26 @@ render_pikchr() {
 	local name=$1 width=$2
 	pikchr --svg-only "$name.pikchr" \
 		| rsvg-convert --width "$width" --background-color white -o "$name.png"
-	echo "rendered $name.png (${width}px wide)"
+	optimize_png "$name.png"
+	echo "rendered $name.png (${width}px wide, $(du -h "$name.png" | cut -f1))"
+}
+
+# PNG optimization; neither tool is auto-installed. pngquant first (palette
+# quantization — visually lossless on flat-color diagrams, biggest win),
+# then oxipng (lossless recompression of whatever the previous step left).
+optimize_png() {
+	local file=$1
+	if command -v pngquant >/dev/null 2>&1; then
+		# pngquant exits nonzero when --skip-if-larger declines to rewrite
+		pngquant --force --skip-if-larger --ext .png -- "$file" || true
+	else
+		echo "warning: pngquant not found; skipping palette quantization" >&2
+	fi
+	if command -v oxipng >/dev/null 2>&1; then
+		oxipng --quiet --opt 4 --strip safe "$file"
+	else
+		echo "warning: oxipng not found; skipping lossless recompression" >&2
+	fi
 }
 
 render_pikchr architecture-master 800

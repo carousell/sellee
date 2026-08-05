@@ -5,14 +5,16 @@
 
 $m = 0.15            // zone border padding
 $label = 0.26        // extra zone headroom for the zone label
+$label2 = 0.34       // headroom when the label sits directly above a component row
 boxwid = 1.2
 boxht = 0.35
+fontscale = 1.25
 
 // ---------- people ----------
 SELLER: oval "seller" fit fill white
 
 // ---------- control surfaces (contents) ----------
-TG:  box fill white "telegram channel" at SELLER.s - (0, 0.85)
+TG:  box fill white "telegram channel" at SELLER.s - (0, 0.93)
 ATT: box fill white "attended session" "(terminal)" at TG - (1.85, 0)
 OTH: box fill white "... other channels" at TG + (1.85, 0)
 
@@ -38,7 +40,7 @@ HARNESS: box fill white "agent harness" "(ephemeral)" at (MCP.c.x, PASS.c.y - 0.
 BROWSER: box fill white "browser" at HARNESS + (2.5, 0)
 
 // ---------- marketplaces (contents) ----------
-FB:   box fill white "facebook" "marketplace" at (TG.c.x, HARNESS.c.y - 1.1)
+FB:   box fill white "facebook" "marketplace" at (TG.c.x, HARNESS.c.y - 1.18)
 CARO: box fill white "carousell" at FB - (1.85, 0)
 OTHM: box fill white "... other marketplaces" at FB + (1.85, 0)
 
@@ -50,25 +52,25 @@ DAEMON: box wid BUS.wid + 0.14 + 2*$m \
     ht (ADAPTER.n.y - PASS.s.y) + 2*$m \
     at (BUS.c.x, (ADAPTER.n.y + PASS.s.y)/2) \
     fill 0xfdf3d6 thick behind ADAPTER
-text "selly daemon" italic with .nw at DAEMON.nw + (-0.15, 0)
+text "selly daemon" italic with .nw at DAEMON.nw + (-0.18, 0)
 
 MACHINE: box wid DAEMON.wid + 2.4*$m \
     ht (DAEMON.n.y + $label) - (HARNESS.s.y - $m) \
     at (DAEMON.c.x, ((DAEMON.n.y + $label) + (HARNESS.s.y - $m))/2) \
     fill 0xfffbf0 thick behind DAEMON
-text "seller's machine" italic with .nw at MACHINE.nw + (-0.15, 0)
+text "seller's machine" italic with .nw at MACHINE.nw + (-0.22, 0)
 
 CONTROL: box wid MACHINE.wid \
-    ht (ATT.n.y + $label) - (ATT.s.y - $m) \
-    at (MACHINE.c.x, ((ATT.n.y + $label) + (ATT.s.y - $m))/2) \
+    ht (ATT.n.y + $label2) - (ATT.s.y - $m) \
+    at (MACHINE.c.x, ((ATT.n.y + $label2) + (ATT.s.y - $m))/2) \
     fill 0xdbeefb thick behind ATT
-text "control surfaces" italic with .nw at CONTROL.nw + (-0.15, 0)
+text "control surfaces" italic with .nw at CONTROL.nw + (-0.22, 0)
 
 MARKETS: box wid MACHINE.wid \
-    ht (CARO.n.y + $label) - (CARO.s.y - $m) \
-    at (MACHINE.c.x, ((CARO.n.y + $label) + (CARO.s.y - $m))/2) \
+    ht (CARO.n.y + $label2) - (CARO.s.y - $m) \
+    at (MACHINE.c.x, ((CARO.n.y + $label2) + (CARO.s.y - $m))/2) \
     fill 0xf6e6fa thick behind CARO
-text "marketplaces" italic with .nw at MARKETS.nw + (-0.15, 0)
+text "marketplaces" italic with .nw at MARKETS.nw + (-0.18, 0)
 
 BUYERS: oval "buyers" fit fill white at (FB.c.x, MARKETS.s.y - 0.55)
 
