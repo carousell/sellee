@@ -1,0 +1,110 @@
+// Master architecture diagram — selly-agent
+// Layout: control surfaces / seller's machine (daemon inside) / marketplaces,
+// with the seller and buyers as the endpoints. Content boxes are placed first,
+// zone borders are computed from their bounds and drawn behind, arrows last.
+
+$m = 0.15            // zone border padding
+$label = 0.26        // extra zone headroom for the zone label
+boxwid = 1.2
+boxht = 0.35
+
+// ---------- people ----------
+SELLER: oval "seller" fit fill white
+
+// ---------- control surfaces (contents) ----------
+TG:  box fill white "telegram channel" at SELLER.s - (0, 0.85)
+ATT: box fill white "attended session" "(terminal)" at TG - (1.85, 0)
+OTH: box fill white "... other channels" at TG + (1.85, 0)
+
+// ---------- selly daemon (contents) ----------
+ADAPTER: box fill white "channel adapter" at TG - (0, 1.25)
+// event bus: a horizontal ("rotated") cylinder — body + end caps drawn
+// manually since pikchr cylinders are upright-only; BUS is an invisible
+// box giving the arrows their usual .n/.s anchor points
+BUSBODY: box wid 4.7 ht 0.28 at ADAPTER - (0, 0.715) fill white color white
+BUS:     box invis "event bus" wid BUSBODY.wid ht BUSBODY.ht at BUSBODY
+line from BUS.nw to BUS.ne
+line from BUS.sw to BUS.se
+ellipse wid 0.14 ht BUS.ht at BUS.w fill white
+ellipse wid 0.14 ht BUS.ht at BUS.e fill white
+SCHED:   box fill white "scheduler" at BUS - (0, 0.715)
+MCP:     box fill white "MCP server" at SCHED - (1.75, 0)
+DB:      cylinder fill white "sqlite DB" "(everything uses this)" small small \
+             wid 0.7 ht 0.5 rad 0.05 at SCHED + (1.75, 0)
+PASS:    box fill white "pass runner" at SCHED - (0, 0.75)
+
+// ---------- external processes on the seller's machine ----------
+HARNESS: box fill white "agent harness" "(ephemeral)" at (MCP.c.x, PASS.c.y - 0.95)
+BROWSER: box fill white "browser" at HARNESS + (2.5, 0)
+
+// ---------- marketplaces (contents) ----------
+FB:   box fill white "facebook" "marketplace" at (TG.c.x, HARNESS.c.y - 1.1)
+CARO: box fill white "carousell" at FB - (1.85, 0)
+OTHM: box fill white "... other marketplaces" at FB + (1.85, 0)
+
+// ---------- zone borders (drawn behind their contents) ----------
+// DAEMON/MACHINE come first: CONTROL and MARKETS take MACHINE's width so all
+// three outer zones share edges (they already share a center x)
+// width from the event bus (the widest element); +0.14 covers the end caps
+DAEMON: box wid BUS.wid + 0.14 + 2*$m \
+    ht (ADAPTER.n.y - PASS.s.y) + 2*$m \
+    at (BUS.c.x, (ADAPTER.n.y + PASS.s.y)/2) \
+    fill 0xfdf3d6 thick behind ADAPTER
+text "selly daemon" italic with .nw at DAEMON.nw + (-0.15, 0)
+
+MACHINE: box wid DAEMON.wid + 2.4*$m \
+    ht (DAEMON.n.y + $label) - (HARNESS.s.y - $m) \
+    at (DAEMON.c.x, ((DAEMON.n.y + $label) + (HARNESS.s.y - $m))/2) \
+    fill 0xfffbf0 thick behind DAEMON
+text "seller's machine" italic with .nw at MACHINE.nw + (-0.15, 0)
+
+CONTROL: box wid MACHINE.wid \
+    ht (ATT.n.y + $label) - (ATT.s.y - $m) \
+    at (MACHINE.c.x, ((ATT.n.y + $label) + (ATT.s.y - $m))/2) \
+    fill 0xdbeefb thick behind ATT
+text "control surfaces" italic with .nw at CONTROL.nw + (-0.15, 0)
+
+MARKETS: box wid MACHINE.wid \
+    ht (CARO.n.y + $label) - (CARO.s.y - $m) \
+    at (MACHINE.c.x, ((CARO.n.y + $label) + (CARO.s.y - $m))/2) \
+    fill 0xf6e6fa thick behind CARO
+text "marketplaces" italic with .nw at MARKETS.nw + (-0.15, 0)
+
+BUYERS: oval "buyers" fit fill white at (FB.c.x, MARKETS.s.y - 0.55)
+
+// ---------- arrows ----------
+// people <-> zones
+arrow <-> from SELLER.s to (SELLER.c.x, CONTROL.n.y)
+arrow <-> from BUYERS.n to (BUYERS.c.x, MARKETS.s.y)
+
+// control surfaces <-> channel adapter
+arrow <-> from TG.s to ADAPTER.n
+arrow <-> from OTH.s down until even with (OTH.s.x, CONTROL.s.y - 0.18) \
+    then left until even with (ADAPTER.n.x + 0.45, ADAPTER.n.y) \
+    then down until even with ADAPTER.n
+
+// attended session -> MCP server, routed around the left edge
+arrow from ATT.w left 0.55 then down until even with MCP.w then to MCP.w
+text "calls" small rjust at (ATT.w.x - 0.59, (ATT.c.y + MCP.c.y)/2)
+
+// daemon internals
+arrow <-> from ADAPTER.s to BUS.n
+text "consumes" small ljust "+ emits" small ljust at last arrow.c + (0.04, 0)
+arrow from MCP.n to (MCP.c.x, BUS.s.y)
+text "emits" small rjust at last arrow.c - (0.04, 0)
+arrow <-> from SCHED.n to BUS.s
+text "consumes" small ljust "+ emits" small ljust at last arrow.c + (0.04, 0)
+arrow from SCHED.s to PASS.n
+text "triggers" small ljust at last arrow.c + (0.04, 0)
+
+// the pass loop: daemon spawns the harness; the harness acts only via MCP
+arrow from PASS.s down 0.4 \
+    then left until even with (HARNESS.n.x + 0.55, HARNESS.n.y) \
+    then down until even with HARNESS.n
+text "spawns + manages" small at ((PASS.s.x + (HARNESS.n.x + 0.55))/2, PASS.s.y - 0.4 + 0.07)
+arrow from HARNESS.n to MCP.s
+text "calls" small rjust at last arrow.c - (0.04, 0)
+
+// harness -> browser -> marketplaces
+arrow from HARNESS.e to BROWSER.w "drives" above small
+arrow <-> from BROWSER.s to (BROWSER.c.x, MARKETS.n.y)

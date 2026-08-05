@@ -1,0 +1,94 @@
+<svg xmlns='http://www.w3.org/2000/svg' style='font-size:initial;' class="pikchr" viewBox="0 0 869.138 1087.2" data-pikchr-date="20250304235229">
+<path d="M74.9779,832.32L866.978,832.32L866.978,250.56L74.9779,250.56Z"  style="fill:rgb(255,251,240);stroke-width:3.24;stroke:rgb(0,0,0);" />
+<path d="M100.898,695.52L841.058,695.52L841.058,288L100.898,288Z"  style="fill:rgb(253,243,214);stroke-width:3.24;stroke:rgb(0,0,0);" />
+<path d="M74.9779,201.6L866.978,201.6L866.978,92.16L74.9779,92.16Z"  style="fill:rgb(219,238,251);stroke-width:3.24;stroke:rgb(0,0,0);" />
+<path d="M74.9779,990.72L866.978,990.72L866.978,881.28L74.9779,881.28Z"  style="fill:rgb(246,230,250);stroke-width:3.24;stroke:rgb(0,0,0);" />
+<path d="M456.722,32.4L485.234,32.4A15.12 15.12 0 0 0 500.354 17.28A15.12 15.12 0 0 0 485.234 2.16L456.722,2.16A15.12 15.12 0 0 0 441.602 17.28A15.12 15.12 0 0 0 456.722 32.4Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="17.28" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">seller</text>
+<path d="M384.578,180L557.378,180L557.378,129.6L384.578,129.6Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="154.8" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">telegram channel</text>
+<path d="M118.178,180L290.978,180L290.978,129.6L118.178,129.6Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="204.578" y="144.72" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">attended session</text>
+<text x="204.578" y="164.88" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">(terminal)</text>
+<path d="M650.978,180L823.778,180L823.778,129.6L650.978,129.6Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="737.378" y="154.8" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">... other channels</text>
+<path d="M384.578,360L557.378,360L557.378,309.6L384.578,309.6Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="334.8" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">channel adapter</text>
+<path d="M132.578,457.92L809.378,457.92L809.378,417.6L132.578,417.6Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(255,255,255);" />
+<text x="470.978" y="437.76" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">event bus</text>
+<path d="M132.578,417.6L809.378,417.6"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<path d="M132.578,457.92L809.378,457.92"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<ellipse cx="132.578" cy="437.76" rx="10.08" ry="20.16"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<ellipse cx="809.378" cy="437.76" rx="10.08" ry="20.16"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<path d="M384.578,565.92L557.378,565.92L557.378,515.52L384.578,515.52Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="540.72" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">scheduler</text>
+<path d="M132.578,565.92L305.378,565.92L305.378,515.52L132.578,515.52Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="218.978" y="540.72" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">MCP server</text>
+<path d="M672.578,511.92L672.578,569.52A50.4 7.2 0 0 0 773.378 569.52L773.378,511.92A50.4 7.2 0 0 0 672.578 511.92A50.4 7.2 0 0 0 773.378 511.92"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="722.978" y="536.04" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">sqlite DB</text>
+<text x="722.978" y="552.571" text-anchor="middle" fill="rgb(0,0,0)" font-size="64%" dominant-baseline="central">(everything uses this)</text>
+<path d="M384.578,673.92L557.378,673.92L557.378,623.52L384.578,623.52Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="648.72" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">pass runner</text>
+<path d="M132.578,810.72L305.378,810.72L305.378,760.32L132.578,760.32Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="218.978" y="775.44" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">agent harness</text>
+<text x="218.978" y="795.6" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">(ephemeral)</text>
+<path d="M492.578,810.72L665.378,810.72L665.378,760.32L492.578,760.32Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="578.978" y="785.52" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">browser</text>
+<path d="M384.578,969.12L557.378,969.12L557.378,918.72L384.578,918.72Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="933.84" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">facebook</text>
+<text x="470.978" y="954" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">marketplace</text>
+<path d="M118.178,969.12L290.978,969.12L290.978,918.72L118.178,918.72Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="204.578" y="943.92" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">carousell</text>
+<path d="M650.978,969.12L823.778,969.12L823.778,918.72L650.978,918.72Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="737.378" y="943.92" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">... other marketplaces</text>
+<text x="140.181" y="303.12" text-anchor="middle" font-style="italic" fill="rgb(0,0,0)" dominant-baseline="central">selly daemon</text>
+<text x="127.509" y="265.68" text-anchor="middle" font-style="italic" fill="rgb(0,0,0)" dominant-baseline="central">seller's machine</text>
+<text x="126.991" y="107.28" text-anchor="middle" font-style="italic" fill="rgb(0,0,0)" dominant-baseline="central">control surfaces</text>
+<text x="115.989" y="896.4" text-anchor="middle" font-style="italic" fill="rgb(0,0,0)" dominant-baseline="central">marketplaces</text>
+<path d="M451.941,1085.04L490.015,1085.04A15.12 15.12 0 0 0 505.135 1069.92A15.12 15.12 0 0 0 490.015 1054.8L451.941,1054.8A15.12 15.12 0 0 0 436.821 1069.92A15.12 15.12 0 0 0 451.941 1085.04Z"  style="fill:rgb(255,255,255);stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="470.978" y="1069.92" text-anchor="middle" fill="rgb(0,0,0)" dominant-baseline="central">buyers</text>
+<polygon points="470.978,32.4 475.298,43.92 466.658,43.92" style="fill:rgb(0,0,0)"/>
+<polygon points="470.978,92.16 466.658,80.64 475.298,80.64" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,38.16L470.978,86.4"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<polygon points="470.978,1054.8 466.658,1043.28 475.298,1043.28" style="fill:rgb(0,0,0)"/>
+<polygon points="470.978,990.72 475.298,1002.24 466.658,1002.24" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,1049.04L470.978,996.48"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<polygon points="470.978,180 475.298,191.52 466.658,191.52" style="fill:rgb(0,0,0)"/>
+<polygon points="470.978,309.6 466.658,298.08 475.298,298.08" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,185.76L470.978,303.84"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<polygon points="737.378,180 741.698,191.52 733.058,191.52" style="fill:rgb(0,0,0)"/>
+<polygon points="535.778,309.6 531.458,298.08 540.098,298.08" style="fill:rgb(0,0,0)"/>
+<path d="M737.378,185.76L737.378,227.52L535.778,227.52L535.778,303.84"  style="fill:none;stroke-width:2.16;stroke-linejoin:round;stroke:rgb(0,0,0);" />
+<polygon points="132.578,540.72 121.058,545.04 121.058,536.4" style="fill:rgb(0,0,0)"/>
+<path d="M118.178,154.8L38.9779,154.8L38.9779,540.72L126.818,540.72"  style="fill:none;stroke-width:2.16;stroke-linejoin:round;stroke:rgb(0,0,0);" />
+<text x="33.2179" y="347.76" text-anchor="end" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">calls</text>
+<polygon points="470.978,360 475.298,371.52 466.658,371.52" style="fill:rgb(0,0,0)"/>
+<polygon points="470.978,417.6 466.658,406.08 475.298,406.08" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,365.76L470.978,411.84"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="476.738" y="380.736" text-anchor="start" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">consumes</text>
+<text x="476.738" y="396.864" text-anchor="start" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">+ emits</text>
+<polygon points="218.978,457.92 223.298,469.44 214.658,469.44" style="fill:rgb(0,0,0)"/>
+<path d="M218.978,515.52L218.978,463.68"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="213.218" y="486.72" text-anchor="end" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">emits</text>
+<polygon points="470.978,515.52 466.658,504 475.298,504" style="fill:rgb(0,0,0)"/>
+<polygon points="470.978,457.92 475.298,469.44 466.658,469.44" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,509.76L470.978,463.68"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="476.738" y="478.656" text-anchor="start" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">consumes</text>
+<text x="476.738" y="494.784" text-anchor="start" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">+ emits</text>
+<polygon points="470.978,623.52 466.658,612 475.298,612" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,565.92L470.978,617.76"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="476.738" y="594.72" text-anchor="start" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">triggers</text>
+<polygon points="298.178,760.32 293.858,748.8 302.498,748.8" style="fill:rgb(0,0,0)"/>
+<path d="M470.978,673.92L470.978,731.52L298.178,731.52L298.178,754.56"  style="fill:none;stroke-width:2.16;stroke-linejoin:round;stroke:rgb(0,0,0);" />
+<text x="384.578" y="721.44" text-anchor="middle" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">spawns + manages</text>
+<polygon points="218.978,565.92 223.298,577.44 214.658,577.44" style="fill:rgb(0,0,0)"/>
+<path d="M218.978,760.32L218.978,571.68"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="213.218" y="663.12" text-anchor="end" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">calls</text>
+<polygon points="492.578,785.52 481.058,789.84 481.058,781.2" style="fill:rgb(0,0,0)"/>
+<path d="M305.378,785.52L486.818,785.52"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+<text x="398.978" y="775.836" text-anchor="middle" fill="rgb(0,0,0)" font-size="80%" dominant-baseline="central">drives</text>
+<polygon points="578.978,810.72 583.298,822.24 574.658,822.24" style="fill:rgb(0,0,0)"/>
+<polygon points="578.978,881.28 574.658,869.76 583.298,869.76" style="fill:rgb(0,0,0)"/>
+<path d="M578.978,816.48L578.978,875.52"  style="fill:none;stroke-width:2.16;stroke:rgb(0,0,0);" />
+</svg>
+
