@@ -11,10 +11,11 @@ from __future__ import annotations
 
 import os
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from selly_agent import config, heartbeat, paths
+from selly_agent import config, control, heartbeat, lock, paths, secrets
 from selly_agent.db import connect_reader
 from selly_agent.events import query_events
 from selly_agent.installer import materialize
@@ -188,22 +189,75 @@ def start(*, label: str | None = None, platform: Platform | None = None) -> int:
     return 0
 
 
+# How long the daemon gets to finish what it is doing once asked. A pass in flight is the long
+# case; the drain does not wait for one, so this covers the lanes settling and the files closing.
+STOP_TIMEOUT_SEC = 30.0
+_STOP_POLL_SEC = 0.2
+
+
+def daemon_pid() -> int | None:
+    """The PID of the running daemon, from the instance lock; None when nothing holds it."""
+    pid = lock.read_holder_pid(paths.lock_path())
+    return pid if lock.is_pid_alive(pid) else None
+
+
+def shutdown(
+    *, label: str | None = None, platform: Platform | None = None, timeout_sec: float | None = None
+) -> bool:
+    """Take the daemon down and wait until its process is gone. True when nothing is running.
+
+    The job is deregistered first so the supervisor cannot restart what is about to stop, then the
+    daemon is asked over its control route to drain and exit. Asked rather than signalled because
+    nothing delivers a signal on Windows — and because callers that go on to replace files the
+    daemon holds open need a stop that is settled, not merely requested.
+
+    False means a process is still there after being asked, which is a refusal to proceed rather
+    than something to force: whatever it is doing, it is doing it to the seller's databases.
+    """
+    platform = _resolve_platform(platform)
+    label = _resolve_label(platform, label)
+    if platform.is_registered(label):
+        platform.unregister(label)
+
+    pid = daemon_pid()
+    if pid is None:
+        return True
+    token = secrets.read_mcp_token()
+    if token:
+        try:
+            control.post(config.load().http_port, token, "/control/shutdown", {})
+        except control.DaemonUnreachable:
+            # Already going, or already gone. The wait below is the answer either way.
+            pass
+
+    deadline = time.monotonic() + (STOP_TIMEOUT_SEC if timeout_sec is None else timeout_sec)
+    while lock.is_pid_alive(pid):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(_STOP_POLL_SEC)
+    return True
+
+
 def stop(*, label: str | None = None, platform: Platform | None = None) -> int:
     platform = _resolve_platform(platform)
     label = _resolve_label(platform, label)
-    if not platform.is_registered(label):
-        print("not running")
-        return 0
-    platform.unregister(label)
-    print("stopped")
+    running = platform.is_registered(label) or daemon_pid() is not None
+    if not shutdown(label=label, platform=platform):
+        print(
+            f"the worker (pid {daemon_pid()}) did not stop within {STOP_TIMEOUT_SEC:.0f}s — it is "
+            "still writing, so nothing has been forced. Check `selly-agent logs`.",
+            file=sys.stderr,
+        )
+        return 1
+    print("stopped" if running else "not running")
     return 0
 
 
 def uninstall(*, label: str | None = None, platform: Platform | None = None) -> int:
     platform = _resolve_platform(platform)
     label = _resolve_label(platform, label)
-    if platform.is_registered(label):
-        platform.unregister(label)
+    # Drained rather than just deregistered: the files about to be removed are the ones it has open.
+    shutdown(label=label, platform=platform)
     for location in _plist_locations(platform, label).values():
         if location.exists() and _is_ours(location):
             location.unlink()

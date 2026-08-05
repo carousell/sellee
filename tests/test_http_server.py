@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 
@@ -355,3 +356,22 @@ def test_tail_serves_the_packaged_page(server) -> None:
     assert b"event tail" in served
     # the page is a packaged asset, not an inline string — pin that wiring
     assert served == (PACKAGE_DATA_DIR / "tail.html").read_bytes()
+
+
+def test_shutdown_sets_the_stop_flag_the_signal_handlers_set(server) -> None:
+    stop = threading.Event()
+    server.stop_event = stop
+
+    status, body = _request(server, "POST", "/control/shutdown", token="attended-secret", body={})
+
+    assert status == 202
+    assert body["stopping"] is True
+    assert stop.is_set()
+
+
+def test_shutdown_without_a_loop_to_stop_says_so(server) -> None:
+    """A single-tick run answers the route rather than pretending to stop."""
+    status, body = _request(server, "POST", "/control/shutdown", token="attended-secret", body={})
+
+    assert status == 409
+    assert "no loop" in body["error"]

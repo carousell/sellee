@@ -238,11 +238,19 @@ def restore_snapshot(snapshot: Path) -> None:
 
 
 def _stop_daemon(platform=None) -> bool:
-    """Stop the daemon, answering whether it was running. Its state before the update decides
-    whether it should be running after."""
+    """Stop the daemon and confirm it is gone, answering whether it was running. Its state before
+    the update decides whether it should be running after.
+
+    Confirmed rather than requested, because everything after this replaces files the daemon has
+    open — and on Windows an open file cannot be replaced at all, so a swap racing a live daemon
+    fails partway instead of being merely untidy.
+    """
     status = supervisor.gather_status(platform=platform)
-    if status.registered:
-        supervisor.stop(label=status.label, platform=platform)
+    if not supervisor.shutdown(label=status.label, platform=platform):
+        raise UpdateError(
+            f"the background worker (pid {supervisor.daemon_pid()}) did not stop when asked, and "
+            "updating would replace files it still has open — nothing has been changed"
+        )
     return status.registered
 
 
@@ -364,9 +372,8 @@ def perform(args, cfg, out, *, platform=None) -> int:
     # was handed: re-installing the job under the wrong mode would quietly move the plist and
     # turn a start-at-login daemon into one that never comes back.
     status = supervisor.gather_status(platform=platform)
-    mode, was_running = status.mode, status.registered
-    if was_running:
-        supervisor.stop(label=status.label, platform=platform)
+    mode = status.mode
+    was_running = _stop_daemon(platform)
     try:
         materialize.install_version(staged, release.version)
     except Exception:

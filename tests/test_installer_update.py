@@ -543,6 +543,24 @@ def test_a_successful_update_clears_the_download_cache(installed, served) -> Non
     assert (stale / "selly-agent-0.2.0.tar.gz").exists()
 
 
+def test_an_update_refuses_to_start_while_the_daemon_is_still_running(
+    installed, served, monkeypatch
+) -> None:
+    """The swap replaces files the daemon has open, which on Windows cannot be done at all — so a
+    stop that was requested but never confirmed has to stop the update, not just be noted."""
+    root, base = served
+    build_release(root, "0.2.0")
+    monkeypatch.setattr(supervisor, "shutdown", lambda **_kwargs: False)
+    monkeypatch.setattr(supervisor, "daemon_pid", lambda: 4242)
+    before = materialize.current_target()
+
+    with pytest.raises(UpdateError) as caught:
+        update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
+
+    assert "did not stop" in str(caught.value)
+    assert materialize.current_target() == before
+
+
 def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(
     xdg_tmp, monkeypatch, capsys
 ) -> None:

@@ -312,6 +312,7 @@ def run_daemon(*, once: bool) -> int:
             attended_token=attended_token,
             config=cfg,
             channels=channels,
+            stop_event=stop,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so

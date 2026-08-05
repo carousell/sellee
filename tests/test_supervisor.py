@@ -252,3 +252,69 @@ def test_install_refuses_a_real_directory_at_current(xdg_tmp) -> None:
 
     assert supervisor.install(mode="manual", platform=fake) == 2
     assert fake.register_calls == []
+
+
+# --- the confirmed stop -------------------------------------------------------------------
+
+
+def _liveness(*answers):
+    """Successive answers to is_pid_alive, so a test can script a process going away. The last
+    answer repeats, so a single True means one that never does."""
+    remaining = list(answers)
+    return lambda _pid: remaining.pop(0) if len(remaining) > 1 else remaining[0]
+
+
+def _pretend_holder(monkeypatch, pid: int, *answers) -> None:
+    monkeypatch.setattr(supervisor.lock, "read_holder_pid", lambda _path: pid)
+    monkeypatch.setattr(supervisor.lock, "is_pid_alive", _liveness(*answers))
+    monkeypatch.setattr(supervisor.time, "sleep", lambda _seconds: None)
+
+
+def test_stopping_deregisters_before_asking_the_daemon_to_drain(xdg_tmp, monkeypatch) -> None:
+    """Order matters where a periodic trigger is the keep-alive: a daemon asked to stop while its
+    job is still enabled can be started again before it has finished going."""
+    fake = FakePlatform()
+    fake.registered_labels.add("com.selly.agent")
+    happened = []
+
+    def unregister(label: str) -> None:
+        happened.append("deregistered")
+        fake.registered_labels.discard(label)
+
+    def post(*_args, **_kwargs):
+        happened.append("asked")
+        return 202, {"stopping": True}
+
+    monkeypatch.setattr(fake, "unregister", unregister)
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: "token")
+    monkeypatch.setattr(supervisor.control, "post", post)
+    _pretend_holder(monkeypatch, 4242, True, False)
+
+    assert supervisor.shutdown(platform=fake) is True
+    assert happened == ["deregistered", "asked"]
+
+
+def test_a_daemon_that_will_not_go_is_not_reported_as_stopped(xdg_tmp, monkeypatch) -> None:
+    """Nothing is forced: whatever it is still doing, it is doing to the seller's databases."""
+    fake = FakePlatform()
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: None)
+    monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
+    _pretend_holder(monkeypatch, 4242, True)
+
+    assert supervisor.shutdown(platform=fake) is False
+    assert supervisor.stop(platform=fake) == 1
+
+
+def test_an_unreachable_daemon_still_settles_when_its_process_goes(xdg_tmp, monkeypatch) -> None:
+    """A daemon already draining refuses connections while still holding the lock, which is no
+    reason to give up on it: the process going away is the answer, not the reply."""
+    fake = FakePlatform()
+
+    def refuse(*_args, **_kwargs):
+        raise supervisor.control.DaemonUnreachable("connection refused")
+
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: "token")
+    monkeypatch.setattr(supervisor.control, "post", refuse)
+    _pretend_holder(monkeypatch, 4242, True, True, False)
+
+    assert supervisor.shutdown(platform=fake) is True
