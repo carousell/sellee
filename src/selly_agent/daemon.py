@@ -166,12 +166,18 @@ def make_browser_factory(cfg, store, bus, holder: dict):
 
 def _setup_logging(level_name: str) -> None:
     level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level,
-        stream=sys.stderr,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        force=True,
-    )
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    if sys.stderr is None:
+        # A windowless interpreter (pythonw) has no stderr, and the scheduled task that starts
+        # the daemon there does no output redirection the way launchd does — so the daemon owns
+        # its log file, at the same path the macOS supervisor redirects to.
+        log_path = paths.logs_dir() / "agent.err.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=level, filename=str(log_path), encoding="utf-8", format=fmt, force=True
+        )
+        return
+    logging.basicConfig(level=level, stream=sys.stderr, format=fmt, force=True)
 
 
 def _install_signal_handlers(stop: threading.Event) -> None:

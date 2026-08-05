@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from pathlib import Path
@@ -9,6 +10,7 @@ from pathlib import Path
 from selly_agent import config, paths, supervisor
 from selly_agent.installer import materialize
 from selly_agent.platform.macos import MacOSPlatform
+from selly_agent.platform.windows import WindowsPlatform
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "com.selly.agent.plist"
 
@@ -373,3 +375,52 @@ def test_a_file_that_does_not_decode_is_not_ours(tmp_path) -> None:
     path.write_bytes(b"\xff\xfe\x00")  # a truncated UTF-16 stream no encoding accepts
 
     assert not supervisor._is_ours(path, FakePlatform())
+
+
+# --- environment delivery through a companion file ----------------------------------------
+
+
+class FakeWindowsPlatform(WindowsPlatform):
+    """The Windows platform with its schtasks calls recorded in-memory instead of executed."""
+
+    def __init__(self):
+        self.registered_labels: set[str] = set()
+
+    def register(self, config_path: Path) -> None:
+        self.registered_labels.add(Path(config_path).stem)
+
+    def unregister(self, label: str) -> None:
+        self.registered_labels.discard(label)
+
+    def is_registered(self, label: str) -> bool:
+        return label in self.registered_labels
+
+
+def test_a_definition_that_cannot_carry_environment_gets_a_companion_file(xdg_tmp) -> None:
+    """Task Scheduler XML has no environment element, so the pinned environment must arrive
+    through the companion file the action's --env-file argument names — dropping it silently is
+    how the daemon ends up resolving a different world's paths than the installer provisioned."""
+    fake = FakeWindowsPlatform()
+    assert supervisor.install(mode="manual", platform=fake) == 0
+
+    dest = paths.config_dir() / "SellyAgent.xml"
+    companion = paths.config_dir() / "SellyAgent.env.json"
+    definition = dest.read_text(encoding="utf-16")
+    assert "--env-file" in definition
+    assert companion.name in definition
+
+    environment = json.loads(companion.read_text(encoding="utf-8"))
+    assert environment["PYTHONUTF8"] == "1"
+    assert environment["XDG_STATE_HOME"] == os.environ["XDG_STATE_HOME"]
+
+
+def test_uninstall_takes_the_companion_file_with_the_definition(xdg_tmp) -> None:
+    fake = FakeWindowsPlatform()
+    assert supervisor.install(mode="manual", platform=fake) == 0
+    companion = paths.config_dir() / "SellyAgent.env.json"
+    assert companion.exists()
+
+    assert supervisor.uninstall(platform=fake) == 0
+
+    assert not companion.exists()
+    assert not (paths.config_dir() / "SellyAgent.xml").exists()

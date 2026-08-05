@@ -13,6 +13,7 @@ from xml.etree import ElementTree
 import pytest
 
 from selly_agent import supervisor
+from selly_agent.platform.base import RegistrationError
 from selly_agent.platform.windows import _TASK_NAMESPACE, WindowsPlatform
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "SellyAgent.xml"
@@ -20,9 +21,13 @@ GOLDEN = Path(__file__).resolve().parent / "golden" / "SellyAgent.xml"
 PROGRAM_ARGS = [
     r"C:\Users\seller\AppData\Local\selly-agent\share\current\.venv\Scripts\pythonw.exe",
     r"C:\Users\seller\AppData\Local\selly-agent\share\current\bin\selly-agent",
+    "--env-file",
+    r"C:\Users\seller\AppData\Local\selly-agent\config\SellyAgent.env.json",
     "daemon",
     "run",
 ]
+
+WORKING_DIR = Path(r"C:\Users\seller\AppData\Local\selly-agent\share\current")
 
 
 def render(**overrides) -> str:
@@ -34,6 +39,7 @@ def render(**overrides) -> str:
         "marker": supervisor.MARKER,
         "environment": {},
         "start_at_login": True,
+        "working_dir": WORKING_DIR,
     }
     defaults.update(overrides)
     return WindowsPlatform().render_supervisor(**defaults)
@@ -109,6 +115,23 @@ def test_the_action_names_the_interpreter_and_quotes_what_needs_it() -> None:
     assert find(tree, "Actions/Exec/Arguments").text == r'"C:\Program Files\a\selly" daemon'
 
 
+def test_the_working_directory_is_what_the_caller_chose() -> None:
+    """Chosen, not derived: deriving it from the interpreter path would parse a Windows path with
+    the host's rules — which reads C:\\... as one component on every other OS, so the suite would
+    pin one thing here and the PC would render another."""
+    tree = parse(render(working_dir=Path(r"C:\some\dir")))
+    assert find(tree, "Actions/Exec/WorkingDirectory").text == r"C:\some\dir"
+
+
+def test_the_action_carries_the_environment_file_flag() -> None:
+    """The task schema has no environment element, so the pinned environment rides in a companion
+    file the launcher applies — named in the action's own arguments, where it cannot be lost."""
+    assert WindowsPlatform().environment_file is True
+    arguments = find(parse(render()), "Actions/Exec/Arguments").text
+    assert "--env-file" in arguments
+    assert "SellyAgent.env.json" in arguments
+
+
 def test_a_path_with_xml_syntax_in_it_is_escaped() -> None:
     tree = parse(render(program_args=[r"C:\py\pythonw.exe", r"C:\a&b\selly"]))
     assert find(tree, "Actions/Exec/Arguments").text == r"C:\a&b\selly"
@@ -124,16 +147,23 @@ def test_the_definition_must_be_written_as_utf16() -> None:
 
 
 class RecordingPlatform(WindowsPlatform):
-    """A Windows platform whose schtasks calls are recorded rather than run."""
+    """A Windows platform whose schtasks calls are recorded rather than run.
 
-    def __init__(self, returncode: int = 0):
+    `registered_xml` is what a /Query .. /XML answers — None means no task holds the label."""
+
+    def __init__(self, returncode: int = 0, registered_xml: str | None = None):
         self.calls: list = []
         self._returncode = returncode
+        self._existing_xml = registered_xml
 
     def _schtasks(self, *args):
         import subprocess
 
         self.calls.append(args)
+        if "/Query" in args and "/XML" in args:
+            if self._existing_xml is None:
+                return subprocess.CompletedProcess(args, 1, "", "the system cannot find the task")
+            return subprocess.CompletedProcess(args, 0, self._existing_xml, "")
         return subprocess.CompletedProcess(args, self._returncode, "", "")
 
 
@@ -146,25 +176,61 @@ def test_registering_imports_the_definition_and_starts_it(tmp_path) -> None:
 
     platform.register(definition)
 
-    assert platform.calls[0] == ("/Create", "/TN", "SellyAgent", "/XML", str(definition), "/F")
-    assert platform.calls[1] == ("/Run", "/TN", "SellyAgent")
+    assert platform.calls[0] == ("/Query", "/TN", "SellyAgent", "/XML")
+    assert platform.calls[1] == ("/Create", "/TN", "SellyAgent", "/XML", str(definition), "/F")
+    assert platform.calls[2] == ("/Run", "/TN", "SellyAgent")
 
 
-def test_registering_replaces_rather_than_deleting_first(tmp_path) -> None:
+def test_registering_replaces_our_own_rather_than_deleting_first(tmp_path) -> None:
     """/F is what keeps a re-install or a mode flip from having a window in which no task exists."""
     definition = tmp_path / "SellyAgent.xml"
     definition.write_text("<Task/>", encoding="utf-16")
-    platform = RecordingPlatform()
+    platform = RecordingPlatform(registered_xml=f"<Task>{supervisor.MARKER}</Task>")
 
     platform.register(definition)
 
     assert "/Delete" not in [call[0] for call in platform.calls]
+    assert ("/Run", "/TN", "SellyAgent") in platform.calls
 
 
-def test_unregistering_does_not_prompt() -> None:
+def test_registering_refuses_to_replace_a_foreign_task(tmp_path) -> None:
+    """The registered task is not a file of ours, so the file-based ours-check cannot see it — a
+    legacy install's task with the same name would be silently destroyed by /F without this."""
+    definition = tmp_path / "SellyAgent.xml"
+    definition.write_text("<Task/>", encoding="utf-16")
+    platform = RecordingPlatform(registered_xml="<Task>someone else's</Task>")
+
+    with pytest.raises(RegistrationError):
+        platform.register(definition)
+
+    assert "/Create" not in [call[0] for call in platform.calls]
+
+
+def test_a_rejected_definition_is_an_error_not_a_success_message(tmp_path) -> None:
+    """schtasks failing to import must not leave install printing 'installed and started'."""
+    definition = tmp_path / "SellyAgent.xml"
+    definition.write_text("<Task/>", encoding="utf-16")
+
+    with pytest.raises(RegistrationError):
+        RecordingPlatform(returncode=1).register(definition)
+
+
+def test_unregistering_deletes_our_task_without_prompting() -> None:
+    platform = RecordingPlatform(registered_xml=f"<Task>{supervisor.MARKER}</Task>")
+    platform.unregister("SellyAgent")
+    assert platform.calls[-1] == ("/Delete", "/TN", "SellyAgent", "/F")
+
+
+def test_unregistering_leaves_a_foreign_task_alone() -> None:
+    platform = RecordingPlatform(registered_xml="<Task>someone else's</Task>")
+    platform.unregister("SellyAgent")
+    assert "/Delete" not in [call[0] for call in platform.calls]
+
+
+def test_unregistering_nothing_deletes_nothing() -> None:
     platform = RecordingPlatform()
     platform.unregister("SellyAgent")
-    assert platform.calls == [("/Delete", "/TN", "SellyAgent", "/F")]
+    assert "/Delete" not in [call[0] for call in platform.calls]
 
 
 @pytest.mark.parametrize(("returncode", "expected"), [(0, True), (1, False)])
@@ -172,11 +238,13 @@ def test_registration_is_read_from_the_query_result(returncode, expected) -> Non
     assert RecordingPlatform(returncode).is_registered("SellyAgent") is expected
 
 
-def test_the_task_directory_is_ours_to_clean_up() -> None:
-    """Unlike ~/Library/LaunchAgents, which holds every application's job and must be left standing,
-    this directory exists only because we made it — so an empty one left behind is our litter."""
-    assert WindowsPlatform().owns_job_directory is True
-    assert WindowsPlatform().launch_agents_dir(Path(r"C:\Users\seller")).parts[-2:] == (
-        ".selly-agent",
-        "tasks",
-    )
+def test_the_task_directory_is_ours_to_clean_up(xdg_tmp) -> None:
+    """Windows has no auto-start directory of the OS's own, so the definitions live in our config
+    tree — one tree to install, inspect and remove — and an empty tasks dir left behind is our
+    litter, unlike ~/Library/LaunchAgents which holds every application's jobs."""
+    from selly_agent import paths
+
+    platform = WindowsPlatform()
+    assert platform.owns_job_directory is True
+    assert platform.launch_agents_dir(Path(r"C:\Users\seller")) is None
+    assert paths.launch_agents_dir(platform=platform) == paths.config_dir() / "tasks"

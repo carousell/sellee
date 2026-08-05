@@ -377,11 +377,16 @@ def tcc_protected_roots() -> list[Path]:
 
 
 def launch_agents_dir(platform=None) -> Path:
-    """The per-user auto-start directory, composed here from the platform's OS-specific rule
+    """Where job definitions live, composed here from the platform's OS-specific rule
     (callers must never compose this themselves). A platform may be injected (tests); otherwise
-    the host platform is used. home is resolved here so the platform layer never touches it."""
+    the host platform is used. home is resolved here so the platform layer never touches it.
+
+    A platform with no auto-start directory of the OS's own (Windows: registration is an API
+    call, not a file placement) answers None, and the definitions stay in our config tree — one
+    tree to install, inspect and remove."""
     resolved = platform if platform is not None else get_platform()
-    return resolved.launch_agents_dir(_home())
+    system_dir = resolved.launch_agents_dir(_home())
+    return system_dir if system_dir is not None else config_dir() / "tasks"
 
 
 # --- ensure helpers ------------------------------------------------------------------------

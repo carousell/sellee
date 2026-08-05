@@ -39,10 +39,12 @@ class MacOSPlatform(Platform):
         marker: str,
         environment: dict,
         start_at_login: bool = True,
+        working_dir: Path | None = None,
     ) -> str:
-        # Not consulted: on macOS the mode is the plist's location, and launchd auto-loads only
-        # what is in the launch-agents directory. RunAtLoad below is what a bootstrap does now.
-        del start_at_login
+        # Neither is consulted: on macOS the mode is the plist's location, and launchd auto-loads
+        # only what is in the launch-agents directory (RunAtLoad below is what a bootstrap does
+        # now); the working directory is left to launchd's default, as it always has been.
+        del start_at_login, working_dir
         args_xml = "\n".join(f"    <string>{escape(a)}</string>" for a in program_args)
         env_xml = ""
         if environment:

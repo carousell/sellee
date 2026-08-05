@@ -149,4 +149,41 @@ def test_launcher_imports_nothing_beyond_the_stdlib():
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported == {"__future__", "os", "subprocess", "sys", "selly_agent"}
+    assert imported == {"__future__", "json", "os", "subprocess", "sys", "selly_agent"}
+
+
+# --- the supervised job's environment file ------------------------------------------------------
+
+
+def test_env_file_is_applied_and_stripped_from_argv(launcher, tmp_path):
+    env_file = tmp_path / "SellyAgent.env.json"
+    env_file.write_text('{"SELLY_TEST_VAR": "from-file"}', encoding="utf-8")
+    environ = {}
+
+    argv = launcher["apply_env_file"](
+        ["selly-agent", "--env-file", str(env_file), "daemon", "run"], environ
+    )
+
+    assert argv == ["selly-agent", "daemon", "run"]
+    assert environ["SELLY_TEST_VAR"] == "from-file"
+
+
+def test_no_env_file_flag_changes_nothing(launcher):
+    environ = {}
+    argv = ["selly-agent", "daemon", "run"]
+    assert launcher["apply_env_file"](argv, environ) == argv
+    assert environ == {}
+
+
+def test_a_missing_env_file_refuses_to_run(launcher, tmp_path):
+    """The file is named by the job definition, so its absence is a broken install — proceeding
+    would boot a daemon resolving different roots than the installer provisioned."""
+    with pytest.raises(SystemExit) as excinfo:
+        launcher["apply_env_file"](["x", "--env-file", str(tmp_path / "gone.json"), "daemon"], {})
+    assert excinfo.value.code == 2
+
+
+def test_an_env_file_flag_without_a_path_refuses_to_run(launcher):
+    with pytest.raises(SystemExit) as excinfo:
+        launcher["apply_env_file"](["x", "--env-file"], {})
+    assert excinfo.value.code == 2

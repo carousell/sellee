@@ -12,7 +12,12 @@ us on macOS, which Task Scheduler does not offer directly:
     forever" into a watchdog. MultipleInstances=IgnoreNew keeps Task Scheduler from queueing them.
   * **Ownership** cannot be a marker in a file we wrote, because a registered task is not a file
     we own. The marker goes in the task's Description, which is where a person looking at the task
-    in the UI would want it anyway.
+    in the UI would want it anyway — and it is checked before any register or delete, because a
+    file-based ours-check cannot see a registered task that has no file of ours behind it.
+  * **Environment** cannot be expressed at all — the task schema has no element for it, where a
+    plist has EnvironmentVariables. The supervisor writes the job's environment to a companion
+    file instead and names it in the action's arguments (--env-file), which the launcher applies
+    before anything resolves a path.
   * **Log files** are the daemon's own problem here. Task Scheduler does no output redirection,
     where launchd takes StandardOutPath and StandardErrorPath.
 
@@ -22,11 +27,14 @@ window on the desktop every time the keep-alive trigger fired.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 from pathlib import Path
 from xml.sax.saxutils import escape
 
-from selly_agent.platform.base import Platform
+from selly_agent.platform.base import MARKER, Platform, RegistrationError
+
+log = logging.getLogger(__name__)
 
 _DEFAULT_LABEL = "SellyAgent"
 
@@ -44,16 +52,16 @@ class WindowsPlatform(Platform):
     name = "windows"
     definition_encoding = "utf-16"
     owns_job_directory = True
+    environment_file = True
 
-    def launch_agents_dir(self, home: Path) -> Path:
-        """Where a task definition is kept before it is registered.
-
-        Not a system location: Windows has no directory that means "start this at login" the way
+    def launch_agents_dir(self, home: Path) -> Path | None:
+        """None: Windows has no directory that means "start this at login" the way
         ~/Library/LaunchAgents does — registration is an API call, not a file placement. The XML
-        still has to live somewhere for the register call to read and for the mode logic to find,
-        so it goes beside the config, and mode is expressed by the triggers instead.
+        still has to live somewhere for the register call to read and for the mode logic to find;
+        paths.py keeps it in our own config tree, and mode is expressed by the triggers instead.
         """
-        return home / ".selly-agent" / "tasks"
+        del home
+        return None
 
     def default_label(self) -> str:
         return _DEFAULT_LABEL
@@ -71,17 +79,26 @@ class WindowsPlatform(Platform):
         marker: str,
         environment: dict,
         start_at_login: bool = True,
+        working_dir: Path | None = None,
     ) -> str:
         """The task definition. UTF-16 is what schtasks expects on import, so the caller writes
         this text with that encoding; the declaration says so.
 
         stdout_path and stderr_path are accepted and not used: Task Scheduler cannot redirect
-        output, so the daemon opens its own log files. They stay in the signature because the
+        output, so the daemon opens its own log files. environment is accepted and not used for
+        the same reason — the schema cannot carry it, so the caller delivers it through the
+        companion file (environment_file above). Both stay in the signature because the
         supervisor asks every platform the same question.
+
+        working_dir is required here in practice: deriving it from the interpreter path would
+        parse a Windows path with the host's rules, which on any other OS reads C:\\... as a
+        single component.
         """
+        del environment
+        if working_dir is None:
+            raise ValueError("a task definition needs an explicit working directory")
         interpreter, *arguments = [str(part) for part in program_args]
         argument_line = " ".join(_quote(argument) for argument in arguments)
-        working_dir = str(Path(interpreter).parent)
         return (
             '<?xml version="1.0" encoding="UTF-16"?>\n'
             f'<Task version="1.2" xmlns="{_TASK_NAMESPACE}">\n'
@@ -135,7 +152,7 @@ class WindowsPlatform(Platform):
             "    <Exec>\n"
             f"      <Command>{escape(interpreter)}</Command>\n"
             f"      <Arguments>{escape(argument_line)}</Arguments>\n"
-            f"      <WorkingDirectory>{escape(working_dir)}</WorkingDirectory>\n"
+            f"      <WorkingDirectory>{escape(str(working_dir))}</WorkingDirectory>\n"
             "    </Exec>\n"
             "  </Actions>\n"
             "</Task>\n"
@@ -151,21 +168,59 @@ class WindowsPlatform(Platform):
             check=False,
         )
 
+    def _registered_xml(self, label: str) -> str | None:
+        """The XML Task Scheduler holds for this label, or None when no such task exists.
+
+        This — not the file we wrote — is what the ours-check must read: a task registered by
+        someone else has no file of ours behind it and is invisible to any file-based check.
+        """
+        result = self._schtasks("/Query", "/TN", label, "/XML")
+        return result.stdout if result.returncode == 0 else None
+
     def register(self, config_path: Path) -> None:
         """Import the definition and start it now, which is what bootstrapping a plist does.
 
         /F replaces a task of the same name, so a re-install or a mode flip is one call rather
-        than delete-then-create with a window in between where nothing is registered.
+        than delete-then-create with a window in between where nothing is registered — but only
+        one of ours: replacing a foreign task (a legacy install, the seller's own) would destroy
+        something we cannot restore, so that refuses instead.
         """
         label = Path(config_path).stem
-        self._schtasks("/Create", "/TN", label, "/XML", str(config_path), "/F")
-        self._schtasks("/Run", "/TN", label)
+        existing = self._registered_xml(label)
+        if existing is not None and MARKER not in existing:
+            raise RegistrationError(
+                f"a scheduled task named {label!r} already exists and was not created by "
+                "selly-agent — remove or rename it first"
+            )
+        created = self._schtasks("/Create", "/TN", label, "/XML", str(config_path), "/F")
+        if created.returncode != 0:
+            raise RegistrationError(
+                f"the task definition was not accepted: {_last_line(created)}"
+            )
+        run = self._schtasks("/Run", "/TN", label)
+        if run.returncode != 0:
+            raise RegistrationError(f"the task was registered but did not start: {_last_line(run)}")
 
     def unregister(self, label: str) -> None:
-        self._schtasks("/Delete", "/TN", label, "/F")
+        existing = self._registered_xml(label)
+        if existing is None:
+            return
+        if MARKER not in existing:
+            log.warning(
+                "leaving scheduled task %r in place: it was not created by selly-agent", label
+            )
+            return
+        deleted = self._schtasks("/Delete", "/TN", label, "/F")
+        if deleted.returncode != 0:
+            log.warning("could not delete scheduled task %r: %s", label, _last_line(deleted))
 
     def is_registered(self, label: str) -> bool:
         return self._schtasks("/Query", "/TN", label).returncode == 0
+
+
+def _last_line(result: subprocess.CompletedProcess) -> str:
+    lines = ((result.stderr or "") + (result.stdout or "")).strip().splitlines()
+    return lines[-1].strip() if lines else "no output"
 
 
 def _quote(argument: str) -> str:
