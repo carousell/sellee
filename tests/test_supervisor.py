@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from selly_agent import config, paths, supervisor
+from selly_agent.installer import materialize
 from selly_agent.platform.macos import MacOSPlatform
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "com.selly.agent.plist"
@@ -59,6 +61,35 @@ def test_the_plist_pins_the_xdg_overrides_the_installer_ran_under(xdg_tmp) -> No
     for var in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
         assert f"<key>{var}</key>" in plist
         assert f"<string>{os.environ[var]}</string>" in plist
+
+
+def test_the_job_runs_on_the_installs_own_venv_interpreter(xdg_tmp, tree) -> None:
+    # The daemon needs the dependencies, and a supervised job inherits no shell — so the
+    # definition has to name the venv's interpreter rather than whatever ran the installer.
+    materialize.install_version(tree, "1.0.0")
+    interpreter = paths.venv_python(paths.current())
+
+    assert supervisor.job_interpreter() == interpreter
+
+    fake = FakePlatform()
+    assert supervisor.install(mode="manual", platform=fake) == 0
+    plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
+    assert f"<string>{interpreter}</string>" in plist
+
+
+def test_the_job_names_the_interpreter_through_current_not_a_version(xdg_tmp, tree) -> None:
+    # Named through the swap point, so the definition does not go stale the moment a version is
+    # replaced underneath it — and so an update's re-register writes the same path back.
+    materialize.install_version(tree, "1.0.0")
+    named = str(supervisor.job_interpreter())
+    assert named.startswith(str(paths.current()))
+    assert "versions" not in named
+
+
+def test_a_checkout_without_a_venv_still_gets_a_startable_job(xdg_tmp) -> None:
+    # `./setup --dev` before a bootstrap: naming an interpreter that does not exist would give a
+    # job that fails to start with nothing saying why.
+    assert supervisor.job_interpreter() == Path(os.path.realpath(sys.executable))
 
 
 def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) -> None:
