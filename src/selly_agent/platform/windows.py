@@ -115,12 +115,15 @@ class WindowsPlatform(Platform):
             f"      <Enabled>{'true' if start_at_login else 'false'}</Enabled>\n"
             "    </LogonTrigger>\n"
             # The keep-alive. A repetition that never ends, on a trigger that is always due.
+            # Repetition before StartBoundary: that is the order the schema declares and the
+            # order Task Scheduler's own export writes, and a validating import is entitled to
+            # reject the other one.
             "    <TimeTrigger>\n"
-            "      <StartBoundary>2020-01-01T00:00:00</StartBoundary>\n"
             "      <Repetition>\n"
             f"        <Interval>PT{_KEEPALIVE_MINUTES}M</Interval>\n"
             "        <StopAtDurationEnd>false</StopAtDurationEnd>\n"
             "      </Repetition>\n"
+            "      <StartBoundary>2020-01-01T00:00:00</StartBoundary>\n"
             "      <Enabled>true</Enabled>\n"
             "    </TimeTrigger>\n"
             "  </Triggers>\n"
@@ -168,6 +171,12 @@ class WindowsPlatform(Platform):
             ["schtasks", *args],
             capture_output=True,
             text=True,
+            # schtasks writes the console code page, not the ANSI one the locale decoder would
+            # use, and its text is localized — so a byte outside that page would raise inside
+            # subprocess.run and escape from `daemon stop`. Nothing here reads more than an
+            # ASCII marker and the exit code, so replacing an undecodable byte costs nothing.
+            encoding="oem",
+            errors="replace",
             check=False,
         )
 

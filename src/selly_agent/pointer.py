@@ -117,7 +117,12 @@ def write_shim(shim, launcher, interpreter) -> Path:
     staging = shim.with_name(shim.name + ".new")
     discard(staging)
     if _WINDOWS:
-        staging.write_text(_CMD_SHIM.format(target=launcher, interpreter=Path(interpreter)))
+        # cmd.exe parses a batch file in the console code page, not the ANSI one a locale
+        # write would use. Where they differ — an accented name under C:\\Users — the two
+        # spellings disagree and the shim's `if exist` never matches its own target.
+        staging.write_text(
+            _CMD_SHIM.format(target=launcher, interpreter=Path(interpreter)), encoding="oem"
+        )
     else:
         staging.symlink_to(launcher)
     os.replace(staging, shim)
@@ -132,7 +137,7 @@ def shim_target(shim):
     if not _WINDOWS:
         return None
     try:
-        for line in shim.read_text().splitlines():
+        for line in shim.read_text(encoding="oem").splitlines():
             if line.startswith('set "SELLY_LAUNCHER='):
                 return Path(line.split("=", 1)[1].rstrip('"'))
     except OSError:
