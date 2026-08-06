@@ -275,6 +275,7 @@ class BrowserClient:
                 # code page and kill the reader thread on the first byte it cannot map.
                 encoding="utf-8",
                 bufsize=1,
+                **spawn.windowless_flags(),
             )
         except (OSError, ValueError) as exc:
             raise BrowserUnavailable(

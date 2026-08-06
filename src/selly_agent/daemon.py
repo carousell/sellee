@@ -122,6 +122,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
                 text=True,
                 check=False,
                 timeout=_BROWSER_WARM_TIMEOUT_SEC,
+                **spawn.windowless_flags(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("could not warm %s: %s", browser_client.PINNED_MCP_SPEC, exc)

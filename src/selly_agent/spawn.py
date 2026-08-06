@@ -73,3 +73,16 @@ def survives_us_flags() -> dict:
     if os.name == "nt":
         return {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
+
+
+def windowless_flags() -> dict:
+    """Popen keywords for a child we talk to over pipes and never want seen.
+
+    Under pythonw there is no console to inherit, so a console-subsystem child is given one of its
+    own — a window on the seller's desktop belonging to a process they cannot account for, and
+    closing it delivers CTRL_CLOSE_EVENT to a server that was mid-operation. Nothing here needs a
+    group of its own: these children are stopped through the handle we already hold.
+    """
+    if os.name == "nt":
+        return {"creationflags": subprocess.CREATE_NO_WINDOW}
+    return {}

@@ -50,3 +50,16 @@ def test_an_absolute_program_survives_resolution(tmp_path, monkeypatch) -> None:
     binary = _executable(tmp_path / "claude")
     monkeypatch.setenv("PATH", "")
     assert spawn.resolve([str(binary), "-p"]) == [str(binary), "-p"]
+
+
+def test_a_windowless_child_asks_for_no_console_and_no_group() -> None:
+    """A piped child under pythonw would otherwise be given a console of its own — a window the
+    seller cannot account for, and closing it sends CTRL_CLOSE_EVENT to a server mid-operation.
+    It is stopped through the handle we hold, so it wants no process group of its own."""
+    flags = spawn.windowless_flags()
+    if os.name == "nt":
+        import subprocess
+
+        assert flags == {"creationflags": subprocess.CREATE_NO_WINDOW}
+    else:
+        assert flags == {}

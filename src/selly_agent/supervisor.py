@@ -264,12 +264,38 @@ def shutdown(
     if _wait_for_exit(pid, STOP_TIMEOUT_SEC if timeout_sec is None else timeout_sec):
         return True
     log.warning("the worker (pid %s) did not stop when asked; killing it", pid)
+    if not _is_the_daemon_we_recorded(pid):
+        # The lock says this pid, but the OS says it is not the process that wrote our heartbeat.
+        # A stale lock plus a reused number is enough to point kill_tree at a stranger's process
+        # tree, so an identity we cannot establish means we do not kill.
+        log.error(
+            "refusing to kill pid %s: it is not the worker this install recorded. "
+            "Check it by hand before starting again.",
+            pid,
+        )
+        return False
     # The kill takes the daemon's whole tree — including a Chrome this daemon spawned. That is
     # accepted: it is the agent's own Chrome on a dedicated profile, its sessions persist on
     # disk, and the next launch clears the stale locks a killed Chrome leaves. (One this daemon
     # merely re-attached to is not among its children and survives.)
     proc_tree.kill_tree(pid)
     return _wait_for_exit(pid, _FORCED_EXIT_WAIT_SEC)
+
+
+def _is_the_daemon_we_recorded(pid: int) -> bool:
+    """Whether `pid` is still the process the heartbeat was written by.
+
+    A wedged-but-alive daemon keeps writing heartbeats, and one that died before its first tick
+    has nothing left to kill — so refusing when the record is missing costs nothing real, and it
+    is the only answer that cannot kill the wrong process.
+    """
+    record = heartbeat.read(paths.heartbeat_path())
+    if not record or record.get("pid") != pid:
+        return False
+    created = record.get("created")
+    if not isinstance(created, (int, float)):
+        return False  # an older install's record, written before creation time was kept
+    return proc_tree.is_recorded_process(pid, created)
 
 
 def _wait_for_exit(pid: int, timeout_sec: float) -> bool:

@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from selly_agent import config, paths, pointer, supervisor
+from selly_agent import config, heartbeat, paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.platform.macos import MacOSPlatform
 from selly_agent.platform.windows import WindowsPlatform
@@ -315,6 +315,20 @@ def test_stopping_deregisters_before_asking_the_daemon_to_drain(xdg_tmp, monkeyp
     assert happened == ["deregistered", "asked"]
 
 
+def _recorded_daemon(monkeypatch, pid: int) -> None:
+    """A heartbeat naming `pid`, and an OS that agrees the process holding it is that one.
+
+    Without this the kill path refuses, which is the point of it: a lock naming a pid the OS has
+    since handed to someone else must not steer kill_tree into a stranger's process tree.
+    """
+    paths.ensure_state_dirs()
+    monkeypatch.setattr(supervisor.proc_tree, "creation_time", lambda _pid: 1000.0)
+    heartbeat.write(paths.heartbeat_path(), pid)
+    monkeypatch.setattr(
+        supervisor.proc_tree, "is_recorded_process", lambda p, created, **kw: created == 1000.0
+    )
+
+
 def test_a_daemon_that_ignores_the_request_is_killed(xdg_tmp, monkeypatch) -> None:
     """Past the deadline it is wedged rather than busy, and one stuck daemon must not block every
     future update. The databases are written under WAL, so a kill costs a recovery, not data."""
@@ -324,9 +338,42 @@ def test_a_daemon_that_ignores_the_request_is_killed(xdg_tmp, monkeypatch) -> No
     monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
     monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda pid: killed.append(pid) or True)
     _pretend_holder(monkeypatch, 4242, True, True, False)
+    _recorded_daemon(monkeypatch, 4242)
 
     assert supervisor.shutdown(platform=fake) is True
     assert killed == [4242]
+
+
+def test_a_pid_the_daemon_no_longer_owns_is_never_killed(xdg_tmp, monkeypatch) -> None:
+    """PIDs are reused, and the instance lock's stale window is unbounded in manual mode. The
+    stray ledger has always checked creation time before killing; the daemon's own lock did not,
+    so a wedged-stop could take out whatever process inherited the number."""
+    fake = FakePlatform()
+    killed = []
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: None)
+    monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
+    monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda pid: killed.append(pid) or True)
+    _pretend_holder(monkeypatch, 4242, True, True, False)
+    _recorded_daemon(monkeypatch, 4242)
+    # The OS says the process now holding 4242 started at some other time than we recorded.
+    monkeypatch.setattr(supervisor.proc_tree, "is_recorded_process", lambda p, created, **kw: False)
+
+    assert supervisor.shutdown(platform=fake) is False
+    assert killed == []
+
+
+def test_a_kill_is_refused_when_no_heartbeat_names_the_pid(xdg_tmp, monkeypatch) -> None:
+    """No record means no identity. A wedged-but-alive daemon writes heartbeats, and one that
+    died before its first tick has nothing left to kill, so refusing costs nothing real."""
+    fake = FakePlatform()
+    killed = []
+    monkeypatch.setattr(supervisor.secrets, "read_mcp_token", lambda: None)
+    monkeypatch.setattr(supervisor, "STOP_TIMEOUT_SEC", 0.0)
+    monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda pid: killed.append(pid) or True)
+    _pretend_holder(monkeypatch, 4242, True, True, False)
+
+    assert supervisor.shutdown(platform=fake) is False
+    assert killed == []
 
 
 def test_a_daemon_that_survives_even_the_kill_is_not_reported_as_stopped(
@@ -338,6 +385,7 @@ def test_a_daemon_that_survives_even_the_kill_is_not_reported_as_stopped(
     monkeypatch.setattr(supervisor, "_FORCED_EXIT_WAIT_SEC", 0.0)
     monkeypatch.setattr(supervisor.proc_tree, "kill_tree", lambda _pid: False)
     _pretend_holder(monkeypatch, 4242, True)
+    _recorded_daemon(monkeypatch, 4242)
 
     assert supervisor.shutdown(platform=fake) is False
     assert supervisor.stop(platform=fake) == 1
