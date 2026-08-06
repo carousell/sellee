@@ -198,7 +198,11 @@ def test_the_shutdown_route_stops_cleanly(tmp_path) -> None:
         )
         assert started, f"daemon never recorded daemon.start:\n{_daemon_output(proc)}"
 
-        token = (tmp_path / "config" / "selly-agent" / "mcp_token").read_text().strip()
+        # Waited for, not assumed: the token is minted after daemon.start is published, so a host
+        # slow enough to lose that race reads a file the daemon has not written yet.
+        token_path = tmp_path / "config" / "selly-agent" / "mcp_token"
+        assert _wait_for(token_path.exists), f"no attended token:\n{_daemon_output(proc)}"
+        token = token_path.read_text(encoding="utf-8").strip()
         request = urllib.request.Request(
             f"http://127.0.0.1:{port}/control/shutdown",
             data=b"{}",
