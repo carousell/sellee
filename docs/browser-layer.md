@@ -30,6 +30,24 @@ not both launch onto one profile), and a launch that failed quiets further attem
 for five minutes rather than costing every caller the full wait. Keeping Chrome alive
 across crashes and logins is the supervisor's job.
 
+**Except where the browser is on a different machine.** In the container install
+profile (`docs/docker.md`) the daemon runs in a container and Chrome runs on the
+seller's own desktop, so acquiring it is `ensure_running(may_launch=False)`: the probe,
+and nothing else. No binary is resolved, no `Singleton*` lock is cleared, nothing is
+spawned — each of those would act on the wrong machine's Chrome. A silent port is
+`UNAVAILABLE` immediately, with a hint naming the launch script the seller runs
+themselves, and `LAUNCHED` simply never happens, so the window notice is never queued.
+With no launch there is no failed-launch backoff either: every acquisition just
+re-probes, which is cheaper than the host path rather than more expensive.
+
+The endpoint stays `http://127.0.0.1:<port>` on both sides of that boundary, and this
+is load-bearing rather than incidental. Chrome refuses a `/json*` request whose `Host`
+header is a DNS name (its DNS-rebinding protection) and Playwright's first act is
+exactly that request; the `webSocketDebuggerUrl` it answers with is loopback-shaped and
+Playwright dials it verbatim. So the container forwards its own `127.0.0.1:9222` to the
+host rather than naming the host, and nothing in this file — not `cdp_endpoint`, not
+`browser_command`, not the `.mcp.json` emitter — has a deployment branch in it.
+
 ## The client
 
 `browser/client.py` is the daemon's own Playwright MCP client: JSON-RPC over a
@@ -433,7 +451,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 
 | key | default | what it does |
 | --- | --- | --- |
-| `chrome_cdp_port` | `9222` | the warm Chrome's CDP port on loopback |
+| `chrome_cdp_port` | `9222` | the warm Chrome's CDP port on loopback — in a container, the port the forwarder listens on *and* forwards to |
 | `chrome_bin` | `null` | the Chrome executable to start; `null` means the OS default install path |
 | `playwright_mcp_cmd` | `null` | override the server command; `null` means `npx --yes @playwright/mcp@<pinned version>` against the CDP endpoint. The pin lives in `browser/client.py` (`MCP_VERSION`) — bump it there |
 | `inbox_read_interval_sec` | `300.0` | how often the read lane ticks |

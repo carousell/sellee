@@ -49,6 +49,44 @@ selly-agent uninstall              # add --preserve-data to keep the database an
 against its published checksum and hands off to that release's own `./setup`.
 It refuses to run until release hosting is public.
 
+### Or in a container
+
+A second install profile, for two cases: you would rather nothing were
+installed on your machine, and you are on Windows, where the native port exists
+but has not been verified on real hardware yet. The host install above is still
+the primary one.
+
+```sh
+git clone https://github.com/carousell/selly-agent && cd selly-agent
+export TZ=Asia/Singapore                       # your own timezone — see below
+export CLAUDE_CODE_OAUTH_TOKEN="$(claude setup-token)"
+docker compose build
+./start-chrome.sh                              # start-chrome.ps1 on Windows
+docker compose up -d
+docker exec -it selly-agent selly-agent setup  # region, carousell.ai, marketplaces, Telegram
+docker exec -it selly-agent selly-agent chat
+```
+
+Three things are worth knowing before you start:
+
+- **Chrome runs on your computer, not in the container, and you start it.**
+  That is the point rather than a limitation: the agent drives your own real,
+  logged-in browser. Closing it does no harm — the agent says so and waits.
+- **`TZ` is required.** Every timing decision the agent makes, quiet hours most
+  of all, is made against its own clock, and a container's default is UTC. A
+  mismatch is reported by `healthcheck` and as a notice, but setting it is
+  cheaper than reading about it.
+- **`CLAUDE_CODE_OAUTH_TOKEN` is required.** A container has no browser to sign
+  in with, so the token is the only way in. Mint one on your own machine with
+  `claude setup-token`.
+
+Everything the container writes lands in one directory (`./selly-data` unless
+you set `SELLY_DATA`), so uninstalling is `docker compose down && rm -rf
+selly-data` and your machine is exactly as it was.
+
+Full reference — the compose files, the Linux override, and how photos get in —
+is in [`docs/docker.md`](docs/docker.md).
+
 ## Where the plans live
 
 Design, architecture decisions, invariants, and the plan this code implements
@@ -153,11 +191,16 @@ Tests point `$XDG_*_HOME` at a tmpdir, so they never touch a real install.
 ```
 setup                      the installer's front door: provision uv + the pinned Python, exec bin/selly-agent setup
 install.sh                 the curl bootstrap: verify a release, hand off to its own ./setup
+Dockerfile                 the container install profile's image (see docs/docker.md)
+compose.yaml               its service; compose.linux.yaml overrides it for a Linux host
+docker/entrypoint.sh       the CDP forwarder and the photo inbox, before the daemon
+start-chrome.sh|.ps1       start the Chrome the agent drives, on your own machine
 bin/selly-agent            single CLI launcher (resolves src/, dispatches argv)
 src/selly_agent/
   cli.py                   argparse dispatch (setup, daemon, update, healthcheck, pass, …)
   paths.py                 the one path authority (XDG; only module touching home/XDG)
-  platform/                OS seam (macOS launchd; Windows is a later port)
+  deployment.py            host or container, and what follows from it
+  platform/                OS seam (macOS launchd, container; Windows is a later port)
   config.py                read-only config.json loader (+ installer-side writer)
   secrets.py               config-dir secret files (0600): MCP token, carousell.ai key
   db.py                    SQLite: WAL, one write connection per DB, readers
@@ -185,6 +228,7 @@ src/selly_agent/
   pass_cli.py              pass run / chat / harness config / provision CLI verbs
   lock.py                  PID-aware single-instance lock
   heartbeat.py             liveness heartbeat file
+  clock.py                 does this process's clock agree with the seller's timezone
   scheduler.py             the loop: due tasks -> executor, backoff, task events
   daemon.py                wires it together; the daemon process
   supervisor.py            launchd install/start/stop/status/uninstall

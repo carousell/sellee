@@ -119,6 +119,24 @@ conventions. The Makefile targets are the seam CI will call.
 No homegrown test framework. Fixtures point `$XDG_*_HOME` at a tmpdir so tests
 never touch a real install. Ported legacy tests are converted to plain pytest.
 
+## There are two deployment profiles, and one marker decides
+
+A host install and a container install run the same code. `deployment.py` reads
+the one marker that tells them apart (`SELLY_DEPLOYMENT`, an `ENV` baked into
+the image), and everything conditional on the profile branches on it: whether
+the daemon may launch Chrome, whether a supervisor job exists, whether the clock
+can disagree with the seller. When you write a message that assumes this process
+owns the machine around it, check it is still true in a container —
+`docs/docker.md` describes that profile.
+
+**The program never names a container engine.** We ship a `compose.yaml` and the
+docs name its commands, but which engine is running the image, and what the
+container is called, belong to whoever started it — `podman`, a hand-written
+`docker run`, something we have not heard of. A runtime string says "in the
+container" and lets them translate; a guard test in `tests/test_deployment.py`
+fails anything that says otherwise (comments and docstrings are exempt, since
+that is where the rule is explained).
+
 ## Path authority
 
 `paths.py` is the only module allowed to resolve the home directory or read an

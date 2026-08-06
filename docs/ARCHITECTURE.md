@@ -36,8 +36,12 @@ Foundations:
 - **`paths.py`** — the single path authority. Every location is resolved here,
   honoring the XDG base directories; a guard test enforces that nothing else
   touches home/XDG.
-- **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`).
-  The "port once" boundary; no launchd string leaks past it.
+- **`deployment.py`** — host or container, and what follows from it: whether the
+  daemon manages Chrome, and whether there is a supervisor job to speak of.
+- **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`,
+  `container.py`). The "port once" boundary; no launchd string leaks past it.
+- **`clock.py`** — whether this process's clock agrees with the seller's
+  timezone. Only asked in a container, where the two can differ.
 - **`config.py`** — reads `config.json` (missing → defaults; invalid → rejected;
   unknown keys ignored). The daemon only reads config; the installer writes it.
 
