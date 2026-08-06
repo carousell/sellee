@@ -7,7 +7,6 @@ thing you delete through. Getting that wrong takes the installed version with it
 from __future__ import annotations
 
 import os
-from pathlib import Path
 
 import pytest
 
@@ -111,24 +110,21 @@ def test_on_posix_the_shim_is_a_link_to_the_launcher(tmp_path) -> None:
     assert pointer.SHIM_SUFFIX == ""
 
 
-def test_the_windows_shim_is_written_in_the_code_page_cmd_reads(tmp_path, monkeypatch) -> None:
+def test_the_windows_shim_is_written_in_the_code_page_cmd_reads(monkeypatch) -> None:
     """cmd.exe parses a batch file in the console code page. Written in the ANSI one instead, a
     shim under an accented user directory names a target its own `if exist` never matches.
 
-    The kwarg is what is asserted, not the bytes: the oem codec exists only on Windows, so a
+    The choice is asserted rather than the bytes: the oem codec exists only on Windows, so a
     POSIX run cannot round-trip through it to check the result.
     """
-    written = {}
-    real_write_text = Path.write_text
-
-    def record(self, data, **kwargs):
-        written["encoding"] = kwargs.get("encoding")
-        return real_write_text(self, data, encoding="utf-8")
-
     monkeypatch.setattr(pointer, "_WINDOWS", True)
-    monkeypatch.setattr(Path, "write_text", record)
+    assert pointer._shim_encoding() == "oem"
 
+
+def test_the_shim_is_written_as_bytes_not_through_a_text_stream(tmp_path) -> None:
+    """The code-page codecs have no working incremental encoder, so a text-mode write through
+    Path.write_text raises on this shim's pure-ASCII body — which is how the first attempt at
+    the fix above took out every install test on Windows."""
     launcher = _version(tmp_path, "1.0.0") / "bin" / "selly-agent"
-    pointer.write_shim(tmp_path / "bin" / "selly-agent.cmd", launcher, "C:/py/python.exe")
-
-    assert written["encoding"] == "oem"
+    shim = pointer.write_shim(tmp_path / "bin" / "selly-agent", launcher, "/usr/bin/python3")
+    assert pointer.shim_target(shim) == launcher

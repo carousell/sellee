@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 
+from selly_agent import paths
 from selly_agent.config import Config
 from selly_agent.installer import checks, preflight
 
@@ -107,7 +108,7 @@ def test_the_remediation_is_the_command_setup_would_run(platform, monkeypatch) -
 def test_a_platform_with_no_package_manager_says_so_rather_than_naming_one(monkeypatch) -> None:
     monkeypatch.setattr(preflight.sys, "platform", "linux")
     assert preflight.install_command("node") == []
-    assert "re-run ./setup" in preflight.install_hint("node")
+    assert f"re-run {preflight.setup_door()}" in preflight.install_hint("node")
 
 
 def test_node_gate_refuses_an_intel_node_on_apple_silicon(monkeypatch) -> None:
@@ -207,10 +208,12 @@ def test_prewarm_fills_the_cache_the_worker_will_read_with_the_pinned_version(mo
     assert preflight.prewarm_playwright(Config()).status == checks.OK
 
     assert preflight.browser_client.PINNED_MCP_SPEC in seen["argv"]
-    assert seen["env"] == {
-        "PATH": os.pathsep.join(["/opt/node/bin", preflight.supervisor.SUPERVISED_PATH]),
-        "HOME": "/Users/seller",
-    }
+    worker_path = os.pathsep.join(["/opt/node/bin", preflight.supervisor.SUPERVISED_PATH])
+    assert seen["env"]["PATH"] == worker_path
+    # Exactly the worker's environment and nothing else — what that is differs per platform
+    # (Windows cannot start a child without SystemRoot), so the base is asked rather than
+    # spelled out; the point is that this shell's own environment did not leak in.
+    assert seen["env"] == {"PATH": worker_path, **paths.supervised_env_base()}
 
 
 # --- the spawn the worker will actually perform --------------------------------------------------
@@ -268,7 +271,7 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
     # The PATH it was tried under is the whole diagnosis — without it the message is unactionable.
     assert str(tmp_path / "system") in result.detail
     assert "`node` is not on" in result.detail
-    assert "re-run ./setup" in result.fix
+    assert f"re-run {preflight.setup_door()}" in result.fix
 
 
 def test_the_spawn_gate_checks_an_override_and_leaves_node_out_of_it(tmp_path, monkeypatch) -> None:
@@ -350,7 +353,7 @@ def test_a_divergent_npx_records_both_directories_with_node_first(tmp_path, monk
 
     # Node first: npx's shebang looks `node` up on PATH, and the node the gates checked must win
     # over any stray build sitting beside npx.
-    assert preflight.node_path_fragment() == f"{node_dir}:{npx_dir}"
+    assert preflight.node_path_fragment() == os.pathsep.join([str(node_dir), str(npx_dir)])
 
 
 def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> None:

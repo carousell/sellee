@@ -209,10 +209,16 @@ def test_the_shutdown_route_stops_cleanly(tmp_path) -> None:
                 "Origin": "http://127.0.0.1",
             },
         )
+        # The daemon's own pid, from the instance lock — not proc.pid. The launcher re-execs onto
+        # the version's interpreter, and on Windows exec does not replace the process: it starts a
+        # new one and the launcher exits, so the daemon is a different pid from the one spawned.
+        holder = int(
+            (tmp_path / "state" / "selly-agent" / "daemon.lock").read_text(encoding="utf-8").strip()
+        )
         try:
             with urllib.request.urlopen(request, timeout=10) as response:
                 assert response.status == 202
-                assert json.loads(response.read())["pid"] == proc.pid
+                assert json.loads(response.read())["pid"] == holder
         except urllib.error.URLError as exc:
             raise AssertionError(
                 f"the control route did not answer ({exc}).\nIts output:\n"

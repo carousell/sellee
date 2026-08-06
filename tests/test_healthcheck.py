@@ -11,7 +11,7 @@ import os
 
 from selly_agent import healthcheck, secrets, supervisor
 from selly_agent.config import Config
-from selly_agent.installer import checks
+from selly_agent.installer import checks, preflight
 
 # --- the daemon ---------------------------------------------------------------------------------
 
@@ -130,7 +130,7 @@ def test_a_recorded_path_that_no_longer_reaches_npx_fails() -> None:
     result = healthcheck.browser_server_check(binary="npx", fragment="/opt/node/bin", resolved=None)
     assert result.status == checks.FAIL
     assert "/opt/node/bin" in result.detail
-    assert "./setup" in result.fix
+    assert preflight.setup_door() in result.fix
 
 
 def test_no_recorded_path_is_not_checked_rather_than_failed() -> None:

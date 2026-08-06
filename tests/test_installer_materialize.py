@@ -352,7 +352,9 @@ def test_install_refuses_to_take_a_name_a_foreign_symlink_already_holds(
 
     with pytest.raises(LayoutError):
         materialize.install_shim()
-    assert os.readlink(paths.shim_path()) == str(theirs)
+    # Through pointer.read rather than os.readlink: Windows answers with the extended-length
+    # form (\\?\C:\...), which names the same file in a spelling nothing else here uses.
+    assert pointer.read(paths.shim_path()) == Path(os.path.realpath(theirs))
 
 
 def test_an_unterminated_block_is_left_alone_rather_than_eating_the_file(tmp_path) -> None:

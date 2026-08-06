@@ -382,7 +382,7 @@ def test_the_gate_fails_when_a_tree_has_no_dependency_environment(tmp_path):
     result = preflight.check_runtime(tmp_path)
     assert result.status == checks.FAIL
     assert "no dependency environment" in result.detail
-    assert "./setup" in result.fix
+    assert preflight.setup_door() in result.fix
 
 
 def test_the_gate_fails_when_the_interpreter_cannot_run(tmp_path):

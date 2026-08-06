@@ -43,6 +43,16 @@ goto selly_wait
 """
 
 
+def _shim_encoding() -> str:
+    """What the .cmd shim is written in.
+
+    cmd.exe parses a batch file in the console code page, not the ANSI one a locale write would
+    use. Where the two differ — an accented name under C:\\Users — the target spelled in one is
+    not the target read in the other, and the shim's own `if exist` never matches it.
+    """
+    return "oem" if _WINDOWS else "utf-8"
+
+
 def is_pointer(path) -> bool:
     """Whether `path` is one of our indirections rather than a real directory.
 
@@ -117,12 +127,10 @@ def write_shim(shim, launcher, interpreter) -> Path:
     staging = shim.with_name(shim.name + ".new")
     discard(staging)
     if _WINDOWS:
-        # cmd.exe parses a batch file in the console code page, not the ANSI one a locale
-        # write would use. Where they differ — an accented name under C:\\Users — the two
-        # spellings disagree and the shim's `if exist` never matches its own target.
-        staging.write_text(
-            _CMD_SHIM.format(target=launcher, interpreter=Path(interpreter)), encoding="oem"
-        )
+        body = _CMD_SHIM.format(target=launcher, interpreter=Path(interpreter))
+        # Encoded here and written as bytes rather than through write_text: the code-page codecs
+        # have no working incremental encoder, so a text-mode write refuses even pure ASCII.
+        staging.write_bytes(body.encode(_shim_encoding()))
     else:
         staging.symlink_to(launcher)
     os.replace(staging, shim)
@@ -137,7 +145,7 @@ def shim_target(shim):
     if not _WINDOWS:
         return None
     try:
-        for line in shim.read_text(encoding="oem").splitlines():
+        for line in shim.read_bytes().decode(_shim_encoding()).splitlines():
             if line.startswith('set "SELLY_LAUNCHER='):
                 return Path(line.split("=", 1)[1].rstrip('"'))
     except OSError:
