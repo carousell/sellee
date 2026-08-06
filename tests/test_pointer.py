@@ -132,3 +132,10 @@ def test_the_shim_is_written_as_bytes_not_through_a_text_stream(tmp_path) -> Non
     launcher = _version(tmp_path, "1.0.0") / "bin" / "selly-agent"
     shim = pointer.write_shim(tmp_path / "bin" / "selly-agent", launcher, "/usr/bin/python3")
     assert pointer.shim_target(shim) == launcher
+
+
+def test_the_shim_template_stays_ascii() -> None:
+    """It is written in the console code page, which is cp437 or cp850 on a Western install and
+    has no em dash. One in a `rem` line is enough to make every install on Windows fail."""
+    body = pointer._CMD_SHIM.format(target="C:/x/selly-agent", interpreter="C:/py/python.exe")
+    assert body.isascii(), [c for c in body if not c.isascii()]

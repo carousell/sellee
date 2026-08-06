@@ -33,8 +33,9 @@ set "SELLY_LAUNCHER={target}"
 set /a SELLY_TRIES=0
 :selly_wait
 if exist "%SELLY_LAUNCHER%" goto selly_run
-rem An update is mid-swap: the pointer is gone for a moment. Wait rather than fail — and keep
+rem An update is mid-swap: the pointer is gone for a moment. Wait rather than fail, and keep
 rem waiting a few rounds, because a scanner holding the old target can stretch the moment.
+rem (ASCII only in here: this file is written in the console code page, which has no em dash.)
 set /a SELLY_TRIES+=1
 if %SELLY_TRIES% geq 5 goto selly_run
 timeout /t 1 /nobreak >nul 2>&1
