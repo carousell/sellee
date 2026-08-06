@@ -101,7 +101,9 @@ def call(name, args, mid):
     return out["result"].get("structuredContent")
 emit({"type":"system","subtype":"init","session_id":"listing"})
 rpc("initialize", {}, 1)
-photos = re.findall(r"^\\s+(/\\S+\\.jpg)$", prompt, re.M)
+# No leading slash in the pattern: an absolute path is C:\\... on Windows, and requiring
+# one there matched nothing, so this stand-in harness aborted before creating anything.
+photos = re.findall(r"^\\s+(\\S+\\.jpg)$", prompt, re.M)
 assert photos, prompt
 item = call("create_item",
     {"title":"Desk lamp","list_price":80.0,"currency":"SGD","photos":photos}, 2)

@@ -371,7 +371,9 @@ def test_an_agent_session_stops_setup_asking_questions(world, monkeypatch, capsy
 def test_a_daemon_that_never_heartbeats_fails_with_its_own_log(world, monkeypatch, capsys) -> None:
     monkeypatch.setattr(heartbeat, "wait_fresh", lambda path, **kwargs: False)
     paths.ensure_state_dirs()
-    (paths.logs_dir() / "agent.err.log").write_text("Traceback…\nOSError: port 7355 in use\n")
+    (paths.logs_dir() / "agent.err.log").write_text(
+        "Traceback…\nOSError: port 7355 in use\n", encoding="utf-8"
+    )
 
     assert setup_main("--yes", "--manual") == 1
     err = capsys.readouterr().err

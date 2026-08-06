@@ -22,7 +22,11 @@ def _executable(path, body: str = "#!/bin/sh\nexit 0\n"):
 def test_a_program_on_path_is_resolved_to_its_full_path(tmp_path, monkeypatch) -> None:
     binary = _executable(tmp_path / "npx")
     monkeypatch.setenv("PATH", str(tmp_path))
-    assert spawn.resolve(["npx", "--yes", "pkg"]) == [str(binary), "--yes", "pkg"]
+    resolved = spawn.resolve(["npx", "--yes", "pkg"])
+    # normcase: Windows hands back the extension in PATHEXT's own casing (npx.CMD), and its
+    # paths are case-insensitive, so comparing the raw strings would fail on spelling alone.
+    assert os.path.normcase(resolved[0]) == os.path.normcase(str(binary))
+    assert resolved[1:] == ["--yes", "pkg"]
 
 
 def test_a_missing_program_is_left_for_the_caller_to_report(tmp_path, monkeypatch) -> None:

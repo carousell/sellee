@@ -627,7 +627,10 @@ def _daemon_diagnostics() -> str:
     log_path = paths.logs_dir() / "agent.err.log"
     lines = [f"Its log is at {log_path}", "Run `selly-agent daemon status` for its view."]
     try:
-        tail = log_path.read_text(encoding="utf-8").splitlines()[-_LOG_TAIL_LINES:]
+        # errors="replace": this runs to explain a failure, and a log carrying one odd byte —
+        # a subprocess's output in the machine's own code page — must not fail that explanation.
+        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = tail[-_LOG_TAIL_LINES:]
     except OSError:
         tail = []
     if tail:

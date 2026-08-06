@@ -42,8 +42,10 @@ def test_plist_render_matches_golden() -> None:
     text = MacOSPlatform().render_supervisor(
         label="com.selly.agent",
         program_args=["/usr/bin/python3", "/opt/current/bin/selly-agent", "daemon", "run"],
-        stdout_path=Path("/state/logs/agent.out.log"),
-        stderr_path=Path("/state/logs/agent.err.log"),
+        # Plain strings, not Path: this golden describes a macOS plist, and a Path would be
+        # re-spelled in the running host's separator before it reached the render.
+        stdout_path="/state/logs/agent.out.log",
+        stderr_path="/state/logs/agent.err.log",
         marker=supervisor.MARKER,
         environment={},
     )
@@ -103,7 +105,10 @@ def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) ->
 
     plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
     assert "<key>PATH</key>" in plist
-    assert f"<string>/opt/node-versions/v22/bin:{supervisor.SUPERVISED_PATH}</string>" in plist
+    assert (
+        f"<string>/opt/node-versions/v22/bin{os.pathsep}{supervisor.SUPERVISED_PATH}</string>"
+        in plist
+    )
 
 
 def test_a_multi_directory_fragment_reaches_the_jobs_path_whole(xdg_tmp) -> None:
@@ -114,8 +119,8 @@ def test_a_multi_directory_fragment_reaches_the_jobs_path_whole(xdg_tmp) -> None
 
     plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
     assert (
-        f"<string>/opt/node/bin:/usr/local/npm-global/bin:{supervisor.SUPERVISED_PATH}</string>"
-        in plist
+        f"<string>/opt/node/bin:/usr/local/npm-global/bin{os.pathsep}"
+        f"{supervisor.SUPERVISED_PATH}</string>" in plist
     )
 
 
