@@ -17,10 +17,9 @@ import os
 import shutil
 import sqlite3
 import subprocess
-import sys
 from pathlib import Path
 
-from selly_agent import passes, paths, supervisor
+from selly_agent import host, passes, paths, supervisor
 from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
 from selly_agent.installer import checks, runtime
@@ -145,7 +144,7 @@ def is_apple_silicon() -> bool:
     which is precisely the situation this gate exists to catch: a translated shell whose PATH
     Node is an Intel build. The sysctl answers for the machine either way.
     """
-    if sys.platform != "darwin":
+    if not host.macos():
         return False  # the question is about Rosetta, which nothing else has
     code, out = _run(["sysctl", "-n", "hw.optional.arm64"])
     return code == 0 and out.strip() == "1"
@@ -211,11 +210,11 @@ def supervised_env(fragment: str | None = None) -> dict:
 # person. macOS gets Homebrew, Windows gets winget — which ships with Windows, so unlike Homebrew
 # there is nothing to bootstrap before it can be offered.
 _PACKAGE_MANAGERS = {
-    "darwin": {
+    "macos": {
         "name": "Homebrew",
         "packages": {"node": ("node", False), "chrome": ("google-chrome", True)},
     },
-    "win32": {
+    "windows": {
         "name": "winget",
         "packages": {"node": ("OpenJS.NodeJS.LTS", False), "chrome": ("Google.Chrome", False)},
     },
@@ -224,12 +223,12 @@ _PACKAGE_MANAGERS = {
 
 def setup_door() -> str:
     """How a person re-runs setup, spelled for this platform's front door."""
-    return r".\setup.ps1" if os.name == "nt" else "./setup"
+    return r".\setup.ps1" if host.windows() else "./setup"
 
 
 def package_manager_name() -> str:
     """What to call the installer this platform uses, or "" where we know of none."""
-    return _PACKAGE_MANAGERS.get(sys.platform, {}).get("name", "")
+    return _PACKAGE_MANAGERS.get(host.name(), {}).get("name", "")
 
 
 def install_command(dependency: str) -> list:
@@ -238,14 +237,14 @@ def install_command(dependency: str) -> list:
     One place so a gate's remediation text and the command setup actually runs cannot disagree,
     which is the way a person ends up pasting something that does not work.
     """
-    manager = _PACKAGE_MANAGERS.get(sys.platform)
+    manager = _PACKAGE_MANAGERS.get(host.name())
     if manager is None:
         return []
     entry = manager["packages"].get(dependency)
     if entry is None:
         return []
     package, cask = entry
-    if sys.platform == "win32":
+    if host.windows():
         return ["winget", "install", "--exact", "--id", package]
     brew = homebrew_path()
     if not brew:
@@ -267,7 +266,7 @@ def _claude_install_hint() -> str:
     would fail. The CLI is a separate install from the desktop app either way, which is the part
     people get wrong.
     """
-    if os.name == "nt":
+    if host.windows():
         return (
             "The `claude` CLI is a separate install from the desktop app. Install it, then "
             f"re-run {setup_door()}."
@@ -315,15 +314,15 @@ def brew_install(package: str, *, cask: bool = False) -> tuple:
 # --- gates -----------------------------------------------------------------------------------
 
 
-_PLATFORM_NAMES = {"darwin": "macOS", "win32": "Windows"}
+_PLATFORM_NAMES = {"macos": "macOS", "windows": "Windows"}
 
 
 def check_platform() -> checks.Check:
-    name = _PLATFORM_NAMES.get(sys.platform)
+    name = _PLATFORM_NAMES.get(host.name())
     if name is None:
         return checks.fail(
             "platform",
-            f"{sys.platform} is not supported yet",
+            f"{host.name()} is not supported yet",
             "selly-agent runs on macOS and Windows today; Linux is a planned port.",
         )
     return checks.ok("platform", name)

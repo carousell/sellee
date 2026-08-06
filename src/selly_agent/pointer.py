@@ -18,7 +18,9 @@ import codecs
 import os
 from pathlib import Path
 
-_WINDOWS = os.name == "nt"
+from selly_agent import host
+
+_WINDOWS = host.windows()
 
 # The shim is a script on Windows, so its name carries an extension there. Read through paths, which
 # stays the single authority on where things live; this is only the naming rule.

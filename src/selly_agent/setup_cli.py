@@ -14,7 +14,6 @@ than writing state behind its back.
 from __future__ import annotations
 
 import json
-import os
 import time
 
 from selly_agent import (
@@ -24,6 +23,7 @@ from selly_agent import (
     control,
     healthcheck,
     heartbeat,
+    host,
     marketplaces,
     pass_cli,
     passes,
@@ -280,7 +280,7 @@ def _offer_path(ui: Ui, args) -> None:
     ui.say("")
     ui.warn(f"{bin_dir} is not on your PATH, so `selly-agent` will not be found yet.")
 
-    if os.name == "nt":
+    if host.windows():
         _offer_user_path_entry(ui, args, bin_dir)
         return
 

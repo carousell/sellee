@@ -92,11 +92,13 @@ def test_node_gate_reports_a_missing_node(monkeypatch) -> None:
     assert result.fix == preflight.install_hint("node")
 
 
-@pytest.mark.parametrize("platform", ["darwin", "win32"])
+@pytest.mark.parametrize("platform", ["macos", "windows"])
 def test_the_remediation_is_the_command_setup_would_run(platform, monkeypatch) -> None:
     """A gate that printed one command while setup ran another is how somebody ends up pasting
     something that does not work."""
-    monkeypatch.setattr(preflight.sys, "platform", platform)
+    # Patched at the one seam that answers this, rather than at sys.platform: the tables are
+    # keyed on host.name(), so pretending to be another OS is one substitution.
+    monkeypatch.setattr(preflight.host, "name", lambda: platform)
     monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
 
     command = preflight.install_command("node")
@@ -106,7 +108,7 @@ def test_the_remediation_is_the_command_setup_would_run(platform, monkeypatch) -
 
 
 def test_a_platform_with_no_package_manager_says_so_rather_than_naming_one(monkeypatch) -> None:
-    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    monkeypatch.setattr(preflight.host, "name", lambda: "linux")
     assert preflight.install_command("node") == []
     assert f"re-run {preflight.setup_door()}" in preflight.install_hint("node")
 

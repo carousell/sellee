@@ -12,22 +12,21 @@ piece missing.
 
 from __future__ import annotations
 
-import sys
-
+from selly_agent import host
 from selly_agent.platform.base import Platform, UnsupportedPlatform
 
 
 def get_platform() -> Platform:
-    if sys.platform == "darwin":
+    if host.macos():
         from selly_agent.platform.macos import MacOSPlatform
 
         return MacOSPlatform()
-    if sys.platform == "win32":
+    if host.windows():
         from selly_agent.platform.windows import WindowsPlatform
 
         return WindowsPlatform()
     raise UnsupportedPlatform(
-        f"{sys.platform!r} is not supported yet (macOS and Windows; Linux is a planned port)"
+        f"{host.name()!r} is not supported yet (macOS and Windows; Linux is a planned port)"
     )
 
 

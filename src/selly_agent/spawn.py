@@ -13,6 +13,8 @@ import shutil
 import signal
 import subprocess
 
+from selly_agent import host
+
 
 def resolve(argv) -> list:
     """`argv` with its program resolved to a full path; unchanged when nothing matches.
@@ -37,7 +39,7 @@ def become(argv) -> int:
     exit status becomes ours, which costs one lingering parent process and keeps the terminal sane.
     """
     resolved = resolve(argv)
-    if os.name != "nt":
+    if not host.windows():
         os.execv(resolved[0], resolved)  # never returns
     # Ctrl+C belongs to the child while it runs: it shares the console and gets the event
     # itself, and run() would answer the parent's KeyboardInterrupt by killing the very child
@@ -56,7 +58,7 @@ def detached_flags() -> dict:
     at once. Windows has no session, so the nearest thing is a new process group plus no console:
     without CREATE_NO_WINDOW a background job flashes a console window on every pass.
     """
-    if os.name == "nt":
+    if host.windows():
         return {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW}
     return {"start_new_session": True}
 
@@ -70,7 +72,7 @@ def survives_us_flags() -> dict:
     it is the agent's own Chrome on a dedicated profile, and the next launch recovers (sessions
     persist on disk; stale profile locks are cleared).
     """
-    if os.name == "nt":
+    if host.windows():
         return {"creationflags": subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP}
     return {"start_new_session": True}
 
@@ -83,6 +85,6 @@ def windowless_flags() -> dict:
     closing it delivers CTRL_CLOSE_EVENT to a server that was mid-operation. Nothing here needs a
     group of its own: these children are stopped through the handle we already hold.
     """
-    if os.name == "nt":
+    if host.windows():
         return {"creationflags": subprocess.CREATE_NO_WINDOW}
     return {}

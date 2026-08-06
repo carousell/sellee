@@ -13,10 +13,9 @@ nobody can act on again.
 
 from __future__ import annotations
 
-import os
 import shutil
 
-from selly_agent import config, paths, pointer, supervisor
+from selly_agent import config, host, paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -50,7 +49,7 @@ def _run(args, ui: Ui) -> int:
 
     if materialize.remove_shim():
         ui.say(f"removed {paths.shim_path()}")
-    if os.name == "nt":
+    if host.windows():
         # Only if setup recorded adding it: a directory the seller already had on PATH is theirs.
         if config.load().path_entry_added and materialize.remove_user_path_entry():
             ui.say("removed our entry from your account's PATH")

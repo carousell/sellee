@@ -1,12 +1,13 @@
-"""Guards that stand in for the CI this project does not have yet.
+"""Guards on the things CI cannot see from one machine.
 
-Two classes of breakage cost nothing to catch here and are otherwise invisible until somebody runs
-the code on the other platform: a module that cannot be imported at all, and a file the code names
-that is not in the tree. Both were how the previous Windows port rotted — it was never run, so
-nothing noticed.
+CI now runs the suite on Linux, macOS and Windows, so "does it work there" is answered by running
+it. These cover what a green run on three machines still would not: a module that cannot be
+imported at all (invisible until the one code path that imports it runs), a packaged file the code
+names but that never shipped, and platform branching leaking out of the modules that own it. All
+three were how the previous Windows port rotted — it was never run, so nothing noticed.
 
-What these cannot do is tell you the code *works* on the other platform. Only running it there can,
-which is what the live checklist is for.
+What these cannot do is tell you the code *works* on the other platform. Only running it there
+can, which is what CI and the live checklist are for.
 """
 
 from __future__ import annotations
@@ -63,6 +64,8 @@ def test_the_platform_only_list_stays_empty() -> None:
 # Spelled with forward slashes and matched against as_posix(), so the guard means the same thing
 # on a host whose separator is a backslash — otherwise every owner silently stops being one.
 _PLATFORM_OWNERS = {
+    # The module that defines the question. Every other owner asks it through here.
+    "selly_agent/host.py",
     "selly_agent/platform/__init__.py",
     "selly_agent/platform/base.py",
     "selly_agent/platform/macos.py",
@@ -85,7 +88,11 @@ _PLATFORM_OWNERS = {
 
 _PLATFORM_TOKENS = re.compile(
     r"\bos\.name\b|\bsys\.platform\b|\bimport platform\b|"
-    r"\bmsvcrt\b|\bwinreg\b|\b_winapi\b|\bfcntl\b|\bctypes\b"
+    r"\bmsvcrt\b|\bwinreg\b|\b_winapi\b|\bfcntl\b|\bctypes\b|"
+    # host.py's own helpers count as platform tokens. Without this line the tidier spelling
+    # would be an unpoliced way to branch on the OS anywhere in the tree — the abstraction
+    # would have quietly removed the rule it was supposed to make easier to follow.
+    r"\bhost\.windows\b|\bhost\.macos\b|\bhost\.linux\b|\bhost\.name\b"
 )
 
 
@@ -119,6 +126,40 @@ def test_platform_conditionals_live_in_their_owner_modules() -> None:
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, "platform conditionals outside their owner modules:\n" + "\n".join(
         offenders
+    )
+
+
+# The one module allowed to ask the OS directly; everything else goes through its helpers.
+_HOST_MODULE = "selly_agent/host.py"
+
+_RAW_HOST_QUESTION = re.compile(r"os\.name\s*[=!]=|sys\.platform\s*[=!]=|sys\.platform\.startswith")
+
+
+def test_the_host_question_is_asked_one_way() -> None:
+    """`os.name == "nt"`, `os.name != "nt"` and `sys.platform == "win32"` all answer the same
+    question, and the tree used all three — twice in one module. They agree, which is exactly why
+    the inconsistency survived: nothing was ever wrong, so nothing forced a decision.
+
+    host.py is the one place that asks. This keeps the older spellings from drifting back, which
+    a rename alone would not: nothing else would have noticed the next `os.name == "nt"`.
+
+    Not covered here: bin/selly-agent, which has no .py extension and so is not walked anyway.
+    The launcher runs before the venv exists and cannot import host, so its checks stay inline —
+    the one place two spellings is the lesser evil, and it is called out in host.py's docstring.
+    """
+    offenders = []
+    for path in sorted(SRC.rglob("*.py")):
+        rel = path.relative_to(SRC).as_posix()
+        if rel == _HOST_MODULE:
+            continue
+        for lineno, line in enumerate(
+            _without_comments(path.read_text(encoding="utf-8")).splitlines(), start=1
+        ):
+            if _RAW_HOST_QUESTION.search(line):
+                offenders.append(f"{rel}:{lineno}: {line.strip()}")
+    assert not offenders, (
+        "the host is asked directly outside host.py (use host.windows()/macos()/linux()):\n"
+        + "\n".join(offenders)
     )
 
 

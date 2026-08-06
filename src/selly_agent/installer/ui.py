@@ -17,6 +17,8 @@ import os
 import shutil
 import sys
 
+from selly_agent import host
+
 # The banner is skipped below this width rather than wrapped: a wrapped banner is unreadable
 # noise, and the one-line fallback carries the same information.
 BANNER_MIN_COLUMNS = 64
@@ -85,7 +87,7 @@ class Ui:
             return False
         if not getattr(self.stream, "isatty", lambda: False)():
             return False
-        if os.name != "nt":
+        if not host.windows():
             return True
         # A classic Windows console does not process VT sequences unless its host enabled them,
         # and raw escape bytes are worse than no colour. These are the hosts known to render

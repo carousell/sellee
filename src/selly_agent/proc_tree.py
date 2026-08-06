@@ -22,6 +22,8 @@ import time
 
 import psutil
 
+from selly_agent import host
+
 log = logging.getLogger(__name__)
 
 _GRACE_SEC = 10  # a terminated tree gets this long to exit before it is killed outright
@@ -60,7 +62,7 @@ def _process_group(pid: int) -> int | None:
 
     Read before anything is signalled: once the leader is reaped its PID no longer answers.
     """
-    if os.name == "nt":
+    if host.windows():
         return None
     try:
         return os.getpgid(pid)

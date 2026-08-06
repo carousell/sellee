@@ -17,14 +17,13 @@ import logging
 import os
 import shutil
 import subprocess
-import sys
 import threading
 import time
 import urllib.error
 import urllib.request
 from pathlib import Path
 
-from selly_agent import paths, spawn
+from selly_agent import host, paths, spawn
 
 log = logging.getLogger(__name__)
 
@@ -87,9 +86,9 @@ def chrome_candidates() -> list:
     conventional directories are the fallback. Elsewhere it is a name on PATH, under any of the
     three the distributions use.
     """
-    if sys.platform == "darwin":
+    if host.macos():
         return [_CHROME_MACOS]
-    if os.name == "nt":
+    if host.windows():
         found = _registered_chrome()
         roots = [
             os.environ.get("PROGRAMFILES"),
@@ -123,7 +122,7 @@ def singleton_lock_names() -> tuple:
     Per-OS because they differ, and clearing the wrong names is worse than clearing none: the next
     launch on the profile hangs, which is the failure this clearing exists to prevent.
     """
-    if os.name == "nt":
+    if host.windows():
         return ("lockfile",)
     return ("SingletonLock", "SingletonCookie", "SingletonSocket")
 

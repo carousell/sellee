@@ -26,6 +26,8 @@ from pathlib import Path
 
 import psutil
 
+from selly_agent import host
+
 log = logging.getLogger(__name__)
 
 # Past any PID body we would write, and past EOF, which both platforms allow locking.
@@ -35,7 +37,7 @@ _LOCK_BYTE_OFFSET = 4096
 _OPEN_FLAGS = os.O_RDWR | os.O_CREAT | getattr(os, "O_BINARY", 0)
 
 
-if os.name == "nt":
+if host.windows():
     import msvcrt
 
     def _take_exclusive(fd: int) -> None:

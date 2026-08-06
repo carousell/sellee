@@ -13,10 +13,9 @@ environment) always takes effect.
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
-from selly_agent import pointer
+from selly_agent import host, pointer
 from selly_agent.platform import get_platform
 
 APP = "selly-agent"
@@ -63,7 +62,7 @@ def _root(var: str, xdg_rel: str, windows_leaf: str) -> Path:
     override = os.environ.get(var)
     if override:
         return Path(override) / APP
-    if os.name == "nt":
+    if host.windows():
         return _local_app_data() / APP / windows_leaf
     return _home() / xdg_rel / APP
 
@@ -83,7 +82,7 @@ def supervised_env_base() -> dict:
     PATHEXT a bare `npx` never resolves to `npx.cmd`. Those come from this process, where the
     machine is the authority — the home directory does not, so that a test can redirect it.
     """
-    if os.name != "nt":
+    if not host.windows():
         return {"HOME": str(_home())}
     passthrough = ("SystemRoot", "PATHEXT", "COMSPEC", "APPDATA", "LOCALAPPDATA", "TEMP", "TMP")
     env = {"USERPROFILE": str(_home())}
@@ -171,7 +170,7 @@ def uv_path() -> Path:
     Deliberately not ~/.local/bin: a user may have their own uv there, and taking that name is not
     ours to do. Under the data root, an uninstall removes it by removing that root.
     """
-    return tools_dir() / ("uv.exe" if os.name == "nt" else "uv")
+    return tools_dir() / ("uv.exe" if host.windows() else "uv")
 
 
 def venv_dir(tree: Path) -> Path:
@@ -187,8 +186,8 @@ def venv_python(tree: Path) -> Path:
     answered here and not behind the platform seam — that seam refuses an unsupported host, and
     this has to resolve while a runtime is still being established.
     """
-    scripts = "Scripts" if os.name == "nt" else "bin"
-    name = "python.exe" if os.name == "nt" else "python"
+    scripts = "Scripts" if host.windows() else "bin"
+    name = "python.exe" if host.windows() else "python"
     return venv_dir(tree) / scripts / name
 
 
@@ -199,7 +198,7 @@ def venv_windowless_python(tree: Path) -> Path:
     desktop; with a keep-alive that starts it every few minutes, that is a window every few
     minutes. Nothing else differs. POSIX makes no such distinction.
     """
-    if os.name != "nt":
+    if not host.windows():
         return venv_python(tree)
     return venv_dir(tree) / "Scripts" / "pythonw.exe"
 
@@ -302,7 +301,7 @@ def claude_bin_candidates() -> list[Path]:
     runner never reaches for the home directory itself. PATH is searched separately by the
     caller (shutil.which); these cover the common non-PATH installs."""
     home = _home()
-    if os.name == "nt":
+    if host.windows():
         # Where Claude Code's own Windows installer puts it, with and without the extension a
         # bare name would need PATHEXT to find.
         return [
@@ -370,7 +369,7 @@ def tcc_protected_roots() -> list[Path]:
     Empty elsewhere: nothing else has this concept, and a check against a list that means nothing
     would refuse install locations for no reason.
     """
-    if sys.platform != "darwin":
+    if not host.macos():
         return []
     home = _home()
     return [home / "Documents", home / "Desktop", home / "Downloads"]
@@ -407,7 +406,7 @@ def _ensure(path: Path, mode: int) -> Path:
     same protection Claude Code relies on for its own credentials. Faking a chmod that enforced
     nothing would only make the code look like it had done something.
     """
-    if os.name == "nt":
+    if host.windows():
         path.mkdir(parents=True, exist_ok=True)
         return path
     old_umask = os.umask(0)

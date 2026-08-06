@@ -20,7 +20,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from selly_agent import paths, pointer
+from selly_agent import host, paths, pointer
 from selly_agent.installer import runtime
 
 # What a version directory holds: the launcher and the package (whose migrations, registries and
@@ -174,7 +174,7 @@ def _fsync_dir(path: Path) -> None:
     """Flush the directory entry so the rename that follows survives a crash. This makes the
     *switch* durable, not every byte of every copied file — a torn copy is discarded by the
     rename never happening, which is the direction that is safe to fail in."""
-    if os.name == "nt":
+    if host.windows():
         # Windows has no fd for a directory: the CRT refuses to open one, so this would raise
         # PermissionError rather than syncing anything. The rename below is still atomic there
         # (MoveFileEx), and NTFS journals the metadata itself, so there is nothing to flush by

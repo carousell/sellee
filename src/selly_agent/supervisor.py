@@ -18,7 +18,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from selly_agent import config, control, heartbeat, lock, paths, proc_tree, secrets
+from selly_agent import config, control, heartbeat, host, lock, paths, proc_tree, secrets
 from selly_agent.db import connect_reader
 from selly_agent.events import query_events
 from selly_agent.installer import materialize
@@ -61,7 +61,7 @@ def _default_supervised_path() -> str:
     and because the installer's gates verify the browser server can be spawned under exactly this,
     plus the recorded fragment.
     """
-    if os.name == "nt":
+    if host.windows():
         root = os.environ.get("SystemRoot", r"C:\Windows")
         dirs = (rf"{root}\system32", root, rf"{root}\System32\Wbem")
     else:

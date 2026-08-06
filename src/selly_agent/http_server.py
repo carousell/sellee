@@ -31,7 +31,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from selly_agent import __version__, passes
+from selly_agent import __version__, host, passes
 from selly_agent.db import connect_reader
 from selly_agent.events import event_to_wire, latest_seq, query_events, routine_kinds
 from selly_agent.paths import PACKAGE_DATA_DIR
@@ -177,7 +177,7 @@ class _Server(ThreadingHTTPServer):
     # The default (SO_REUSEADDR on) is harmless on POSIX, but on Windows it lets this bind land
     # on a port another process is actively using — and a second daemon sharing the port is
     # exactly the double-bind the loud startup failure exists to surface.
-    allow_reuse_address = os.name != "nt"
+    allow_reuse_address = not host.windows()
 
     def server_bind(self) -> None:
         """Bind without asking the network who we are.
