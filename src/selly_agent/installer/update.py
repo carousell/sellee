@@ -29,7 +29,7 @@ import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
-from selly_agent import __version__, config, heartbeat, paths, supervisor
+from selly_agent import __version__, config, deployment, heartbeat, paths, supervisor
 from selly_agent.installer import materialize
 
 log = logging.getLogger(__name__)
@@ -264,9 +264,12 @@ def _start_daemon(mode: str, *, platform=None) -> bool:
 # --- the daemon's own look ----------------------------------------------------------------------
 
 UPDATE_NOTICE = (
-    "selly-agent {version} is out (you're on {current}). Update when it suits you: "
-    "`selly-agent update`."
+    "selly-agent {version} is out (you're on {current}). Update when it suits you: {how}."
 )
+# How this install takes a new version. A container's code is its image, so there is nothing here
+# to swap — which is a different instruction, not a differently-worded one.
+HOST_UPDATE_HOW = "`selly-agent update`"
+CONTAINER_UPDATE_HOW = "rebuild the image from an updated checkout and recreate the container"
 
 
 def update_probe(*, store, bus, config_obj, seen: set) -> None:
@@ -287,7 +290,8 @@ def update_probe(*, store, bus, config_obj, seen: set) -> None:
     if not is_newer(release.version, __version__) or release.version in seen:
         return
     seen.add(release.version)
-    store.queue_notice(UPDATE_NOTICE.format(version=release.version, current=__version__))
+    how = CONTAINER_UPDATE_HOW if deployment.is_container() else HOST_UPDATE_HOW
+    store.queue_notice(UPDATE_NOTICE.format(version=release.version, current=__version__, how=how))
     bus.publish("update.available", {"version": release.version, "current": __version__})
 
 
@@ -314,6 +318,15 @@ def _base_url(args, cfg) -> str:
 
 
 def _guard_updatable() -> None:
+    if deployment.is_container():
+        # Not a dangerous-mutation guard — nothing in the image creates a `current` symlink, so
+        # the next check would already refuse. It is here for the message: swapping a version
+        # directory is not how this install gets a new version, and saying "run ./setup from a
+        # checkout" to someone in a container sends them somewhere that cannot help.
+        raise UpdateError(
+            "this install runs from an image, so a new version is a new image rather than a swap "
+            f"in place — {CONTAINER_UPDATE_HOW}"
+        )
     if materialize.current_target() is None:
         raise UpdateError(
             "there is no installed version here to update — run ./setup from a checkout first"

@@ -243,6 +243,30 @@ def test_a_dev_install_refuses_to_update(xdg_tmp, tmp_path, served) -> None:
     assert "working tree" in str(caught.value)
 
 
+def test_a_container_install_is_told_to_rebuild_its_image(container, xdg_tmp, served) -> None:
+    """A version directory swap is not how this install gets a new version, and "run ./setup from
+    a checkout" is advice that leads nowhere from inside a container."""
+    with pytest.raises(UpdateError) as caught:
+        update_mod.perform(Args(url=served[1]), Config(), lambda line: None)
+    message = str(caught.value)
+    assert "a new image" in message
+    assert "./setup" not in message  # advice that leads nowhere from inside a container
+    assert "docker" not in message.lower()  # nor an engine we did not choose
+
+
+def test_the_release_notice_names_the_command_this_deployment_updates_with(
+    container, installed, served, store, bus
+) -> None:
+    root, base = served
+    build_release(root, "9.9.9")
+    update_mod.update_probe(
+        store=store, bus=bus, config_obj=Config(update_base_url=base), seen=set()
+    )
+    notice = store.claim_queued_notices(1)[0]["text"]
+    assert update_mod.CONTAINER_UPDATE_HOW in notice
+    assert "selly-agent update" not in notice  # the verb that refuses here
+
+
 def test_a_manual_daemon_that_was_not_running_is_not_started_by_an_update(
     xdg_tmp, tmp_path, monkeypatch, served
 ) -> None:

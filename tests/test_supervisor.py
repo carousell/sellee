@@ -252,3 +252,37 @@ def test_install_refuses_a_real_directory_at_current(xdg_tmp) -> None:
 
     assert supervisor.install(mode="manual", platform=fake) == 2
     assert fake.register_calls == []
+
+
+# --- a container has no job to ask about ------------------------------------------------------
+
+
+def test_a_containers_status_comes_from_the_process_not_from_a_job(container, xdg_tmp) -> None:
+    """Docker is the supervisor here, so `launchctl print` has no counterpart. The instance lock
+    names the live holder, which is the same question asked of the thing that can answer it."""
+    import os
+
+    paths.ensure_state_dirs()
+    paths.lock_path().write_text(str(os.getpid()))
+
+    status = supervisor.gather_status()
+    assert status.mode == "container"
+    assert status.registered is True
+
+
+def test_a_container_whose_worker_died_reads_as_stopped(container, xdg_tmp) -> None:
+    paths.ensure_state_dirs()
+    # A pid that cannot be running: the lock body outlived its holder.
+    paths.lock_path().write_text("999999999")
+    assert supervisor.gather_status().registered is False
+
+
+def test_a_container_status_never_resolves_a_host_platform(container, xdg_tmp, monkeypatch) -> None:
+    """get_platform() would hand back a ContainerPlatform that refuses every supervisor question,
+    so the branch has to come first rather than be caught afterwards."""
+
+    def explode():
+        raise AssertionError("the platform seam was resolved in container mode")
+
+    monkeypatch.setattr(supervisor, "get_platform", explode)
+    assert supervisor.gather_status().mode == "container"

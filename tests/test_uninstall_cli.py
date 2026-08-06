@@ -43,6 +43,20 @@ def test_a_full_uninstall_leaves_nothing_of_ours_behind(installed) -> None:
     assert not materialize.rc_block_present(materialize.shell_rc_target("/bin/zsh").read_text())
 
 
+def test_a_container_uninstall_refuses_rather_than_emptying_the_bind_mount(
+    container, installed, capsys
+) -> None:
+    """Run here it would empty the seller's bind-mounted directory and leave the container up.
+    Everything this install wrote is in that one directory, which is theirs to delete."""
+    assert uninstall_main("--yes") == 1
+
+    assert paths.selly_db().exists()
+    assert installed.is_registered("com.selly.agent")
+    err = capsys.readouterr().err
+    assert "/data" in err
+    assert "docker" not in err.lower()
+
+
 def test_after_uninstalling_a_fresh_install_is_not_blocked(installed) -> None:
     # The bug class this guards: leftovers that make the next ./setup refuse — a real directory
     # where `current` should be a symlink, or a shim that is already taken.

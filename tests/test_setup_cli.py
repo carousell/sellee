@@ -141,6 +141,50 @@ def test_a_default_install_stages_a_version_and_brings_the_daemon_up(world, caps
     assert "worker is up" in out
 
 
+def test_a_container_setup_runs_only_the_half_that_is_about_the_seller(
+    world, container, capsys
+) -> None:
+    """The image already is the machine half: dependencies installed, layout fixed, worker
+    started by Docker. What is left is region, rail, marketplaces, Telegram and the workspace."""
+    assert setup_main("--yes") == 0
+
+    # Nothing was materialized and no job was registered — the two halves are really separate.
+    assert not paths.current().exists()
+    assert not paths.shim_path().exists()
+    assert list(paths.versions_dir().glob("*")) == []
+    assert world.registered_labels == set()
+    assert world.register_calls == []
+
+    # And the seller half ran in full.
+    assert world.calls["basics"]["region"] == "SG"
+    assert world.calls["provisioned"] == "SG"
+
+    out = capsys.readouterr().out
+    assert "Checking this machine" not in out
+    assert "Installing Selly" not in out
+    assert "already running in this container" in out
+
+
+def test_a_container_setup_says_where_the_closing_commands_run(world, container, capsys) -> None:
+    """They are the same commands as on a host, but the seller has to be inside the container to
+    type them — and how they get there is their container runtime's business, not ours."""
+    setup_main("--yes")
+    out = capsys.readouterr().out
+    assert "Run these inside the container" in out
+    assert "selly-agent chat" in out
+    assert "rebuild the image" in out  # `selly-agent update` refuses here
+    assert "docker" not in out.lower()
+
+
+def test_a_container_setup_does_not_promise_that_nothing_was_written(
+    world, container, capsys
+) -> None:
+    """The worker starts with the container and has been writing since — so the host install's
+    consent-gate promise would be false here."""
+    setup_main("--yes")
+    assert "Nothing has been written yet." not in capsys.readouterr().out
+
+
 def test_setup_announces_every_location_before_writing(world, capsys) -> None:
     setup_main("--yes", "--manual")
     out = capsys.readouterr().out

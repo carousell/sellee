@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import shutil
 
-from selly_agent import paths, supervisor
+from selly_agent import deployment, paths, supervisor
 from selly_agent.installer import materialize
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -31,6 +31,16 @@ def run(args) -> int:
 
 
 def _run(args, ui: Ui) -> int:
+    if deployment.is_container():
+        # Everything this would remove is either inside the image (which deleting from within
+        # cannot help) or inside the bind mount (which the seller owns and can delete outright).
+        # Running it here would empty their data directory and leave the container up.
+        raise Abort(
+            "this install lives in a container, so removing it is not this command's to do — and "
+            "it is the easy case: nothing was written outside the directory you mounted at /data",
+            "Remove the container with whatever runs it, then delete that directory.",
+        )
+
     preserve = bool(getattr(args, "preserve_data", False))
     platform = get_platform()
 

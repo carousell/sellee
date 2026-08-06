@@ -3,6 +3,14 @@
 from __future__ import annotations
 
 import argparse
+import sys
+
+from selly_agent import deployment
+
+# The verbs that register, start or stop a supervisor job. In a container there is no job — the
+# process is the container's — and a command that pretended otherwise would either do nothing or
+# leave the seller believing they had stopped an agent that is still running.
+_SUPERVISOR_VERBS = frozenset({"install", "uninstall", "start", "stop"})
 
 
 def dispatch(args: argparse.Namespace) -> int:
@@ -12,6 +20,14 @@ def dispatch(args: argparse.Namespace) -> int:
         from selly_agent import daemon
 
         return daemon.run_daemon(once=args.once)
+
+    if deployment.is_container() and command in _SUPERVISOR_VERBS:
+        print(
+            f"`daemon {command}` has nothing to do here: this process is the container's, and "
+            "starting, stopping and removing it is your container runtime's job, not ours.",
+            file=sys.stderr,
+        )
+        return 2
 
     from selly_agent import supervisor
 

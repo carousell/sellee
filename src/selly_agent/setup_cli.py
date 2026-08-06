@@ -21,6 +21,7 @@ from selly_agent import (
     config,
     connect_cli,
     control,
+    deployment,
     healthcheck,
     heartbeat,
     marketplaces,
@@ -34,6 +35,7 @@ from selly_agent import (
 from selly_agent.browser import markets as market_adapters
 from selly_agent.installer import checks, materialize, preflight
 from selly_agent.installer import region as region_guess
+from selly_agent.installer import update as update_mod
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
 
@@ -72,14 +74,22 @@ def _run(args, ui: Ui) -> None:
     if platform_check.failed:
         raise Abort(platform_check.detail, platform_check.fix)
     platform = get_platform()
-    tree = materialize.source_tree()
 
-    _intro(ui, platform)
-    if not _agreed_to_proceed(ui):
-        return
-    _gates(ui, tree)
-    _install_layout(ui, args, platform, tree)
-    _start_daemon(ui, args, platform)
+    # The container ships the machine half already done: the dependencies are in the image, the
+    # layout is the image's own filesystem, and the worker was started by Docker before anyone
+    # typed this. What is left is the half that is about the seller rather than the machine.
+    if deployment.is_container():
+        _intro_container(ui)
+        if not _agreed_to_proceed(ui, nothing_written=False):
+            return
+    else:
+        tree = materialize.source_tree()
+        _intro(ui, platform)
+        if not _agreed_to_proceed(ui):
+            return
+        _gates(ui, tree)
+        _install_layout(ui, args, platform, tree)
+        _start_daemon(ui, args, platform)
 
     # Everything past here talks to the running daemon, so it needs the token minted at its
     # first start. Read now rather than at import: before this line there was none.
@@ -116,6 +126,35 @@ def _intro(ui: Ui, platform) -> None:
     for line in materialize.layout_preview(platform=platform):
         ui.say(line)
 
+    _note_agent_session(ui)
+
+
+def _intro_container(ui: Ui) -> None:
+    """The same account of what is about to happen, for an install that has no machine half.
+
+    Nothing here is installed on the seller's computer, which is the whole reason this profile
+    exists — so it is said plainly, along with the one thing that is not true of: the Chrome the
+    agent drives is theirs, on their desktop, started by them.
+    """
+    ui.banner(__version__)
+    ui.say("")
+    ui.say("Selly is a marketplace agent: it lists items, answers buyers, and negotiates within")
+    ui.say(f"limits you set. Version {__version__} is already running in this container.")
+    ui.say("")
+    ui.say("This will:")
+    ui.say("  • record the region and currency to price in")
+    ui.say("  • set up carousell.ai")
+    ui.say("  • optionally connect marketplaces and Telegram")
+    ui.say("  • write the workspace for the terminal session")
+    ui.say("")
+    ui.say("Everything it writes lands in the directory you mounted at /data, and nothing is")
+    ui.say("installed on your computer. Chrome is the exception by design: it runs on your own")
+    ui.say("desktop, you start it, and the agent drives it from here.")
+
+    _note_agent_session(ui)
+
+
+def _note_agent_session(ui: Ui) -> None:
     agent_var = preflight.agent_context()
     if agent_var and ui.interactive:
         # A TTY exists, but an agent is holding it. Questions asked here would be answered by
@@ -125,21 +164,31 @@ def _intro(ui: Ui, platform) -> None:
         ui.interactive = False
 
 
-def _agreed_to_proceed(ui: Ui) -> bool:
+def _agreed_to_proceed(ui: Ui, *, nothing_written: bool = True) -> bool:
     """The consent gate: nothing has been written before this, and nothing is until it passes.
 
     Every phase after this one either writes to disk or installs something, including the
     dependency gates (a `brew install`, a package download). So the whole account of what will
     happen is given first, and one answer covers it — the individually consequential steps
     (touching a shell rc, signing in, opening a marketplace) still ask again in their own words.
+
+    The container has already written for itself by the time anyone runs this (the worker starts
+    with the container), so there the promise would be false and is not made.
     """
     ui.say("")
-    ui.say("Nothing has been written yet.")
+    if nothing_written:
+        ui.say("Nothing has been written yet.")
     if ui.confirm("Proceed with the installation?", default=True):
         return True
     ui.say("")
-    ui.say("Cancelled — nothing was written. Re-run ./setup when you're ready.")
+    ui.say(f"Cancelled — nothing was written. Re-run {_setup_command()} when you're ready.")
     return False
+
+
+def _setup_command() -> str:
+    """How to start this again. `./setup` is a checkout's front door and does not exist in the
+    container, where the runtime is already established and only this verb remains."""
+    return "selly-agent setup" if deployment.is_container() else "./setup"
 
 
 # --- the gates ------------------------------------------------------------------------------
@@ -586,16 +635,28 @@ def _finish(ui: Ui, platform) -> None:
 
     ui.step("Installed")
     ui.say("Selly is running.")
+    container = deployment.is_container()
+    if container:
+        # The CLI lives in here, not on the seller's PATH. How they get back in is their
+        # container runtime's business — the same way they reached this prompt.
+        ui.say("Run these inside the container, the way you ran this:")
     ui.say("• Talk to Selly:    selly-agent chat   (`/selly` there changes settings)")
-    ui.say("• Watch it work:    selly-agent logs --follow   (or --web)")
+    ui.say("• Watch it work:    selly-agent logs --follow" + ("" if container else "   (or --web)"))
     ui.say("• Check status:     selly-agent daemon status")
-    ui.say("• Update:           selly-agent update")
+    if container:
+        ui.say(f"• Update:           {update_mod.CONTAINER_UPDATE_HOW}")
+    else:
+        ui.say("• Update:           selly-agent update")
 
 
 def _daemon_diagnostics() -> str:
     """What to look at when the worker did not come up — with the tail of its own stderr, since
     that is where the reason actually is and nobody finds that path on their own."""
     log_path = paths.logs_dir() / "agent.err.log"
+    if deployment.is_container():
+        # The worker's stderr goes to the container's own output rather than to a file, so the
+        # reason is wherever that runtime collects logs.
+        return "The worker logs to the container's output — read it with your container runtime."
     lines = [f"Its log is at {log_path}", "Run `selly-agent daemon status` for its view."]
     try:
         tail = log_path.read_text().splitlines()[-_LOG_TAIL_LINES:]
