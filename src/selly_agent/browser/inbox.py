@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from selly_agent import marketplaces
+from selly_agent import deployment, marketplaces
 from selly_agent.browser import markets as market_adapters
 from selly_agent.browser import reconcile
 from selly_agent.browser.client import BrowserError, BrowserUnavailable
@@ -45,14 +45,25 @@ _ACTIVE_STATUSES = ("active", "liaising", "agreed")
 _BROWSER_PASS_TYPES = ("reply", "publish")
 
 BLIND_NOTICE = (
-    "I can't read your {market} inbox right now, so I may be missing buyer messages. "
-    "Check that the agent's Chrome is running and still logged in."
+    "I can't read your {market} inbox right now, so I may be missing buyer messages. {chrome_check}"
+)
+# Which Chrome the seller should go and look at. On a host install it is the window the agent
+# opens for itself; in a container it is theirs, on their own desktop, and closing it is the
+# most likely reason we are blind.
+CHROME_CHECK = "Check that the agent's Chrome is running and still logged in."
+CONTAINER_CHROME_CHECK = (
+    "Check that Chrome is running on your own computer (start it with ./start-chrome.sh) and "
+    "still logged in."
 )
 LOGGED_OUT_NOTICE = (
     "Your {market} session is logged out, so I've stopped reading that market. "
-    "Run `selly-agent connect {market}` and I'll open it for you to sign in — then I'll pick up "
-    "where I left off."
+    "Run `selly-agent connect {market}`{where} and I'll open it for you to sign in — then I'll "
+    "pick up where I left off."
 )
+# This notice is read on a phone and acted on at a shell, so it has to say where that shell is.
+# Not *how* to get there: which container runtime, and what the container is called, are the
+# operator's business and not something we can guess for them.
+IN_CONTAINER = " in the container"
 UNAVAILABLE_NOTICE = (
     "I can't drive the browser at the moment, so browser marketplaces are paused. "
     "The carousell.ai side is unaffected. Details: {reason}"
@@ -88,6 +99,14 @@ def _notify_once(deps: InboxDeps, key: str, text: str) -> None:
 
 def _clear_notice(deps: InboxDeps, key: str) -> None:
     deps.notified.pop(key, None)
+
+
+def _chrome_check() -> str:
+    return CONTAINER_CHROME_CHECK if deployment.is_container() else CHROME_CHECK
+
+
+def _where() -> str:
+    return IN_CONTAINER if deployment.is_container() else ""
 
 
 def _unavailable(deps: InboxDeps, exc: BrowserUnavailable) -> None:
@@ -159,7 +178,11 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     state = login.get("state")
     if state == "logged_out":
         deps.bus.publish("browser.login", {"market": market, "state": state})
-        _notify_once(deps, f"logged_out:{market}", LOGGED_OUT_NOTICE.format(market=market))
+        _notify_once(
+            deps,
+            f"logged_out:{market}",
+            LOGGED_OUT_NOTICE.format(market=market, where=_where()),
+        )
         return
     _clear_notice(deps, f"logged_out:{market}")
 
@@ -402,7 +425,11 @@ def _count_blind(deps: InboxDeps, market: str, reason: str) -> None:
         "browser.blind", {"market": market, "failures": failures, "reason": reason[:200]}
     )
     if failures >= int(deps.config.browser_blind_after):
-        _notify_once(deps, f"blind:{market}", BLIND_NOTICE.format(market=market))
+        _notify_once(
+            deps,
+            f"blind:{market}",
+            BLIND_NOTICE.format(market=market, chrome_check=_chrome_check()),
+        )
 
 
 def _clear_blind(deps: InboxDeps, market: str) -> None:

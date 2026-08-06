@@ -128,6 +128,10 @@ def _kinds(bus, kind):
     return bus.store.read(kinds=[kind])
 
 
+def _texts(store):
+    return [notice["text"] for notice in store.claim_queued_notices(10)]
+
+
 # --- the happy path -----------------------------------------------------------------------------
 
 
@@ -403,6 +407,21 @@ def test_a_logged_out_market_is_skipped_with_one_notice(store, bus, seeded) -> N
     assert client.navigations == [_INBOX, _INBOX]  # no thread was opened
     assert store.count_queued_notices() == 1
     assert [e.payload["state"] for e in _kinds(bus, "browser.login")] == ["logged_out"] * 2
+
+
+def test_the_notices_name_commands_the_seller_can_actually_run(
+    store, bus, seeded, container
+) -> None:
+    """Both notices are read away from the machine — on a phone, usually — and acted on at a
+    shell where the CLI lives inside a container and Chrome does not."""
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(login="logged_out", conversations=[_conv()]))
+    inbox.inbox_lane(deps)
+    assert "`selly-agent connect carousell` in the container" in _texts(store)[0]
+
+    blind = _deps(store, bus, StubClient(error="boom"), browser_blind_after=1)
+    inbox.inbox_lane(blind)
+    assert "start-chrome.sh" in _texts(store)[-1]
 
 
 def test_an_unknown_login_state_still_reads(store, bus, seeded) -> None:
