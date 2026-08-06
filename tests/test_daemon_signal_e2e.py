@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import pathlib
 import signal
 import socket
 import sqlite3
@@ -61,6 +62,51 @@ def _write_config(tmp_path, *, http_port: int = 0) -> None:
     )
 
 
+def _daemon(tmp_path, extra_env=None):
+    """Start a foreground daemon, with its output going to a file rather than a pipe.
+
+    A pipe nobody drains is a deadlock waiting for a talkative run: the daemon blocks on write
+    once the buffer fills, which is 16KB on macOS against 64KB on Linux — so the same daemon
+    wedges on one and not the other. A file has no such limit, and it is readable afterwards,
+    which a failed run needs.
+    """
+    env = _env(tmp_path)
+    env.update(extra_env or {})
+    log_path = tmp_path / "daemon-output.log"
+    handle = open(log_path, "wb")  # noqa: SIM115 — closed by the caller's finally
+    proc = subprocess.Popen(
+        [sys.executable, str(LAUNCHER), "daemon", "run"],
+        env=env,
+        stdout=handle,
+        stderr=subprocess.STDOUT,
+    )
+    proc._selly_log = log_path  # type: ignore[attr-defined]
+    proc._selly_handle = handle  # type: ignore[attr-defined]
+    return proc
+
+
+def _daemon_output(proc) -> str:
+    """What the daemon said, for a failure message that would otherwise name only a timeout."""
+    try:
+        return pathlib.Path(proc._selly_log).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return "<no output captured>"
+
+
+def _exits(proc, timeout: float) -> int:
+    """Wait for exit, reporting what the daemon said when it does not come.
+
+    Without this a stop that hangs is only ever a TimeoutExpired naming the command — true, and
+    no help at all in working out which lane was still holding the drain.
+    """
+    try:
+        return proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        raise AssertionError(
+            f"daemon did not exit within {timeout}s. Its output:\n{_daemon_output(proc)}"
+        ) from None
+
+
 def _free_port() -> int:
     with socket.socket() as probe:
         probe.bind(("127.0.0.1", 0))
@@ -95,21 +141,15 @@ def test_sigterm_stops_cleanly(tmp_path) -> None:
     (tmp_path / "home").mkdir()
     _write_config(tmp_path)
 
-    proc = subprocess.Popen(
-        [sys.executable, str(LAUNCHER), "daemon", "run"],
-        env=_env(tmp_path),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    proc = _daemon(tmp_path)
     try:
         started = _wait_for(
             lambda: _events_db(tmp_path).exists() and "daemon.start" in _kinds(_events_db(tmp_path))
         )
-        assert started, "daemon never recorded daemon.start"
+        assert started, f"daemon never recorded daemon.start:\n{_daemon_output(proc)}"
 
         proc.send_signal(signal.SIGTERM)
-        rc = proc.wait(timeout=10)
-        assert rc == 0
+        assert _exits(proc, 10) == 0
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -128,17 +168,12 @@ def test_the_shutdown_route_stops_cleanly(tmp_path) -> None:
     port = _free_port()
     _write_config(tmp_path, http_port=port)
 
-    proc = subprocess.Popen(
-        [sys.executable, str(LAUNCHER), "daemon", "run"],
-        env=_env(tmp_path),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    proc = _daemon(tmp_path)
     try:
         started = _wait_for(
             lambda: _events_db(tmp_path).exists() and "daemon.start" in _kinds(_events_db(tmp_path))
         )
-        assert started, "daemon never recorded daemon.start"
+        assert started, f"daemon never recorded daemon.start:\n{_daemon_output(proc)}"
 
         token = (tmp_path / "config" / "selly-agent" / "mcp_token").read_text().strip()
         request = urllib.request.Request(
@@ -151,11 +186,17 @@ def test_the_shutdown_route_stops_cleanly(tmp_path) -> None:
                 "Origin": "http://127.0.0.1",
             },
         )
-        with urllib.request.urlopen(request, timeout=10) as response:
-            assert response.status == 202
-            assert json.loads(response.read())["pid"] == proc.pid
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                assert response.status == 202
+                assert json.loads(response.read())["pid"] == proc.pid
+        except urllib.error.URLError as exc:
+            raise AssertionError(
+                f"the control route did not answer ({exc}). The daemon's output:\n"
+                f"{_daemon_output(proc)}"
+            ) from None
 
-        assert proc.wait(timeout=15) == 0
+        assert _exits(proc, 15) == 0
     finally:
         if proc.poll() is None:
             proc.kill()
@@ -170,12 +211,7 @@ def test_the_shutdown_route_needs_the_attended_token(tmp_path) -> None:
     port = _free_port()
     _write_config(tmp_path, http_port=port)
 
-    proc = subprocess.Popen(
-        [sys.executable, str(LAUNCHER), "daemon", "run"],
-        env=_env(tmp_path),
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    proc = _daemon(tmp_path)
     try:
         assert _wait_for(
             lambda: _events_db(tmp_path).exists() and "daemon.start" in _kinds(_events_db(tmp_path))
@@ -206,12 +242,7 @@ def test_second_instance_exits_zero(tmp_path) -> None:
     _write_config(tmp_path)
     env = _env(tmp_path)
 
-    first = subprocess.Popen(
-        [sys.executable, str(LAUNCHER), "daemon", "run"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    first = _daemon(tmp_path)
     try:
         assert _wait_for(
             lambda: _events_db(tmp_path).exists() and "daemon.start" in _kinds(_events_db(tmp_path))
