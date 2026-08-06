@@ -71,6 +71,9 @@ def _daemon(tmp_path, extra_env=None):
     which a failed run needs.
     """
     env = _env(tmp_path)
+    # So a daemon that will not go can be asked where it is: with this set, SIGABRT dumps every
+    # thread's stack to stderr, which _exits collects. A hang here is otherwise only a timeout.
+    env["PYTHONFAULTHANDLER"] = "1"
     env.update(extra_env or {})
     log_path = tmp_path / "daemon-output.log"
     handle = open(log_path, "wb")  # noqa: SIM115 — closed by the caller's finally
@@ -102,9 +105,29 @@ def _exits(proc, timeout: float) -> int:
     try:
         return proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
+        stacks = _stack_dump(proc)
         raise AssertionError(
-            f"daemon did not exit within {timeout}s. Its output:\n{_daemon_output(proc)}"
+            f"daemon did not exit within {timeout}s.\nIts output:\n{_daemon_output(proc)}\n"
+            f"Where it was stuck:\n{stacks}"
         ) from None
+
+
+def _stack_dump(proc) -> str:
+    """Every thread's stack, from a daemon that has stopped responding.
+
+    PYTHONFAULTHANDLER makes SIGABRT dump them; the process is already being abandoned at this
+    point, so killing it to find out where it stopped costs nothing.
+    """
+    if proc.poll() is not None:
+        return "<already exited>"
+    before = len(_daemon_output(proc))
+    proc.send_signal(signal.SIGABRT)
+    try:
+        proc.wait(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+    return _daemon_output(proc)[before:] or "<no dump>"
 
 
 def _free_port() -> int:
@@ -192,8 +215,8 @@ def test_the_shutdown_route_stops_cleanly(tmp_path) -> None:
                 assert json.loads(response.read())["pid"] == proc.pid
         except urllib.error.URLError as exc:
             raise AssertionError(
-                f"the control route did not answer ({exc}). The daemon's output:\n"
-                f"{_daemon_output(proc)}"
+                f"the control route did not answer ({exc}).\nIts output:\n"
+                f"{_daemon_output(proc)}\nWhere it was stuck:\n{_stack_dump(proc)}"
             ) from None
 
         assert _exits(proc, 15) == 0
