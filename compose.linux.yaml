@@ -1,0 +1,11 @@
+# Linux host override:
+#   docker compose -f compose.yaml -f compose.linux.yaml up -d
+#
+# A Linux host has no route from the bridge to the host's loopback, where the agent's Chrome
+# deliberately sits — so instead of forwarding, share the host's network namespace: the
+# container's loopback *is* the host's, and Chrome is already at 127.0.0.1:9222.
+services:
+  selly-agent:
+    network_mode: host
+    environment:
+      SELLY_CDP_FORWARD: "0"

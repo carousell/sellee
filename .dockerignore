@@ -1,0 +1,13 @@
+# The image builds its own runtime from the pin files, so a local venv, a local install's data
+# and VCS metadata are all context nobody reads.
+.git
+.jj
+.local
+.venv*
+dist
+selly-data
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+*.egg-info

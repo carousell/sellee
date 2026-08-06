@@ -1,0 +1,134 @@
+"""The image, the compose files and the host Chrome scripts, checked as far as text can be.
+
+Nothing here builds an image — that needs a Docker daemon, and the things that would actually go
+wrong (whether the container can reach a loopback-bound Chrome on the host, whether a publish
+transfers photos) need a real machine with a real browser besides. What a test suite *can* hold
+is the set of facts that are stated in two places at once, where one copy drifting is silent:
+the launch flags, the pinned browser-server version, the marker, and the loopback rule.
+"""
+
+from __future__ import annotations
+
+import re
+from pathlib import Path
+
+import pytest
+
+from selly_agent import deployment
+from selly_agent.browser import chrome, client
+
+ROOT = Path(__file__).resolve().parents[1]
+DOCKERFILE = (ROOT / "Dockerfile").read_text()
+COMPOSE = (ROOT / "compose.yaml").read_text()
+COMPOSE_LINUX = (ROOT / "compose.linux.yaml").read_text()
+ENTRYPOINT = (ROOT / "docker" / "entrypoint.sh").read_text()
+START_SH = (ROOT / "start-chrome.sh").read_text()
+START_PS1 = (ROOT / "start-chrome.ps1").read_text()
+
+
+def _flags(text: str) -> set:
+    """The Chrome switch names a launcher passes, ignoring their values."""
+    return {match.split("=")[0] for match in re.findall(r"--[a-z][a-z-]+(?:=[^\s\"',]*)?", text)}
+
+
+# --- the host Chrome scripts ------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("script", [START_SH, START_PS1], ids=["sh", "ps1"])
+def test_the_launch_scripts_pass_the_same_switches_as_the_daemon_would(script) -> None:
+    """A host install and a container drive the same browser the same way. If these drift, the
+    difference shows up as a behavioural mystery on one profile and not the other."""
+    expected = _flags(" ".join(chrome.launch_command(9222)))
+    assert expected <= _flags(script)
+
+
+@pytest.mark.parametrize("script", [START_SH, START_PS1], ids=["sh", "ps1"])
+def test_the_launch_scripts_never_put_cdp_on_a_network_interface(script) -> None:
+    """The debugging port is browser control with no authentication of any kind. It stays on
+    loopback; the container reaches it through a forwarder, not by it being exposed."""
+    assert "--remote-debugging-address" not in script
+
+
+@pytest.mark.parametrize("script", [START_SH, START_PS1], ids=["sh", "ps1"])
+def test_the_launch_scripts_use_a_profile_of_the_seller_s_own(script) -> None:
+    """Never the everyday Chrome — and never the container's profile directory either, which
+    stays empty in this profile."""
+    assert "--user-data-dir" in script
+    assert "/data/share" not in script
+
+
+# --- the image ----------------------------------------------------------------------------------
+
+
+def test_the_image_carries_the_deployment_marker() -> None:
+    assert f"ENV {deployment.MARKER_VAR}={deployment.CONTAINER}" in DOCKERFILE
+
+
+def test_the_image_points_all_four_xdg_roots_at_the_one_bind_mount() -> None:
+    for var in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
+        assert f"{var}=/data/" in DOCKERFILE
+
+
+def test_the_image_does_not_restate_the_pinned_browser_server_version() -> None:
+    """It reads the spec out of the code at build time. A second copy here would go stale, and a
+    stale one is invisible: the daemon would just download the real pin on the first browser
+    action instead of using the cache this image warmed."""
+    assert client.MCP_VERSION not in DOCKERFILE
+    assert "PINNED_MCP_SPEC" in DOCKERFILE
+
+
+def test_the_image_installs_what_the_daemon_shells_out_to() -> None:
+    # `ps` for the pass runner's process tree, ImageMagick for photo conversion, socat for the
+    # CDP forwarder, tini to reap the node processes a pass orphans, tzdata for the clock.
+    for package in ("procps", "imagemagick", "socat", "tini", "tzdata"):
+        assert package in DOCKERFILE
+
+
+def test_the_image_pins_the_harness_it_installs() -> None:
+    assert re.search(r"@anthropic-ai/claude-code@\$\{CLAUDE_CODE_VERSION\}", DOCKERFILE)
+    assert re.search(r"ARG CLAUDE_CODE_VERSION=\d+\.\d+\.\d+", DOCKERFILE)
+
+
+def test_tini_is_pid_one() -> None:
+    assert DOCKERFILE.count("ENTRYPOINT") == 1
+    assert '"/usr/bin/tini"' in DOCKERFILE
+
+
+# --- the forwarder --------------------------------------------------------------------------
+
+
+def test_the_forwarder_listens_on_loopback_only() -> None:
+    """Chrome refuses a /json request whose Host header is a DNS name, and answers with a
+    loopback WebSocket URL that Playwright then dials verbatim — so the endpoint has to be
+    loopback inside the container as well as outside it."""
+    assert "bind=127.0.0.1" in ENTRYPOINT
+    assert "host.docker.internal" in ENTRYPOINT
+
+
+def test_a_linux_host_swaps_the_forwarder_for_the_host_network() -> None:
+    assert "network_mode: host" in COMPOSE_LINUX
+    assert 'SELLY_CDP_FORWARD: "0"' in COMPOSE_LINUX
+
+
+# --- compose --------------------------------------------------------------------------------
+
+
+def test_compose_refuses_to_start_without_a_timezone_or_a_token() -> None:
+    """Both are things whose absence is silent rather than loud: a UTC clock moves quiet hours
+    onto the wrong eight hours, and a missing token fails at the first pass, hours later."""
+    assert "TZ: ${TZ:?" in COMPOSE
+    assert "CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?" in COMPOSE
+
+
+def test_compose_publishes_no_ports() -> None:
+    """The daemon's HTTP server is its MCP and control surface, on container loopback. The
+    attended session reaches it from inside, so there is nothing to publish."""
+    assert "ports:" not in COMPOSE
+    assert "ports:" not in COMPOSE_LINUX
+
+
+def test_compose_mounts_one_directory_and_lets_docker_supervise() -> None:
+    assert ":/data" in COMPOSE
+    assert "restart: unless-stopped" in COMPOSE
+    # `docker stop` is a SIGTERM the daemon drains on; killing it mid-drain leaves the lock body.
+    assert "stop_grace_period" in COMPOSE
