@@ -29,7 +29,12 @@ from selly_agent.harness import claude
 from selly_agent.harness.claude import PASS_PROMPT_MARKER
 from selly_agent.harness.model import PassSpec, StdioServer
 from selly_agent.pass_stream import is_cap_hit, parse_stream_line
-from selly_agent.proc_tree import confirm_dead, creation_time, reap_strays
+from selly_agent.proc_tree import (
+    confirm_dead,
+    creation_time,
+    finished_records,
+    reap_strays,
+)
 from selly_agent.store import Scope
 from selly_agent.tools import (
     TIER_PASS_CHANNEL,
@@ -520,11 +525,11 @@ def _babysitter(proc, deadline_sec: float, stop_event, killed: dict, paused_chec
         now = time.monotonic()
         if now - start >= deadline_sec:
             killed["timeout"] = True
-            confirm_dead(proc)
+            killed["survivors"] = not confirm_dead(proc)
             return
         if stop_event is not None and stop_event.is_set():
             killed["stopped"] = True
-            confirm_dead(proc)
+            killed["survivors"] = not confirm_dead(proc)
             return
         # A pause interrupts a running pass within one watch window — safe because cursors/pacing
         # make the killed step re-runnable, so nothing is half-done.
@@ -532,7 +537,7 @@ def _babysitter(proc, deadline_sec: float, stop_event, killed: dict, paused_chec
             last_pause_check = now
             if paused_check():
                 killed["paused"] = True
-                confirm_dead(proc)
+                killed["survivors"] = not confirm_dead(proc)
                 return
         time.sleep(_BABY_POLL_SEC)
 
@@ -608,6 +613,10 @@ def run_pass(deps: PassDeps, claimed) -> str:
         _write_workspace(workspace, spec)
         if claimed.type == "publish":
             _stage_photos(workspace, payload, deps.store)
+        # Declared before anything can raise: the finally below reads it to decide whether the
+        # ledger record is safe to delete, and a spawn that never got as far as a process has
+        # nothing left running to keep a record for.
+        killed: dict = {}
         try:
             argv = deps.argv_builder(spec)
         except SpawnError as exc:
@@ -639,7 +648,6 @@ def run_pass(deps: PassDeps, claimed) -> str:
             _record_process(deps, pass_id, proc.pid, reap_after_ts=expiry)
 
             holder: dict = {}
-            killed: dict = {}
             reader = threading.Thread(
                 target=_reader, args=(proc, deps.bus, pass_id, holder), daemon=True
             )
@@ -678,7 +686,10 @@ def run_pass(deps: PassDeps, claimed) -> str:
         return cls
     finally:
         deps.auth.revoke_pass_token(token)
-        deps.store.forget_pass_process(pass_id)
+        if not killed.get("survivors"):
+            # Children outlived the kill, so the record stays: it is the only thing that lets the
+            # stray reaper find them on a later tick, which is what the ledger is for.
+            deps.store.forget_pass_process(pass_id)
         _cleanup_workspace(workspace)
 
 
@@ -752,9 +763,14 @@ def stray_reaper(deps: PassDeps) -> None:
     killed mid-flight keeps working the seller's account with nobody watching, and the next daemon
     to start is the one that can end it.
     """
-    for stray in reap_strays(deps.store.pass_processes(), now=deps.now()):
+    records = deps.store.pass_processes()
+    now = deps.now()
+    for stray in reap_strays(records, now=now):
         deps.store.forget_pass_process(stray["pass_id"])
         deps.bus.publish("pass.reaped", {"pid": stray["pid"]}, pass_id=stray["pass_id"])
+    # No event for these: nothing was killed, the row is simply spent.
+    for finished in finished_records(records, now=now):
+        deps.store.forget_pass_process(finished["pass_id"])
 
 
 def deadline_slack(config) -> float:

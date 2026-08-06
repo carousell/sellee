@@ -89,14 +89,17 @@ def _kill(procs: list) -> None:
             proc.kill()
 
 
-def confirm_dead(proc, grace: float = _GRACE_SEC) -> None:
+def confirm_dead(proc, grace: float = _GRACE_SEC) -> bool:
     """Stop a pass we spawned, and do not return until it and its descendants are gone.
+
+    Answers whether they actually are. A caller that forgets the ledger record on a False
+    would be throwing away the only handle anything has on the survivors.
 
     The leader is stopped and reaped through its own Popen rather than through psutil, which would
     reap it out from under subprocess and leave the exit status unreadable.
     """
     if proc.pid is None:
-        return
+        return True
     children = _descendants(proc.pid)
     group = _process_group(proc.pid)
 
@@ -109,7 +112,7 @@ def confirm_dead(proc, grace: float = _GRACE_SEC) -> None:
         proc.wait(timeout=grace)
     _, alive = psutil.wait_procs(children, timeout=grace)
     if not alive and proc.poll() is not None:
-        return
+        return True
 
     _kill(alive)
     with contextlib.suppress(OSError):
@@ -126,6 +129,8 @@ def confirm_dead(proc, grace: float = _GRACE_SEC) -> None:
             proc.pid,
             len(left) + (0 if proc.poll() is not None else 1),
         )
+        return False
+    return True
 
 
 def kill_tree(pid: int, grace: float = _GRACE_SEC) -> bool:
@@ -197,6 +202,23 @@ def find_stray_passes(records, now: float | None = None) -> list:
             continue
         strays.append(record)
     return strays
+
+
+def finished_records(records, now: float | None = None) -> list:
+    """Records past their deadline whose process is no longer the one recorded.
+
+    Either it exited on its own or its pid has been handed to somebody else; both mean there is
+    nothing here to kill and nothing more to watch. They are separated from the strays because
+    only a kill is worth an event — but they still have to be forgotten, and until now nothing
+    deleted them, so the table grew by one row for every pass whose daemon died mid-flight.
+    """
+    moment = time.time() if now is None else now
+    return [
+        record
+        for record in records
+        if moment > record["reap_after_ts"]
+        and not is_recorded_process(record["pid"], record["created_ts"])
+    ]
 
 
 def reap_strays(records, now: float | None = None) -> list:

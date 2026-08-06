@@ -176,3 +176,17 @@ def test_a_stray_that_survives_the_kill_is_not_reported_reaped(monkeypatch) -> N
     records = [_record("pass_old", own, proc_tree.creation_time(own), reap_after_ts=100.0)]
 
     assert proc_tree.reap_strays(records, now=500.0) == []
+
+
+def test_a_record_whose_process_is_gone_is_forgotten_not_reaped() -> None:
+    """Nothing else ever deletes these. find_stray_passes only answers with what is still alive,
+    so a pass whose daemon died after it had already exited left a row that outlived the install
+    — one per such pass, forever."""
+    from selly_agent.proc_tree import finished_records
+
+    records = [
+        {"pass_id": "gone", "pid": 999_999, "created_ts": 1.0, "reap_after_ts": 100.0},
+        {"pass_id": "not-yet-due", "pid": 999_998, "created_ts": 1.0, "reap_after_ts": 900.0},
+    ]
+    finished = finished_records(records, now=500.0)
+    assert [r["pass_id"] for r in finished] == ["gone"]
