@@ -167,6 +167,12 @@ def _fsync_dir(path: Path) -> None:
     """Flush the directory entry so the rename that follows survives a crash. This makes the
     *switch* durable, not every byte of every copied file — a torn copy is discarded by the
     rename never happening, which is the direction that is safe to fail in."""
+    if os.name == "nt":
+        # Windows has no fd for a directory: the CRT refuses to open one, so this would raise
+        # PermissionError rather than syncing anything. The rename below is still atomic there
+        # (MoveFileEx), and NTFS journals the metadata itself, so there is nothing to flush by
+        # hand — the durability this function buys on POSIX is already the filesystem's.
+        return
     fd = os.open(str(path), os.O_RDONLY)
     try:
         os.fsync(fd)
