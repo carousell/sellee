@@ -20,6 +20,7 @@ import time
 
 from selly_agent import (
     __version__,
+    clock,
     config,
     crosslist,
     deployment,
@@ -237,6 +238,12 @@ def run_daemon(*, once: bool) -> int:
 
     store = Store(data_db)
     started_ts = time.time()
+
+    # In a container the clock is whatever the image was started with, not the seller's own, and
+    # every quiet-hours decision below is made against the local wall clock. A silent eight-hour
+    # offset would move the whole of "don't do this at night" onto the wrong eight hours.
+    if deployment.is_container():
+        clock.check_timezone(store=store, bus=bus)
 
     attended_token = secrets.ensure_mcp_token()
 

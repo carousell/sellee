@@ -6,6 +6,10 @@ run a pass, and does it have a rail identity. Anything else a check could probe 
 from these or is not something a seller can act on, and a summary nobody reads because it is forty
 lines long is worse than none.
 
+A container adds a seventh, the clock. It earns its line by being both invisible and wrong by
+default: the timing of everything the agent does for a seller is decided against the local wall
+clock, and a container's is whatever it was started with.
+
 Two rules shape it. Every check is a pure decision over inputs plus a wrapper that fetches them,
 so a probe that throws becomes a failed line rather than the end of the report. And a check
 fails only when something is actually wrong: an optional thing being off is a warning, and a
@@ -17,8 +21,9 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
+import time
 
-from selly_agent import config, control, deployment, secrets, supervisor
+from selly_agent import clock, config, control, deployment, secrets, supervisor
 from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
 from selly_agent.installer import checks, preflight
@@ -145,6 +150,26 @@ def browser_server_check(*, binary: str, fragment: str, resolved, fix: str = "")
     return checks.ok("browser server", f"{binary} at {resolved}")
 
 
+def clock_check(*, zone: str, delta_minutes) -> checks.Check:
+    """Does this process's clock agree with the seller's own day?
+
+    Only asked where the two can differ. Everything timed to the seller's day — quiet hours most
+    of all — is decided against the local wall clock, so an offset here is not a cosmetic
+    difference: it moves the whole window.
+    """
+    if not zone:
+        return checks.warn("clock", "no timezone recorded yet — set during setup")
+    if delta_minutes is None:
+        return checks.warn("clock", f"{zone} is not a timezone this machine knows")
+    if delta_minutes:
+        return checks.fail(
+            "clock",
+            f"{clock.render_delta(delta_minutes)} {zone}, where you sell",
+            f"Set TZ={zone} for the container and restart it.",
+        )
+    return checks.ok("clock", f"agrees with {zone}")
+
+
 def rail_key_check(*, present: bool) -> checks.Check:
     if present:
         return checks.ok("carousell.ai key", "present")
@@ -257,10 +282,29 @@ def _rail_key_probe() -> checks.Check:
     return rail_key_check(present=secrets.read_carousell_ai_api_key() is not None)
 
 
+def _clock_probe(cfg) -> checks.Check:
+    """The seller's recorded timezone, asked of the daemon, against this process's clock."""
+    token = secrets.read_mcp_token()
+    if not token:
+        return checks.warn("clock", "not checked — the daemon has never run here")
+    try:
+        status, answer = control.get(cfg.http_port, token, "/control/seller-basics")
+    except control.DaemonUnreachable:
+        return checks.warn("clock", "not checked — the daemon isn't answering")
+    if status != 200:
+        return checks.warn("clock", f"not checked — the daemon refused the read ({status})")
+    zone = (answer.get("basics") or {}).get("timezone") or ""
+    return clock_check(zone=zone, delta_minutes=clock.offset_delta(zone, time.time()))
+
+
 def run_checks(platform=None) -> list:
-    """The six checks, in the order a person would ask them. None of them can raise."""
+    """The six checks, in the order a person would ask them. None of them can raise.
+
+    Seven in a container, where the clock is a compose knob rather than the seller's own — the
+    one question that cannot be wrong on a machine they are sitting at.
+    """
     cfg = config.load()
-    return [
+    results = [
         checks.fail_open("daemon", lambda: _daemon_probe(platform)),
         checks.fail_open("channel", lambda: _channel_probe(platform)),
         checks.fail_open("browser", lambda: _browser_probe(cfg)),
@@ -268,6 +312,9 @@ def run_checks(platform=None) -> list:
         checks.fail_open("harness", lambda: _harness_probe(cfg)),
         checks.fail_open("carousell.ai key", _rail_key_probe),
     ]
+    if deployment.is_container():
+        results.append(checks.fail_open("clock", lambda: _clock_probe(cfg)))
+    return results
 
 
 def report(results) -> str:
