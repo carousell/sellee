@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from selly_agent import __version__, config, heartbeat, paths, supervisor
-from selly_agent.installer import checks, materialize, runtime
+from selly_agent.installer import checks, materialize, preflight, runtime
 
 log = logging.getLogger(__name__)
 
@@ -350,12 +350,14 @@ def _base_url(args, cfg) -> str:
 def _guard_updatable() -> None:
     if materialize.current_target() is None:
         raise UpdateError(
-            "there is no installed version here to update — run ./setup from a checkout first"
+            f"there is no installed version here to update — run {preflight.setup_door()} from a "
+            f"checkout first"
         )
     if materialize.is_dev_install():
         raise UpdateError(
-            "this install points at a working tree, not a released version — update it with git "
-            "or jj, or re-run ./setup without --dev to switch to versioned installs"
+            f"this install points at a working tree, not a released version — update it with git "
+            f"or jj, or re-run {preflight.setup_door()} without --dev to switch to versioned "
+            f"installs"
         )
 
 

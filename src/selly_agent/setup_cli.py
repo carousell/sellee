@@ -142,7 +142,7 @@ def _agreed_to_proceed(ui: Ui) -> bool:
     if ui.confirm("Proceed with the installation?", default=True):
         return True
     ui.say("")
-    ui.say("Cancelled — nothing was written. Re-run ./setup when you're ready.")
+    ui.say(f"Cancelled — nothing was written. Re-run {preflight.setup_door()} when you're ready.")
     return False
 
 
@@ -222,7 +222,7 @@ def _gate_dependency(ui: Ui, name: str, probe) -> None:
         raise Abort(
             f"{name}: {check.detail}",
             f"{check.fix}\n(Nothing here can install it for you — install {name} however you "
-            f"prefer, then re-run ./setup.)",
+            f"prefer, then re-run {preflight.setup_door()}.)",
         )
     manager = preflight.package_manager_name()
     if not ui.confirm(f"Install {name} with {manager} now?", default=True, lead=False):

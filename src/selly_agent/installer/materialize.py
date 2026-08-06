@@ -153,6 +153,13 @@ def previous_version():
 # --- writing the layout -------------------------------------------------------------------
 
 
+def _setup_door() -> str:
+    """Imported inside the function: preflight reaches the supervisor, which reaches back here."""
+    from selly_agent.installer import preflight
+
+    return preflight.setup_door()
+
+
 def _guard_current_is_ours() -> None:
     current = paths.current()
     if current.exists() and not pointer.is_pointer(current):
@@ -207,7 +214,7 @@ def stage_version(tree, version: str) -> Path:
         if not source.is_dir():
             raise LayoutError(
                 f"{tree} does not look like a selly-agent tree ({name}/ is missing)",
-                "Run ./setup from an unpacked release or a checkout.",
+                f"Run {_setup_door()} from an unpacked release or a checkout.",
             )
         shutil.copytree(source, staged / name, ignore=_IGNORED)
     for name in VERSION_FILES:
@@ -330,7 +337,7 @@ def install_shim() -> Path:
         # delete one: an install that quietly replaces someone else's command cannot give it back.
         raise LayoutError(
             f"{shim} already exists and was not created by selly-agent",
-            "Something else owns that name. Move it aside and re-run ./setup.",
+            f"Something else owns that name. Move it aside and re-run {_setup_door()}.",
         )
     return pointer.write_shim(shim, target, install_interpreter())
 

@@ -384,8 +384,8 @@ def check_tree_location(tree) -> checks.Check:
         return checks.fail(
             "install location",
             f"{tree} is under a folder macOS protects ({names})",
-            "Move the tree somewhere unprotected (e.g. ~/dev/selly-agent) and re-run ./setup — "
-            "the background agent is denied reads there and cannot start.",
+            f"Move the tree somewhere unprotected (e.g. ~/dev/selly-agent) and re-run "
+            f"{setup_door()} — the background agent is denied reads there and cannot start.",
         )
     return checks.ok("install location", str(tree))
 
