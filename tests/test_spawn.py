@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import os
 import stat
 
 from selly_agent import spawn
 
 
 def _executable(path, body: str = "#!/bin/sh\nexit 0\n"):
-    path.write_text(body)
+    """A program the host will actually resolve. On Windows that means one of PATHEXT's
+    extensions — an extensionless file is not executable there, so `which` walks past it."""
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        body = "@echo off\r\nexit /b 0\r\n"
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IXUSR)
     return path
 

@@ -207,7 +207,7 @@ def test_prewarm_fills_the_cache_the_worker_will_read_with_the_pinned_version(mo
 
     assert preflight.browser_client.PINNED_MCP_SPEC in seen["argv"]
     assert seen["env"] == {
-        "PATH": f"/opt/node/bin:{preflight.supervisor.SUPERVISED_PATH}",
+        "PATH": os.pathsep.join(["/opt/node/bin", preflight.supervisor.SUPERVISED_PATH]),
         "HOME": "/Users/seller",
     }
 
@@ -242,7 +242,7 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
     # and the launchd job — whose PATH holds none of it — could not spawn the browser server.
     bin_dir = tmp_path / "node" / "bin"
     _node_stubs(bin_dir)
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), os.environ["PATH"]]))
     monkeypatch.setattr(preflight, "node_path_fragment", lambda: "")
     monkeypatch.setattr(preflight.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
 

@@ -7,6 +7,8 @@ render, the real config writes.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from tests.test_supervisor import FakePlatform
 
@@ -49,7 +51,7 @@ def world(monkeypatch, xdg_tmp, tree):
     monkeypatch.setattr(heartbeat, "wait_fresh", lambda path, **kwargs: True)
     # A PATH that already has ~/.local/bin, so the rc-file offer stays out of the way unless a
     # test is about it.
-    monkeypatch.setenv("PATH", f"/usr/bin:{paths.user_bin_dir()}")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", str(paths.user_bin_dir())]))
 
     # The daemon half: a token as if one had been minted at first start, and control routes that
     # record rather than serve.
@@ -382,7 +384,7 @@ def test_a_daemon_that_never_heartbeats_fails_with_its_own_log(world, monkeypatc
 def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
     world, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--yes", "--manual") == 0
@@ -395,7 +397,7 @@ def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
 def test_no_modify_path_prints_the_line_and_leaves_the_rc_file_alone(
     world, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--yes", "--manual", "--no-modify-path") == 0
@@ -408,7 +410,7 @@ def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
     world, monkeypatch, capsys
 ) -> None:
     # No terminal to ask at and no --yes: nobody consented to a dotfile edit.
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--manual") == 0
@@ -575,7 +577,7 @@ def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
 ) -> None:
     # Writing ~/.profile for fish produces a file fish never reads, holding a line it could not
     # parse — a confident success message and no effect.
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
 
     assert setup_main("--yes", "--manual") == 0
@@ -588,7 +590,7 @@ def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
 
 
 def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/ksh")
 
     assert setup_main("--yes", "--manual") == 0
@@ -600,7 +602,7 @@ def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch,
 
 
 def test_an_unset_shell_says_so_rather_than_naming_nothing(world, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.delenv("SHELL", raising=False)
 
     assert setup_main("--yes", "--manual") == 0

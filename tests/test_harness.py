@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import pytest
@@ -120,7 +121,7 @@ def test_a_pass_with_no_granted_media_denies_read_outright() -> None:
 
 
 def test_granted_media_becomes_path_scoped_read_rules() -> None:
-    spec = _spec(readable_paths=_PHOTOS)
+    spec = _spec_with_paths(_PHOTOS)
     files = claude.render_workspace(spec)
     assert files[".claude/settings.json"] == (GOLDEN / "claude_settings_media.json").read_text()
     argv = claude.pass_argv(spec, claude_bin="claude")
@@ -132,14 +133,14 @@ def test_granted_media_becomes_path_scoped_read_rules() -> None:
 def test_granted_media_lifts_the_bare_read_deny() -> None:
     """A deny beats any allow however specific, so bare Read must leave the deny list when paths
     are granted — anything outside the grants is still rejected (headless mode never prompts)."""
-    perms = claude.settings_json(_spec(readable_paths=_PHOTOS))["permissions"]
+    perms = claude.settings_json(_spec_with_paths(_PHOTOS))["permissions"]
     assert "Read" not in perms["deny"]
     rules = [rule for rule in perms["allow"] if rule.startswith("Read(")]
     assert rules == [f"Read(/{p})" for p in _PHOTOS]  # exactly the grants, nothing broader
 
 
 def test_granted_media_never_loosens_the_rest_of_the_posture() -> None:
-    perms = claude.settings_json(_spec(readable_paths=_PHOTOS))["permissions"]
+    perms = claude.settings_json(_spec_with_paths(_PHOTOS))["permissions"]
     assert {"Bash", "Edit", "Write", "NotebookEdit"} <= set(perms["deny"])
     assert set(claude.WEB_TOOLS) <= set(perms["deny"])  # web stays off unless web_tools says so
 
@@ -249,7 +250,7 @@ def test_a_browser_pass_keeps_the_no_bash_posture() -> None:
 
 
 def test_allowed_tools_stays_last_with_a_browser_server() -> None:
-    spec = _spec(browser_server=_BROWSER, readable_paths=("/media/store/1/a.jpg",))
+    spec = _spec_with_paths(("/media/store/1/a.jpg",), browser_server=_BROWSER)
     argv = claude.pass_argv(spec)
     idx = argv.index("--allowedTools")
     assert list(argv[idx + 1 :]) == list(claude.allowed_tools(spec))
@@ -300,7 +301,20 @@ def test_a_windows_media_path_becomes_a_forward_slash_read_rule() -> None:
     )
 
 
-def _spec_with_paths(paths_tuple):
-    spec = _spec()
+def _spec_with_paths(paths_tuple, **kwargs):
+    """A spec carrying paths this host would not itself call absolute.
+
+    The rendering these tests check is pure string work, so one set of POSIX literals — and so
+    one golden — describes it on every host. Only PassSpec's own validation asks the host what
+    absolute means, and that is what the two tests below pin.
+    """
+    spec = _spec(**kwargs)
     object.__setattr__(spec, "readable_paths", paths_tuple)
     return spec
+
+
+def test_this_hosts_own_absolute_media_path_is_accepted() -> None:
+    """The store hands over paths in the host's own spelling, so validation has to accept them
+    there — a POSIX literal is not absolute on Windows, and a drive path is not on POSIX."""
+    native = os.path.join(os.path.abspath(os.sep), "media", "store", "1", "photo.jpg")
+    assert _spec(readable_paths=(native,)).readable_paths == (native,)

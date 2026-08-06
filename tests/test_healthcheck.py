@@ -157,7 +157,7 @@ def test_the_server_binary_is_resolved_against_the_workers_path_not_this_shells(
 
     # A recorded directory that no longer holds npx: this shell can still find one, the worker
     # cannot, and it is the worker's answer that matters.
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), os.environ["PATH"]]))
     gone = healthcheck._browser_server_probe(Config(node_bin_dir=str(tmp_path / "gone")))
     assert gone.status == checks.FAIL
 

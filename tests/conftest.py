@@ -221,3 +221,23 @@ def stub_provision(monkeypatch):
 
     monkeypatch.setattr(runtime, "provision", fake)
     return provisioned
+
+
+@pytest.fixture(autouse=True)
+def no_real_user_path_writes(monkeypatch):
+    """Stand in for editing the account's own PATH in the Windows registry.
+
+    Autouse for the same reason as stub_provision: a test that reaches this on a real Windows
+    machine edits the person running it, and every `--yes` setup test would leave a dead tmp
+    directory behind on their account. A test that is genuinely about the writer replaces it
+    with its own fake, which lands after this one and so wins.
+    """
+    from selly_agent.installer import materialize
+
+    def refuse(value):
+        raise AssertionError(
+            "a test reached the real user-PATH writer — patch materialize._write_user_path "
+            f"if that is the subject, or the test would edit this account's PATH: {value!r}"
+        )
+
+    monkeypatch.setattr(materialize, "_write_user_path", refuse)

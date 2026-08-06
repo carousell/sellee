@@ -23,6 +23,11 @@ import pytest
 
 INSTALL_SH = Path(__file__).resolve().parents[1] / "install.sh"
 
+# The subject is the POSIX front door itself, executed by a real /bin/sh. Windows has its own
+# door (install.ps1) and no sh to run this one with; the MSYS sh a git install brings along is
+# not what a seller would be using either.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="install.sh is the POSIX front door")
+
 
 def _executable(path: Path, body: str) -> None:
     path.write_text(body, encoding="utf-8")
