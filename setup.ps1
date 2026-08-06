@@ -26,6 +26,22 @@ param(
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
+# The POSIX door spells these --bootstrap-only and --with-dev, and the README shows that spelling.
+# PowerShell binds only -BootstrapOnly, so the long forms would otherwise ride $Forwarded into the
+# installer — which does not take them, and would install the machine for someone who asked only
+# to prepare a checkout.
+if ($Forwarded) {
+    $remaining = @()
+    foreach ($argument in $Forwarded) {
+        switch ($argument) {
+            '--bootstrap-only' { $BootstrapOnly = $true }
+            '--with-dev' { $WithDev = $true }
+            default { $remaining += $argument }
+        }
+    }
+    $Forwarded = $remaining
+}
+
 # The output is a transcript someone reads while deciding whether to continue, so it has to be
 # legible: UTF-8 for the box-drawing and the ticks. Per-process, so nothing about the machine's
 # console is changed permanently. (Colour is the installer's own business — it only emits VT
@@ -72,7 +88,11 @@ $pythonVersionFile = Join-Path $here '.python-version'
 if (-not (Test-Path -LiteralPath $pythonVersionFile)) {
     Die "this tree is missing .python-version; re-download the release."
 }
-$pinnedPython = (Get-Content -LiteralPath $pythonVersionFile -TotalCount 1).Trim()
+$pinnedPythonLine = Get-Content -LiteralPath $pythonVersionFile -TotalCount 1
+if (-not $pinnedPythonLine) {
+    Die "this tree's .python-version is empty; re-download the release."
+}
+$pinnedPython = $pinnedPythonLine.Trim()
 
 # --- acquiring uv ----------------------------------------------------------------------------
 
@@ -101,7 +121,11 @@ function ServesPin([string]$Candidate) {
     return [bool]($listed | Select-String -Pattern "^cpython-$escaped(\.\d+)*-" -Quiet)
 }
 
-$onPath = (Get-Command uv -ErrorAction SilentlyContinue).Source
+# Captured before the member access: under Set-StrictMode, reaching for .Source on the $null that
+# Get-Command returns when uv is not installed is a terminating error — which is the default case,
+# on a machine that has never had uv.
+$uvCommand = Get-Command uv -ErrorAction SilentlyContinue
+$onPath = if ($uvCommand) { $uvCommand.Source } else { $null }
 if (ServesPin $onPath) {
     $uv = $onPath
     Write-Output "using the uv already on your PATH ($(& $uv --version))"
@@ -135,8 +159,12 @@ else {
         $extracted = Get-ChildItem -Path $work -Filter 'uv.exe' -Recurse | Select-Object -First 1
         if (-not $extracted) { Die "the uv archive doesn't contain uv.exe." }
         New-Item -ItemType Directory -Path $tools -Force | Out-Null
-        # Move into place, so a half-written binary is never runnable at the final name.
-        Move-Item -LiteralPath $extracted.FullName -Destination $ourUv -Force
+        # Staged beside the destination and then renamed, so a half-written binary is never
+        # runnable at the final name. Moving straight from the temp directory would not promise
+        # that: TEMP can sit on another volume, where a move is a copy under the final name.
+        $staged = "$ourUv.new"
+        Copy-Item -LiteralPath $extracted.FullName -Destination $staged -Force
+        Move-Item -LiteralPath $staged -Destination $ourUv -Force
     }
     finally {
         Remove-Item -LiteralPath $work -Recurse -Force -ErrorAction SilentlyContinue
