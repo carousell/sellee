@@ -25,6 +25,7 @@ import json
 import logging
 import os
 import secrets as _stdlib_secrets
+import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -177,6 +178,19 @@ class _Server(ThreadingHTTPServer):
     # on a port another process is actively using — and a second daemon sharing the port is
     # exactly the double-bind the loud startup failure exists to surface.
     allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        """Bind without asking the network who we are.
+
+        HTTPServer.server_bind calls socket.getfqdn() purely to fill in `server_name`, which is a
+        reverse-DNS lookup — and one that blocks for as long as the resolver takes to give up. On
+        a machine with no reverse record for its own address (a VPN, a locked-down network, a CI
+        runner) that is minutes, during which the daemon has started, recorded daemon.start, and
+        is answering nothing at all. We bind to the loopback address we were handed and never
+        serve `server_name` to anyone, so the lookup buys nothing.
+        """
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class _Handler(BaseHTTPRequestHandler):
