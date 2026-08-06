@@ -520,6 +520,22 @@ def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatc
     assert not (paths.browser_profile_dir() / chrome.singleton_lock_names()[0]).exists()
 
 
+def test_a_launch_wait_gives_up_as_soon_as_the_daemon_is_stopping(monkeypatch) -> None:
+    """The daemon's drain waits for its lanes, so a lane still sitting out the full launch wait is
+    a `daemon stop` that looks wedged for twenty seconds. Chrome is detached and comes up anyway."""
+    polls = []
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: polls.append(1) or False)
+    monkeypatch.setattr(chrome, "_LAUNCH_POLL_SEC", 0.0)
+    monkeypatch.setattr(chrome.subprocess, "Popen", lambda argv, **kw: None)
+
+    state = chrome.ensure_running(
+        9222, chrome_bin="/bin/chrome", wait_sec=3600.0, should_stop=lambda: True
+    )
+    assert state == chrome.UNAVAILABLE
+    # The opening readiness probe, then one poll inside the wait — not an hour of them.
+    assert len(polls) == 2
+
+
 def test_ensure_running_reports_unavailable_when_chrome_never_answers(monkeypatch) -> None:
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: False)
     monkeypatch.setattr(chrome, "_LAUNCH_POLL_SEC", 0.0)

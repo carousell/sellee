@@ -192,7 +192,13 @@ def bring_up_hint(port: int, *, chrome_bin: str | None = None) -> str:
     return f"the agent's Chrome is not running on port {port} — start it with:\n  {quoted}"
 
 
-def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float = LAUNCH_WAIT_SEC):
+def ensure_running(
+    port: int,
+    *,
+    chrome_bin: str | None = None,
+    wait_sec: float = LAUNCH_WAIT_SEC,
+    should_stop=None,
+):
     """Make sure the agent's Chrome is answering on its debugging port, starting it if it is not.
 
     Answers READY (it already was), LAUNCHED (it is now, and the seller should be told a window
@@ -242,6 +248,12 @@ def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float 
             if is_ready(port):
                 _last_failed_launch_ts = None
                 return LAUNCHED
+            if should_stop is not None and should_stop():
+                # The daemon is draining and waits for its lanes, so a lane still sitting out this
+                # wait is a stop that appears wedged. Chrome is detached and keeps coming up on its
+                # own; the next acquisition finds it ready.
+                log.info("stopping while waiting for Chrome on port %s — leaving it to start", port)
+                return UNAVAILABLE
         log.warning("started Chrome but it did not answer on port %s within %ss", port, wait_sec)
         _last_failed_launch_ts = time.monotonic()
         return UNAVAILABLE
