@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
 import pytest
@@ -215,13 +216,29 @@ def test_prewarm_fills_the_cache_the_worker_will_read_with_the_pinned_version(mo
 # --- the spawn the worker will actually perform --------------------------------------------------
 
 
+def _executable(path: Path, says: str = "") -> Path:
+    """A program the host will actually resolve, answering `says` on stdout.
+
+    Windows resolves only what PATHEXT lists, so an extensionless stub is invisible to the very
+    lookup these gates perform — the gate would report the tool missing and the test would read
+    that as the gate being broken.
+    """
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        body = "@echo off\r\n" + (f"echo {says}\r\n" if says else "")
+    else:
+        body = "#!/bin/sh\n" + (f"echo {says}\n" if says else "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
+
+
 def _node_stubs(directory: Path) -> None:
     """`node` and `npx` that answer --version, as executable as the real ones."""
     directory.mkdir(parents=True, exist_ok=True)
     for name in ("node", "npx"):
-        stub = directory / name
-        stub.write_text("#!/bin/sh\necho v22.0.0\n")
-        stub.chmod(0o755)
+        _executable(directory / name, "v22.0.0")
 
 
 def test_the_spawn_gate_passes_when_the_workers_path_reaches_node_and_npx(
@@ -257,10 +274,7 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
 def test_the_spawn_gate_checks_an_override_and_leaves_node_out_of_it(tmp_path, monkeypatch) -> None:
     # An override may be a bundled server that never goes through npx, so `node` is not ours to
     # demand; its own binary still has to be reachable from the worker.
-    server = tmp_path / "opt" / "mcp"
-    server.parent.mkdir(parents=True)
-    server.write_text("#!/bin/sh\necho 1.0\n")
-    server.chmod(0o755)
+    server = _executable(tmp_path / "opt" / "mcp", "1.0")
     monkeypatch.setattr(preflight, "node_path_fragment", lambda: "")
     monkeypatch.setattr(preflight.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
 
@@ -313,7 +327,7 @@ def test_the_node_directory_is_recorded_at_a_path_that_outlives_the_shell(
     installation = tmp_path / "node-versions" / "v22" / "installation"
     (installation / "bin").mkdir(parents=True)
     for name in ("node", "npx"):
-        (installation / "bin" / name).write_text("#!/bin/sh\n")
+        _executable(installation / "bin" / name)
     per_shell = tmp_path / "fnm_multishells" / "52166_1785491228033"
     per_shell.parent.mkdir(parents=True)
     per_shell.symlink_to(installation)
@@ -360,6 +374,9 @@ def test_the_state_store_probe_passes_on_a_local_disk(xdg_tmp) -> None:
     assert list(paths.state_dir().glob(".preflight-wal-probe*")) == []
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="a directory mode is a POSIX concept; chmod does not deny writes here"
+)
 def test_the_state_store_probe_fails_loud_where_a_database_cannot_live(
     xdg_tmp, monkeypatch
 ) -> None:

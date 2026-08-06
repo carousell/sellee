@@ -146,8 +146,10 @@ def test_the_server_binary_is_resolved_against_the_workers_path_not_this_shells(
 ) -> None:
     bin_dir = tmp_path / "node" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "npx").write_text("#!/bin/sh\n")
-    (bin_dir / "npx").chmod(0o755)
+    # Carrying an extension where the host needs one, or the probe's own lookup walks past it.
+    npx = bin_dir / ("npx.cmd" if os.name == "nt" else "npx")
+    npx.write_text("@echo off\r\n" if os.name == "nt" else "#!/bin/sh\n", encoding="utf-8")
+    npx.chmod(0o755)
     # An empty directory as the supervised default, so the answer comes from the recorded fragment
     # rather than from whatever this machine happens to have in /usr/bin.
     monkeypatch.setattr(healthcheck.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
