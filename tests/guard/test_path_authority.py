@@ -55,12 +55,12 @@ def _code_lines(source: str) -> dict:
 def test_only_paths_module_resolves_home_or_xdg() -> None:
     offenders: list[str] = []
     for path in sorted(SRC.rglob("*.py")):
-        rel = str(path.relative_to(SRC))
+        rel = path.relative_to(SRC).as_posix()
         if rel == AUTHORITY:
             continue
         for lineno, line in _code_lines(path.read_text(encoding="utf-8")).items():
             if any(pat.search(line) for pat in FORBIDDEN):
-                offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{lineno}")
     assert not offenders, (
         "home/XDG resolution outside paths.py (route it through paths.py):\n" + "\n".join(offenders)
     )

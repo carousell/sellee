@@ -59,6 +59,9 @@ def test_the_platform_only_list_stays_empty() -> None:
 # Where a platform conditional is allowed to live: the platform/ seam (host integration), plus
 # the portable modules that each own one per-OS concern and hide it behind a neutral API. A hit
 # anywhere else is core logic learning a platform quirk — the scatter that rotted the last port.
+#
+# Spelled with forward slashes and matched against as_posix(), so the guard means the same thing
+# on a host whose separator is a backslash — otherwise every owner silently stops being one.
 _PLATFORM_OWNERS = {
     "selly_agent/platform/__init__.py",
     "selly_agent/platform/base.py",
@@ -106,7 +109,7 @@ def test_platform_conditionals_live_in_their_owner_modules() -> None:
     ask what OS this is. Growing the owner list is a deliberate, visible act."""
     offenders = []
     for path in sorted(SRC.rglob("*.py")):
-        rel = str(path.relative_to(SRC))
+        rel = path.relative_to(SRC).as_posix()
         if rel in _PLATFORM_OWNERS:
             continue
         for lineno, line in enumerate(
@@ -152,7 +155,9 @@ def test_every_packaged_asset_the_code_names_is_present() -> None:
     assert named, "the walk found no packaged assets, so it is not checking anything"
 
     missing = [
-        f"{source.relative_to(ROOT)}: {asset.name}" for source, asset in named if not asset.exists()
+        f"{source.relative_to(ROOT).as_posix()}: {asset.name}"
+        for source, asset in named
+        if not asset.exists()
     ]
     assert not missing, "assets named in the code but not in the package:\n" + "\n".join(missing)
 

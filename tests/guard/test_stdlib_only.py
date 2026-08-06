@@ -114,7 +114,7 @@ def test_no_non_stdlib_imports_under_src() -> None:
     for path in _src_files():
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for top in sorted(_disallowed_imports(tree, ALLOWED_RUNTIME_DEPS)):
-            offenders.append(f"{path.relative_to(ROOT)}: {top}")
+            offenders.append(f"{path.relative_to(ROOT).as_posix()}: {top}")
     assert not offenders, (
         "imports under src/ that are neither stdlib nor an allowlisted dependency:\n"
         + "\n".join(offenders)
@@ -147,7 +147,7 @@ def test_platform_stdlib_is_accepted_on_every_os() -> None:
 def test_no_network_imports_outside_allowlist() -> None:
     offenders: list[str] = []
     for path in _src_files():
-        rel = str(path.relative_to(SRC))
+        rel = path.relative_to(SRC).as_posix()
         if rel in NETWORK_ALLOWLIST:
             continue
         tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))

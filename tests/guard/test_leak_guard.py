@@ -73,7 +73,7 @@ def test_no_bot_token_shape_in_repo_files() -> None:
     for path, text in _repo_text_files():
         for lineno, line in enumerate(text.splitlines(), start=1):
             if TOKEN_RE.search(line):
-                offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
+                offenders.append(f"{path.relative_to(ROOT).as_posix()}:{lineno}")
     assert not offenders, "bot-token shape in repo files:\n" + "\n".join(offenders)
 
 
@@ -85,6 +85,6 @@ def test_no_unapproved_identifier_digits_in_repo_files() -> None:
                 continue
             for match in DIGIT_RUN_RE.findall(line):
                 if match not in APPROVED_FAKE_IDS:
-                    offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
+                    offenders.append(f"{path.relative_to(ROOT).as_posix()}:{lineno}")
                     break
     assert not offenders, "unapproved identifier digits in repo files:\n" + "\n".join(offenders)
