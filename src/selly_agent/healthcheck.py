@@ -18,7 +18,8 @@ from __future__ import annotations
 import dataclasses
 import shutil
 
-from selly_agent import config, control, secrets, supervisor
+from selly_agent import config, control, deployment, secrets, supervisor
+from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
 from selly_agent.installer import checks, preflight
 
@@ -30,33 +31,44 @@ HEARTBEAT_STALE_SEC = 60.0
 # --- pure decisions ----------------------------------------------------------------------------
 
 
-def daemon_check(*, mode: str, registered: bool, heartbeat_age) -> checks.Check:
+def daemon_check(
+    *,
+    mode: str,
+    registered: bool,
+    heartbeat_age,
+    start_hint: str = "selly-agent daemon start",
+    restart_hint: str = "selly-agent daemon stop && selly-agent daemon start",
+    status_hint: str = "selly-agent daemon status",
+) -> checks.Check:
     """Is the worker running — judged against the mode the seller chose.
 
     Manual mode not running is informative, not a fault: they asked for a daemon they start
     themselves, and reporting their own decision as a failure trains people to ignore the report.
+
+    The hints are passed in because who keeps this process alive differs by deployment, and a fix
+    naming a command the reader cannot run is worse than no fix at all.
     """
     if registered:
         if heartbeat_age is None:
             return checks.fail(
                 "daemon",
                 "registered, but it has never written a heartbeat",
-                "Something is failing at startup — see `selly-agent daemon status`.",
+                f"Something is failing at startup — see `{status_hint}`.",
             )
         if heartbeat_age > HEARTBEAT_STALE_SEC:
             return checks.fail(
                 "daemon",
                 f"registered, but its last heartbeat was {heartbeat_age:.0f}s ago",
-                "The loop looks stuck — `selly-agent daemon stop` then `daemon start`.",
+                f"The loop looks stuck — {restart_hint}",
             )
         return checks.ok("daemon", f"running (heartbeat {heartbeat_age:.0f}s ago)")
     if mode == supervisor.MANUAL:
         return checks.warn(
             "daemon",
             "not running — manual mode, which is what you chose",
-            "selly-agent daemon start",
+            start_hint,
         )
-    return checks.fail("daemon", "not running", "selly-agent daemon start")
+    return checks.fail("daemon", "not running", start_hint)
 
 
 def channel_check(*, bound: bool) -> checks.Check:
@@ -71,13 +83,17 @@ def channel_check(*, bound: bool) -> checks.Check:
     )
 
 
-def browser_check(*, enabled, blocked: str, states) -> checks.Check:
+def browser_check(*, enabled, blocked: str, states, blocked_fix: str = "") -> checks.Check:
     """Can we drive the marketplaces the seller enabled, and are they still signed in?
 
     With no external marketplaces there is nothing to check and nothing wrong: the rail needs no
     browser. A probe the daemon declined to run is nothing wrong either — Chrome being closed or
     a pass mid-publish are both ordinary — but the report must say which reason held it up: the
     person reading it may be looking straight at a Chrome the report claims isn't there.
+
+    `blocked_fix` is how a reader gets past that block where getting past it is theirs to do —
+    a container's Chrome runs on their own desktop, so a closed one waits on them rather than on
+    the agent's next browser turn.
     """
     if not enabled:
         return checks.ok("browser", "no external marketplaces — carousell.ai only")
@@ -85,7 +101,7 @@ def browser_check(*, enabled, blocked: str, states) -> checks.Check:
         return checks.warn(
             "browser",
             f"{blocked}, so I can't check {len(enabled)} marketplace sign-in(s) right now",
-            "Nothing to do — I'll check the next time I use the browser.",
+            blocked_fix or "Nothing to do — I'll check the next time I use the browser.",
         )
     logged_out = [row["market"] for row in states if row.get("state") == "logged_out"]
     unknown = [row["market"] for row in states if row.get("state") == "unknown"]
@@ -105,7 +121,7 @@ def browser_check(*, enabled, blocked: str, states) -> checks.Check:
     return checks.ok("browser", f"Chrome up, signed in to {len(states)} marketplace(s)")
 
 
-def browser_server_check(*, binary: str, fragment: str, resolved) -> checks.Check:
+def browser_server_check(*, binary: str, fragment: str, resolved, fix: str = "") -> checks.Check:
     """Is the browser server's binary reachable from the PATH the worker is actually given?
 
     Deterministic and offline, unlike the browser check above — it resolves a name against a
@@ -122,8 +138,9 @@ def browser_server_check(*, binary: str, fragment: str, resolved) -> checks.Chec
         return checks.fail(
             "browser server",
             f"{binary} is not reachable from the worker's PATH ({fragment})",
-            "Node moved, or was replaced by a version manager — re-run ./setup to record where it "
-            "lives now.",
+            fix
+            or "Node moved, or was replaced by a version manager — re-run ./setup to record where "
+            "it lives now.",
         )
     return checks.ok("browser server", f"{binary} at {resolved}")
 
@@ -143,6 +160,16 @@ def rail_key_check(*, present: bool) -> checks.Check:
 
 def _daemon_probe(platform=None) -> checks.Check:
     status = supervisor.gather_status(platform=platform)
+    if deployment.is_container():
+        # Whatever runs the container is what starts and restarts it; naming a command would mean
+        # guessing which engine, which container name, and which of the two the reader used.
+        return daemon_check(
+            mode=status.mode,
+            registered=status.registered,
+            heartbeat_age=status.heartbeat_age_sec,
+            start_hint="Start the container again.",
+            restart_hint="restart the container.",
+        )
     return daemon_check(
         mode=status.mode,
         registered=status.registered,
@@ -174,7 +201,20 @@ def _browser_probe(cfg) -> checks.Check:
         enabled=answer.get("enabled") or [],
         blocked=answer.get("blocked") or "",
         states=answer.get("markets") or [],
+        blocked_fix=_chrome_blocked_fix(cfg, answer.get("blocked") or ""),
     )
+
+
+def _chrome_blocked_fix(cfg, blocked: str) -> str:
+    """Whether the block the daemon reported is a Chrome the reader has to start themselves.
+
+    Asked of the port rather than of the daemon's wording, and only where it can be the answer:
+    a host install starts its own Chrome, so there the block resolves itself and the standing
+    "nothing to do" is the truth.
+    """
+    if not blocked or not deployment.is_container():
+        return ""
+    return "" if chrome.is_ready(cfg.chrome_cdp_port) else chrome.CONTAINER_CHROME_FIX
 
 
 def _browser_unknown(reason: str) -> checks.Check:
@@ -185,16 +225,26 @@ def _browser_unknown(reason: str) -> checks.Check:
 
 def _browser_server_probe(cfg) -> checks.Check:
     """Resolve the server command's binary under the recorded fragment plus the supervised default —
-    the same PATH the job definition carries, asked of nothing but the filesystem."""
+    the same PATH the job definition carries, asked of nothing but the filesystem.
+
+    In a container there is no fragment to record and no job definition to carry it: node was
+    installed into the image, so the image's own PATH is both the worker's PATH and the answer.
+    """
     command = cfg.playwright_mcp_cmd or browser_client.default_command(
         browser_client.cdp_endpoint(cfg.chrome_cdp_port)
     )
     binary = str(command[0])
-    fragment = cfg.node_bin_dir or ""
+    container = deployment.is_container()
+    fragment = preflight.supervised_path("") if container else (cfg.node_bin_dir or "")
     return browser_server_check(
         binary=binary,
         fragment=fragment,
         resolved=shutil.which(binary, path=preflight.supervised_path(fragment)),
+        fix=(
+            "Node is installed into the image, so this is not the image we build — rebuild it."
+            if container
+            else ""
+        ),
     )
 
 

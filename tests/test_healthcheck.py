@@ -220,3 +220,75 @@ def test_the_browser_check_says_unknown_rather_than_none_when_the_daemon_is_down
     result = healthcheck._browser_probe(Config())
     assert result.status == checks.WARN
     assert "isn't answering" in result.detail
+
+
+# --- the container column -------------------------------------------------------------------
+
+
+def test_a_container_worker_is_fixed_by_the_container_not_by_a_launchd_verb(
+    container, xdg_tmp
+) -> None:
+    """`selly-agent daemon start` cannot be the fix where there is no job to start — and naming
+    the command that *is* would mean guessing an engine and a container name we did not choose."""
+    stopped = healthcheck._daemon_probe()
+    assert stopped.status == checks.FAIL
+    assert stopped.fix == "Start the container again."
+    assert "docker" not in stopped.fix.lower()
+
+
+def test_a_container_reports_the_host_chrome_as_the_thing_to_start() -> None:
+    """On a host a closed Chrome resolves itself — the daemon opens one. Here it waits on the
+    seller, so the report has to say so."""
+    from selly_agent.browser import chrome
+
+    result = healthcheck.browser_check(
+        enabled=["carousell"],
+        blocked="Chrome isn't running",
+        states=[],
+        blocked_fix=chrome.CONTAINER_CHROME_FIX,
+    )
+    assert result.status == checks.WARN
+    assert "start-chrome.sh" in result.fix
+
+
+def test_a_block_that_is_not_chrome_keeps_the_standing_answer(container, xdg_tmp, monkeypatch):
+    """A pass holding the browser is ordinary and resolves itself, so it must not be dressed up
+    as something the seller has to go and do."""
+    from selly_agent import control
+    from selly_agent.browser import chrome
+    from selly_agent.config import Config
+
+    monkeypatch.setattr(secrets, "read_mcp_token", lambda: "tok")
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
+    monkeypatch.setattr(
+        control,
+        "get",
+        lambda *a, **k: (
+            200,
+            {"enabled": ["carousell"], "blocked": "a pass is using the browser", "markets": []},
+        ),
+    )
+    result = healthcheck._browser_probe(Config())
+    assert "Nothing to do" in result.fix
+
+
+def test_the_container_browser_server_is_checked_against_the_image_path(
+    container, tmp_path, monkeypatch
+) -> None:
+    """There is no recorded node fragment and no job definition to carry one — node was installed
+    into the image, so the image's PATH is the worker's PATH."""
+    from selly_agent.config import Config
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    (bin_dir / "npx").write_text("#!/bin/sh\n")
+    (bin_dir / "npx").chmod(0o755)
+    monkeypatch.setenv("PATH", str(bin_dir))
+
+    result = healthcheck._browser_server_probe(Config())
+    assert result.status == checks.OK
+
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    missing = healthcheck._browser_server_probe(Config())
+    assert missing.status == checks.FAIL
+    assert "rebuild it" in missing.fix
