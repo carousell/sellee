@@ -6,6 +6,10 @@ is silent. Given that, the daemon may start Chrome itself: a background publish 
 the window happens to be closed is worth a window opening for, and the seller is told before it
 does. Keeping it alive across crashes and logins is still the supervisor's job, not this module's.
 
+Where the browser is on a different machine from the daemon — a container talking to the seller's
+own desktop Chrome — launching is not ours to do at all, and `ensure_running(may_launch=False)`
+answers with the probe alone.
+
 The probe is the only network I/O in the browser layer: an HTTP GET of Chrome's own CDP version
 endpoint on the loopback interface.
 """
@@ -129,7 +133,35 @@ def bring_up_hint(port: int, *, chrome_bin: str | None = None) -> str:
     return f"the agent's Chrome is not running on port {port} — start it with:\n  {quoted}"
 
 
-def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float = LAUNCH_WAIT_SEC):
+# The one-line version of the instruction below, for a report line that has room for a fix and
+# not for an argv.
+CONTAINER_CHROME_FIX = (
+    "Start Chrome on your own computer: ./start-chrome.sh (start-chrome.ps1 on Windows)."
+)
+
+
+def container_bring_up_hint(port: int) -> str:
+    """The same instruction where the browser is not ours to start.
+
+    Naming the argv here would be worse than useless: it describes a Chrome on the machine running
+    this code, and the one that matters is on the seller's desktop, with its own profile directory
+    and its own path to the binary. The script that knows those ships beside the compose file.
+    """
+    return (
+        f"the agent's Chrome is not answering on port {port} — it runs on your own computer, "
+        "not in the container. Start it from the selly-agent checkout with:\n"
+        "  ./start-chrome.sh      (macOS, Linux)\n"
+        "  .\\start-chrome.ps1     (Windows PowerShell)"
+    )
+
+
+def ensure_running(
+    port: int,
+    *,
+    chrome_bin: str | None = None,
+    wait_sec: float = LAUNCH_WAIT_SEC,
+    may_launch: bool = True,
+):
     """Make sure the agent's Chrome is answering on its debugging port, starting it if it is not.
 
     Answers READY (it already was), LAUNCHED (it is now, and the seller should be told a window
@@ -139,12 +171,20 @@ def ensure_running(port: int, *, chrome_bin: str | None = None, wait_sec: float 
     killed Chrome safe to clear, and only then is a second launch on this profile safe at all. The
     whole body runs under one launch lock so that holds with concurrent callers, and a launch that
     failed quiets further attempts for FAILED_LAUNCH_BACKOFF_SEC.
+
+    `may_launch=False` reduces all of that to the probe: no binary resolved, no lock file touched,
+    nothing started. That is the only correct behavior where the browser belongs to a machine this
+    process is not running on — the profile whose locks it would clear is not the profile that
+    Chrome uses, and the binary it would resolve is not the one the seller runs.
     """
     global _last_failed_launch_ts
     with _LAUNCH_LOCK:
         if is_ready(port):
             _last_failed_launch_ts = None
             return READY
+
+        if not may_launch:
+            return UNAVAILABLE
 
         if (
             _last_failed_launch_ts is not None

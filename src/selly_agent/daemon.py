@@ -22,6 +22,7 @@ from selly_agent import (
     __version__,
     config,
     crosslist,
+    deployment,
     heartbeat,
     intent_sweep,
     lock,
@@ -82,12 +83,22 @@ def ensure_chrome(cfg, store, bus) -> None:
     Acquiring the browser means ensuring it runs: this is the one place that rule lives, called on
     every acquisition because Chrome can be closed at any moment after the client is built. A launch
     queues the seller notice before anything drives the window, so it never appears unexplained.
+
+    Where the browser is the seller's own, on a machine this process only reaches over a port, the
+    acquisition is the probe and nothing else — so no window is ever started, and a closed one is
+    reported with the instruction for starting it there.
     """
-    state = chrome.ensure_running(cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin)
+    may_launch = deployment.manages_chrome()
+    state = chrome.ensure_running(
+        cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin, may_launch=may_launch
+    )
     if state == chrome.UNAVAILABLE:
-        raise browser_client.BrowserUnavailable(
+        hint = (
             chrome.bring_up_hint(cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin)
+            if may_launch
+            else chrome.container_bring_up_hint(cfg.chrome_cdp_port)
         )
+        raise browser_client.BrowserUnavailable(hint)
     if state == chrome.LAUNCHED:
         store.queue_notice(CHROME_STARTED_NOTICE)
         bus.publish("browser.chrome_launched", {"port": cfg.chrome_cdp_port})
@@ -226,6 +237,7 @@ def run_daemon(*, once: bool) -> int:
 
     store = Store(data_db)
     started_ts = time.time()
+
     attended_token = secrets.ensure_mcp_token()
 
     # Core needs-me wiring — always on, provider-independent (the queue works with no channel
