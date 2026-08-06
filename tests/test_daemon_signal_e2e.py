@@ -44,8 +44,20 @@ def _write_config(tmp_path, *, http_port: int = 0) -> None:
     cfg_dir.mkdir(parents=True)
     # http_port 0 → an ephemeral port, so two daemon subprocesses never collide on a fixed port.
     # A test that has to address the daemon names one instead, having found a free one first.
+    #
+    # The browser is pointed at names that cannot resolve, so the lanes report it unavailable and
+    # this stays a test about the drain. Left to find the host's own tooling, the daemon launches
+    # whatever Chrome and npx are installed and waits on them — which is why this passed on a
+    # machine with neither and failed on CI runners that have both.
     (cfg_dir / "config.json").write_text(
-        json.dumps({"tick_interval_sec": 0.3, "http_port": http_port})
+        json.dumps(
+            {
+                "tick_interval_sec": 0.3,
+                "http_port": http_port,
+                "chrome_bin": str(tmp_path / "no-such-chrome"),
+                "playwright_mcp_cmd": [str(tmp_path / "no-such-npx")],
+            }
+        )
     )
 
 
