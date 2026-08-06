@@ -627,7 +627,7 @@ def _daemon_diagnostics() -> str:
     log_path = paths.logs_dir() / "agent.err.log"
     lines = [f"Its log is at {log_path}", "Run `selly-agent daemon status` for its view."]
     try:
-        tail = log_path.read_text().splitlines()[-_LOG_TAIL_LINES:]
+        tail = log_path.read_text(encoding="utf-8").splitlines()[-_LOG_TAIL_LINES:]
     except OSError:
         tail = []
     if tail:

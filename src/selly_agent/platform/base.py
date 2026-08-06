@@ -44,6 +44,11 @@ class Platform(ABC):
     # and names it in the job's arguments (--env-file), which the launcher applies on startup.
     environment_file: bool = False
 
+    # Interpreter flags the supervised job is started with, before the launcher script. An
+    # environment variable cannot do this job: the companion file above is read by the launcher,
+    # which is already running by then, and text-mode defaults are fixed at interpreter startup.
+    supervised_interpreter_flags: tuple = ()
+
     @abstractmethod
     def launch_agents_dir(self, home: Path) -> Path | None:
         """The per-user auto-start directory the supervisor reads at login.

@@ -142,16 +142,17 @@ def install(*, mode: str, label: str | None = None, platform: Platform | None = 
 
     dest = locations[mode]
     environment = _job_environment()
-    program_args = [
-        str(materialize.supervised_interpreter()),
-        str(paths.current() / "bin" / "selly-agent"),
-        "daemon",
-        "run",
-    ]
+    launcher_args = ["daemon", "run"]
     if platform.environment_file:
         # The definition format cannot carry environment variables, so the launcher applies them
         # from a companion file named in the job's own arguments.
-        program_args[2:2] = ["--env-file", str(_environment_file(dest))]
+        launcher_args[:0] = ["--env-file", str(_environment_file(dest))]
+    program_args = [
+        str(materialize.supervised_interpreter()),
+        *platform.supervised_interpreter_flags,
+        str(paths.current() / "bin" / "selly-agent"),
+        *launcher_args,
+    ]
     plist_text = platform.render_supervisor(
         label=label,
         program_args=program_args,

@@ -414,6 +414,20 @@ def test_a_definition_that_cannot_carry_environment_gets_a_companion_file(xdg_tm
     assert environment["XDG_STATE_HOME"] == os.environ["XDG_STATE_HOME"]
 
 
+def test_the_supervised_interpreter_is_started_in_utf8_mode(xdg_tmp) -> None:
+    """PYTHONUTF8 in the companion file cannot do this: the launcher reads that file, and by then
+    the interpreter's text-mode defaults are already set from the machine's code page. Only a flag
+    on the command line lands before startup, so the daemon reads the skill files it ships with."""
+    fake = FakeWindowsPlatform()
+    assert supervisor.install(mode="manual", platform=fake) == 0
+
+    definition = (paths.config_dir() / "SellyAgent.xml").read_text(encoding="utf-16")
+    arguments = definition.split("<Arguments>")[1].split("</Arguments>")[0]
+    assert arguments.startswith("-X utf8 ")
+    # ...and before the launcher script, or the interpreter treats it as one of its arguments.
+    assert arguments.index("-X utf8") < arguments.index("selly-agent")
+
+
 def test_uninstall_takes_the_companion_file_with_the_definition(xdg_tmp) -> None:
     fake = FakeWindowsPlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0

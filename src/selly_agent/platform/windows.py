@@ -53,6 +53,9 @@ class WindowsPlatform(Platform):
     definition_encoding = "utf-16"
     owns_job_directory = True
     environment_file = True
+    # Windows text I/O defaults to the ANSI code page through 3.14, so the daemon would read its
+    # own UTF-8 skill files and write its own logs in whatever the machine happens to be set to.
+    supervised_interpreter_flags = ("-X", "utf8")
 
     def launch_agents_dir(self, home: Path) -> Path | None:
         """None: Windows has no directory that means "start this at login" the way

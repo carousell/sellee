@@ -466,7 +466,7 @@ def _write_workspace(workspace: Path, spec: PassSpec) -> None:
     for rel, content in claude.render_workspace(spec).items():
         path = workspace / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
 
 
 def _stage_photos(workspace: Path, payload: dict, store) -> tuple:

@@ -163,12 +163,16 @@ def harness_config(directory=None, *, quiet: bool = False) -> int:
     commands_dir.mkdir(parents=True, exist_ok=True)
     for name in skills.available_commands():
         target = commands_dir / f"{name}.md"
-        body = skills.command_path(name).read_text().replace("{SKILLS_DIR}", str(skills_dir))
-        target.write_text(body)
+        body = (
+            skills.command_path(name)
+            .read_text(encoding="utf-8")
+            .replace("{SKILLS_DIR}", str(skills_dir))
+        )
+        target.write_text(body, encoding="utf-8")
         written.append(target)
 
     claude_md = dest / "CLAUDE.md"
-    claude_md.write_text(_claude_md(skills_dir))
+    claude_md.write_text(_claude_md(skills_dir), encoding="utf-8")
     written.append(claude_md)
 
     if not quiet:
