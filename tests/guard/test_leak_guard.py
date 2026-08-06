@@ -57,7 +57,7 @@ def _repo_text_files() -> list[tuple[Path, str]]:
         if path.resolve() == SELF:  # self-exclude: our own fixtures are bad examples by design
             continue
         try:
-            files.append((path, path.read_text()))
+            files.append((path, path.read_text(encoding="utf-8")))
         except (OSError, UnicodeDecodeError):
             continue  # binary / unreadable
     return files

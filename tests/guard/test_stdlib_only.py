@@ -112,7 +112,7 @@ def _disallowed_imports(tree: ast.AST, allowed: set) -> set:
 def test_no_non_stdlib_imports_under_src() -> None:
     offenders: list[str] = []
     for path in _src_files():
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for top in sorted(_disallowed_imports(tree, ALLOWED_RUNTIME_DEPS)):
             offenders.append(f"{path.relative_to(ROOT)}: {top}")
     assert not offenders, (
@@ -150,7 +150,7 @@ def test_no_network_imports_outside_allowlist() -> None:
         rel = str(path.relative_to(SRC))
         if rel in NETWORK_ALLOWLIST:
             continue
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for top in _imported_top_levels(tree):
             if top in NETWORK_MODULES:
                 offenders.append(f"{rel}: {top}")

@@ -109,7 +109,9 @@ def test_platform_conditionals_live_in_their_owner_modules() -> None:
         rel = str(path.relative_to(SRC))
         if rel in _PLATFORM_OWNERS:
             continue
-        for lineno, line in enumerate(_without_comments(path.read_text()).splitlines(), start=1):
+        for lineno, line in enumerate(
+            _without_comments(path.read_text(encoding="utf-8")).splitlines(), start=1
+        ):
             if _PLATFORM_TOKENS.search(line):
                 offenders.append(f"{rel}:{lineno}: {line.strip()}")
     assert not offenders, "platform conditionals outside their owner modules:\n" + "\n".join(
@@ -131,7 +133,7 @@ def _named_assets():
 
     roots = {"PACKAGE_DATA_DIR": PACKAGE_DATA_DIR, "SKILLS_DIR": SKILLS_DIR}
     for path in sorted(SRC.rglob("*.py")):
-        for node in ast.walk(ast.parse(path.read_text(), filename=str(path))):
+        for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"), filename=str(path))):
             if not isinstance(node, ast.BinOp) or not isinstance(node.op, ast.Div):
                 continue
             if not (isinstance(node.right, ast.Constant) and isinstance(node.right.value, str)):

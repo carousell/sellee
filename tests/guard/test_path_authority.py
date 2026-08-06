@@ -58,7 +58,7 @@ def test_only_paths_module_resolves_home_or_xdg() -> None:
         rel = str(path.relative_to(SRC))
         if rel == AUTHORITY:
             continue
-        for lineno, line in _code_lines(path.read_text()).items():
+        for lineno, line in _code_lines(path.read_text(encoding="utf-8")).items():
             if any(pat.search(line) for pat in FORBIDDEN):
                 offenders.append(f"{path.relative_to(ROOT)}:{lineno}")
     assert not offenders, (

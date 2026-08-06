@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 
 import pytest
 
@@ -56,8 +57,9 @@ def test_claude_md_asks_for_catchup_at_session_start(configured) -> None:
 def test_claude_md_links_every_skill_by_a_resolvable_path(configured) -> None:
     from pathlib import Path
 
-    text = (configured / "CLAUDE.md").read_text()
-    referenced = [t for t in text.split("`") if t.endswith(".md") and "/" in t]
+    text = (configured / "CLAUDE.md").read_text(encoding="utf-8")
+    # The paths are rendered in the host's own separator, which is what the harness has to open.
+    referenced = [t for t in text.split("`") if t.endswith(".md") and os.sep in t]
     assert len(referenced) == len(skills.available())
     for token in referenced:
         assert Path(token).is_file()

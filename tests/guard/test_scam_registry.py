@@ -140,7 +140,7 @@ def _validate(doc) -> list:
 
 
 def test_shipped_scam_registry_is_valid() -> None:
-    doc = json.loads(marketplaces.SCAM_REGISTRY_PATH.read_text())
+    doc = json.loads(marketplaces.SCAM_REGISTRY_PATH.read_text(encoding="utf-8"))
     errors = _validate(doc)
     assert errors == [], "shipped scam_registry.json failed validation:\n" + "\n".join(errors)
 
