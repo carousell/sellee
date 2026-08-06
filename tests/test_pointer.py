@@ -118,7 +118,11 @@ def test_the_windows_shim_is_written_in_the_code_page_cmd_reads(monkeypatch) -> 
     POSIX run cannot round-trip through it to check the result.
     """
     monkeypatch.setattr(pointer, "_WINDOWS", True)
-    assert pointer._shim_encoding() == "oem"
+    # A real page number, never the stdlib's "oem" alias: that alias passes the CP_OEMCP
+    # sentinel to the code-page codec as if it were a page, and every encode through it fails.
+    assert pointer._shim_encoding() != "oem"
+    if os.name == "nt":
+        assert pointer._shim_encoding().startswith("cp")
 
 
 def test_the_shim_is_written_as_bytes_not_through_a_text_stream(tmp_path) -> None:

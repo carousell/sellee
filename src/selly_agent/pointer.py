@@ -14,6 +14,7 @@ the daemon is stopped, and the shim retries.
 
 from __future__ import annotations
 
+import codecs
 import os
 from pathlib import Path
 
@@ -49,8 +50,23 @@ def _shim_encoding() -> str:
     cmd.exe parses a batch file in the console code page, not the ANSI one a locale write would
     use. Where the two differ — an accented name under C:\\Users — the target spelled in one is
     not the target read in the other, and the shim's own `if exist` never matches it.
+
+    The page is asked for by number rather than through the stdlib's "oem" alias: that alias
+    hands the CP_OEMCP sentinel (1) to the code-page codec as though it were a page number, and
+    every encode through it fails with "'cp1' codec ... invalid character" — even for ASCII.
     """
-    return "oem" if _WINDOWS else "utf-8"
+    if not _WINDOWS:
+        return "utf-8"
+    import ctypes
+
+    try:
+        name = f"cp{ctypes.windll.kernel32.GetOEMCP()}"
+        codecs.lookup(name)
+    except (OSError, AttributeError, LookupError):
+        # A page Python has no codec for. The shim is ASCII apart from the paths it names, so
+        # UTF-8 is right whenever those are too — which is every install but an exotic one.
+        return "utf-8"
+    return name
 
 
 def is_pointer(path) -> bool:
@@ -128,9 +144,11 @@ def write_shim(shim, launcher, interpreter) -> Path:
     discard(staging)
     if _WINDOWS:
         body = _CMD_SHIM.format(target=launcher, interpreter=Path(interpreter))
-        # Encoded here and written as bytes rather than through write_text: the code-page codecs
-        # have no working incremental encoder, so a text-mode write refuses even pure ASCII.
-        staging.write_bytes(body.encode(_shim_encoding()))
+        # CRLF, and written as bytes so nothing translates them back: cmd.exe mis-reads `goto`
+        # and its labels in a batch file with bare newlines, and the retry loop above is built
+        # from both. Encoding here rather than through write_text keeps the two decisions in one
+        # place — which line ending, and which code page.
+        staging.write_bytes(body.replace("\n", "\r\n").encode(_shim_encoding()))
     else:
         staging.symlink_to(launcher)
     os.replace(staging, shim)
