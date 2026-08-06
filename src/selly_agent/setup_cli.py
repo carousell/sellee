@@ -250,7 +250,7 @@ def _install_layout(ui: Ui, args, platform, tree) -> None:
 
     if args.dev:
         materialize.install_dev(tree)
-        ui.say(f"dev mode: current → {tree}")
+        ui.say(f"dev mode: current {checks.arrow()} {tree}")
         ui.note("edits in that tree are live after a worker restart")
     else:
         dest = materialize.install_version(tree, __version__)
@@ -322,10 +322,12 @@ def _offer_user_path_entry(ui: Ui, args, bin_dir) -> None:
     # PowerShell, so following it replaces the account's entire PATH with that literal; run from
     # cmd it copies the combined machine and user PATH into the user value and truncates it at
     # 1024 characters. There is no one-liner here worth the chance of destroying someone's PATH.
+    step = checks.arrow()
     by_hand = (
         f"Add this directory to your PATH: {bin_dir}\n"
-        "  (Settings → System → About → Advanced system settings → Environment Variables,\n"
-        "   then edit Path under your user variables — or re-run setup and accept the offer.)"
+        f"  (Settings {step} System {step} About {step} Advanced system settings {step} "
+        f"Environment Variables,\n"
+        f"   then edit Path under your user variables — or re-run setup and accept the offer.)"
     )
     consented = ui.interactive or ui.assume_yes
     if args.no_modify_path or not consented:

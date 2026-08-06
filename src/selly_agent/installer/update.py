@@ -228,36 +228,16 @@ def latest_snapshot():
     return found[-1] if found else None
 
 
-_RESTORE_ATTEMPTS = 5
-_RESTORE_BACKOFF_SEC = 0.5
-
-
-def _retry_permission_denied(operation):
-    """Run `operation`, retrying briefly on PermissionError.
-
-    On Windows an antivirus scanner holds a just-closed file for a moment; a rollback that dies
-    on that moment leaves the install half-restored, which is the one state this whole path
-    exists to prevent.
-    """
-    for attempt in range(_RESTORE_ATTEMPTS):
-        try:
-            return operation()
-        except PermissionError:
-            if attempt == _RESTORE_ATTEMPTS - 1:
-                raise
-            time.sleep(_RESTORE_BACKOFF_SEC * (attempt + 1))
-
-
 def restore_snapshot(snapshot: Path) -> None:
     """Put a snapshot back as selly.db. The daemon must be stopped: this replaces the file it
     would otherwise be holding open."""
-    _retry_permission_denied(lambda: shutil.copy2(snapshot, paths.selly_db()))
+    runtime.retry_permission_denied(lambda: shutil.copy2(snapshot, paths.selly_db()))
     # A WAL alongside a restored database describes the *replaced* one, and replaying it would
     # undo the restore. The snapshot is a complete, checkpointed copy, so they can go.
     for suffix in ("-wal", "-shm"):
         sidecar = paths.selly_db().with_name(paths.selly_db().name + suffix)
         if sidecar.exists():
-            _retry_permission_denied(sidecar.unlink)
+            runtime.retry_permission_denied(sidecar.unlink)
 
 
 # --- the daemon around the swap -------------------------------------------------------------------
@@ -364,7 +344,7 @@ def _guard_updatable() -> None:
 def check(args, cfg, out) -> int:
     """`--check`: say what is on offer and exit in a way a script can branch on."""
     release = discover(_base_url(args, cfg))
-    out(f"{__version__} → {release.version}")
+    out(f"{__version__} {checks.arrow()} {release.version}")
     if not is_newer(release.version, __version__):
         out("Already up to date.")
         return 0
@@ -376,7 +356,7 @@ def perform(args, cfg, out, *, platform=None) -> int:
     _guard_updatable()
     base = _base_url(args, cfg)
     release = discover(base)
-    out(f"selly-agent {__version__} → {release.version}")
+    out(f"selly-agent {__version__} {checks.arrow()} {release.version}")
     if not is_newer(release.version, __version__):
         out("Already up to date.")
         return 0
@@ -412,7 +392,7 @@ def perform(args, cfg, out, *, platform=None) -> int:
             _start_daemon(mode, platform=platform)
             out("Nothing was changed; the previous version is still running.")
         raise
-    out(f"Installed versions/{release.version}; current → {release.version}.")
+    out(f"Installed versions/{release.version}; current {checks.arrow()} {release.version}.")
 
     if not was_running:
         # Manual mode, and it was not running before. Starting it now would be a change nobody
@@ -503,7 +483,7 @@ def rollback(args, cfg, out, *, platform=None) -> int:
     if target is None:
         raise UpdateError("there is no previous version retained to roll back to")
     leaving = materialize.current_target()
-    out(f"Rolling back {materialize.current_version()} → {target.name}.")
+    out(f"Rolling back {materialize.current_version()} {checks.arrow()} {target.name}.")
     status = supervisor.gather_status(platform=platform)
     _roll_back_to(
         target,

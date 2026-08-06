@@ -220,9 +220,9 @@ writer, so a `..` segment or an outward symlink is refused before a row exists.
 Photos reach the store two ways: the channel poller downloads them on receipt
 (durable before any LLM sees them), and `import_photos` copies local files in for
 attended sessions. `carousell_ai_upload_photos` converts what needs converting —
-`sips` behind the platform seam, since stdlib cannot transform an image and the
-runtime takes no pip dependency — uploads each photo, and stamps the whole set in
-one transaction. A partial failure stamps nothing: the marketplace replaces a
+Pillow, plus pillow-heif for the HEIC an iPhone produces, both allowlisted
+runtime dependencies rather than a shelled-out per-OS tool — uploads each photo,
+and stamps the whole set in one transaction. A partial failure stamps nothing: the marketplace replaces a
 photo set wholesale, so half a set is a listing with the wrong cover.
 
 The channel subsystem — the optional bound chat (Telegram today) plus the

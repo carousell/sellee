@@ -34,6 +34,15 @@ def glyph(status: str, stream=None) -> str:
     return _degrade(_GLYPHS.get(status, "•"), _ASCII_GLYPHS.get(status, "*"), stream)
 
 
+def arrow(stream=None) -> str:
+    """The "becomes" mark, degraded where the stream cannot encode it.
+
+    Same reason as glyph(): `selly-agent update --check > log.txt` under a legacy code page
+    raises UnicodeEncodeError on the first line rather than rendering something plainer.
+    """
+    return _degrade("→", "->", stream)
+
+
 def _degrade(text: str, fallback: str, stream=None) -> str:
     target = sys.stdout if stream is None else stream
     encoding = getattr(target, "encoding", None) or "utf-8"

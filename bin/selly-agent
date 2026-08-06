@@ -112,11 +112,12 @@ def dispatch(argv):
         if (exc.name or "").startswith("selly_agent"):
             raise
         door = "setup.ps1" if os.name == "nt" else "setup"
-        sys.stderr.write(
-            f"selly-agent: cannot import {exc.name} — this install's dependencies are not in "
-            f"place yet.\nRun {os.path.join(_tree, door)} to build them, or `make bootstrap` "
-            f"in a checkout.\n"
-        )
+        if sys.stderr is not None:  # a windowless interpreter has none, as _die knows
+            sys.stderr.write(
+                f"selly-agent: cannot import {exc.name} — this install's dependencies are not "
+                f"in place yet.\nRun {os.path.join(_tree, door)} to build them, or "
+                f"`make bootstrap` in a checkout.\n"
+            )
         return 1
 
 
