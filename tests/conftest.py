@@ -153,6 +153,14 @@ def xdg_tmp(tmp_path, monkeypatch):
 
 
 @pytest.fixture
+def container(monkeypatch):
+    """Run the test as if inside the container image, whose Dockerfile sets this marker."""
+    from selly_agent import deployment
+
+    monkeypatch.setenv(deployment.MARKER_VAR, deployment.CONTAINER)
+
+
+@pytest.fixture
 def tree(tmp_path):
     """A minimal selly-agent tree: what a checkout or an unpacked release looks like.
 
