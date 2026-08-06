@@ -19,7 +19,7 @@ _CORE_MODULES = [p for p in _CORE.glob("*.py")]
 
 def _imports(path: Path) -> set:
     names: set = set()
-    tree = ast.parse(path.read_text(), filename=str(path))
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
     for node in ast.walk(tree):
         if isinstance(node, ast.ImportFrom) and node.module:
             names.add(node.module)

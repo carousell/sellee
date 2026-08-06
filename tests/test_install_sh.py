@@ -25,7 +25,7 @@ INSTALL_SH = Path(__file__).resolve().parents[1] / "install.sh"
 
 
 def _executable(path: Path, body: str) -> None:
-    path.write_text(body)
+    path.write_text(body, encoding="utf-8")
     path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
 

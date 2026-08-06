@@ -76,7 +76,7 @@ def read_holder_pid(lock_path: Path) -> int | None:
     """The PID recorded in the lock body, or None on a missing/empty/garbage body — a corrupt
     body must never raise into the startup path."""
     try:
-        raw = Path(lock_path).read_text().strip()
+        raw = Path(lock_path).read_text(encoding="utf-8").strip()
     except OSError:
         return None
     try:

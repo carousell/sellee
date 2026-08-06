@@ -36,7 +36,7 @@ def _framed(entry: dict) -> dict:
 
 
 def main(argv) -> int:
-    script = json.loads(open(argv[1]).read()) if len(argv) > 1 else {}
+    script = json.loads(open(argv[1], encoding="utf-8").read()) if len(argv) > 1 else {}
     # Every tool call is appended here so a test can assert on what the client actually sent without
     # the client having to keep a record for the test's benefit.
     calls_log = argv[1] + ".calls" if len(argv) > 1 else None
@@ -61,7 +61,7 @@ def main(argv) -> int:
             name = params.get("name")
             calls_seen[name] = calls_seen.get(name, 0) + 1
             if calls_log:
-                with open(calls_log, "a") as handle:
+                with open(calls_log, "a", encoding="utf-8") as handle:
                     entry = {"tool": name, "arguments": params.get("arguments")}
                     handle.write(json.dumps(entry) + "\n")
             if name in script.get("malformed", []):

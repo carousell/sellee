@@ -73,6 +73,10 @@ src = ["src", "tests"]
 extend-include = ["bin/selly-agent"]
 
 [tool.ruff.lint]
+# PLW1514 is still preview-only; this pair turns on exactly the preview rules named in
+# `select` and nothing else, leaving every stable rule's behavior alone.
+preview = true
+explicit-preview-rules = true
 select = [
     "E",  # pycodestyle errors
     "W",  # pycodestyle warnings
@@ -81,6 +85,13 @@ select = [
     "UP", # pyupgrade (respects target-version)
     "B",  # bugbear
     "TID", # tidy-imports: bans relative imports (see below)
+    # Every open()/read_text()/write_text() names its encoding. The default is the locale
+    # encoding — the ANSI code page on Windows until Python 3.15 — so an unspecified encoding
+    # reads and writes differently per machine, which is the port's single largest bug class.
+    # Caveat: ruff (unlike pylint) flags only lexically-obvious cases — bare open(...) and
+    # Path(...) constructor chains — not read_text() through a variable, so this catches the
+    # common new-code shape rather than proving the tree clean.
+    "PLW1514", # pylint: unspecified-encoding
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]

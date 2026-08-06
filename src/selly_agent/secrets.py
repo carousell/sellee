@@ -48,7 +48,7 @@ def write_secret(path: Path, value: str) -> None:
 def read_secret(path: Path) -> str | None:
     """The stored value, or None when absent. An empty/blank file reads as absent."""
     try:
-        value = path.read_text().strip()
+        value = path.read_text(encoding="utf-8").strip()
     except FileNotFoundError:
         return None
     return value or None
