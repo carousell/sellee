@@ -7,7 +7,7 @@ import os
 import sys
 from pathlib import Path
 
-from selly_agent import config, paths, supervisor
+from selly_agent import config, paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.platform.macos import MacOSPlatform
 from selly_agent.platform.windows import WindowsPlatform
@@ -141,7 +141,7 @@ def test_install_manual_places_in_config_dir_and_does_not_register(xdg_tmp) -> N
     assert plist.exists() and supervisor.MARKER in plist.read_text()
     assert fake.register_calls == []  # manual mode does not auto-start
     assert config.load().daemon_mode == "manual"
-    assert paths.current().is_symlink()
+    assert pointer.is_pointer(paths.current())
 
 
 def test_install_login_start_places_in_launch_agents_and_registers(xdg_tmp) -> None:
@@ -243,7 +243,7 @@ def test_install_leaves_an_existing_versioned_current_alone(xdg_tmp) -> None:
 def test_install_points_current_at_the_checkout_when_nothing_is_installed(xdg_tmp) -> None:
     fake = FakePlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0
-    assert paths.current().is_symlink()
+    assert pointer.is_pointer(paths.current())
     assert (paths.current() / "bin" / "selly-agent").is_file()
 
 

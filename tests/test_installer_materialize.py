@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import paths
+from selly_agent import paths, pointer
 from selly_agent.installer import materialize
 from selly_agent.installer.materialize import LayoutError
 
@@ -20,7 +20,7 @@ def test_install_version_populates_versions_and_points_current(xdg_tmp, tree) ->
     assert (dest / "bin" / "selly-agent").is_file()
     assert (dest / "src" / "selly_agent" / "__init__.py").is_file()
     assert (dest / "README.md").is_file()
-    assert paths.current().is_symlink()
+    assert pointer.is_pointer(paths.current())
     assert materialize.current_target() == dest.resolve()
     assert materialize.current_version() == "1.0.0"
 
@@ -111,7 +111,7 @@ def test_a_real_directory_at_current_is_refused_with_a_remedy(xdg_tmp, tree) -> 
     assert "real directory" in caught.value.message
     assert "mv " in caught.value.fix
     # Refused, not eaten.
-    assert paths.current().is_dir() and not paths.current().is_symlink()
+    assert paths.current().is_dir() and not pointer.is_pointer(paths.current())
 
 
 def test_dev_install_points_current_at_the_working_tree(xdg_tmp, tree) -> None:
@@ -128,10 +128,10 @@ def test_a_versioned_install_is_not_a_dev_install(xdg_tmp, tree) -> None:
 
 def test_swapping_never_leaves_current_absent(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
-    original = os.readlink(paths.current())
+    original = pointer.read(paths.current())
     materialize.install_version(tree, "2.0.0")
-    assert os.readlink(paths.current()) != original
-    assert paths.current().is_symlink()
+    assert pointer.read(paths.current()) != original
+    assert pointer.is_pointer(paths.current())
 
 
 # --- retention ------------------------------------------------------------------------------

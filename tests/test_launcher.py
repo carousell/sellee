@@ -55,8 +55,15 @@ def _raises(exc):
     return fail
 
 
+def _venv_interpreter_path(tree: Path) -> Path:
+    """The host's own venv layout, which is what the launcher goes looking for."""
+    if os.name == "nt":
+        return tree / ".venv" / "Scripts" / "python.exe"
+    return tree / ".venv" / "bin" / "python"
+
+
 def _make_venv(tree: Path) -> Path:
-    interpreter = tree / ".venv" / "bin" / "python"
+    interpreter = _venv_interpreter_path(tree)
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("#!/bin/sh\n")
     interpreter.chmod(0o755)
@@ -84,15 +91,15 @@ def test_the_store_interpreter_outside_the_venv_still_re_execs(launcher, tmp_pat
     gets none of the venv's packages, so it must still be corrected — the reason membership is
     decided by prefix rather than by comparing resolved interpreter paths.
     """
-    store = tmp_path / "uv-store" / "cpython-3.14" / "bin"
+    store = tmp_path / "uv-store" / "cpython-3.14" / ("Scripts" if os.name == "nt" else "bin")
     store.mkdir(parents=True)
-    real = store / "python3.14"
+    real = store / ("python3.14.exe" if os.name == "nt" else "python3.14")
     real.write_text("#!/bin/sh\n")
     real.chmod(0o755)
 
     tree = tmp_path / "tree"
-    (tree / ".venv" / "bin").mkdir(parents=True)
-    link = tree / ".venv" / "bin" / "python"
+    link = _venv_interpreter_path(tree)
+    link.parent.mkdir(parents=True)
     link.symlink_to(real)
 
     # sys.prefix when running the store interpreter directly is the store, not the venv.

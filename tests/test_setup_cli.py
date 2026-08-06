@@ -21,6 +21,7 @@ from selly_agent import (
     pass_cli,
     passes,
     paths,
+    pointer,
     secrets,
     settings_cli,
     setup_cli,
@@ -132,7 +133,7 @@ def test_a_default_install_stages_a_version_and_brings_the_daemon_up(world, caps
     version_dir = paths.versions_dir() / __version__
     assert (version_dir / "bin" / "selly-agent").is_file()
     assert materialize.current_version() == __version__
-    assert paths.shim_path().is_symlink()
+    assert pointer.shim_target(paths.shim_path()) is not None
 
     cfg = config.load()
     assert cfg.daemon_mode == "manual"
@@ -175,7 +176,7 @@ def test_a_re_run_is_idempotent(world) -> None:
     assert setup_main("--yes", "--manual") == 0
     assert setup_main("--yes", "--manual") == 0
     assert materialize.current_version() is not None
-    assert paths.shim_path().is_symlink()
+    assert pointer.shim_target(paths.shim_path()) is not None
 
 
 # --- the consent gate ---------------------------------------------------------------------------
@@ -381,6 +382,9 @@ def test_a_daemon_that_never_heartbeats_fails_with_its_own_log(world, monkeypatc
 # --- PATH -----------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
     world, monkeypatch, capsys
 ) -> None:
@@ -394,6 +398,9 @@ def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
     assert "is not on your PATH" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_no_modify_path_prints_the_line_and_leaves_the_rc_file_alone(
     world, monkeypatch, capsys
 ) -> None:
@@ -406,6 +413,9 @@ def test_no_modify_path_prints_the_line_and_leaves_the_rc_file_alone(
     assert materialize.RC_BLOCK_BODY in capsys.readouterr().out
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
     world, monkeypatch, capsys
 ) -> None:
@@ -572,6 +582,9 @@ def test_a_custom_daemon_label_is_not_replaced_by_the_default_one(world) -> None
     assert not (paths.config_dir() / "com.selly.agent.plist").exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
     world, monkeypatch, capsys
 ) -> None:
@@ -589,6 +602,9 @@ def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
     assert materialize.RC_BLOCK_BODY not in out  # never the POSIX line for fish
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch, capsys) -> None:
     monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/ksh")
@@ -601,6 +617,9 @@ def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch,
     assert not (paths.user_path("~") / ".profile").exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_an_unset_shell_says_so_rather_than_naming_nothing(world, monkeypatch, capsys) -> None:
     monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.delenv("SHELL", raising=False)

@@ -119,9 +119,20 @@ def test_download_url_needs_no_api_call():
 
 
 def _fake_uv(tmp_path: Path, listing: str) -> Path:
-    """A stand-in uv whose `python list` prints whatever a test wants it to."""
+    """A stand-in uv whose `python list` prints whatever a test wants it to.
+
+    On Windows the host runs only what PATHEXT recognises, so this is a .cmd — and the listing
+    goes to a sidecar the script types out, because every `<download available>` in it would
+    otherwise be read as a redirection.
+    """
+    if os.name == "nt":
+        fake = tmp_path / "uv.cmd"
+        sidecar = tmp_path / "uv-listing.txt"
+        sidecar.write_text(listing + "\n", encoding="utf-8")
+        fake.write_text(f'@echo off\r\ntype "{sidecar}"\r\n', encoding="utf-8")
+        return fake
     fake = tmp_path / "uv"
-    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\n")
+    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\n", encoding="utf-8")
     fake.chmod(0o755)
     return fake
 
@@ -293,8 +304,15 @@ def test_ensure_uv_reuses_our_own_previously_fetched_copy(
     monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
     ours = paths.uv_path()
     ours.parent.mkdir(parents=True, exist_ok=True)
-    ours.write_text(f"#!/bin/sh\ncat <<'EOF'\n{_FINAL}\nEOF\n")
-    ours.chmod(0o755)
+    if os.name == "nt":
+        # The path this looks for ends in .exe, and a batch file under that name is not something
+        # Windows will run. What is under test is which uv gets chosen, not whether it runs, so
+        # the probe answers for it.
+        ours.write_bytes(b"")
+        monkeypatch.setattr(runtime, "serves_pin", lambda candidate, pin: Path(candidate) == ours)
+    else:
+        ours.write_text(f"#!/bin/sh\ncat <<'EOF'\n{_FINAL}\nEOF\n", encoding="utf-8")
+        ours.chmod(0o755)
 
     def refuse(**kwargs):
         raise AssertionError("should not re-fetch a uv we already installed")
