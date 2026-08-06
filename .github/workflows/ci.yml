@@ -1,0 +1,38 @@
+# The Makefile's contract: CI is owner-managed and calls the same entry points a developer
+# does. Each job syncs the locked dependency set onto the pinned interpreter and runs one
+# Makefile target's commands directly (make itself isn't on the Windows runners).
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      # Deliberately no PYTHONUTF8 here: a user's shell doesn't set it, and forcing it
+      # would mask the locale-encoding failures the Windows job exists to surface.
+      - run: uv run --no-sync python -m pytest
+
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: uv run --no-sync ruff check .
+      - run: uv run --no-sync ruff format --check .
+      - run: uv run --no-sync pyright

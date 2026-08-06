@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 from selly_agent import config, daemon, heartbeat, lock, paths
 from selly_agent.browser import client as browser_client
@@ -104,7 +105,10 @@ def test_the_daemon_warms_the_pinned_browser_server_at_startup(monkeypatch) -> N
     thread.join(timeout=5)
 
     argv, kwargs = calls[0]
-    assert argv == ["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
+    # The program is resolved at spawn time — bare "npx" is not spawnable on Windows — so the
+    # assertion is on the tail plus a resolved head rather than on the literal argv.
+    assert Path(argv[0]).name.startswith("npx")
+    assert argv[1:] == ["--yes", browser_client.PINNED_MCP_SPEC, "--version"]
     assert kwargs["timeout"] == daemon._BROWSER_WARM_TIMEOUT_SEC
 
 

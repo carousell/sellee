@@ -6,8 +6,9 @@ subsystems land, this page becomes the index that links out to their docs.
 
 ## The one-process model
 
-selly-agent is a single long-running Python process, kept alive by the OS
-(launchd on macOS). Its runtime is provisioned rather than assumed: uv installs a
+selly-agent is a single long-running Python process, kept alive by the OS —
+launchd on macOS, a per-user scheduled task on Windows. Its runtime is provisioned
+rather than assumed: uv installs a
 standalone CPython at a pinned version plus a short, hash-locked dependency set
 into a venv owned by the install, and a guard test over `src/` imports fails
 anything outside the stdlib and that reviewed list.
@@ -15,13 +16,13 @@ Concurrency is a few threads sharing SQLite state.
 
 Everything is reachable from one front door: `bin/selly-agent` resolves the
 package and dispatches argv via `cli.py` (`daemon run/install/start/stop/status/
-uninstall`, `logs`, `chat`, `version`). launchd's job points at this launcher.
+uninstall`, `logs`, `chat`, `version`). The supervised job points at this launcher.
 
 ## Layout
 
 ```
-setup                     the installer's front door (POSIX sh; provisions uv + Python, hands over)
-install.sh                the curl bootstrap (verify a release, run its own ./setup)
+setup / setup.ps1         the installer's front doors (provision uv + Python, then hand over)
+install.sh / install.ps1  the curl/irm bootstraps (verify a release, run its own setup)
 bin/selly-agent          CLI launcher
 src/selly_agent/          the package
 tests/                    plain pytest (guards under tests/guard/)
@@ -36,8 +37,13 @@ Foundations:
 - **`paths.py`** — the single path authority. Every location is resolved here,
   honoring the XDG base directories; a guard test enforces that nothing else
   touches home/XDG.
-- **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`).
-  The "port once" boundary; no launchd string leaks past it.
+- **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`,
+  `windows.py`). Host integration only: where a job definition lives, how it is
+  registered, what it is called. No launchd or Task Scheduler string leaks past it.
+  Deliberately *not* here: anything that must answer before the host is known to be
+  supported, which lives in a portable module of its own (`paths.py` for the roots
+  and the venv layout, `lock.py`, `pointer.py`, `spawn.py`, `proc_tree.py`,
+  `images.py`).
 - **`config.py`** — reads `config.json` (missing → defaults; invalid → rejected;
   unknown keys ignored). The daemon only reads config; the installer writes it.
 
@@ -101,8 +107,10 @@ Observability — one event record, two readers. Detail in
 
 Install, update and removal — deterministic, no LLM anywhere in the path. An
 install and an update are the same operation: stage a tree into `versions/<v>`
-and move a symlink, so the default install exercises the update path on every
-machine:
+and re-point `current` at it, so the default install exercises the update path on
+every machine. `current` is a symlink where symlinks are free and a directory
+junction on Windows, where they are not — filesystem indirection either way, so
+everything that resolves a path through it stays unaware:
 
 - **`installer/ui.py`** — setup's voice. The only home of the `SELLY:` prefix; a
   CLI verb setup invokes owns its own output rather than being wrapped in a
@@ -111,7 +119,9 @@ machine:
 - **`installer/preflight.py`** — the machine gates, each split into a pure
   decision and a shim that fetches its inputs. Node native to the machine (a
   Rosetta Node is the failure this exists for), Chrome present, the `claude` CLI
-  signed in, and a tree macOS will actually let a launchd job read.
+  signed in, this install's dependencies importable, and a tree macOS will actually
+  let a launchd job read. Remediations name the platform's own installer (Homebrew
+  or winget) from one place, so a gate cannot print a command setup would not run.
 - **`installer/materialize.py`** — the versioned layout: stage, atomic rename,
   swap `current`, the `~/.local/bin` shim, retention, and the marker-fenced PATH
   block. `current` is always a symlink we own; a real directory there is refused.
@@ -210,9 +220,9 @@ writer, so a `..` segment or an outward symlink is refused before a row exists.
 Photos reach the store two ways: the channel poller downloads them on receipt
 (durable before any LLM sees them), and `import_photos` copies local files in for
 attended sessions. `carousell_ai_upload_photos` converts what needs converting —
-`sips` behind the platform seam, since stdlib cannot transform an image and the
-runtime takes no pip dependency — uploads each photo, and stamps the whole set in
-one transaction. A partial failure stamps nothing: the marketplace replaces a
+Pillow, plus pillow-heif for the HEIC an iPhone produces, both allowlisted
+runtime dependencies rather than a shelled-out per-OS tool — uploads each photo,
+and stamps the whole set in one transaction. A partial failure stamps nothing: the marketplace replaces a
 photo set wholesale, so half a set is a listing with the wrong cover.
 
 The channel subsystem — the optional bound chat (Telegram today) plus the
@@ -232,7 +242,9 @@ Lifecycle:
 - **`daemon.py`** — the process: lock, ensure dirs, run startup migrations, open
   the bus, run the scheduler; a signal drains cleanly and exits 0.
 - **`supervisor.py`** — the OS-agnostic orchestration behind
-  `daemon install/start/stop/status/uninstall`.
+  `daemon install/start/stop/status/uninstall`. The job's pinned environment goes
+  into the definition where the format carries one (the plist), and into a
+  companion `.env.json` the launcher applies where it cannot (the task XML).
 
 ## Startup, in order
 
@@ -242,12 +254,16 @@ Lifecycle:
    pending); a failure aborts startup.
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
 5. Ensure the attended MCP token; wire the always-on needs-me handlers; start the
-   localhost HTTP server (a bind failure is fatal — fail loud so launchd's
+   localhost HTTP server (a bind failure is fatal — fail loud so the supervisor's
    throttle paces respawns).
 6. Register the scheduler's tasks, start any configured channel providers, and
    run the loop, writing the heartbeat each tick.
-7. On SIGTERM/SIGINT: drain, shut down channel providers, stop the HTTP server,
-   emit `daemon.stop`, clear the lock, exit 0.
+7. On a stop request — SIGTERM/SIGINT, or `POST /control/shutdown`, which is what
+   every platform can reach and the only trigger Windows has — drain, shut down
+   channel providers, stop the HTTP server, emit `daemon.stop`, clear the lock,
+   exit 0. `daemon stop` waits for the process to be gone before reporting, and
+   kills it if it will not go: update and uninstall replace files it holds open,
+   which on Windows cannot be done at all while it does.
 
 `daemon run --once` runs a single tick and stops — the deterministic test seam.
 

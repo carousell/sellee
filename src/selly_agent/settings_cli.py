@@ -16,6 +16,7 @@ from __future__ import annotations
 import sys
 
 from selly_agent import config, control
+from selly_agent.installer import checks
 
 
 def run(args) -> int:
@@ -60,7 +61,9 @@ def _list(port: int, token: str) -> int:
     if pending:
         print("Pending changes (approve/cancel by id):")
         for p in pending:
-            print(f"  {p['change_id']}  {p['label']}: {p['current']} → {p['proposed']}")
+            print(
+                f"  {p['change_id']}  {p['label']}: {p['current']} {checks.arrow()} {p['proposed']}"
+            )
     else:
         print("No pending changes.")
     print("\nSettings:")

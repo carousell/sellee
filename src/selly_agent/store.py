@@ -363,6 +363,13 @@ PassRecord = TypedDict(
 )
 
 
+class PassProcessRecord(TypedDict):
+    pass_id: str
+    pid: int
+    created_ts: float
+    reap_after_ts: float
+
+
 class ChannelRecord(TypedDict):
     """The bound-channel singleton (see `get_channel`) — synthesized to defaults when no row
     exists yet (unbound: chat_id/bind_nonce None, update_offset 0). Holds no secret (the bot
@@ -2831,6 +2838,39 @@ class Store:
                     (_now(), *pass_ids),
                 )
         return pass_ids
+
+    def record_pass_process(
+        self, pass_id: str, *, pid: int, created_ts: float, reap_after_ts: float
+    ) -> None:
+        """Note the OS process running a pass, so a future daemon can recognise what this one
+        leaves behind if it dies. Replaces any earlier row for the pass."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO pass_processes (pass_id, pid, created_ts, reap_after_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (pass_id) DO UPDATE SET "
+                "pid = excluded.pid, created_ts = excluded.created_ts, "
+                "reap_after_ts = excluded.reap_after_ts",
+                (pass_id, pid, created_ts, reap_after_ts),
+            )
+
+    def forget_pass_process(self, pass_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM pass_processes WHERE pass_id = ?", (pass_id,))
+
+    def pass_processes(self) -> list[PassProcessRecord]:
+        """Every recorded pass process — what a daemon that died was holding when it went."""
+        return [
+            {
+                "pass_id": row["pass_id"],
+                "pid": row["pid"],
+                "created_ts": row["created_ts"],
+                "reap_after_ts": row["reap_after_ts"],
+            }
+            for row in self._db.query(
+                "SELECT pass_id, pid, created_ts, reap_after_ts FROM pass_processes "
+                "ORDER BY reap_after_ts ASC"
+            )
+        ]
 
     def has_active_channel_pass(self) -> bool:
         """True while a channel pass is queued or running — the coalescing gate: the poller only

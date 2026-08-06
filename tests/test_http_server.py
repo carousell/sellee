@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 
@@ -355,3 +356,44 @@ def test_tail_serves_the_packaged_page(server) -> None:
     assert b"event tail" in served
     # the page is a packaged asset, not an inline string — pin that wiring
     assert served == (PACKAGE_DATA_DIR / "tail.html").read_bytes()
+
+
+def test_shutdown_sets_the_stop_flag_the_signal_handlers_set(server) -> None:
+    stop = threading.Event()
+    server.stop_event = stop
+
+    status, body = _request(server, "POST", "/control/shutdown", token="attended-secret", body={})
+
+    assert status == 202
+    assert body["stopping"] is True
+    # Waited for, not asserted outright: the reply is flushed before the flag is set, so the client
+    # can be back here first. That ordering is the point — the drain closes this very server.
+    assert stop.wait(timeout=5)
+
+
+def test_shutdown_without_a_loop_to_stop_says_so(server) -> None:
+    """A single-tick run answers the route rather than pretending to stop."""
+    status, body = _request(server, "POST", "/control/shutdown", token="attended-secret", body={})
+
+    assert status == 409
+    assert "no loop" in body["error"]
+
+
+def test_binding_never_waits_on_a_reverse_dns_lookup(monkeypatch) -> None:
+    """HTTPServer.server_bind calls socket.getfqdn() to fill in a server_name we never serve.
+    It is a reverse lookup, and where the resolver has no answer it blocks — the daemon has
+    started, recorded daemon.start, and is answering nothing while it waits."""
+    import socket as socket_module
+
+    from selly_agent import http_server as module
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("server_bind asked the resolver who this machine is")
+
+    monkeypatch.setattr(socket_module, "getfqdn", refuse)
+    server = module._Server(("127.0.0.1", 0), module._Handler)
+    try:
+        assert server.server_name == "127.0.0.1"
+        assert server.server_port == server.server_address[1]
+    finally:
+        server.server_close()

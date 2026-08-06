@@ -11,7 +11,7 @@ import pytest
 
 from selly_agent import passes, skills
 from selly_agent.harness import claude
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 
 # What each pass type composes, per payload where the payload decides it. A change here should be a
 # deliberate diff, because every skill is paid on every pass of that type.

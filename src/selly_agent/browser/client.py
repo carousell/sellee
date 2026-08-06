@@ -27,7 +27,7 @@ import threading
 from collections import deque
 from contextlib import contextmanager
 
-from selly_agent import paths
+from selly_agent import paths, spawn
 
 log = logging.getLogger(__name__)
 
@@ -266,18 +266,25 @@ class BrowserClient:
             return
         try:
             proc = subprocess.Popen(  # noqa: S603 — argv is a config list, never a shell string
-                self._command,
+                spawn.resolve(self._command),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 text=True,
+                # The server frames UTF-8 JSON; the locale default would decode it in a Windows
+                # code page and kill the reader thread on the first byte it cannot map.
+                encoding="utf-8",
                 bufsize=1,
+                **spawn.windowless_flags(),
             )
         except (OSError, ValueError) as exc:
             raise BrowserUnavailable(
                 f"could not start the browser server ({self._command[0]!r} not found?) — "
                 "install Node and the Playwright MCP package, or set playwright_mcp_cmd"
             ) from exc
+        # The framing is one JSON message per "\n". Text mode would otherwise write os.linesep,
+        # putting a carriage return the server has to guess about at the end of every request.
+        proc.stdin.reconfigure(newline="")
         self._proc = proc
         self._lines = queue.Queue()
         self._stderr = deque(maxlen=_STDERR_LINES)

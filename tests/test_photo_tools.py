@@ -9,7 +9,7 @@ import pytest
 
 import selly_agent.tools  # noqa: F401  registration
 from selly_agent import paths
-from selly_agent.platform.base import ImageToolUnavailable
+from selly_agent.images import ImageToolUnavailable
 from selly_agent.rail.client import RailToolError, RailUnprovisioned
 from selly_agent.tools import photos as photo_tools
 from selly_agent.tools.registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolError, dispatch
@@ -192,17 +192,17 @@ def test_upload_unprovisioned_names_the_fix(make_ctx, store, xdg_tmp) -> None:
         )
 
 
-# --- conversion behind the platform seam --------------------------------------------------------
+# --- conversion ---------------------------------------------------------------------------------
 
 
 def test_a_jpeg_uploads_untransformed(make_ctx, store, xdg_tmp, monkeypatch) -> None:
-    """The channel case — Telegram already hands us JPEG — must never depend on an image tool,
-    which is also why the suite runs on a non-Mac box."""
+    """The channel case — Telegram already hands us JPEG — must not re-encode: a photo the rail
+    already accepts, at a size it will take, goes as it arrived."""
 
-    def explode():
-        raise AssertionError("the platform image tool must not be consulted for a JPEG")
+    def explode(*_args, **_kwargs):
+        raise AssertionError("an acceptable photo must not be converted")
 
-    monkeypatch.setattr(photo_tools, "get_platform", explode)
+    monkeypatch.setattr(photo_tools.images, "to_jpeg", explode)
     rail = FakeRail()
     item = _item_with_photos(store, names=("a.jpg",))
     dispatch(
@@ -213,16 +213,15 @@ def test_a_jpeg_uploads_untransformed(make_ctx, store, xdg_tmp, monkeypatch) -> 
     assert rail.uploads == [(JPEG, "image/jpeg")]
 
 
-def test_a_heic_is_converted_through_the_platform(make_ctx, store, xdg_tmp, monkeypatch) -> None:
+def test_a_heic_is_converted_before_upload(make_ctx, store, xdg_tmp, monkeypatch) -> None:
     converted = []
 
-    class FakePlatform:
-        def to_jpeg(self, src, dest, max_dim):
-            converted.append((Path(src).name, max_dim))
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(JPEG)
+    def fake_to_jpeg(src, dest, max_dim):
+        converted.append((Path(src).name, max_dim))
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(JPEG)
 
-    monkeypatch.setattr(photo_tools, "get_platform", FakePlatform)
+    monkeypatch.setattr(photo_tools.images, "to_jpeg", fake_to_jpeg)
     rail = FakeRail()
     item = _item_with_photos(store, names=("a.heic",), data=HEIC)
     dispatch(
@@ -237,11 +236,10 @@ def test_a_heic_is_converted_through_the_platform(make_ctx, store, xdg_tmp, monk
 def test_a_missing_image_tool_names_the_file_and_stamps_nothing(
     make_ctx, store, xdg_tmp, monkeypatch
 ) -> None:
-    class NoTool:
-        def to_jpeg(self, src, dest, max_dim):
-            raise ImageToolUnavailable(f"cannot convert {Path(src).name}: `sips` is not available")
+    def fail(src, dest, max_dim):
+        raise ImageToolUnavailable(f"cannot convert {Path(src).name}: not an image")
 
-    monkeypatch.setattr(photo_tools, "get_platform", NoTool)
+    monkeypatch.setattr(photo_tools.images, "to_jpeg", fail)
     item = _item_with_photos(store, names=("a.heic",), data=HEIC)
     with pytest.raises(ToolError, match="cannot convert a.heic"):
         dispatch(
@@ -253,12 +251,11 @@ def test_a_missing_image_tool_names_the_file_and_stamps_nothing(
 
 
 def test_conversion_leaves_no_derived_copies_behind(make_ctx, store, xdg_tmp, monkeypatch) -> None:
-    class FakePlatform:
-        def to_jpeg(self, src, dest, max_dim):
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(JPEG)
+    def fake_to_jpeg(src, dest, max_dim):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(JPEG)
 
-    monkeypatch.setattr(photo_tools, "get_platform", FakePlatform)
+    monkeypatch.setattr(photo_tools.images, "to_jpeg", fake_to_jpeg)
     item = _item_with_photos(store, names=("a.heic",), data=HEIC)
     dispatch(
         "carousell_ai_upload_photos",

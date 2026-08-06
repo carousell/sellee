@@ -61,8 +61,18 @@ def read_rules(spec: PassSpec) -> tuple:
     `Read(//abs/path)` is the harness's rule syntax: gitignore-style, `//` anchoring at the
     filesystem root (a single `/` would anchor at the settings file). An exact path grants exactly
     one file — how a pass gets eyes on a claimed photo without any wider file access.
+
+    Always spelled with forward slashes: the patterns are gitignore-style, where a backslash is
+    an escape, so a Windows path is converted before it becomes a rule. That form
+    (`Read(//C:/Users/...)`) is provisional until verified against the harness's matcher on a
+    real Windows machine.
     """
-    return tuple(f"{READ_TOOL}(/{path})" for path in spec.readable_paths)
+    return tuple(f"{READ_TOOL}({_rule_path(path)})" for path in spec.readable_paths)
+
+
+def _rule_path(path: str) -> str:
+    slashed = str(path).replace("\\", "/")
+    return f"/{slashed}" if slashed.startswith("/") else f"//{slashed}"
 
 
 def allowed_tools(spec: PassSpec) -> tuple:
@@ -99,6 +109,10 @@ def settings_json(spec: PassSpec) -> dict:
     }
 
 
+# Opens every pass prompt, naming what the session is to anyone reading a transcript later.
+PASS_PROMPT_MARKER = "selly-agent headless pass"
+
+
 def render_workspace(spec: PassSpec) -> dict:
     """The workspace files as a {relative_path: text} map. The runner writes these into an empty
     per-pass directory whose only contents are these files (nothing to escape to)."""
@@ -111,8 +125,16 @@ def render_workspace(spec: PassSpec) -> dict:
 
 
 def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
-    """The full `claude -p` argv. --allowedTools is last (it greedily consumes following args)."""
-    argv = [claude_bin, "-p", spec.prompt]
+    """The full `claude -p` argv, prompt excluded — that arrives on stdin.
+
+    Two reasons it is not an argument. Windows caps a command line at about 32,000 characters, and
+    a composed prompt carrying a conversation plus a photo list can pass that; the failure would be
+    a spawn that dies with nothing to read. And a prompt in argv is a prompt in every process
+    listing on the machine.
+
+    --allowedTools is last, since it greedily consumes the arguments after it.
+    """
+    argv = [claude_bin, "-p"]
     if spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
     argv += ["--strict-mcp-config", "--mcp-config", json.dumps(mcp_config(spec), sort_keys=True)]
@@ -191,8 +213,10 @@ def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
 
 
 def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
-    if argv[1] != "-p" or argv[2] != spec.prompt:
-        raise ValueError("argv does not lead with -p <prompt>")
+    if argv[1] != "-p":
+        raise ValueError("argv does not lead with -p")
+    if spec.prompt in argv:
+        raise ValueError("the prompt must reach the harness on stdin, not in argv")
     if "--strict-mcp-config" not in argv:
         raise ValueError("argv is missing --strict-mcp-config")
     _validate_servers(spec, json.loads(argv[argv.index("--mcp-config") + 1]))

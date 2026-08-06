@@ -3,32 +3,38 @@
 Single-flight by construction — the scheduler's in-flight guard plus a claim that stamps `running`
 in one transaction mean two claimers never take the same row, and a crash mid-pass is failed
 loudly by the stale-running sweep (never silently re-run). Each pass runs in an empty per-pass
-workspace holding only its generated harness config; its stdout (stream-json) is parsed live into
-bus events, a babysitter enforces the deadline and daemon-stop via a process-group kill, and every
-attempt is ledgered as pass.start / pass.end so a lane that fails every attempt is visible.
+workspace holding only its generated harness config; its prompt arrives on stdin and its stdout
+(stream-json) is parsed live into bus events, a babysitter enforces the deadline and daemon-stop by
+killing the whole process tree, and every attempt is ledgered as pass.start / pass.end so a lane
+that fails every attempt is visible.
 """
 
 from __future__ import annotations
 
 import logging
-import os
 import shutil
 import subprocess
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
 
-from selly_agent import marketplaces, paths, settings, skills
+from selly_agent import marketplaces, paths, settings, skills, spawn
 from selly_agent import reply_prompt as reply_prompt_mod
 from selly_agent.browser import client as browser_client
 from selly_agent.browser import markets as market_adapters
 from selly_agent.channel import prompt as channel_prompt_mod
 from selly_agent.harness import claude
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 from selly_agent.harness.model import PassSpec, StdioServer
 from selly_agent.pass_stream import is_cap_hit, parse_stream_line
-from selly_agent.proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
+from selly_agent.proc_tree import (
+    confirm_dead,
+    creation_time,
+    finished_records,
+    reap_strays,
+)
 from selly_agent.store import Scope
 from selly_agent.tools import (
     TIER_PASS_CHANNEL,
@@ -399,7 +405,6 @@ class PassDeps:
     http_endpoint: str
     stop_event: threading.Event
     argv_builder: Callable[[PassSpec], list]
-    tracked_pgids: set = field(default_factory=set)
     now: Callable[[], float] = time.time
 
 
@@ -466,7 +471,7 @@ def _write_workspace(workspace: Path, spec: PassSpec) -> None:
     for rel, content in claude.render_workspace(spec).items():
         path = workspace / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(content)
+        path.write_text(content, encoding="utf-8")
 
 
 def _stage_photos(workspace: Path, payload: dict, store) -> tuple:
@@ -520,11 +525,11 @@ def _babysitter(proc, deadline_sec: float, stop_event, killed: dict, paused_chec
         now = time.monotonic()
         if now - start >= deadline_sec:
             killed["timeout"] = True
-            confirm_dead(proc)
+            killed["survivors"] = not confirm_dead(proc)
             return
         if stop_event is not None and stop_event.is_set():
             killed["stopped"] = True
-            confirm_dead(proc)
+            killed["survivors"] = not confirm_dead(proc)
             return
         # A pause interrupts a running pass within one watch window — safe because cursors/pacing
         # make the killed step re-runnable, so nothing is half-done.
@@ -532,7 +537,7 @@ def _babysitter(proc, deadline_sec: float, stop_event, killed: dict, paused_chec
             last_pause_check = now
             if paused_check():
                 killed["paused"] = True
-                confirm_dead(proc)
+                killed["survivors"] = not confirm_dead(proc)
                 return
         time.sleep(_BABY_POLL_SEC)
 
@@ -582,7 +587,6 @@ def run_pass(deps: PassDeps, claimed) -> str:
     deps.bus.publish("pass.start", {"type": claimed.type}, pass_id=pass_id)
 
     proc = None
-    pgid = None
     try:
         try:
             spec = build_spec(
@@ -609,6 +613,10 @@ def run_pass(deps: PassDeps, claimed) -> str:
         _write_workspace(workspace, spec)
         if claimed.type == "publish":
             _stage_photos(workspace, payload, deps.store)
+        # Declared before anything can raise: the finally below reads it to decide whether the
+        # ledger record is safe to delete, and a spawn that never got as far as a process has
+        # nothing left running to keep a record for.
+        killed: dict = {}
         try:
             argv = deps.argv_builder(spec)
         except SpawnError as exc:
@@ -627,21 +635,19 @@ def run_pass(deps: PassDeps, claimed) -> str:
             proc = subprocess.Popen(  # noqa: S603 — argv is composed by our emitter, not a shell
                 argv,
                 cwd=str(workspace),
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=errf,
                 text=True,
+                # Explicit, not the locale's: the harness speaks UTF-8 on both pipes, and the
+                # Windows locale default is a code page that cannot carry a seller's message.
+                encoding="utf-8",
                 bufsize=1,
-                start_new_session=True,
+                **spawn.detached_flags(),
             )
-            try:
-                pgid = os.getpgid(proc.pid)
-                deps.tracked_pgids.add(pgid)
-            except OSError:
-                pgid = None
+            _record_process(deps, pass_id, proc.pid, reap_after_ts=expiry)
 
             holder: dict = {}
-            killed: dict = {}
             reader = threading.Thread(
                 target=_reader, args=(proc, deps.bus, pass_id, holder), daemon=True
             )
@@ -652,6 +658,9 @@ def run_pass(deps: PassDeps, claimed) -> str:
             )
             reader.start()
             baby.start()
+            # After the reader is up: a prompt larger than the pipe buffer would otherwise block
+            # here while nothing was draining the harness's output.
+            _send_prompt(proc, spec.prompt)
             rc = proc.wait()
             reader.join(timeout=5)
             baby.join(timeout=_GRACE_JOIN_SEC)
@@ -677,9 +686,47 @@ def run_pass(deps: PassDeps, claimed) -> str:
         return cls
     finally:
         deps.auth.revoke_pass_token(token)
-        if pgid is not None:
-            deps.tracked_pgids.discard(pgid)
+        if not killed.get("survivors"):
+            # Children outlived the kill, so the record stays: it is the only thing that lets the
+            # stray reaper find them on a later tick, which is what the ledger is for.
+            deps.store.forget_pass_process(pass_id)
         _cleanup_workspace(workspace)
+
+
+def _send_prompt(proc, prompt: str) -> None:
+    """Hand the harness its prompt and close stdin, which is what tells it the prompt is complete.
+
+    A harness that has already died is not an error here: it exits on its own terms and the
+    classifier reads the return code. Any other write failure is loud — a live harness whose
+    prompt was lost would otherwise sit reading stdin until the babysitter kills it. stdin is
+    closed no matter what, so it at least reads EOF rather than waiting.
+    """
+    try:
+        proc.stdin.write(prompt)
+    except OSError:
+        log.debug("could not write the prompt to the harness; it is no longer reading")
+    except ValueError:
+        log.warning("the prompt was not delivered to the harness", exc_info=True)
+    finally:
+        try:
+            proc.stdin.close()
+        except (OSError, ValueError):
+            pass
+
+
+def _record_process(deps: PassDeps, pass_id: str, pid: int, *, reap_after_ts: float) -> None:
+    """Record the spawned process so a later daemon can recognise it if this one dies holding it.
+
+    The creation time comes from the OS rather than the clock, because it is what tells this
+    process apart from a future one that inherits its PID. A process that has already exited is
+    not recorded: there is nothing left to reap, and reading its creation time would fail anyway.
+    """
+    created_ts = creation_time(pid)
+    if created_ts is None:
+        return
+    deps.store.record_pass_process(
+        pass_id, pid=pid, created_ts=created_ts, reap_after_ts=reap_after_ts
+    )
 
 
 def _spawn_error(deps: PassDeps, claimed, pass_id: str, reason: str) -> str:
@@ -710,11 +757,20 @@ def pass_lane(deps: PassDeps) -> None:
 
 
 def stray_reaper(deps: PassDeps) -> None:
-    for stray in reap_strays(deps.tracked_pgids, deadline_slack(deps.config)):
-        deps.bus.publish(
-            "pass.reaped",
-            {"pid": stray["pid"], "pgid": stray["pgid"], "age_sec": stray["age_sec"]},
-        )
+    """Kill pass processes a daemon died holding, and forget them.
+
+    The records outlive the daemon that wrote them, which is the point: a pass whose daemon was
+    killed mid-flight keeps working the seller's account with nobody watching, and the next daemon
+    to start is the one that can end it.
+    """
+    records = deps.store.pass_processes()
+    now = deps.now()
+    for stray in reap_strays(records, now=now):
+        deps.store.forget_pass_process(stray["pass_id"])
+        deps.bus.publish("pass.reaped", {"pid": stray["pid"]}, pass_id=stray["pass_id"])
+    # No event for these: nothing was killed, the row is simply spent.
+    for finished in finished_records(records, now=now):
+        deps.store.forget_pass_process(finished["pass_id"])
 
 
 def deadline_slack(config) -> float:

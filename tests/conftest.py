@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import stat
 import time
+from pathlib import Path
 
 import pytest
 
@@ -139,12 +142,30 @@ def make_ctx(bus, store, xdg_tmp):
     return _make
 
 
+def assert_private(path, mode: int = 0o600) -> None:
+    """Assert that only the owner can reach `path`, where the OS enforces that with a mode.
+
+    Windows has none to assert: privacy there rests on the user profile that %LOCALAPPDATA% sits
+    inside, which is the same protection Claude Code relies on for its own credentials. Asserting
+    0600 there would fail on a file that is already as private as the platform makes files.
+    """
+    if os.name == "nt":
+        return
+    assert stat.S_IMODE(Path(path).stat().st_mode) == mode
+
+
 @pytest.fixture
 def xdg_tmp(tmp_path, monkeypatch):
-    """Point HOME and every XDG_*_HOME at a fresh tmpdir so path resolution is hermetic."""
+    """Point the home directory and every XDG_*_HOME at a fresh tmpdir so path resolution is
+    hermetic.
+
+    Both spellings of home, because Path.home() reads USERPROFILE on Windows: setting only HOME
+    there would leave nearly every test writing into the real profile.
+    """
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
     monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path / "state"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
@@ -167,6 +188,8 @@ def tree(tmp_path):
     (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '9.9.9'\n")
     (root / "src" / "selly_agent" / "__pycache__" / "stale.pyc").write_text("junk")
     (root / "README.md").write_text("docs\n")
+    (root / "setup").write_text("#!/bin/sh\n")
+    (root / "setup.ps1").write_text("# windows front door\n")
     (root / "pyproject.toml").write_text("[project]\nname = 'selly-agent'\n")
     (root / "uv.lock").write_text("version = 1\n")
     (root / ".python-version").write_text("3.14\n")
@@ -198,3 +221,23 @@ def stub_provision(monkeypatch):
 
     monkeypatch.setattr(runtime, "provision", fake)
     return provisioned
+
+
+@pytest.fixture(autouse=True)
+def no_real_user_path_writes(monkeypatch):
+    """Stand in for editing the account's own PATH in the Windows registry.
+
+    Autouse for the same reason as stub_provision: a test that reaches this on a real Windows
+    machine edits the person running it, and every `--yes` setup test would leave a dead tmp
+    directory behind on their account. A test that is genuinely about the writer replaces it
+    with its own fake, which lands after this one and so wins.
+    """
+    from selly_agent.installer import materialize
+
+    def refuse(value):
+        raise AssertionError(
+            "a test reached the real user-PATH writer — patch materialize._write_user_path "
+            f"if that is the subject, or the test would edit this account's PATH: {value!r}"
+        )
+
+    monkeypatch.setattr(materialize, "_write_user_path", refuse)

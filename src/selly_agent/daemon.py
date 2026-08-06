@@ -31,6 +31,7 @@ from selly_agent import (
     retention,
     secrets,
     settings,
+    spawn,
 )
 from selly_agent.browser import chrome, inbox
 from selly_agent.browser import client as browser_client
@@ -76,14 +77,16 @@ CHROME_STARTED_NOTICE = (
 )
 
 
-def ensure_chrome(cfg, store, bus) -> None:
+def ensure_chrome(cfg, store, bus, should_stop=None) -> None:
     """Make Chrome answer on its CDP port, or raise `BrowserUnavailable` with the by-hand command.
 
     Acquiring the browser means ensuring it runs: this is the one place that rule lives, called on
     every acquisition because Chrome can be closed at any moment after the client is built. A launch
     queues the seller notice before anything drives the window, so it never appears unexplained.
     """
-    state = chrome.ensure_running(cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin)
+    state = chrome.ensure_running(
+        cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin, should_stop=should_stop
+    )
     if state == chrome.UNAVAILABLE:
         raise browser_client.BrowserUnavailable(
             chrome.bring_up_hint(cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin)
@@ -111,7 +114,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
         return None
 
     def warm() -> None:
-        argv = ["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
+        argv = spawn.resolve(["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"])
         try:
             proc = subprocess.run(
                 argv,
@@ -119,6 +122,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
                 text=True,
                 check=False,
                 timeout=_BROWSER_WARM_TIMEOUT_SEC,
+                **spawn.windowless_flags(),
             )
         except (OSError, subprocess.SubprocessError) as exc:
             log.warning("could not warm %s: %s", browser_client.PINNED_MCP_SPEC, exc)
@@ -138,7 +142,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
     return thread
 
 
-def make_browser_factory(cfg, store, bus, holder: dict):
+def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
 
@@ -153,7 +157,7 @@ def make_browser_factory(cfg, store, bus, holder: dict):
             browser_client.cdp_endpoint(cfg.chrome_cdp_port)
         )
         browser_client.ensure_available(command)
-        ensure_chrome(cfg, store, bus)
+        ensure_chrome(cfg, store, bus, should_stop)
         client = holder.get("client")
         if client is None:
             client = browser_client.BrowserClient(command=command)
@@ -165,12 +169,18 @@ def make_browser_factory(cfg, store, bus, holder: dict):
 
 def _setup_logging(level_name: str) -> None:
     level = getattr(logging, level_name, logging.INFO)
-    logging.basicConfig(
-        level=level,
-        stream=sys.stderr,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-        force=True,
-    )
+    fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    if sys.stderr is None:
+        # A windowless interpreter (pythonw) has no stderr, and the scheduled task that starts
+        # the daemon there does no output redirection the way launchd does — so the daemon owns
+        # its log file, at the same path the macOS supervisor redirects to.
+        log_path = paths.logs_dir() / "agent.err.log"
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=level, filename=str(log_path), encoding="utf-8", format=fmt, force=True
+        )
+        return
+    logging.basicConfig(level=level, stream=sys.stderr, format=fmt, force=True)
 
 
 def _install_signal_handlers(stop: threading.Event) -> None:
@@ -248,7 +258,7 @@ def run_daemon(*, once: bool) -> int:
     # factory so a machine with no Node still starts, with its browser lanes reporting unavailable
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
-    browser_factory = make_browser_factory(cfg, store, bus, browser_holder)
+    browser_factory = make_browser_factory(cfg, store, bus, browser_holder, stop.is_set)
     warm_browser_server(cfg, once=once)
 
     def reply_sink_factory():
@@ -311,6 +321,7 @@ def run_daemon(*, once: bool) -> int:
             attended_token=attended_token,
             config=cfg,
             channels=channels,
+            stop_event=stop,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from tests.test_supervisor import FakePlatform
 
@@ -40,7 +42,11 @@ def test_a_full_uninstall_leaves_nothing_of_ours_behind(installed) -> None:
     assert not paths.shim_path().exists()
     assert not installed.is_registered("com.selly.agent")
     assert not (paths.launch_agents_dir(platform=installed) / "com.selly.agent.plist").exists()
-    assert not materialize.rc_block_present(materialize.shell_rc_target("/bin/zsh").read_text())
+    if os.name != "nt":
+        # The rc block is the POSIX PATH door; on Windows the entry lives in the registry and
+        # uninstall takes it from there instead, which the materialize tests cover.
+        rc = materialize.shell_rc_target("/bin/zsh").read_text(encoding="utf-8")
+        assert not materialize.rc_block_present(rc)
 
 
 def test_after_uninstalling_a_fresh_install_is_not_blocked(installed) -> None:
@@ -99,3 +105,16 @@ def test_a_foreign_plist_with_our_label_is_left_alone(installed) -> None:
     uninstall_main("--yes")
 
     assert plist.read_text() == "<plist>someone else's daemon</plist>"
+
+
+def test_what_cannot_be_removed_is_named_rather_than_silent(installed, monkeypatch, capsys) -> None:
+    """rmtree swallows what it cannot delete — and on Windows that is guaranteed to include the
+    interpreter the uninstall itself runs on, so the report is the honesty, not an edge case."""
+    monkeypatch.setattr(uninstall_cli, "_remove", lambda target: None)
+
+    assert uninstall_main("--yes") == 0
+
+    out = capsys.readouterr().out
+    assert "could not remove everything" in out
+    assert str(paths.state_dir()) in out
+    assert "Done, with the leftovers named above." in out

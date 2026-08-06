@@ -17,6 +17,8 @@ import os
 import shutil
 import sys
 
+from selly_agent import host
+
 # The banner is skipped below this width rather than wrapped: a wrapped banner is unreadable
 # noise, and the one-line fallback carries the same information.
 BANNER_MIN_COLUMNS = 64
@@ -83,7 +85,20 @@ class Ui:
     def _detect_color(self) -> bool:
         if os.environ.get("NO_COLOR"):
             return False
-        return bool(getattr(self.stream, "isatty", lambda: False)())
+        if not getattr(self.stream, "isatty", lambda: False)():
+            return False
+        if not host.windows():
+            return True
+        # A classic Windows console does not process VT sequences unless its host enabled them,
+        # and raw escape bytes are worse than no colour. These are the hosts known to render
+        # them; a bare conhost/cmd.exe gets plain text.
+        return bool(
+            os.environ.get("WT_SESSION")
+            or os.environ.get("TERM_PROGRAM")
+            or os.environ.get("ANSICON")
+            or os.environ.get("ConEmuANSI") == "ON"
+            or "xterm" in (os.environ.get("TERM") or "")
+        )
 
     @property
     def width(self) -> int:
@@ -122,11 +137,26 @@ class Ui:
         print(self._paint(f"warn: {text}", _YELLOW), file=self.stream)
 
     def banner(self, version: str) -> None:
-        if self.width < BANNER_MIN_COLUMNS:
+        if self.width < BANNER_MIN_COLUMNS or not self._can_encode(BANNER[0]):
             print(self._paint(f"Selly v{version}", _BOLD_TEAL), file=self.stream)
             return
         for line in BANNER:
             print(self._paint(line, _TEAL), file=self.stream)
+
+    def _can_encode(self, text: str) -> bool:
+        """Whether this terminal can print `text` at all.
+
+        A legacy Windows console runs a code page that has none of the box-drawing characters, and
+        printing them there does not degrade — it raises UnicodeEncodeError partway through the
+        first line of the installer. Asked rather than assumed, so a console that *can* show them
+        still does.
+        """
+        encoding = getattr(self.stream, "encoding", None) or "utf-8"
+        try:
+            text.encode(encoding)
+        except (UnicodeEncodeError, LookupError):
+            return False
+        return True
 
     def fatal(self, exc: Abort) -> None:
         """Render an Abort. The only place a fatal error is printed."""

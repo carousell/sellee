@@ -23,6 +23,37 @@ def venv_interpreter(tree):
     return os.path.join(tree, ".venv", "bin", "python")
 
 
+def _die(message):
+    if sys.stderr is not None:  # a windowless interpreter has none
+        sys.stderr.write(f"selly-agent: {message}\n")
+    raise SystemExit(2)
+
+
+def apply_env_file(argv, environ):
+    """Apply and strip a --env-file argument — the supervised job's pinned environment.
+
+    The scheduled task that starts the daemon on Windows cannot carry environment variables in
+    its definition, so the supervisor records them in a companion file and names it in the job's
+    arguments. Applied here, before the re-exec (the venv child inherits it) and before anything
+    resolves a path. A named file that cannot be read is a broken install, and the daemon must
+    not come up resolving a different world's paths — so that fails rather than proceeds.
+    """
+    if "--env-file" not in argv:
+        return argv
+    index = argv.index("--env-file")
+    if index + 1 >= len(argv):
+        _die("--env-file needs a path")
+    import json
+
+    try:
+        with open(argv[index + 1], encoding="utf-8") as fh:
+            environment = json.load(fh)
+    except (OSError, ValueError) as exc:
+        _die(f"could not read the recorded job environment at {argv[index + 1]}: {exc}")
+    environ.update({str(key): str(value) for key, value in environment.items()})
+    return argv[:index] + argv[index + 2 :]
+
+
 def reexec_target(tree, prefix=None):
     """The interpreter to re-exec onto, or None to carry on with this one.
 
@@ -45,9 +76,21 @@ def reexec_target(tree, prefix=None):
 _here = os.path.dirname(os.path.realpath(__file__))
 _tree = os.path.dirname(_here)
 
+sys.argv = apply_env_file(sys.argv, os.environ)
 _target = reexec_target(_tree)
 if _target is not None:
-    os.execv(_target, [_target, os.path.realpath(__file__), *sys.argv[1:]])
+    _argv = [_target, os.path.realpath(__file__), *sys.argv[1:]]
+    if os.name == "nt":
+        # Windows has no exec that replaces the caller: it would start the real process and let
+        # this one return, so the command would appear to finish while the work was elsewhere.
+        # Ctrl+C belongs to the child while this parent waits — run() would otherwise answer the
+        # interrupt by killing the child it handed the terminal to.
+        import signal
+        import subprocess
+
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        raise SystemExit(subprocess.run(_argv).returncode)
+    os.execv(_target, _argv)
 
 _src = os.path.join(_tree, "src")
 if _src not in sys.path:
@@ -55,5 +98,28 @@ if _src not in sys.path:
 
 from selly_agent.cli import main  # noqa: E402 — sys.path must be set first
 
+
+def dispatch(argv):
+    """Run the CLI, turning a missing dependency into the instruction that fixes it.
+
+    Subcommands import lazily, so a tree whose venv was never built fails several frames into a
+    command with a traceback naming psutil — and nothing naming setup. Our own modules are
+    re-raised, since a missing one of those is a broken install rather than an unbuilt one.
+    """
+    try:
+        return main(argv)
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").startswith("selly_agent"):
+            raise
+        door = "setup.ps1" if os.name == "nt" else "setup"
+        if sys.stderr is not None:  # a windowless interpreter has none, as _die knows
+            sys.stderr.write(
+                f"selly-agent: cannot import {exc.name} — this install's dependencies are not "
+                f"in place yet.\nRun {os.path.join(_tree, door)} to build them, or "
+                f"`make bootstrap` in a checkout.\n"
+            )
+        return 1
+
+
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    sys.exit(dispatch(sys.argv))

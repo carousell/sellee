@@ -2,22 +2,17 @@
 
 from __future__ import annotations
 
-import stat
-
 import pytest
+from tests.conftest import assert_private
 
 from selly_agent import paths, secrets
-
-
-def _mode(path) -> int:
-    return stat.S_IMODE(path.stat().st_mode)
 
 
 def test_write_and_read_round_trip_with_0600(xdg_tmp) -> None:
     path = paths.mcp_token_path()
     secrets.write_secret(path, "abc123")
     assert secrets.read_secret(path) == "abc123"
-    assert _mode(path) == 0o600
+    assert_private(path)
     assert not path.with_name(path.name + ".tmp").exists()
 
 
@@ -43,11 +38,11 @@ def test_malformed_values_rejected_never_sanitized(xdg_tmp, bad) -> None:
 def test_ensure_mcp_token_generates_once_then_stays_stable(xdg_tmp) -> None:
     token = secrets.ensure_mcp_token()
     assert token
-    assert _mode(paths.mcp_token_path()) == 0o600
+    assert_private(paths.mcp_token_path())
     assert secrets.ensure_mcp_token() == token
 
 
 def test_carousell_ai_key_helpers(xdg_tmp) -> None:
     secrets.write_carousell_ai_api_key("key-xyz")
     assert secrets.read_carousell_ai_api_key() == "key-xyz"
-    assert _mode(paths.carousell_ai_api_key_path()) == 0o600
+    assert_private(paths.carousell_ai_api_key_path())

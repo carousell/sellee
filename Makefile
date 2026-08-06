@@ -43,7 +43,7 @@ dist:
 	@cp -R bin src $(STAGE)/
 	@cp README.md $(STAGE)/ 2>/dev/null || true
 	@cp LICENSE $(STAGE)/ 2>/dev/null || true
-	@cp setup $(STAGE)/
+	@cp setup setup.ps1 $(STAGE)/
 # The runtime description travels with the release: without these a version cannot install its
 # own dependencies. Kept in step with VERSION_FILES in installer/materialize.py, which a test pins.
 	@cp pyproject.toml uv.lock .python-version $(STAGE)/

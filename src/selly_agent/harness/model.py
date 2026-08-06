@@ -7,6 +7,7 @@ emitter or (worse) at spawn time.
 
 from __future__ import annotations
 
+import os.path
 from dataclasses import dataclass
 
 
@@ -69,7 +70,9 @@ class PassSpec:
         if not self.server_name or not self.server_name.replace("-", "").replace("_", "").isalnum():
             raise ValueError("PassSpec.server_name must be an identifier")
         for path in self.readable_paths:
-            if not str(path).startswith("/"):
+            # By the host's own rule, not a leading-slash check — a resolved Windows path is
+            # C:\..., which is absolute and starts with no slash at all.
+            if not os.path.isabs(str(path)):
                 raise ValueError("PassSpec.readable_paths entries must be absolute paths")
         if self.browser_server is not None:
             if self.browser_server.name == self.server_name:

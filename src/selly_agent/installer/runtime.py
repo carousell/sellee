@@ -17,12 +17,14 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import re
 import shutil
 import subprocess
 import sys
 import tarfile
 import tempfile
+import time
 import urllib.error
 import urllib.request
 import zipfile
@@ -239,10 +241,36 @@ def fetch_uv(*, pin_file: Path | None = None) -> Path:
         _extract_binary(archive, staged)
         staged.chmod(0o755)
         destination.parent.mkdir(parents=True, exist_ok=True)
-        # Replace rather than write in place: a half-written binary must never be runnable.
-        shutil.move(str(staged), str(destination))
+        # Staged beside the destination and renamed onto it, so a half-written binary is never
+        # runnable at the final name. shutil.move does not promise that: re-fetching over an
+        # existing uv.exe hits FileExistsError inside the rename on Windows and falls back to
+        # copy-then-unlink, which is exactly the window this avoids — and the same fallback runs
+        # whenever the scratch directory is on another filesystem.
+        beside = destination.with_name(destination.name + ".new")
+        retry_permission_denied(lambda: shutil.copy2(staged, beside))
+        retry_permission_denied(lambda: os.replace(beside, destination))
     log.info("installed uv %s at %s", version, destination)
     return destination
+
+
+_REPLACE_ATTEMPTS = 5
+_REPLACE_BACKOFF_SEC = 0.5
+
+
+def retry_permission_denied(operation):
+    """Run `operation`, retrying briefly on PermissionError.
+
+    On Windows an antivirus scanner holds a just-closed file for a moment; an install or rollback
+    that dies on that moment leaves the tree half-replaced, which is the one state these paths
+    exist to prevent.
+    """
+    for attempt in range(_REPLACE_ATTEMPTS):
+        try:
+            return operation()
+        except PermissionError:
+            if attempt == _REPLACE_ATTEMPTS - 1:
+                raise
+            time.sleep(_REPLACE_BACKOFF_SEC * (attempt + 1))
 
 
 def ensure_uv(tree: Path, *, pin_file: Path | None = None) -> Path:
@@ -337,7 +365,8 @@ def describe(tree: Path) -> dict:
     if present:
         code, out, err = _run([interpreter, "-c", "import psutil; print(psutil.__version__)"])
         dependency_ok = code == 0
-        detail = out.strip() if dependency_ok else err.strip().splitlines()[-1:][0] if err else ""
+        lines = (out if dependency_ok else err).strip().splitlines()
+        detail = lines[-1] if lines else ""
     return {
         "interpreter": str(interpreter),
         "present": present,

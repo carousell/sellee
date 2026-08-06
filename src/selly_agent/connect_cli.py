@@ -28,6 +28,7 @@ import sys
 import time
 
 from selly_agent import config, control
+from selly_agent.installer import checks
 
 _POLL_INTERVAL_SEC = 1.0
 # Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
@@ -76,7 +77,7 @@ def run(args) -> int:
 # the answer every time it is asked. So this verb is re-runnable forever and has nothing to undo.
 
 _MARKET_STATE_MESSAGES = {
-    "logged_in": "✅ Signed in to {name}.",
+    "logged_in": "{mark} Signed in to {name}.",
     "unknown": "I can't tell whether you're signed in to {name} — I'll confirm the first time I "
     "list something there.",
     "logged_out": "I still see a login screen on {name}. Sign in on that tab and re-run this "
@@ -118,7 +119,7 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     name = _display_name(market)
     state = body.get("state")
     if state == "logged_in":
-        print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
+        print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name, mark=checks.glyph(checks.OK)))
         return 0
 
     print(f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
@@ -131,7 +132,11 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
             return 1
         state = _probe_market(port, mcp_token, market)
 
-    print(_MARKET_STATE_MESSAGES.get(state or "unknown", "").format(name=name))
+    print(
+        _MARKET_STATE_MESSAGES.get(state or "unknown", "").format(
+            name=name, mark=checks.glyph(checks.OK)
+        )
+    )
     return 0 if state == "logged_in" else 1
 
 

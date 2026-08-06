@@ -4,21 +4,23 @@ Install and update are the same operation here — an install is an update into 
 `versions/` — so both go through one module and the default install exercises, on every machine,
 exactly the path an update will later take.
 
-Two invariants shape everything below. `current` is *always* a symlink we own: a real directory
-there is someone else's (or a half-finished copy), and replacing it silently is how an install
-eats a tree it did not create, so it is refused with a remediation instead. And a version
-directory becomes visible only by rename: the copy lands beside its destination and is moved into
-place in one step, so a crash mid-copy leaves a stray `.tmp` and a still-working install rather
-than a half-populated version that `current` already points at.
+Two invariants shape everything below. `current` is *always* a pointer we own — a symlink, or a
+junction where symlinks need privileges: a real directory there is someone else's (or a
+half-finished copy), and replacing it silently is how an install eats a tree it did not create, so
+it is refused with a remediation instead. And a version directory becomes visible only by rename:
+the copy lands beside its destination and is moved into place in one step, so a crash mid-copy
+leaves a stray `.tmp` and a still-working install rather than a half-populated version that
+`current` already points at.
 """
 
 from __future__ import annotations
 
 import os
 import shutil
+import sys
 from pathlib import Path
 
-from selly_agent import paths
+from selly_agent import host, paths, pointer
 from selly_agent.installer import runtime
 
 # What a version directory holds: the launcher and the package (whose migrations, registries and
@@ -29,6 +31,9 @@ from selly_agent.installer import runtime
 VERSION_DIRS = ("bin", "src")
 VERSION_FILES = (
     "setup",
+    # The Windows front door ships in every version too, so a tree installed from a release can be
+    # re-run there — and so `update` stages a version that is runnable on either platform.
+    "setup.ps1",
     "README.md",
     "LICENSE",
     "pyproject.toml",
@@ -74,12 +79,33 @@ def source_tree() -> Path:
 # --- reading the layout -------------------------------------------------------------------
 
 
+def install_interpreter() -> Path:
+    """The interpreter this install runs on, for whoever has to name one: the supervised job and
+    the Windows shim.
+
+    Named through `current` rather than the version behind it, so the name stays true across an
+    update. Falls back to whatever is running us when there is no venv — a checkout pointed at by
+    `./setup --dev` before bootstrapping — because naming an interpreter that does not exist gives
+    a job that fails to start with nothing explaining why, and the launcher re-execs onto the venv
+    by itself once there is one.
+    """
+    interpreter = paths.venv_python(paths.current())
+    return interpreter if interpreter.exists() else Path(os.path.realpath(sys.executable))
+
+
+def supervised_interpreter() -> Path:
+    """The interpreter to name in the background job's definition.
+
+    install_interpreter answers for a person at a terminal; a job wants the same interpreter
+    without a console attached, which on Windows is a different executable beside it.
+    """
+    interpreter = paths.venv_windowless_python(paths.current())
+    return interpreter if interpreter.exists() else install_interpreter()
+
+
 def current_target():
     """What `current` points at, or None when it does not exist. Never follows further."""
-    current = paths.current()
-    if not current.is_symlink():
-        return None
-    return Path(os.path.realpath(current))
+    return pointer.read(paths.current())
 
 
 def current_version():
@@ -127,11 +153,18 @@ def previous_version():
 # --- writing the layout -------------------------------------------------------------------
 
 
+def _setup_door() -> str:
+    """Imported inside the function: preflight reaches the supervisor, which reaches back here."""
+    from selly_agent.installer import preflight
+
+    return preflight.setup_door()
+
+
 def _guard_current_is_ours() -> None:
     current = paths.current()
-    if current.exists() and not current.is_symlink():
+    if current.exists() and not pointer.is_pointer(current):
         raise LayoutError(
-            f"{current} is a real directory, not the symlink selly-agent manages",
+            f"{current} is a real directory, not the pointer selly-agent manages",
             f"Move or remove it (it was not created by selly-agent), then re-run:\n"
             f"  mv {current} {current}.bak",
         )
@@ -141,6 +174,12 @@ def _fsync_dir(path: Path) -> None:
     """Flush the directory entry so the rename that follows survives a crash. This makes the
     *switch* durable, not every byte of every copied file — a torn copy is discarded by the
     rename never happening, which is the direction that is safe to fail in."""
+    if host.windows():
+        # Windows has no fd for a directory: the CRT refuses to open one, so this would raise
+        # PermissionError rather than syncing anything. The rename below is still atomic there
+        # (MoveFileEx), and NTFS journals the metadata itself, so there is nothing to flush by
+        # hand — the durability this function buys on POSIX is already the filesystem's.
+        return
     fd = os.open(str(path), os.O_RDONLY)
     try:
         os.fsync(fd)
@@ -175,7 +214,7 @@ def stage_version(tree, version: str) -> Path:
         if not source.is_dir():
             raise LayoutError(
                 f"{tree} does not look like a selly-agent tree ({name}/ is missing)",
-                "Run ./setup from an unpacked release or a checkout.",
+                f"Run {_setup_door()} from an unpacked release or a checkout.",
             )
         shutil.copytree(source, staged / name, ignore=_IGNORED)
     for name in VERSION_FILES:
@@ -196,20 +235,15 @@ def stage_version(tree, version: str) -> Path:
 
 
 def swap_current(target) -> Path:
-    """Point `current` at `target` in one step: a temporary symlink beside it, then a rename.
+    """Point `current` at `target`.
 
-    Never unlink-then-relink — that leaves a window where `current` does not exist, and the
-    launchd job, the shim and every generated harness config all resolve through it.
+    The supervised job, the shim and every generated harness config resolve through this pointer,
+    so the swap is the whole of an update as far as they are concerned. Where the platform allows
+    it the change is a rename and the pointer is never absent; where it does not, callers swap with
+    the daemon stopped (see pointer.swap).
     """
     _guard_current_is_ours()
-    current = paths.current()
-    current.parent.mkdir(parents=True, exist_ok=True)
-    staging = current.with_name(current.name + ".new")
-    if staging.is_symlink() or staging.exists():
-        staging.unlink()
-    staging.symlink_to(target)
-    os.replace(staging, current)
-    return current
+    return pointer.swap(paths.current(), target)
 
 
 def ensure_current(checkout) -> None:
@@ -222,7 +256,7 @@ def ensure_current(checkout) -> None:
     """
     paths.ensure_runtime_dirs()
     _guard_current_is_ours()
-    if paths.current().is_symlink():
+    if pointer.is_pointer(paths.current()):
         return
     swap_current(Path(checkout).resolve())
 
@@ -277,23 +311,24 @@ def shim_target() -> Path:
 
 
 def _shim_is_ours(shim: Path) -> bool:
-    """Whether the name at `~/.local/bin/selly-agent` is one we installed.
+    """Whether the name at the shim path is one we installed.
 
-    Two ways to be ours, because a dev install has neither the same link text nor a target under
-    the data root as a versioned one: the link says exactly what `install_shim` writes, or it
-    resolves inside our data root.
+    Two ways to be ours, because a dev install has neither the same recorded target nor a resolved
+    one under the data root as a versioned install: what it names is exactly what `install_shim`
+    writes, or it resolves inside our data root.
     """
-    if not shim.is_symlink():
+    named = pointer.shim_target(shim)
+    if named is None:
         return False
-    if os.readlink(shim) == str(shim_target()):
+    if named == shim_target():
         return True
-    resolved = Path(os.path.realpath(shim))
+    resolved = Path(os.path.realpath(named))
     root = paths.data_root().resolve()
     return root == resolved or root in resolved.parents
 
 
 def install_shim() -> Path:
-    """Link `~/.local/bin/selly-agent` at the launcher inside `current`."""
+    """Put `selly-agent` on the user's PATH, pointing at the launcher inside `current`."""
     shim = paths.shim_path()
     target = shim_target()
     shim.parent.mkdir(parents=True, exist_ok=True)
@@ -302,14 +337,9 @@ def install_shim() -> Path:
         # delete one: an install that quietly replaces someone else's command cannot give it back.
         raise LayoutError(
             f"{shim} already exists and was not created by selly-agent",
-            "Something else owns that name. Move it aside and re-run ./setup.",
+            f"Something else owns that name. Move it aside and re-run {_setup_door()}.",
         )
-    staging = shim.with_name(shim.name + ".new")
-    if staging.is_symlink() or staging.exists():
-        staging.unlink()
-    staging.symlink_to(target)
-    os.replace(staging, shim)
-    return shim
+    return pointer.write_shim(shim, target, install_interpreter())
 
 
 def remove_shim() -> bool:
@@ -332,6 +362,95 @@ def user_bin_on_path(path_value=None) -> bool:
         if entry and Path(entry) == target:
             return True
     return False
+
+
+# --- the user PATH on Windows ----------------------------------------------------------------
+
+# Where a user's own PATH lives. Per-user, so no elevation is needed and nothing machine-wide is
+# touched. A separate value from the machine PATH, which the session concatenates with this one.
+_USER_ENVIRONMENT_KEY = "Environment"
+
+# Windows' own rules, written out rather than taken from this host: the value being edited is a
+# Windows registry value whichever machine reads the code, so borrowing os.pathsep and normcase
+# would make the logic mean different things in a test and in production.
+_WINDOWS_PATH_SEP = ";"
+
+
+def _same_directory(left: str, right: str) -> bool:
+    """Whether two PATH entries name one directory, by Windows' rules: case-insensitive, and a
+    trailing separator is not a difference. Without this an install appends a second copy of the
+    same directory every time somebody's PATH happens to spell it differently."""
+    return left.strip().rstrip("\\/").lower() == right.strip().rstrip("\\/").lower()
+
+
+def _read_user_path() -> str:
+    import winreg
+
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _USER_ENVIRONMENT_KEY) as key:
+            value, _kind = winreg.QueryValueEx(key, "Path")
+            return value or ""
+    except FileNotFoundError:
+        return ""  # an account that has never had a user PATH of its own
+
+
+def _write_user_path(value: str) -> None:
+    import winreg
+
+    key_args = (winreg.HKEY_CURRENT_USER, _USER_ENVIRONMENT_KEY, 0, winreg.KEY_WRITE)
+    with winreg.CreateKeyEx(*key_args) as key:
+        # REG_EXPAND_SZ, because a user PATH conventionally holds entries like %USERPROFILE%\... and
+        # writing it as a plain string would stop those from expanding for everyone else's entries.
+        winreg.SetValueEx(key, "Path", 0, winreg.REG_EXPAND_SZ, value)
+    _broadcast_environment_change()
+
+
+def _broadcast_environment_change() -> None:
+    """Tell running programs the environment changed, so a new terminal sees the entry.
+
+    Without this the registry holds the new PATH but nothing reads it until the next sign-in, and
+    the seller is told to reopen a terminal that would not have helped. Explorer is what propagates
+    it to the terminals it launches. Best-effort: a failure here costs a sign-in, not the install.
+    """
+    import ctypes
+
+    HWND_BROADCAST, WM_SETTINGCHANGE, SMTO_ABORTIFHUNG = 0xFFFF, 0x001A, 0x0002
+    try:
+        ctypes.windll.user32.SendMessageTimeoutW(
+            HWND_BROADCAST, WM_SETTINGCHANGE, 0, "Environment", SMTO_ABORTIFHUNG, 1000, None
+        )
+    except OSError:
+        pass
+
+
+def user_path_entries(value=None) -> list:
+    raw = _read_user_path() if value is None else value
+    return [entry for entry in raw.split(_WINDOWS_PATH_SEP) if entry.strip()]
+
+
+def add_user_path_entry() -> bool:
+    """Put our bin dir on the account's own PATH. Answers whether anything was written.
+
+    Appended rather than prepended: this is not a directory that should shadow the seller's own
+    tools, and the only thing in it is ours.
+    """
+    target = str(paths.user_bin_dir())
+    existing = user_path_entries()
+    if any(_same_directory(entry, target) for entry in existing):
+        return False
+    _write_user_path(_WINDOWS_PATH_SEP.join([*existing, target]))
+    return True
+
+
+def remove_user_path_entry() -> bool:
+    """Take our bin dir off the account's PATH, leaving every other entry exactly as it was."""
+    target = str(paths.user_bin_dir())
+    existing = user_path_entries()
+    kept = [entry for entry in existing if not _same_directory(entry, target)]
+    if len(kept) == len(existing):
+        return False
+    _write_user_path(_WINDOWS_PATH_SEP.join(kept))
+    return True
 
 
 def rc_block() -> str:

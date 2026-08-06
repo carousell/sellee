@@ -8,6 +8,7 @@ that does not match the recorded digest must not end up installed.
 from __future__ import annotations
 
 import hashlib
+import os
 import tarfile
 import zipfile
 from pathlib import Path
@@ -118,9 +119,20 @@ def test_download_url_needs_no_api_call():
 
 
 def _fake_uv(tmp_path: Path, listing: str) -> Path:
-    """A stand-in uv whose `python list` prints whatever a test wants it to."""
+    """A stand-in uv whose `python list` prints whatever a test wants it to.
+
+    On Windows the host runs only what PATHEXT recognises, so this is a .cmd — and the listing
+    goes to a sidecar the script types out, because every `<download available>` in it would
+    otherwise be read as a redirection.
+    """
+    if os.name == "nt":
+        fake = tmp_path / "uv.cmd"
+        sidecar = tmp_path / "uv-listing.txt"
+        sidecar.write_text(listing + "\n", encoding="utf-8")
+        fake.write_text(f'@echo off\r\ntype "{sidecar}"\r\n', encoding="utf-8")
+        return fake
     fake = tmp_path / "uv"
-    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\n")
+    fake.write_text(f"#!/bin/sh\ncat <<'EOF'\n{listing}\nEOF\n", encoding="utf-8")
     fake.chmod(0o755)
     return fake
 
@@ -292,8 +304,15 @@ def test_ensure_uv_reuses_our_own_previously_fetched_copy(
     monkeypatch.setattr(runtime.shutil, "which", lambda name: None)
     ours = paths.uv_path()
     ours.parent.mkdir(parents=True, exist_ok=True)
-    ours.write_text(f"#!/bin/sh\ncat <<'EOF'\n{_FINAL}\nEOF\n")
-    ours.chmod(0o755)
+    if os.name == "nt":
+        # The path this looks for ends in .exe, and a batch file under that name is not something
+        # Windows will run. What is under test is which uv gets chosen, not whether it runs, so
+        # the probe answers for it.
+        ours.write_bytes(b"")
+        monkeypatch.setattr(runtime, "serves_pin", lambda candidate, pin: Path(candidate) == ours)
+    else:
+        ours.write_text(f"#!/bin/sh\ncat <<'EOF'\n{_FINAL}\nEOF\n", encoding="utf-8")
+        ours.chmod(0o755)
 
     def refuse(**kwargs):
         raise AssertionError("should not re-fetch a uv we already installed")
@@ -341,6 +360,21 @@ def test_describe_knows_whether_this_process_runs_in_the_tree_venv(tmp_path):
     assert runtime.describe(tmp_path)["running_in_venv"] is False
 
 
+@pytest.mark.skipif(os.name == "nt", reason="writes a #! stub interpreter")
+def test_describe_survives_an_interpreter_that_fails_saying_nothing(tmp_path):
+    """A failure with blank stderr must report no detail, not raise — the report is what a
+    preflight check turns into a message, so a crash here reads as a broken checker."""
+    interpreter = paths.venv_python(tmp_path)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\nprintf '\\n\\n' >&2\nexit 1\n")
+    interpreter.chmod(0o755)
+
+    report = runtime.describe(tmp_path)
+    assert report["present"] is True
+    assert report["dependencies_importable"] is False
+    assert report["detail"] == ""
+
+
 # --- the preflight gate --------------------------------------------------------------------
 
 
@@ -348,7 +382,7 @@ def test_the_gate_fails_when_a_tree_has_no_dependency_environment(tmp_path):
     result = preflight.check_runtime(tmp_path)
     assert result.status == checks.FAIL
     assert "no dependency environment" in result.detail
-    assert "./setup" in result.fix
+    assert preflight.setup_door() in result.fix
 
 
 def test_the_gate_fails_when_the_interpreter_cannot_run(tmp_path):

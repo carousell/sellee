@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import shutil
 
-from selly_agent import paths, supervisor
+from selly_agent import config, host, paths, pointer, supervisor
 from selly_agent.installer import materialize
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -34,7 +34,7 @@ def _run(args, ui: Ui) -> int:
     preserve = bool(getattr(args, "preserve_data", False))
     platform = get_platform()
 
-    ui.step("Uninstalling selly-agent from this Mac")
+    ui.step("Uninstalling selly-agent from this machine")
     for line in _plan(preserve):
         ui.say(line)
     # Deleting someone's data defaults to no, and `--yes` is read as the consent itself rather
@@ -49,17 +49,35 @@ def _run(args, ui: Ui) -> int:
 
     if materialize.remove_shim():
         ui.say(f"removed {paths.shim_path()}")
-    for rc_file in materialize.rc_candidates():
-        # Every shell we might have written to, not just the one running now: install under zsh
-        # and uninstall from bash, and checking only the current shell leaves the block behind.
-        if materialize.remove_rc_block(rc_file):
-            ui.say(f"removed the PATH line from {rc_file}")
+    if host.windows():
+        # Only if setup recorded adding it: a directory the seller already had on PATH is theirs.
+        if config.load().path_entry_added and materialize.remove_user_path_entry():
+            ui.say("removed our entry from your account's PATH")
+    else:
+        for rc_file in materialize.rc_candidates():
+            # Every shell we might have written to, not just the one running now: install under zsh
+            # and uninstall from bash, and checking only the current shell leaves the block behind.
+            if materialize.remove_rc_block(rc_file):
+                ui.say(f"removed the PATH line from {rc_file}")
 
+    residue = []
     for target in _roots_to_remove(preserve):
         _remove(target)
-        ui.say(f"removed {target}")
+        if target.exists():
+            residue.append(target)
+        else:
+            ui.say(f"removed {target}")
     ui.say("")
-    ui.say("Done.")
+    if residue:
+        # Named rather than silent: rmtree swallows what it cannot delete, and on Windows that
+        # is guaranteed to include the interpreter this very uninstall runs on — the OS will not
+        # remove a running executable.
+        ui.warn("could not remove everything; still there:")
+        for target in residue:
+            ui.say(f"  {target}")
+        ui.say("Delete these by hand once nothing of selly-agent is running.")
+        ui.say("")
+    ui.say("Done." if not residue else "Done, with the leftovers named above.")
     return 0
 
 
@@ -82,13 +100,17 @@ def _plan(preserve: bool) -> list:
 
 def _roots_to_remove(preserve: bool) -> list:
     if preserve:
-        # The version trees and the swap symlink go; the data beside them stays.
+        # The version trees and the pointer go; the data beside them stays.
         return [paths.versions_dir(), paths.current(), paths.state_dir(), paths.cache_dir()]
     return [paths.data_root(), paths.state_dir(), paths.config_dir(), paths.cache_dir()]
 
 
 def _remove(target) -> None:
-    if target.is_symlink() or target.is_file():
+    # A pointer is removed, never followed: deleting through `current` would take the version it
+    # names with it. On Windows that pointer is a junction, which is a directory entry.
+    if pointer.is_pointer(target):
+        pointer.discard(target)
+    elif target.is_file():
         target.unlink()
     elif target.is_dir():
         shutil.rmtree(target, ignore_errors=True)

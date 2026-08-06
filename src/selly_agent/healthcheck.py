@@ -122,8 +122,8 @@ def browser_server_check(*, binary: str, fragment: str, resolved) -> checks.Chec
         return checks.fail(
             "browser server",
             f"{binary} is not reachable from the worker's PATH ({fragment})",
-            "Node moved, or was replaced by a version manager — re-run ./setup to record where it "
-            "lives now.",
+            f"Node moved, or was replaced by a version manager — re-run {preflight.setup_door()} "
+            f"to record where it lives now.",
         )
     return checks.ok("browser server", f"{binary} at {resolved}")
 

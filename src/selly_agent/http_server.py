@@ -7,6 +7,9 @@ Bound to 127.0.0.1 only. Three surfaces share it:
   * GET  /events.json, GET /tail — the localhost web tail, reading the event store over a
                   read-only connection.
   * POST /control/enqueue-pass  — enqueue a pass (attended token only).
+  * POST /control/shutdown      — ask the daemon to drain and exit (attended token only). The
+                  cross-platform stop trigger: nothing delivers a signal on Windows, and an
+                  update needs a stop it can confirm rather than one it merely requested.
 
 Hardening from the first line: every request's Host must be a localhost name and any Origin
 header must be a localhost origin (DNS-rebinding defense); bearer tokens map to a session tier
@@ -20,13 +23,15 @@ from __future__ import annotations
 import hmac
 import json
 import logging
+import os
 import secrets as _stdlib_secrets
+import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
-from selly_agent import __version__, passes
+from selly_agent import __version__, host, passes
 from selly_agent.db import connect_reader
 from selly_agent.events import event_to_wire, latest_seq, query_events, routine_kinds
 from selly_agent.paths import PACKAGE_DATA_DIR
@@ -113,6 +118,7 @@ class HttpServer:
         attended_token: str,
         config=None,
         channels=None,
+        stop_event=None,
         host: str = "127.0.0.1",
     ):
         self.bus = bus
@@ -121,8 +127,11 @@ class HttpServer:
         self.context_factory = context_factory
         self.config = config
         self.channels = channels  # the ChannelManager, so connect can start a provider at runtime
+        # The daemon's own stop flag, so the shutdown route triggers exactly the drain a signal
+        # does. None in a single-tick run, which has nothing to interrupt.
+        self.stop_event = stop_event
         self.auth = Auth(attended_token)
-        self._httpd = ThreadingHTTPServer((host, port), _Handler)
+        self._httpd = _Server((host, port), _Handler)
         self._httpd.daemon_threads = True
         self._httpd.app = self  # the handler reaches shared state via self.server.app
         self._thread: threading.Thread | None = None
@@ -162,6 +171,26 @@ def _localhost_origin(header: str | None) -> bool:
         return True
     parsed = urlparse(header)
     return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _LOCALHOST_NAMES
+
+
+class _Server(ThreadingHTTPServer):
+    # The default (SO_REUSEADDR on) is harmless on POSIX, but on Windows it lets this bind land
+    # on a port another process is actively using — and a second daemon sharing the port is
+    # exactly the double-bind the loud startup failure exists to surface.
+    allow_reuse_address = not host.windows()
+
+    def server_bind(self) -> None:
+        """Bind without asking the network who we are.
+
+        HTTPServer.server_bind calls socket.getfqdn() purely to fill in `server_name`, which is a
+        reverse-DNS lookup — and one that blocks for as long as the resolver takes to give up. On
+        a machine with no reverse record for its own address (a VPN, a locked-down network, a CI
+        runner) that is minutes, during which the daemon has started, recorded daemon.start, and
+        is answering nothing at all. We bind to the loopback address we were handed and never
+        serve `server_name` to anyone, so the lookup buys nothing.
+        """
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -263,6 +292,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_seller_basics()
         elif route == "/control/connect-market":
             self._handle_connect_market()
+        elif route == "/control/shutdown":
+            self._handle_shutdown()
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -377,6 +408,21 @@ class _Handler(BaseHTTPRequestHandler):
             "pass.queued", {"type": pass_type, "payload": payload}, pass_id=pass_id
         )
         self._send_json(200, {"pass_id": pass_id})
+
+    def _handle_shutdown(self) -> None:
+        body = self._attended_body()
+        if body is None:
+            return
+        stop = self._app.stop_event
+        if stop is None:
+            self._send_json(409, {"error": "this worker has no loop to stop"})
+            return
+        self._send_json(202, {"stopping": True, "pid": os.getpid()})
+        # Flushed before the flag is set, because the drain this triggers closes this very server:
+        # a caller that never received the reply cannot tell a stop from an unreachable daemon.
+        self.wfile.flush()
+        log.info("shutdown requested over the control route — stopping")
+        stop.set()
 
     def _handle_connect_telegram(self) -> None:
         # Attended-only: the token arrives here (never argv), the daemon validates it, writes the

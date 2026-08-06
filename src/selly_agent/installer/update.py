@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from selly_agent import __version__, config, heartbeat, paths, supervisor
-from selly_agent.installer import materialize
+from selly_agent.installer import checks, materialize, preflight, runtime
 
 log = logging.getLogger(__name__)
 
@@ -132,6 +132,12 @@ def safe_members(archive: tarfile.TarFile, dest: Path):
     """
     dest = dest.resolve()
     for member in archive.getmembers():
+        # Absolute, drive-lettered and UNC names are refused by shape, not just by containment:
+        # joining an absolute segment discards the base entirely, and what that yields depends
+        # on the host's path rules — a property this explicit check does not lean on.
+        raw = member.name.replace("\\", "/")
+        if raw.startswith("/") or ":" in raw.split("/", 1)[0]:
+            raise UpdateError(f"refusing archive: {member.name!r} is not a relative path")
         target = (dest / member.name).resolve()
         if target != dest and dest not in target.parents:
             raise UpdateError(f"refusing archive: {member.name!r} would write outside {dest}")
@@ -225,24 +231,32 @@ def latest_snapshot():
 def restore_snapshot(snapshot: Path) -> None:
     """Put a snapshot back as selly.db. The daemon must be stopped: this replaces the file it
     would otherwise be holding open."""
-    shutil.copy2(snapshot, paths.selly_db())
+    runtime.retry_permission_denied(lambda: shutil.copy2(snapshot, paths.selly_db()))
     # A WAL alongside a restored database describes the *replaced* one, and replaying it would
     # undo the restore. The snapshot is a complete, checkpointed copy, so they can go.
     for suffix in ("-wal", "-shm"):
         sidecar = paths.selly_db().with_name(paths.selly_db().name + suffix)
         if sidecar.exists():
-            sidecar.unlink()
+            runtime.retry_permission_denied(sidecar.unlink)
 
 
 # --- the daemon around the swap -------------------------------------------------------------------
 
 
 def _stop_daemon(platform=None) -> bool:
-    """Stop the daemon, answering whether it was running. Its state before the update decides
-    whether it should be running after."""
+    """Stop the daemon and confirm it is gone, answering whether it was running. Its state before
+    the update decides whether it should be running after.
+
+    Confirmed rather than requested, because everything after this replaces files the daemon has
+    open — and on Windows an open file cannot be replaced at all, so a swap racing a live daemon
+    fails partway instead of being merely untidy.
+    """
     status = supervisor.gather_status(platform=platform)
-    if status.registered:
-        supervisor.stop(label=status.label, platform=platform)
+    if not supervisor.shutdown(label=status.label, platform=platform):
+        raise UpdateError(
+            f"the background worker (pid {supervisor.daemon_pid()}) did not stop when asked, and "
+            "updating would replace files it still has open — nothing has been changed"
+        )
     return status.registered
 
 
@@ -316,19 +330,21 @@ def _base_url(args, cfg) -> str:
 def _guard_updatable() -> None:
     if materialize.current_target() is None:
         raise UpdateError(
-            "there is no installed version here to update — run ./setup from a checkout first"
+            f"there is no installed version here to update — run {preflight.setup_door()} from a "
+            f"checkout first"
         )
     if materialize.is_dev_install():
         raise UpdateError(
-            "this install points at a working tree, not a released version — update it with git "
-            "or jj, or re-run ./setup without --dev to switch to versioned installs"
+            f"this install points at a working tree, not a released version — update it with git "
+            f"or jj, or re-run {preflight.setup_door()} without --dev to switch to versioned "
+            f"installs"
         )
 
 
 def check(args, cfg, out) -> int:
     """`--check`: say what is on offer and exit in a way a script can branch on."""
     release = discover(_base_url(args, cfg))
-    out(f"{__version__} → {release.version}")
+    out(f"{__version__} {checks.arrow()} {release.version}")
     if not is_newer(release.version, __version__):
         out("Already up to date.")
         return 0
@@ -340,7 +356,7 @@ def perform(args, cfg, out, *, platform=None) -> int:
     _guard_updatable()
     base = _base_url(args, cfg)
     release = discover(base)
-    out(f"selly-agent {__version__} → {release.version}")
+    out(f"selly-agent {__version__} {checks.arrow()} {release.version}")
     if not is_newer(release.version, __version__):
         out("Already up to date.")
         return 0
@@ -364,9 +380,8 @@ def perform(args, cfg, out, *, platform=None) -> int:
     # was handed: re-installing the job under the wrong mode would quietly move the plist and
     # turn a start-at-login daemon into one that never comes back.
     status = supervisor.gather_status(platform=platform)
-    mode, was_running = status.mode, status.registered
-    if was_running:
-        supervisor.stop(label=status.label, platform=platform)
+    mode = status.mode
+    was_running = _stop_daemon(platform)
     try:
         materialize.install_version(staged, release.version)
     except Exception:
@@ -377,7 +392,7 @@ def perform(args, cfg, out, *, platform=None) -> int:
             _start_daemon(mode, platform=platform)
             out("Nothing was changed; the previous version is still running.")
         raise
-    out(f"Installed versions/{release.version}; current → {release.version}.")
+    out(f"Installed versions/{release.version}; current {checks.arrow()} {release.version}.")
 
     if not was_running:
         # Manual mode, and it was not running before. Starting it now would be a change nobody
@@ -433,8 +448,7 @@ def _clear_cache(*, keep) -> None:
 
 
 def _summarise(result) -> str:
-    glyph = {"ok": "✅", "warn": "⚠️", "fail": "❌"}.get(result.status, "•")
-    return f"{glyph} {result.name}"
+    return f"{checks.glyph(result.status)} {result.name}"
 
 
 def _roll_back_to(target, mode: str, out, *, migrated_after: float, platform=None) -> None:
@@ -469,7 +483,7 @@ def rollback(args, cfg, out, *, platform=None) -> int:
     if target is None:
         raise UpdateError("there is no previous version retained to roll back to")
     leaving = materialize.current_target()
-    out(f"Rolling back {materialize.current_version()} → {target.name}.")
+    out(f"Rolling back {materialize.current_version()} {checks.arrow()} {target.name}.")
     status = supervisor.gather_status(platform=platform)
     _roll_back_to(
         target,
@@ -500,7 +514,7 @@ def run(args) -> int:
         if getattr(args, "rollback", False):
             return rollback(args, cfg, out)
         return perform(args, cfg, out)
-    except UpdateError as exc:
+    except (UpdateError, runtime.RuntimeSetupError) as exc:
         print(f"selly-agent: {exc}", file=sys.stderr)
         return 1
     except materialize.LayoutError as exc:

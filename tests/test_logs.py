@@ -49,8 +49,13 @@ def test_parse_since_rejects_garbage() -> None:
         logs_cli._parse_since("soon")
 
 
+# A real epoch rather than 0: Windows' localtime() refuses timestamps at the epoch, so
+# datetime.fromtimestamp(0.0) raises OSError there. No event ever carries one.
+_TS = 1700000000.0
+
+
 def test_format_line_shape() -> None:
-    ev = Event(seq=1, ts=0.0, pass_id=None, kind="daemon.start", payload={"pid": 7})
+    ev = Event(seq=1, ts=_TS, pass_id=None, kind="daemon.start", payload={"pid": 7})
     line = logs_cli._format(ev)
     assert "daemon.start" in line
     assert "pass=-" in line
@@ -99,12 +104,12 @@ def test_explicit_kind_overrides_routine_floor(xdg_tmp, capsys) -> None:
 
 
 def test_format_ndjson_shape() -> None:
-    ev = Event(seq=1, ts=0.0, pass_id=None, kind="daemon.start", payload={"pid": 7})
+    ev = Event(seq=1, ts=_TS, pass_id=None, kind="daemon.start", payload={"pid": 7})
     obj = json.loads(logs_cli._format_ndjson(ev))
     assert next(iter(obj)) == "@ts"  # @ts leads the wire form
     assert obj["level"] == "info"  # derived from kind
     assert obj["seq"] == 1
-    assert obj["ts"] == 0.0  # raw epoch retained alongside @ts
+    assert obj["ts"] == _TS  # raw epoch retained alongside @ts
     assert obj["pass_id"] is None
     assert obj["kind"] == "daemon.start"
     assert obj["payload"] == {"pid": 7}

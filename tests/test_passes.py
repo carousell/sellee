@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 import sys
 import threading
 
 import pytest
 
-from selly_agent import passes, paths, retention
+from selly_agent import passes, paths, proc_tree, retention, spawn
 from selly_agent.config import Config
 from selly_agent.store import ClaimedPass
 
@@ -33,6 +35,9 @@ import json, sys, time
 def emit(obj):
     print(json.dumps(obj), flush=True)
 mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
+if mode == "echo":
+    # Prove the prompt arrived on stdin by writing it where the test can read it.
+    open(sys.argv[2], "w").write(sys.stdin.read())
 if mode == "sleep":
     emit({"type": "system", "subtype": "init", "session_id": "s1", "tools": []})
     time.sleep(60)
@@ -205,3 +210,112 @@ def test_pass_end_survives_retention_prune(bus, store, fake_harness, xdg_tmp) ->
     kinds = [e.kind for e in bus.store.read()]
     assert "pass.end" in kinds  # a kept summary survived
     assert "pass.init" not in kinds  # a verbose per-line event was pruned
+
+
+# --- the process ledger -------------------------------------------------------------------------
+
+
+def _claim(store, pass_type="publish", payload=None):
+    payload = {"item_id": "i"} if payload is None else payload
+    claimed = ClaimedPass(
+        pass_id=store.enqueue_pass(pass_type, payload), type=pass_type, payload=payload
+    )
+    store.claim_queued_pass()
+    return claimed
+
+
+def test_the_prompt_reaches_the_harness_on_stdin(bus, store, tmp_path, fake_harness, xdg_tmp):
+    """Not in argv: Windows caps a command line well below what a composed prompt can reach, and
+    an argument is visible in every process listing on the machine."""
+    paths.ensure_state_dirs()
+    received = tmp_path / "prompt.txt"
+
+    def argv_builder(spec):
+        return [sys.executable, str(fake_harness), "echo", str(received)]
+
+    deps = passes.PassDeps(
+        bus=bus,
+        store=store,
+        config=Config(),
+        auth=FakeAuth(),
+        http_endpoint="http://127.0.0.1:1/mcp",
+        stop_event=threading.Event(),
+        argv_builder=argv_builder,
+    )
+
+    passes.run_pass(deps, _claim(store))
+
+    assert "Publish item i" in received.read_text()
+
+
+def test_a_pass_records_its_process_and_forgets_it_when_it_settles(
+    bus, store, fake_harness, monkeypatch, xdg_tmp
+):
+    """The record is what lets the *next* daemon end a pass this one dies holding, so it has to be
+    written while the pass runs and gone once it cannot need reaping."""
+    paths.ensure_state_dirs()
+    recorded = []
+    original = store.record_pass_process
+    monkeypatch.setattr(
+        store,
+        "record_pass_process",
+        lambda pass_id, **kwargs: (recorded.append((pass_id, kwargs)), original(pass_id, **kwargs)),
+    )
+
+    claimed = _claim(store)
+    passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+
+    assert [entry[0] for entry in recorded] == [claimed.pass_id]
+    assert recorded[0][1]["pid"] > 0
+    assert recorded[0][1]["created_ts"] > 0
+    assert store.pass_processes() == []
+
+
+def test_the_reaper_ends_a_pass_a_dead_daemon_left_behind(bus, store, fake_harness, xdg_tmp):
+    """A pass whose daemon was killed keeps working the seller's account with nobody watching."""
+    paths.ensure_state_dirs()
+    leftover = subprocess.Popen(
+        [sys.executable, "-c", "import time; print('up', flush=True); time.sleep(60)"],
+        stdout=subprocess.PIPE,
+        text=True,
+        **spawn.detached_flags(),
+    )
+    assert leftover.stdout.readline().strip() == "up"
+    claimed = _claim(store)
+    store.record_pass_process(
+        claimed.pass_id,
+        pid=leftover.pid,
+        created_ts=proc_tree.creation_time(leftover.pid),
+        reap_after_ts=100.0,
+    )
+
+    deps = _deps(bus, store, fake_harness)
+    deps.now = lambda: 500.0
+    try:
+        passes.stray_reaper(deps)
+
+        assert leftover.wait(timeout=15) is not None
+        assert store.pass_processes() == []
+        reaped = _events(bus, "pass.reaped")
+        assert [event.pass_id for event in reaped] == [claimed.pass_id]
+    finally:
+        if leftover.poll() is None:
+            leftover.kill()
+            leftover.wait()
+
+
+def test_the_reaper_leaves_a_pass_that_is_still_within_its_deadline(bus, store, fake_harness):
+    claimed = _claim(store)
+    own = os.getpid()
+    store.record_pass_process(
+        claimed.pass_id,
+        pid=own,
+        created_ts=proc_tree.creation_time(own),
+        reap_after_ts=900.0,
+    )
+
+    deps = _deps(bus, store, fake_harness)
+    deps.now = lambda: 500.0
+    passes.stray_reaper(deps)
+
+    assert [record["pass_id"] for record in store.pass_processes()] == [claimed.pass_id]

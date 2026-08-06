@@ -12,6 +12,7 @@ the healthcheck renders a line and sets an exit code. Neither decision lives her
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 
 log = logging.getLogger(__name__)
@@ -21,6 +22,35 @@ WARN = "warn"
 FAIL = "fail"
 
 _GLYPHS = {OK: "✅", WARN: "⚠️", FAIL: "❌"}
+_ASCII_GLYPHS = {OK: "[ok]", WARN: "[warn]", FAIL: "[FAIL]"}
+
+
+def glyph(status: str, stream=None) -> str:
+    """The status mark, degraded to ASCII where the stream cannot encode it.
+
+    A legacy Windows console — or output redirected under its code page — does not render the
+    emoji as something worse; it raises UnicodeEncodeError partway through the line.
+    """
+    return _degrade(_GLYPHS.get(status, "•"), _ASCII_GLYPHS.get(status, "*"), stream)
+
+
+def arrow(stream=None) -> str:
+    """The "becomes" mark, degraded where the stream cannot encode it.
+
+    Same reason as glyph(): `selly-agent update --check > log.txt` under a legacy code page
+    raises UnicodeEncodeError on the first line rather than rendering something plainer.
+    """
+    return _degrade("→", "->", stream)
+
+
+def _degrade(text: str, fallback: str, stream=None) -> str:
+    target = sys.stdout if stream is None else stream
+    encoding = getattr(target, "encoding", None) or "utf-8"
+    try:
+        text.encode(encoding)
+    except (UnicodeEncodeError, LookupError):
+        return fallback
+    return text
 
 
 @dataclass(frozen=True)
@@ -38,9 +68,9 @@ class Check:
 
     def render(self) -> list:
         """The check as display lines: a glyph line, plus a fix line when there is one to give."""
-        lines = [f"{_GLYPHS.get(self.status, '•')} {self.name}: {self.detail}"]
+        lines = [f"{glyph(self.status)} {self.name}: {self.detail}"]
         if self.fix and self.status != OK:
-            lines.append(f"   → {self.fix}")
+            lines.append(f"   {_degrade('→', '->')} {self.fix}")
         return lines
 
 

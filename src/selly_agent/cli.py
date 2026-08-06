@@ -99,29 +99,29 @@ def _build_parser() -> argparse.ArgumentParser:
         dest="mode",
         action="store_const",
         const="login-start",
-        help="start automatically at login (plist in ~/Library/LaunchAgents)",
+        help="start automatically when you log in",
     )
     mode.add_argument(
         "--manual",
         dest="mode",
         action="store_const",
         const="manual",
-        help="start only on demand (plist kept in the config dir)",
+        help="start only on demand",
     )
     install.add_argument(
         "--label",
         default=None,
-        help="override the launchd label (side-by-side dev testing)",
+        help="override the background job's name (side-by-side dev testing)",
     )
 
     for name, helptext in (
-        ("uninstall", "unregister the daemon and remove its plist"),
-        ("start", "register the daemon with launchd"),
-        ("stop", "unregister the daemon from launchd"),
+        ("uninstall", "unregister the daemon and remove its job definition"),
+        ("start", "register the daemon with the system supervisor"),
+        ("stop", "stop the daemon and unregister it"),
         ("status", "report daemon state, mode, heartbeat, and recent events"),
     ):
         p = dsub.add_parser(name, help=helptext)
-        p.add_argument("--label", default=None, help="override the launchd label")
+        p.add_argument("--label", default=None, help="override the background job's name")
 
     logs = sub.add_parser("logs", help="tail the event store")
     logs.add_argument("--follow", action="store_true", help="poll for new events (~1s)")

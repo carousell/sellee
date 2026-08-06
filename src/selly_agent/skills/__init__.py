@@ -67,7 +67,7 @@ def load(name: str) -> str:
     """One skill's body, frontmatter stripped. Cached: the files are immutable in an install."""
     path = skill_path(name)
     try:
-        raw = path.read_text()
+        raw = path.read_text(encoding="utf-8")
     except OSError as exc:
         raise SkillNotFound(f"no skill file for {name!r} at {path}") from exc
     return strip_frontmatter(raw).strip()

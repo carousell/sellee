@@ -23,6 +23,7 @@ from selly_agent import (
     control,
     healthcheck,
     heartbeat,
+    host,
     marketplaces,
     pass_cli,
     passes,
@@ -32,7 +33,7 @@ from selly_agent import (
     supervisor,
 )
 from selly_agent.browser import markets as market_adapters
-from selly_agent.installer import checks, materialize, preflight
+from selly_agent.installer import checks, materialize, preflight, runtime
 from selly_agent.installer import region as region_guess
 from selly_agent.installer.ui import Abort, Ui
 from selly_agent.platform import get_platform
@@ -53,6 +54,9 @@ def run(args) -> int:
         return 1
     except materialize.LayoutError as exc:
         ui.fatal(Abort(exc.message, exc.fix))
+        return 1
+    except runtime.RuntimeSetupError as exc:
+        ui.fatal(Abort(str(exc), "Check the network and disk space, then run setup again."))
         return 1
     except control.DaemonUnreachable as exc:
         ui.fatal(
@@ -103,7 +107,7 @@ def _intro(ui: Ui, platform) -> None:
     ui.banner(__version__)
     ui.say("")
     ui.say("Selly is a marketplace agent: it lists items, answers buyers, and negotiates within")
-    ui.say(f"limits you set. This installs version {__version__} on this Mac.")
+    ui.say(f"limits you set. This installs version {__version__} on this machine.")
     ui.say("")
     ui.say("The installer will:")
     ui.say("  • check for Node, Chrome, and the claude CLI (installed and signed in)")
@@ -138,7 +142,7 @@ def _agreed_to_proceed(ui: Ui) -> bool:
     if ui.confirm("Proceed with the installation?", default=True):
         return True
     ui.say("")
-    ui.say("Cancelled — nothing was written. Re-run ./setup when you're ready.")
+    ui.say(f"Cancelled — nothing was written. Re-run {preflight.setup_door()} when you're ready.")
     return False
 
 
@@ -151,15 +155,10 @@ def _gates(ui: Ui, tree) -> None:
 
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
     _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
+    _require(ui, checks.fail_open("state store", lambda: preflight.check_state_store()))
     _gate_claude(ui, cfg)
-    _gate_dependency(ui, "node", lambda: preflight.check_node(), package="node")
-    _gate_dependency(
-        ui,
-        "chrome",
-        lambda: preflight.check_chrome(cfg.chrome_bin),
-        package="google-chrome",
-        cask=True,
-    )
+    _gate_dependency(ui, "node", lambda: preflight.check_node())
+    _gate_dependency(ui, "chrome", lambda: preflight.check_chrome(cfg.chrome_bin))
 
     # After the node gate, which is the friendly one (it names `brew install node`). This is the
     # authoritative one: it asks whether the *worker* can spawn the browser server, under the PATH
@@ -207,25 +206,30 @@ def _gate_claude(ui: Ui, cfg) -> None:
         preflight.claude_login(cfg)
 
 
-def _gate_dependency(ui: Ui, name: str, probe, *, package: str, cask: bool = False) -> None:
-    """A dependency we can offer to install, once. Homebrew itself is never bootstrapped —
-    piping a remote installer into a shell is a trust decision the machine's owner owns."""
+def _gate_dependency(ui: Ui, name: str, probe) -> None:
+    """A dependency we can offer to install, once.
+
+    Homebrew is never bootstrapped — piping a remote installer into a shell is a trust decision the
+    machine's owner owns — so a Mac without it gets the instruction instead of an offer. winget
+    ships with Windows, so there the offer is always available.
+    """
     check = _report(ui, checks.fail_open(name, probe))
     if not check.failed:
         return
 
-    brew = preflight.homebrew_path()
-    if not brew:
+    command = preflight.install_command(name)
+    if not command:
         raise Abort(
             f"{name}: {check.detail}",
-            f"{check.fix}\n(Homebrew isn't installed — get it from https://brew.sh, or install "
-            f"{name} however you prefer, then re-run ./setup.)",
+            f"{check.fix}\n(Nothing here can install it for you — install {name} however you "
+            f"prefer, then re-run {preflight.setup_door()}.)",
         )
-    if not ui.confirm(f"Install {name} with Homebrew now?", default=True, lead=False):
+    manager = preflight.package_manager_name()
+    if not ui.confirm(f"Install {name} with {manager} now?", default=True, lead=False):
         raise Abort(f"{name}: {check.detail}", check.fix)
 
-    ui.say(f"Running `brew install {package}` — this can take a few minutes…")
-    ok, detail = preflight.brew_install(package, cask=cask)
+    ui.say(f"Running `{' '.join(command)}` — this can take a few minutes…")
+    ok, detail = preflight.install_dependency(name)
     if not ok:
         raise Abort(f"installing {name} failed: {detail}", check.fix)
     _require(ui, checks.fail_open(name, probe))
@@ -246,7 +250,7 @@ def _install_layout(ui: Ui, args, platform, tree) -> None:
 
     if args.dev:
         materialize.install_dev(tree)
-        ui.say(f"dev mode: current → {tree}")
+        ui.say(f"dev mode: current {checks.arrow()} {tree}")
         ui.note("edits in that tree are live after a worker restart")
     else:
         dest = materialize.install_version(tree, __version__)
@@ -276,6 +280,10 @@ def _offer_path(ui: Ui, args) -> None:
     ui.say("")
     ui.warn(f"{bin_dir} is not on your PATH, so `selly-agent` will not be found yet.")
 
+    if host.windows():
+        _offer_user_path_entry(ui, args, bin_dir)
+        return
+
     rc_path = materialize.shell_rc_target()
     if rc_path is None:
         # A shell we do not write config for. Someone running something other than the macOS
@@ -302,6 +310,37 @@ def _offer_path(ui: Ui, args) -> None:
         ui.say(f"added to {rc_path} — open a new terminal, or run: source {rc_path}")
     else:
         ui.say(f"{rc_path} already had it")
+
+
+def _offer_user_path_entry(ui: Ui, args, bin_dir) -> None:
+    """The Windows equivalent of the rc-file offer: the account's own PATH, in the registry.
+
+    Same contract as the dotfile — offered, declinable, and recorded so an uninstall removes only
+    what was added. There is no shell to ask about here: one value serves every terminal.
+    """
+    # Deliberately not a command to paste. `setx PATH "%PATH%;..."` does not expand %PATH% in
+    # PowerShell, so following it replaces the account's entire PATH with that literal; run from
+    # cmd it copies the combined machine and user PATH into the user value and truncates it at
+    # 1024 characters. There is no one-liner here worth the chance of destroying someone's PATH.
+    step = checks.arrow()
+    by_hand = (
+        f"Add this directory to your PATH: {bin_dir}\n"
+        f"  (Settings {step} System {step} About {step} Advanced system settings {step} "
+        f"Environment Variables,\n"
+        f"   then edit Path under your user variables — or re-run setup and accept the offer.)"
+    )
+    consented = ui.interactive or ui.assume_yes
+    if args.no_modify_path or not consented:
+        ui.say(by_hand)
+        return
+    if not ui.confirm("Add it to your account's PATH?", default=True, lead=False):
+        ui.say(f"Left unchanged. {by_hand}")
+        return
+    if materialize.add_user_path_entry():
+        config.merge_into_file({"path_entry_added": True})
+        ui.say("added to your account's PATH — open a new terminal to pick it up")
+    else:
+        ui.say("your account's PATH already had it")
 
 
 def _explain_path_by_hand(ui: Ui, shell: str, bin_dir) -> None:
@@ -598,7 +637,10 @@ def _daemon_diagnostics() -> str:
     log_path = paths.logs_dir() / "agent.err.log"
     lines = [f"Its log is at {log_path}", "Run `selly-agent daemon status` for its view."]
     try:
-        tail = log_path.read_text().splitlines()[-_LOG_TAIL_LINES:]
+        # errors="replace": this runs to explain a failure, and a log carrying one odd byte —
+        # a subprocess's output in the machine's own code page — must not fail that explanation.
+        tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        tail = tail[-_LOG_TAIL_LINES:]
     except OSError:
         tail = []
     if tail:

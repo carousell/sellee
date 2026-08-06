@@ -11,7 +11,7 @@ import pytest
 
 from selly_agent import passes, reply_prompt
 from selly_agent.browser import inbox
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from selly_agent.harness.claude import PASS_PROMPT_MARKER
 from selly_agent.store import Scope, ScopedStore
 from selly_agent.tools import tools_for_tier
 from selly_agent.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch

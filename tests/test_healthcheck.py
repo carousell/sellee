@@ -11,7 +11,7 @@ import os
 
 from selly_agent import healthcheck, secrets, supervisor
 from selly_agent.config import Config
-from selly_agent.installer import checks
+from selly_agent.installer import checks, preflight
 
 # --- the daemon ---------------------------------------------------------------------------------
 
@@ -130,7 +130,7 @@ def test_a_recorded_path_that_no_longer_reaches_npx_fails() -> None:
     result = healthcheck.browser_server_check(binary="npx", fragment="/opt/node/bin", resolved=None)
     assert result.status == checks.FAIL
     assert "/opt/node/bin" in result.detail
-    assert "./setup" in result.fix
+    assert preflight.setup_door() in result.fix
 
 
 def test_no_recorded_path_is_not_checked_rather_than_failed() -> None:
@@ -146,8 +146,10 @@ def test_the_server_binary_is_resolved_against_the_workers_path_not_this_shells(
 ) -> None:
     bin_dir = tmp_path / "node" / "bin"
     bin_dir.mkdir(parents=True)
-    (bin_dir / "npx").write_text("#!/bin/sh\n")
-    (bin_dir / "npx").chmod(0o755)
+    # Carrying an extension where the host needs one, or the probe's own lookup walks past it.
+    npx = bin_dir / ("npx.cmd" if os.name == "nt" else "npx")
+    npx.write_text("@echo off\r\n" if os.name == "nt" else "#!/bin/sh\n", encoding="utf-8")
+    npx.chmod(0o755)
     # An empty directory as the supervised default, so the answer comes from the recorded fragment
     # rather than from whatever this machine happens to have in /usr/bin.
     monkeypatch.setattr(healthcheck.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
@@ -157,7 +159,7 @@ def test_the_server_binary_is_resolved_against_the_workers_path_not_this_shells(
 
     # A recorded directory that no longer holds npx: this shell can still find one, the worker
     # cannot, and it is the worker's answer that matters.
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), os.environ["PATH"]]))
     gone = healthcheck._browser_server_probe(Config(node_bin_dir=str(tmp_path / "gone")))
     assert gone.status == checks.FAIL
 

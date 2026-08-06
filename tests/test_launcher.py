@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import ast
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,8 +33,37 @@ def launcher():
     return namespace
 
 
+@pytest.fixture
+def loaded_launcher():
+    """The launcher loaded whole, so the dispatch wrapper can be called directly.
+
+    Safe because __name__ is not __main__ (nothing dispatches) and the re-exec is a no-op when the
+    suite is already on this tree's venv interpreter — which the skip below insists on, since
+    otherwise loading the file would replace the test process.
+    """
+    if os.path.realpath(sys.prefix) != os.path.realpath(REPO_ROOT / ".venv"):
+        pytest.skip("the suite is not running on this tree's venv, so loading would re-exec")
+    namespace = {"__name__": "launcher_loaded", "__file__": str(LAUNCHER)}
+    exec(compile(LAUNCHER.read_text(), str(LAUNCHER), "exec"), namespace)
+    return namespace
+
+
+def _raises(exc):
+    def fail(_argv):
+        raise exc
+
+    return fail
+
+
+def _venv_interpreter_path(tree: Path) -> Path:
+    """The host's own venv layout, which is what the launcher goes looking for."""
+    if os.name == "nt":
+        return tree / ".venv" / "Scripts" / "python.exe"
+    return tree / ".venv" / "bin" / "python"
+
+
 def _make_venv(tree: Path) -> Path:
-    interpreter = tree / ".venv" / "bin" / "python"
+    interpreter = _venv_interpreter_path(tree)
     interpreter.parent.mkdir(parents=True)
     interpreter.write_text("#!/bin/sh\n")
     interpreter.chmod(0o755)
@@ -61,15 +91,15 @@ def test_the_store_interpreter_outside_the_venv_still_re_execs(launcher, tmp_pat
     gets none of the venv's packages, so it must still be corrected — the reason membership is
     decided by prefix rather than by comparing resolved interpreter paths.
     """
-    store = tmp_path / "uv-store" / "cpython-3.14" / "bin"
+    store = tmp_path / "uv-store" / "cpython-3.14" / ("Scripts" if os.name == "nt" else "bin")
     store.mkdir(parents=True)
-    real = store / "python3.14"
+    real = store / ("python3.14.exe" if os.name == "nt" else "python3.14")
     real.write_text("#!/bin/sh\n")
     real.chmod(0o755)
 
     tree = tmp_path / "tree"
-    (tree / ".venv" / "bin").mkdir(parents=True)
-    link = tree / ".venv" / "bin" / "python"
+    link = _venv_interpreter_path(tree)
+    link.parent.mkdir(parents=True)
     link.symlink_to(real)
 
     # sys.prefix when running the store interpreter directly is the store, not the venv.
@@ -97,6 +127,25 @@ def test_venv_interpreter_follows_virtualenv_layout(launcher, tmp_path):
     assert Path(resolved).parent.parent.name == ".venv"
 
 
+def test_a_tree_without_dependencies_says_how_to_build_them(loaded_launcher, capsys):
+    """Subcommands import lazily, so the failure lands mid-command and the traceback names psutil
+    rather than setup."""
+    loaded_launcher["main"] = _raises(ModuleNotFoundError("no psutil", name="psutil"))
+
+    assert loaded_launcher["dispatch"](["selly-agent", "daemon", "run"]) == 1
+    printed = capsys.readouterr().err
+    assert "cannot import psutil" in printed
+    assert str(REPO_ROOT / "setup") in printed
+
+
+def test_one_of_our_own_modules_going_missing_is_not_disguised(loaded_launcher):
+    """That is a broken install, not an unbuilt one, and the traceback is the useful answer."""
+    loaded_launcher["main"] = _raises(ModuleNotFoundError("gone", name="selly_agent.passes"))
+
+    with pytest.raises(ModuleNotFoundError):
+        loaded_launcher["dispatch"](["selly-agent", "version"])
+
+
 def test_launcher_imports_nothing_beyond_the_stdlib():
     """It runs before the venv, so a third-party import here could never resolve — and an
     install that cannot start is an install that cannot say why."""
@@ -107,4 +156,41 @@ def test_launcher_imports_nothing_beyond_the_stdlib():
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported == {"__future__", "os", "sys", "selly_agent"}
+    assert imported == {"__future__", "json", "os", "signal", "subprocess", "sys", "selly_agent"}
+
+
+# --- the supervised job's environment file ------------------------------------------------------
+
+
+def test_env_file_is_applied_and_stripped_from_argv(launcher, tmp_path):
+    env_file = tmp_path / "SellyAgent.env.json"
+    env_file.write_text('{"SELLY_TEST_VAR": "from-file"}', encoding="utf-8")
+    environ = {}
+
+    argv = launcher["apply_env_file"](
+        ["selly-agent", "--env-file", str(env_file), "daemon", "run"], environ
+    )
+
+    assert argv == ["selly-agent", "daemon", "run"]
+    assert environ["SELLY_TEST_VAR"] == "from-file"
+
+
+def test_no_env_file_flag_changes_nothing(launcher):
+    environ = {}
+    argv = ["selly-agent", "daemon", "run"]
+    assert launcher["apply_env_file"](argv, environ) == argv
+    assert environ == {}
+
+
+def test_a_missing_env_file_refuses_to_run(launcher, tmp_path):
+    """The file is named by the job definition, so its absence is a broken install — proceeding
+    would boot a daemon resolving different roots than the installer provisioned."""
+    with pytest.raises(SystemExit) as excinfo:
+        launcher["apply_env_file"](["x", "--env-file", str(tmp_path / "gone.json"), "daemon"], {})
+    assert excinfo.value.code == 2
+
+
+def test_an_env_file_flag_without_a_path_refuses_to_run(launcher):
+    with pytest.raises(SystemExit) as excinfo:
+        launcher["apply_env_file"](["x", "--env-file"], {})
+    assert excinfo.value.code == 2

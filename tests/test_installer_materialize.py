@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import paths
+from selly_agent import paths, pointer
 from selly_agent.installer import materialize
 from selly_agent.installer.materialize import LayoutError
 
@@ -20,7 +20,7 @@ def test_install_version_populates_versions_and_points_current(xdg_tmp, tree) ->
     assert (dest / "bin" / "selly-agent").is_file()
     assert (dest / "src" / "selly_agent" / "__init__.py").is_file()
     assert (dest / "README.md").is_file()
-    assert paths.current().is_symlink()
+    assert pointer.is_pointer(paths.current())
     assert materialize.current_target() == dest.resolve()
     assert materialize.current_version() == "1.0.0"
 
@@ -29,6 +29,15 @@ def test_staging_leaves_dev_scaffolding_behind(xdg_tmp, tree) -> None:
     dest = materialize.install_version(tree, "1.0.0")
     assert not (dest / ".git").exists()
     assert not (dest / "src" / "selly_agent" / "__pycache__").exists()
+
+
+def test_a_staged_version_carries_both_front_doors(xdg_tmp, tree) -> None:
+    """A version has to be re-runnable on the platform it is installed on, and `update` stages the
+    same tree on either — so the Windows entry point travels with every release, not just Windows
+    ones."""
+    dest = materialize.install_version(tree, "1.0.0")
+    assert (dest / "setup").is_file()
+    assert (dest / "setup.ps1").is_file()
 
 
 def test_a_version_carries_the_files_it_needs_to_build_its_own_venv(xdg_tmp, tree) -> None:
@@ -102,7 +111,7 @@ def test_a_real_directory_at_current_is_refused_with_a_remedy(xdg_tmp, tree) -> 
     assert "real directory" in caught.value.message
     assert "mv " in caught.value.fix
     # Refused, not eaten.
-    assert paths.current().is_dir() and not paths.current().is_symlink()
+    assert paths.current().is_dir() and not pointer.is_pointer(paths.current())
 
 
 def test_dev_install_points_current_at_the_working_tree(xdg_tmp, tree) -> None:
@@ -119,10 +128,10 @@ def test_a_versioned_install_is_not_a_dev_install(xdg_tmp, tree) -> None:
 
 def test_swapping_never_leaves_current_absent(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
-    original = os.readlink(paths.current())
+    original = pointer.read(paths.current())
     materialize.install_version(tree, "2.0.0")
-    assert os.readlink(paths.current()) != original
-    assert paths.current().is_symlink()
+    assert pointer.read(paths.current()) != original
+    assert pointer.is_pointer(paths.current())
 
 
 # --- retention ------------------------------------------------------------------------------
@@ -158,6 +167,7 @@ def test_previous_version_is_none_on_a_first_install(xdg_tmp, tree) -> None:
 # --- the shim -------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_shim_links_through_current_so_updates_do_not_rewrite_it(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
     shim = materialize.install_shim()
@@ -170,6 +180,7 @@ def test_shim_links_through_current_so_updates_do_not_rewrite_it(xdg_tmp, tree) 
     assert shim.resolve() == (paths.versions_dir() / "2.0.0" / "bin" / "selly-agent").resolve()
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_shim_install_is_idempotent(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "1.0.0")
     materialize.install_shim()
@@ -186,6 +197,7 @@ def test_shim_refuses_to_clobber_a_real_file(xdg_tmp, tree) -> None:
     assert paths.shim_path().read_text() == "someone else's script\n"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="the shim is a .cmd there; test_pointer covers it")
 def test_remove_shim_only_removes_our_own(xdg_tmp, tree, tmp_path) -> None:
     materialize.install_version(tree, "1.0.0")
     materialize.install_shim()
@@ -237,6 +249,38 @@ def test_removing_the_rc_block_restores_the_surrounding_file(tmp_path) -> None:
     assert materialize.remove_rc_block(rc) is True
     assert rc.read_text() == original
     assert materialize.remove_rc_block(rc) is False
+
+
+def test_the_user_path_entry_is_added_once_and_removed_exactly(xdg_tmp, monkeypatch) -> None:
+    """The Windows counterpart of the rc block. Registry access is stubbed — what is under test is
+    the arithmetic on the PATH value, which is where an install can damage something."""
+    stored = {"value": r"C:\Tools;%USERPROFILE%\bin"}
+    monkeypatch.setattr(materialize, "_read_user_path", lambda: stored["value"])
+    monkeypatch.setattr(
+        materialize, "_write_user_path", lambda value: stored.__setitem__("value", value)
+    )
+    ours = str(paths.user_bin_dir())
+
+    assert materialize.add_user_path_entry() is True
+    assert stored["value"].split(";") == [r"C:\Tools", r"%USERPROFILE%\bin", ours]
+    assert materialize.add_user_path_entry() is False  # idempotent
+
+    assert materialize.remove_user_path_entry() is True
+    assert stored["value"] == r"C:\Tools;%USERPROFILE%\bin"  # everything else untouched
+    assert materialize.remove_user_path_entry() is False
+
+
+def test_an_entry_differing_only_in_case_or_a_trailing_slash_is_not_added_twice(
+    xdg_tmp, monkeypatch
+) -> None:
+    """Windows paths are case-insensitive and people's PATH entries end in a backslash as often as
+    not, so a naive compare would append a second copy of the same directory on every install."""
+    ours = str(paths.user_bin_dir())
+    stored = {"value": f"{ours.upper()}\\"}
+    monkeypatch.setattr(materialize, "_read_user_path", lambda: stored["value"])
+    monkeypatch.setattr(materialize, "_write_user_path", lambda value: pytest.fail("wrote anyway"))
+
+    assert materialize.add_user_path_entry() is False
 
 
 def test_removing_a_block_leaves_anything_written_after_it_alone(tmp_path) -> None:
@@ -308,7 +352,9 @@ def test_install_refuses_to_take_a_name_a_foreign_symlink_already_holds(
 
     with pytest.raises(LayoutError):
         materialize.install_shim()
-    assert os.readlink(paths.shim_path()) == str(theirs)
+    # Through pointer.read rather than os.readlink: Windows answers with the extended-length
+    # form (\\?\C:\...), which names the same file in a spelling nothing else here uses.
+    assert pointer.read(paths.shim_path()) == Path(os.path.realpath(theirs))
 
 
 def test_an_unterminated_block_is_left_alone_rather_than_eating_the_file(tmp_path) -> None:

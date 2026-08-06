@@ -1,7 +1,6 @@
 [
   "claude",
   "-p",
-  "publish item item_123 using only your tools",
   "--strict-mcp-config",
   "--mcp-config",
   "{\"mcpServers\": {\"selly\": {\"headers\": {\"Authorization\": \"Bearer TESTTOKEN\"}, \"type\": \"http\", \"url\": \"http://127.0.0.1:7355/mcp\"}}}",

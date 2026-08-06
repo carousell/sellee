@@ -16,10 +16,10 @@ import sys
 import time
 from pathlib import Path
 
-from selly_agent import config, control, paths, skills
+from selly_agent import config, control, paths, pointer, skills, spawn
 
 # The seam tests replace to observe the launch instead of becoming a Claude Code session.
-_exec = os.execvp
+_exec = spawn.become
 
 
 def run(args) -> int:
@@ -76,12 +76,12 @@ def _follow(port: int, token: str, pass_id: str) -> None:
 def _skills_dir() -> Path:
     """Where a command body should point a reader at the skill files.
 
-    Through the `current` symlink when there is one, so an update swaps the content underneath a
+    Through the `current` pointer when there is one, so an update swaps the content underneath a
     command that was written months ago. Falling back to the package's own location covers a
     checkout with no provisioned layout.
     """
     via_current = paths.current() / "src" / "selly_agent" / "skills"
-    if paths.current().is_symlink() and via_current.is_dir():
+    if pointer.is_pointer(paths.current()) and via_current.is_dir():
         return via_current
     return skills.SKILLS_DIR
 
@@ -163,12 +163,16 @@ def harness_config(directory=None, *, quiet: bool = False) -> int:
     commands_dir.mkdir(parents=True, exist_ok=True)
     for name in skills.available_commands():
         target = commands_dir / f"{name}.md"
-        body = skills.command_path(name).read_text().replace("{SKILLS_DIR}", str(skills_dir))
-        target.write_text(body)
+        body = (
+            skills.command_path(name)
+            .read_text(encoding="utf-8")
+            .replace("{SKILLS_DIR}", str(skills_dir))
+        )
+        target.write_text(body, encoding="utf-8")
         written.append(target)
 
     claude_md = dest / "CLAUDE.md"
-    claude_md.write_text(_claude_md(skills_dir))
+    claude_md.write_text(_claude_md(skills_dir), encoding="utf-8")
     written.append(claude_md)
 
     if not quiet:
@@ -228,11 +232,11 @@ def chat(args=None) -> int:
     # in them is lost rather than printed — silently, and only when stdout is a pipe.
     sys.stdout.flush()
     sys.stderr.flush()
-    # Replace this process rather than parenting the session: signals and the tty then behave
-    # exactly as if the seller had run `claude` themselves. Nothing can run after this line.
+    # Where the platform allows it this process is replaced, so signals and the tty behave exactly
+    # as if the seller had run `claude` themselves; where it does not, the session is run to
+    # completion and its status returned.
     os.chdir(dest)
-    _exec(binary, [binary])
-    return 0  # pragma: no cover — exec does not return
+    return _exec([binary])
 
 
 def provision(args) -> int:

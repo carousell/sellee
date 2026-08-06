@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 import os
+import stat
 from pathlib import Path
 
+import pytest
+
+from selly_agent import paths
 from selly_agent.config import Config
 from selly_agent.installer import checks, preflight
 
@@ -85,7 +89,28 @@ def test_node_gate_reports_a_missing_node(monkeypatch) -> None:
     monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
     result = preflight.check_node()
     assert result.status == checks.FAIL
-    assert result.fix == "brew install node"
+    assert result.fix == preflight.install_hint("node")
+
+
+@pytest.mark.parametrize("platform", ["macos", "windows"])
+def test_the_remediation_is_the_command_setup_would_run(platform, monkeypatch) -> None:
+    """A gate that printed one command while setup ran another is how somebody ends up pasting
+    something that does not work."""
+    # Patched at the one seam that answers this, rather than at sys.platform: the tables are
+    # keyed on host.name(), so pretending to be another OS is one substitution.
+    monkeypatch.setattr(preflight.host, "name", lambda: platform)
+    monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
+
+    command = preflight.install_command("node")
+
+    assert command, f"{platform} should have a way to install node"
+    assert preflight.install_hint("node") == " ".join(command)
+
+
+def test_a_platform_with_no_package_manager_says_so_rather_than_naming_one(monkeypatch) -> None:
+    monkeypatch.setattr(preflight.host, "name", lambda: "linux")
+    assert preflight.install_command("node") == []
+    assert f"re-run {preflight.setup_door()}" in preflight.install_hint("node")
 
 
 def test_node_gate_refuses_an_intel_node_on_apple_silicon(monkeypatch) -> None:
@@ -185,22 +210,40 @@ def test_prewarm_fills_the_cache_the_worker_will_read_with_the_pinned_version(mo
     assert preflight.prewarm_playwright(Config()).status == checks.OK
 
     assert preflight.browser_client.PINNED_MCP_SPEC in seen["argv"]
-    assert seen["env"] == {
-        "PATH": f"/opt/node/bin:{preflight.supervisor.SUPERVISED_PATH}",
-        "HOME": "/Users/seller",
-    }
+    worker_path = os.pathsep.join(["/opt/node/bin", preflight.supervisor.SUPERVISED_PATH])
+    assert seen["env"]["PATH"] == worker_path
+    # Exactly the worker's environment and nothing else — what that is differs per platform
+    # (Windows cannot start a child without SystemRoot), so the base is asked rather than
+    # spelled out; the point is that this shell's own environment did not leak in.
+    assert seen["env"] == {"PATH": worker_path, **paths.supervised_env_base()}
 
 
 # --- the spawn the worker will actually perform --------------------------------------------------
+
+
+def _executable(path: Path, says: str = "") -> Path:
+    """A program the host will actually resolve, answering `says` on stdout.
+
+    Windows resolves only what PATHEXT lists, so an extensionless stub is invisible to the very
+    lookup these gates perform — the gate would report the tool missing and the test would read
+    that as the gate being broken.
+    """
+    if os.name == "nt":
+        path = path.with_suffix(".cmd")
+        body = "@echo off\r\n" + (f"echo {says}\r\n" if says else "")
+    else:
+        body = "#!/bin/sh\n" + (f"echo {says}\n" if says else "")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(body, encoding="utf-8")
+    path.chmod(path.stat().st_mode | stat.S_IXUSR)
+    return path
 
 
 def _node_stubs(directory: Path) -> None:
     """`node` and `npx` that answer --version, as executable as the real ones."""
     directory.mkdir(parents=True, exist_ok=True)
     for name in ("node", "npx"):
-        stub = directory / name
-        stub.write_text("#!/bin/sh\necho v22.0.0\n")
-        stub.chmod(0o755)
+        _executable(directory / name, "v22.0.0")
 
 
 def test_the_spawn_gate_passes_when_the_workers_path_reaches_node_and_npx(
@@ -221,7 +264,7 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
     # and the launchd job — whose PATH holds none of it — could not spawn the browser server.
     bin_dir = tmp_path / "node" / "bin"
     _node_stubs(bin_dir)
-    monkeypatch.setenv("PATH", f"{bin_dir}:{os.environ['PATH']}")
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), os.environ["PATH"]]))
     monkeypatch.setattr(preflight, "node_path_fragment", lambda: "")
     monkeypatch.setattr(preflight.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
 
@@ -229,17 +272,14 @@ def test_the_spawn_gate_fails_when_only_this_shell_can_find_npx(tmp_path, monkey
     assert result.status == checks.FAIL
     # The PATH it was tried under is the whole diagnosis — without it the message is unactionable.
     assert str(tmp_path / "system") in result.detail
-    assert "node --version" in result.detail
-    assert "re-run ./setup" in result.fix
+    assert "`node` is not on" in result.detail
+    assert f"re-run {preflight.setup_door()}" in result.fix
 
 
 def test_the_spawn_gate_checks_an_override_and_leaves_node_out_of_it(tmp_path, monkeypatch) -> None:
     # An override may be a bundled server that never goes through npx, so `node` is not ours to
     # demand; its own binary still has to be reachable from the worker.
-    server = tmp_path / "opt" / "mcp"
-    server.parent.mkdir(parents=True)
-    server.write_text("#!/bin/sh\necho 1.0\n")
-    server.chmod(0o755)
+    server = _executable(tmp_path / "opt" / "mcp", "1.0")
     monkeypatch.setattr(preflight, "node_path_fragment", lambda: "")
     monkeypatch.setattr(preflight.supervisor, "SUPERVISED_PATH", str(tmp_path / "system"))
 
@@ -292,7 +332,7 @@ def test_the_node_directory_is_recorded_at_a_path_that_outlives_the_shell(
     installation = tmp_path / "node-versions" / "v22" / "installation"
     (installation / "bin").mkdir(parents=True)
     for name in ("node", "npx"):
-        (installation / "bin" / name).write_text("#!/bin/sh\n")
+        _executable(installation / "bin" / name)
     per_shell = tmp_path / "fnm_multishells" / "52166_1785491228033"
     per_shell.parent.mkdir(parents=True)
     per_shell.symlink_to(installation)
@@ -315,7 +355,7 @@ def test_a_divergent_npx_records_both_directories_with_node_first(tmp_path, monk
 
     # Node first: npx's shebang looks `node` up on PATH, and the node the gates checked must win
     # over any stray build sitting beside npx.
-    assert preflight.node_path_fragment() == f"{node_dir}:{npx_dir}"
+    assert preflight.node_path_fragment() == os.pathsep.join([str(node_dir), str(npx_dir)])
 
 
 def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> None:
@@ -327,3 +367,33 @@ def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> No
         preflight.shutil, "which", lambda name: "/usr/local/bin/npx" if name == "npx" else None
     )
     assert preflight.node_path_fragment() == ""
+
+
+def test_the_state_store_probe_passes_on_a_local_disk(xdg_tmp) -> None:
+    from selly_agent import paths
+
+    result = preflight.check_state_store()
+
+    assert result.status == checks.OK
+    # The probe cleans up after itself — a leftover database would look like state.
+    assert list(paths.state_dir().glob(".preflight-wal-probe*")) == []
+
+
+@pytest.mark.skipif(
+    os.name == "nt", reason="a directory mode is a POSIX concept; chmod does not deny writes here"
+)
+def test_the_state_store_probe_fails_loud_where_a_database_cannot_live(
+    xdg_tmp, monkeypatch
+) -> None:
+    from selly_agent import paths
+
+    blocked = paths.state_dir()
+    blocked.mkdir(parents=True, exist_ok=True)
+    blocked.chmod(0o500)
+    try:
+        result = preflight.check_state_store()
+    finally:
+        blocked.chmod(0o700)
+
+    assert result.status == checks.FAIL
+    assert "local disk" in result.fix

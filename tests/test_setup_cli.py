@@ -7,6 +7,8 @@ render, the real config writes.
 
 from __future__ import annotations
 
+import os
+
 import pytest
 from tests.test_supervisor import FakePlatform
 
@@ -19,11 +21,12 @@ from selly_agent import (
     pass_cli,
     passes,
     paths,
+    pointer,
     secrets,
     settings_cli,
     setup_cli,
 )
-from selly_agent.installer import checks, materialize, preflight
+from selly_agent.installer import checks, materialize, preflight, runtime
 from selly_agent.installer import region as region_guess
 
 
@@ -49,7 +52,7 @@ def world(monkeypatch, xdg_tmp, tree):
     monkeypatch.setattr(heartbeat, "wait_fresh", lambda path, **kwargs: True)
     # A PATH that already has ~/.local/bin, so the rc-file offer stays out of the way unless a
     # test is about it.
-    monkeypatch.setenv("PATH", f"/usr/bin:{paths.user_bin_dir()}")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", str(paths.user_bin_dir())]))
 
     # The daemon half: a token as if one had been minted at first start, and control routes that
     # record rather than serve.
@@ -130,7 +133,7 @@ def test_a_default_install_stages_a_version_and_brings_the_daemon_up(world, caps
     version_dir = paths.versions_dir() / __version__
     assert (version_dir / "bin" / "selly-agent").is_file()
     assert materialize.current_version() == __version__
-    assert paths.shim_path().is_symlink()
+    assert pointer.shim_target(paths.shim_path()) is not None
 
     cfg = config.load()
     assert cfg.daemon_mode == "manual"
@@ -173,7 +176,7 @@ def test_a_re_run_is_idempotent(world) -> None:
     assert setup_main("--yes", "--manual") == 0
     assert setup_main("--yes", "--manual") == 0
     assert materialize.current_version() is not None
-    assert paths.shim_path().is_symlink()
+    assert pointer.shim_target(paths.shim_path()) is not None
 
 
 # --- the consent gate ---------------------------------------------------------------------------
@@ -292,7 +295,7 @@ def test_a_missing_claude_cli_is_fatal_and_never_installed_for_you(world, monkey
     assert setup_main("--yes", "--manual") == 1
 
 
-def test_a_missing_dependency_offers_brew_then_re_probes(world, monkeypatch, capsys) -> None:
+def test_a_missing_dependency_is_offered_and_then_re_probed(world, monkeypatch, capsys) -> None:
     probes = iter(
         [
             checks.fail("node", "not installed", "brew install node"),
@@ -300,30 +303,35 @@ def test_a_missing_dependency_offers_brew_then_re_probes(world, monkeypatch, cap
         ]
     )
     monkeypatch.setattr(preflight, "check_node", lambda: next(probes))
-    monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
+    monkeypatch.setattr(preflight, "install_command", lambda name: ["brew", "install", name])
     installed = []
     monkeypatch.setattr(
         preflight,
-        "brew_install",
-        lambda package, cask=False: (installed.append((package, cask)), (True, ""))[1],
+        "install_dependency",
+        lambda name: (installed.append(name), (True, ""))[1],
     )
 
     assert setup_main("--yes", "--manual") == 0
-    assert installed == [("node", False)]
+    assert installed == ["node"]
     assert "brew install node" in capsys.readouterr().out
 
 
-def test_without_homebrew_a_missing_dependency_is_fatal_and_brew_is_never_bootstrapped(
+def test_with_no_installer_available_a_missing_dependency_is_fatal_and_nothing_is_bootstrapped(
     world, monkeypatch, capsys
 ) -> None:
+    """Homebrew is the case that motivates this: installing it is piping a remote script into a
+    shell, which belongs to whoever owns the machine."""
+    fix = "brew install node"
+    monkeypatch.setattr(preflight, "check_node", lambda: checks.fail("node", "not installed", fix))
+    monkeypatch.setattr(preflight, "install_command", lambda _name: [])
     monkeypatch.setattr(
-        preflight, "check_node", lambda: checks.fail("node", "not installed", "brew install node")
+        preflight, "install_dependency", lambda _name: pytest.fail("must not install")
     )
-    monkeypatch.setattr(preflight, "homebrew_path", lambda: "")
 
     assert setup_main("--yes", "--manual") == 1
     err = capsys.readouterr().err
-    assert "https://brew.sh" in err
+    assert fix in err
+    assert "however you prefer" in err
     assert not paths.current().exists()
 
 
@@ -363,7 +371,9 @@ def test_an_agent_session_stops_setup_asking_questions(world, monkeypatch, capsy
 def test_a_daemon_that_never_heartbeats_fails_with_its_own_log(world, monkeypatch, capsys) -> None:
     monkeypatch.setattr(heartbeat, "wait_fresh", lambda path, **kwargs: False)
     paths.ensure_state_dirs()
-    (paths.logs_dir() / "agent.err.log").write_text("Traceback…\nOSError: port 7355 in use\n")
+    (paths.logs_dir() / "agent.err.log").write_text(
+        "Traceback…\nOSError: port 7355 in use\n", encoding="utf-8"
+    )
 
     assert setup_main("--yes", "--manual") == 1
     err = capsys.readouterr().err
@@ -374,10 +384,13 @@ def test_a_daemon_that_never_heartbeats_fails_with_its_own_log(world, monkeypatc
 # --- PATH -----------------------------------------------------------------------------------
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
     world, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--yes", "--manual") == 0
@@ -387,10 +400,13 @@ def test_a_missing_path_entry_is_offered_and_written_to_the_rc_file(
     assert "is not on your PATH" in capsys.readouterr().out
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_no_modify_path_prints_the_line_and_leaves_the_rc_file_alone(
     world, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--yes", "--manual", "--no-modify-path") == 0
@@ -399,11 +415,14 @@ def test_no_modify_path_prints_the_line_and_leaves_the_rc_file_alone(
     assert materialize.RC_BLOCK_BODY in capsys.readouterr().out
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
     world, monkeypatch, capsys
 ) -> None:
     # No terminal to ask at and no --yes: nobody consented to a dotfile edit.
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/zsh")
 
     assert setup_main("--manual") == 0
@@ -565,12 +584,15 @@ def test_a_custom_daemon_label_is_not_replaced_by_the_default_one(world) -> None
     assert not (paths.config_dir() / "com.selly.agent.plist").exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
     world, monkeypatch, capsys
 ) -> None:
     # Writing ~/.profile for fish produces a file fish never reads, holding a line it could not
     # parse — a confident success message and no effect.
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/usr/local/bin/fish")
 
     assert setup_main("--yes", "--manual") == 0
@@ -582,8 +604,11 @@ def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
     assert materialize.RC_BLOCK_BODY not in out  # never the POSIX line for fish
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.setenv("SHELL", "/bin/ksh")
 
     assert setup_main("--yes", "--manual") == 0
@@ -594,8 +619,11 @@ def test_an_unrecognised_shell_is_named_and_told_what_to_add(world, monkeypatch,
     assert not (paths.user_path("~") / ".profile").exists()
 
 
+@pytest.mark.skipif(
+    os.name == "nt", reason="the rc-file door; Windows offers the user PATH entry instead"
+)
 def test_an_unset_shell_says_so_rather_than_naming_nothing(world, monkeypatch, capsys) -> None:
-    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("PATH", os.pathsep.join(["/usr/bin", "/bin"]))
     monkeypatch.delenv("SHELL", raising=False)
 
     assert setup_main("--yes", "--manual") == 0
@@ -629,3 +657,24 @@ def test_setup_records_every_directory_the_worker_needs_not_just_the_first(
 
     assert config.load().node_bin_dir == fragment
     assert fragment in (paths.config_dir() / "com.selly.agent.plist").read_text()
+
+
+def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(monkeypatch, capsys) -> None:
+    """Provisioning runs several frames down inside the install, and a first-time installer who
+    hits a network failure gets the one line about it rather than a stack."""
+
+    def fail(*_args, **_kwargs):
+        raise runtime.RuntimeSetupError("could not download uv 0.12.1: connection refused")
+
+    monkeypatch.setattr(setup_cli, "_run", fail)
+
+    assert setup_cli.run(_Args()) == 1
+    printed = capsys.readouterr()
+    assert "could not download uv" in printed.out + printed.err
+    assert "Traceback" not in printed.out + printed.err
+
+
+class _Args:
+    yes = True
+    dev = False
+    mode = None
