@@ -18,7 +18,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from selly_agent import passes, paths, supervisor
+from selly_agent import deployment, passes, paths, supervisor
 from selly_agent.browser import chrome
 from selly_agent.browser import client as browser_client
 from selly_agent.installer import checks, runtime
@@ -186,7 +186,13 @@ def supervised_path(fragment: str | None = None) -> str:
 
     The same join the supervisor writes into the job definition, so a check run against this is
     checking the real thing rather than an approximation of it.
+
+    In a container there is no job definition and nothing recorded: the daemon is started with the
+    image's own PATH, which already reaches the node that was installed alongside it. Asking about
+    a launchd default there would be checking a machine that does not exist.
     """
+    if deployment.is_container():
+        return os.environ.get("PATH", supervisor.SUPERVISED_PATH)
     fragment = node_path_fragment() if fragment is None else fragment
     return f"{fragment}:{supervisor.SUPERVISED_PATH}" if fragment else supervisor.SUPERVISED_PATH
 
@@ -228,6 +234,10 @@ def brew_install(package: str, *, cask: bool = False) -> tuple:
 
 
 def check_platform() -> checks.Check:
+    if deployment.is_container():
+        # The image is the machine here, and it is one we built — so the question this gate asks
+        # of a host ("is this an OS we support?") is already answered.
+        return checks.ok("platform", "container")
     if sys.platform != "darwin":
         return checks.fail(
             "platform",
