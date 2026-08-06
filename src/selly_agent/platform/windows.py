@@ -222,7 +222,12 @@ class WindowsPlatform(Platform):
             return
         deleted = self._schtasks("/Delete", "/TN", label, "/F")
         if deleted.returncode != 0:
-            log.warning("could not delete scheduled task %r: %s", label, _last_line(deleted))
+            # Not a warning: the keep-alive trigger is still registered, so "stopped" would be
+            # a lie that resurrects the daemon within five minutes. Uninstall, which can carry
+            # on regardless, catches this and reports the residue instead.
+            raise RegistrationError(
+                f"the scheduled task {label!r} could not be deleted: {_last_line(deleted)}"
+            )
 
     def is_registered(self, label: str) -> bool:
         return self._schtasks("/Query", "/TN", label).returncode == 0

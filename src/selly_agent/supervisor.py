@@ -329,7 +329,12 @@ def uninstall(*, label: str | None = None, platform: Platform | None = None) -> 
     platform = _resolve_platform(platform)
     label = _resolve_label(platform, label)
     # Drained rather than just deregistered: the files about to be removed are the ones it has open.
-    shutdown(label=label, platform=platform)
+    try:
+        shutdown(label=label, platform=platform)
+    except RegistrationError as exc:
+        # Best-effort here, unlike `stop`: an uninstall that stopped at the first thing it
+        # could not remove would leave more behind than one that carries on and says so.
+        print(f"could not deregister the worker: {exc}", file=sys.stderr)
     for location in _plist_locations(platform, label).values():
         if location.exists() and _is_ours(location, platform):
             location.unlink()

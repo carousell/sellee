@@ -318,7 +318,15 @@ def _offer_user_path_entry(ui: Ui, args, bin_dir) -> None:
     Same contract as the dotfile — offered, declinable, and recorded so an uninstall removes only
     what was added. There is no shell to ask about here: one value serves every terminal.
     """
-    by_hand = f'Add {bin_dir} to your PATH: setx PATH "%PATH%;{bin_dir}"'
+    # Deliberately not a command to paste. `setx PATH "%PATH%;..."` does not expand %PATH% in
+    # PowerShell, so following it replaces the account's entire PATH with that literal; run from
+    # cmd it copies the combined machine and user PATH into the user value and truncates it at
+    # 1024 characters. There is no one-liner here worth the chance of destroying someone's PATH.
+    by_hand = (
+        f"Add this directory to your PATH: {bin_dir}\n"
+        "  (Settings → System → About → Advanced system settings → Environment Variables,\n"
+        "   then edit Path under your user variables — or re-run setup and accept the offer.)"
+    )
     consented = ui.interactive or ui.assume_yes
     if args.no_modify_path or not consented:
         ui.say(by_hand)

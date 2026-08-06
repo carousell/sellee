@@ -41,7 +41,10 @@ def to_jpeg(src, dest, max_dim: int) -> None:
             _without_alpha(image).save(
                 dest, "JPEG", quality=_JPEG_QUALITY, optimize=True, progressive=True
             )
-    except (UnidentifiedImageError, OSError, ValueError) as exc:
+    # DecompressionBombError subclasses Exception directly rather than any of the above, so a
+    # photo past the bomb threshold would otherwise leave here as an unhandled handler bug
+    # instead of the seller-facing "cannot convert this one" path.
+    except (UnidentifiedImageError, OSError, ValueError, Image.DecompressionBombError) as exc:
         raise ImageToolUnavailable(f"cannot convert {src.name}: {exc}") from exc
 
 

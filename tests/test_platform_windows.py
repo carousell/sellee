@@ -221,6 +221,15 @@ def test_unregistering_deletes_our_task_without_prompting() -> None:
     assert platform.calls[-1] == ("/Delete", "/TN", "SellyAgent", "/F")
 
 
+def test_a_delete_that_fails_is_raised_not_logged() -> None:
+    """The keep-alive trigger restarts the daemon within five minutes, so a `daemon stop` that
+    reported success over a failed delete would be telling the seller something untrue — and the
+    daemon coming back is exactly the symptom nobody would connect to the stop."""
+    platform = RecordingPlatform(returncode=1, registered_xml=f"<Task>{supervisor.MARKER}</Task>")
+    with pytest.raises(RegistrationError):
+        platform.unregister("SellyAgent")
+
+
 def test_unregistering_leaves_a_foreign_task_alone() -> None:
     platform = RecordingPlatform(registered_xml="<Task>someone else's</Task>")
     platform.unregister("SellyAgent")

@@ -102,7 +102,10 @@ class Platform(ABC):
 
     @abstractmethod
     def unregister(self, label: str) -> None:
-        """Unregister the job; it stays stopped until re-registered."""
+        """Unregister the job; it stays stopped until re-registered.
+
+        Raises RegistrationError when it could not be deregistered — a caller told the job is
+        gone when its restart trigger is still live has been told something untrue."""
 
     @abstractmethod
     def is_registered(self, label: str) -> bool:

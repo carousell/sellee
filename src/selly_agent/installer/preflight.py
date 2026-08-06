@@ -259,6 +259,25 @@ def install_hint(dependency: str) -> str:
     return " ".join(argv) if argv else f"Install {dependency} and re-run {setup_door()}."
 
 
+def _claude_install_hint() -> str:
+    """How to get the `claude` CLI, spelled for this platform.
+
+    The published one-liner is a shell script, so it is only offered where there is a shell to
+    run it in; elsewhere this falls back to the generic hint rather than naming a command that
+    would fail. The CLI is a separate install from the desktop app either way, which is the part
+    people get wrong.
+    """
+    if os.name == "nt":
+        return (
+            "The `claude` CLI is a separate install from the desktop app. Install it, then "
+            f"re-run {setup_door()}."
+        )
+    return (
+        "The `claude` CLI is a separate install from the desktop app: "
+        "curl -fsSL https://claude.com/install.sh | bash"
+    )
+
+
 def install_dependency(dependency: str) -> tuple:
     """Install one dependency with this platform's manager, answering (ok, output tail).
 
@@ -446,8 +465,7 @@ def check_claude(config) -> checks.Check:
         return checks.fail(
             "claude CLI",
             "not installed",
-            "The `claude` CLI is a separate install from the desktop app: "
-            "curl -fsSL https://claude.com/install.sh | bash",
+            _claude_install_hint(),
         )
     code, out = _run([binary, "auth", "status", "--json"])
     signed_in = parse_auth_status(out)
