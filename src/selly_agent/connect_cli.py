@@ -6,7 +6,8 @@ opens the page, the probe reads back whether it worked, and nothing about the se
 
 The Telegram token is a long-lived credential, so it never touches argv: it is read from stdin
 and POSTed to the running daemon, which validates it, stores it 0600, and mints a bind nonce. The
-CLI prints the deep link (open it on the phone that has Telegram) and polls until the chat binds.
+CLI prints the deep link as a terminal QR plus the link itself (scan or open it on the phone that
+has Telegram) and polls until the chat binds.
 Exit codes: 0 bound · 1 awaiting /start (timed out, re-runnable) · 2 bad token · 3 daemon/API error.
 
 Interactive vs piped:
@@ -24,10 +25,11 @@ phone?" offer shares one implementation of the UX.
 from __future__ import annotations
 
 import getpass
+import os
 import sys
 import time
 
-from selly_agent import config, control
+from selly_agent import config, control, qr
 
 _POLL_INTERVAL_SEC = 1.0
 # Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
@@ -160,7 +162,7 @@ def bind_flow(
 ) -> int:
     """Run the full connect-telegram UX and return the process exit code.
 
-    Guidance → token read → POST /control/connect-telegram → print identity + start_url +
+    Guidance → token read → POST /control/connect-telegram → print identity + QR + start_url +
     phone-delivery guidance → poll channel-status until bound or timeout. Shared by the standalone
     command and the installer's inline offer; the caller owns any offer/accept/decline framing, this
     owns everything from the token to a bound chat.
@@ -204,15 +206,22 @@ def bind_flow(
 
 
 def _print_bind_prompt(bot_username: str, start_url: str, *, timeout: int) -> None:
-    """Show the bot identity and the deep link the operator must open on their phone.
+    """Show the bot identity, a scannable QR of the deep link, and the link itself.
 
-    Wording is phone-oriented ("open on the phone that has Telegram"), not "tap the link" — the
-    operator is often at a desktop with no Telegram, so the link has to travel to the phone. The URL
-    is printed prominently with one line on getting it across (no online-QR suggestion — the nonce
-    is a single-use secret).
+    Wording is phone-oriented ("the phone that has Telegram"), not "tap the link" — the operator
+    is often at a desktop with no Telegram, so the link has to travel to the phone, and the QR is
+    the shortest way across. The link stays printed (copy/paste + accessibility, and the fallback
+    when the terminal render won't scan). Rendering is local — an online QR service would ship
+    the single-use nonce off the machine.
     """
+    # SGR colors force the code dark-on-light whatever the theme, but only where they render:
+    # never into a pipe, and not against the NO_COLOR convention.
+    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(f"Bot @{bot_username} validated.\n")
-    print("Open this link on the phone that has Telegram, then tap Start:")
+    print(qr.render_half_block(qr.encode(start_url), color=color))
+    print()
+    print("Scan the code with the phone that has Telegram — or open this link on it —")
+    print("then tap Start:")
     print(f"  {start_url}")
     print("  On a desktop with no Telegram? Send the link to your phone (message it to")
     print("  yourself) and open it there — don't just type /start, the link carries a")

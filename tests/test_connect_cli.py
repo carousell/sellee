@@ -144,8 +144,31 @@ def test_prints_prominent_url_with_phone_wording(monkeypatch, stub_daemon, capsy
     rc = connect_cli.bind_flow(9999, "mcp-tok", interactive=False)
     assert rc == 0
     out = capsys.readouterr().out
-    assert "Open this link on the phone that has Telegram" in out
+    assert "Scan the code with the phone that has Telegram" in out
     assert "https://t.me/sellybot?start=n0" in out
+
+
+def test_prints_a_terminal_qr_above_the_link(monkeypatch, stub_daemon, capsys) -> None:
+    _pipe_stdin(monkeypatch, _TOKEN + "\n")
+    connect_cli.bind_flow(9999, "mcp-tok", interactive=False)
+    out = capsys.readouterr().out
+    qr_block = out.split("validated.", 1)[1].split("Scan the code", 1)[0]
+    assert "█" in qr_block  # the half-block QR sits between the identity and the guidance
+    # captured stdout is not a TTY, so the render is the plain-glyph one — no SGR into a pipe
+    assert "\x1b[" not in out
+
+
+def test_qr_colors_on_a_tty_unless_no_color(monkeypatch, stub_daemon, capsys) -> None:
+    _pipe_stdin(monkeypatch, _TOKEN + "\n")
+    monkeypatch.setattr(connect_cli.sys.stdout, "isatty", lambda: True, raising=False)
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    connect_cli.bind_flow(9999, "mcp-tok", interactive=False)
+    assert "\x1b[30;47m" in capsys.readouterr().out  # dark-on-light SGR cells
+
+    monkeypatch.setenv("NO_COLOR", "1")
+    _pipe_stdin(monkeypatch, _TOKEN + "\n")
+    connect_cli.bind_flow(9999, "mcp-tok", interactive=False)
+    assert "\x1b[" not in capsys.readouterr().out
 
 
 # --- timeout defaults ------------------------------------------------------------------------
