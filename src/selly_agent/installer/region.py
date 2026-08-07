@@ -68,9 +68,16 @@ def region_for_zone(zone: str):
 def system_timezone() -> str:
     """The machine's IANA zone name, or "" when it cannot be read.
 
-    Read from where /etc/localtime points rather than from `time.tzname`, which gives an
-    abbreviation ("+08") that names no zone and cannot be stored or looked up.
+    TZ wins, because POSIX says it overrides the machine's default and in a container it is the
+    only signal there is: setting it moves the clock but leaves /etc/localtime pointing at UTC,
+    so the two disagree and the file is the one that is wrong.
+
+    Otherwise where /etc/localtime points, rather than `time.tzname`, which gives an abbreviation
+    ("+08") that names no zone and cannot be stored or looked up.
     """
+    named = os.environ.get("TZ", "").strip().lstrip(":")
+    if named and _zone_exists(named):
+        return named
     try:
         resolved = os.path.realpath("/etc/localtime")
     except OSError:
@@ -78,6 +85,18 @@ def system_timezone() -> str:
     marker = "/zoneinfo/"
     index = resolved.find(marker)
     return resolved[index + len(marker) :] if index >= 0 else ""
+
+
+def _zone_exists(name: str) -> bool:
+    """TZ also takes POSIX forms — "<+08>-8", "UTC+8" — that name no zone and cannot be stored,
+    so only a name the database has is worth proposing."""
+    import zoneinfo
+
+    try:
+        zoneinfo.ZoneInfo(name)
+    except Exception:  # noqa: BLE001 — malformed, unknown, or no database: none of them usable
+        return False
+    return True
 
 
 def guess(zone: str | None = None):

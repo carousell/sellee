@@ -56,5 +56,20 @@ def test_an_unknown_or_missing_zone_produces_no_guess() -> None:
     assert region.guess("") is None
 
 
+def test_tz_beats_the_localtime_symlink(monkeypatch) -> None:
+    """A container sets TZ and leaves /etc/localtime at UTC, so reading the file proposes the
+    wrong zone while the clock reads the right one. TZ overrides the machine default on a host
+    too — someone who exports it means it."""
+    monkeypatch.setenv("TZ", "Asia/Singapore")
+    assert region.system_timezone() == "Asia/Singapore"
+
+
+def test_a_tz_that_names_no_zone_falls_back_to_the_machine(monkeypatch) -> None:
+    """TZ takes POSIX forms as well as zone names, and those cannot be stored or looked up."""
+    for value in ("<+08>-8", "UTC+8", "Antarctica/Nowhere", "/etc/localtime"):
+        monkeypatch.setenv("TZ", value)
+        assert region.system_timezone() != value, value
+
+
 def test_render_reads_as_the_confirmation_it_is_used_for() -> None:
     assert region.render(region.guess("Asia/Singapore")) == "SG · SGD · Asia/Singapore"
