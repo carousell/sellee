@@ -25,7 +25,6 @@ phone?" offer shares one implementation of the UX.
 from __future__ import annotations
 
 import getpass
-import os
 import sys
 import time
 
@@ -214,12 +213,8 @@ def _print_bind_prompt(bot_username: str, start_url: str, *, timeout: int) -> No
     when the terminal render won't scan). Rendering is local — an online QR service would ship
     the single-use nonce off the machine.
     """
-    # SGR colors force the code dark-on-light whatever the theme, but only where they render:
-    # never into a pipe, and not against the NO_COLOR convention.
-    color = sys.stdout.isatty() and not os.environ.get("NO_COLOR")
     print(f"Bot @{bot_username} validated.\n")
-    print(qr.render_half_block(qr.encode(start_url), color=color))
-    print()
+    print(qr.render_terminal(start_url))
     print("Scan the code with the phone that has Telegram — or open this link on it —")
     print("then tap Start:")
     print(f"  {start_url}")

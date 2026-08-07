@@ -63,9 +63,9 @@ stays out of `ps`/shell history — and sends it to the running daemon, which:
 Run interactively (stdin is a TTY), it prints short BotFather guidance and prompts
 for the token with `getpass` (not echoed); run with a pipe (scripted / installer),
 it reads one line of stdin with no prompt. Either way it then prints the deep link
-as a terminal QR (half-blocks, forced dark-on-light so a phone can scan it off a
-dark theme; plain glyphs under `NO_COLOR` or a pipe) above the link itself, with
-phone-oriented wording — **scan or open it on the phone that has Telegram**, not
+as a terminal QR (colorless half-blocks in the terminal's own colors — correct
+polarity on a dark theme, inverted on a light one, and most scanners read both)
+above the link itself, with phone-oriented wording — **scan or open it on the phone that has Telegram**, not
 "tap it" (the operator is often at a desktop) — and polls until the chat binds.
 The link is the fallback when the terminal render won't scan; rendering is local
 by design (an online QR service would ship the single-use nonce off the machine).
