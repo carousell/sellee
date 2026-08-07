@@ -141,11 +141,23 @@ def test_the_container_refuses_to_start_without_a_timezone_or_a_token() -> None:
     assert "exit 1" in ENTRYPOINT
 
 
-def test_compose_publishes_no_ports() -> None:
-    """The daemon's HTTP server is its MCP and control surface, on container loopback. The
-    attended session reaches it from inside, so there is nothing to publish."""
-    assert "ports:" not in COMPOSE
+def test_the_one_published_port_is_scoped_to_host_loopback() -> None:
+    """The web tail shares its server with the MCP and control surface, so publishing it puts all
+    three within reach. `"7355:7355"` — no host address — would put them on the seller's LAN."""
+    published = re.findall(r"^\s+- \"([^\"]+)\"", COMPOSE, re.MULTILINE)
+    assert published == ["127.0.0.1:7355:7355"]
+    # Host networking discards published ports anyway, and the loopback it shares is the host's.
     assert "ports:" not in COMPOSE_LINUX
+
+
+def test_a_container_binds_wide_enough_for_that_port_to_reach_it() -> None:
+    """A published port arrives on the bridge address, so a loopback-only bind answers nothing."""
+    assert "ENV SELLY_BIND_HOST=0.0.0.0" in DOCKERFILE
+
+
+def test_sharing_a_host_s_network_namespace_puts_the_bind_back_on_loopback() -> None:
+    """0.0.0.0 there is the machine's real interfaces, and the control surface with it."""
+    assert "SELLY_BIND_HOST: 127.0.0.1" in COMPOSE_LINUX
 
 
 def test_compose_mounts_one_directory_and_lets_docker_supervise() -> None:

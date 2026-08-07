@@ -28,8 +28,8 @@ host="${SELLY_CDP_HOST:-host.docker.internal}"
 
 if [ "${SELLY_CDP_FORWARD:-1}" = "1" ]; then
 	if ! getent hosts "$host" >/dev/null 2>&1; then
-		echo "warn: cannot resolve $host, so the browser will be unreachable" >&2
-		echo "warn: on a Linux host, add -f compose.yaml -f compose.linux.yaml" >&2
+		echo "selly-agent: cannot resolve $host, so the browser will be unreachable" >&2
+		echo "selly-agent: on a Linux host, add -f compose.yaml -f compose.linux.yaml" >&2
 	fi
 	socat "TCP-LISTEN:${port},bind=127.0.0.1,fork,reuseaddr" "TCP:${host}:${port}" &
 fi

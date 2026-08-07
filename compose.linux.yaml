@@ -9,3 +9,6 @@ services:
     network_mode: host
     environment:
       SELLY_CDP_FORWARD: "0"
+      # Sharing that namespace, the image's 0.0.0.0 would be the machine's own interfaces. Nothing
+      # needs publishing here either — this loopback is the host's, so the tail is already there.
+      SELLY_BIND_HOST: 127.0.0.1

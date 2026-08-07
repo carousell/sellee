@@ -46,6 +46,11 @@ ENV XDG_DATA_HOME=/data/share \
 
 ENV SELLY_DEPLOYMENT=container
 
+# A published port arrives on the bridge address, not this container's loopback, so loopback-only
+# would answer nothing. Set it back to 127.0.0.1 wherever the container shares a real host's
+# network namespace — compose.linux.yaml does.
+ENV SELLY_BIND_HOST=0.0.0.0
+
 # tini, because the daemon reaps only the children it spawns and installs no SIGCHLD handler — as
 # PID 1 it would collect an orphaned `node` per pass.
 ENTRYPOINT ["/usr/bin/tini", "--", "/opt/selly-agent/docker/entrypoint.sh"]

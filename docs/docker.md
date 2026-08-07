@@ -63,8 +63,13 @@ Then:
 docker exec -it selly-agent selly-agent chat            # talk to it
 docker exec -it selly-agent selly-agent healthcheck     # is anything wrong
 docker exec -it selly-agent selly-agent logs --follow   # watch it work
+docker exec -it selly-agent selly-agent logs --web      # prints the web tail's URL, token and all
 docker compose logs -f selly-agent                      # the worker's own stderr
 ```
+
+`logs --web` cannot open a browser from in there, so it prints the URL and stops. Paste that into
+a browser on your own machine — `http://127.0.0.1:7355/tail?token=…` reaches the container through
+the one port compose publishes.
 
 ## The two settings you have to get right
 
@@ -159,6 +164,10 @@ namespace instead and runs no forwarder:
 docker compose -f compose.yaml -f compose.linux.yaml up -d
 ```
 
+It also puts `SELLY_BIND_HOST` back to `127.0.0.1`, because sharing the
+namespace makes the image's `0.0.0.0` your machine's real interfaces. Nothing
+needs publishing there either — the web tail is already on your loopback.
+
 One wrinkle there: the container runs as root, so files it creates in the bind
 mount belong to root on your machine (`sudo rm -rf` to remove them). The photo
 inbox is created world-writable for exactly this reason. On macOS and Windows,
@@ -199,10 +208,15 @@ your data directory and leave the container running.
 
 ## What the container does not do
 
-- **Publish any ports.** The daemon's HTTP server is its MCP and control
-  surface, on the container's own loopback. The attended session reaches it from
-  inside, which is why it is `docker exec` rather than a `claude` on your
-  machine.
+- **Reach anything but your own machine.** One port is published, `7355`, and
+  only on your host's loopback — `127.0.0.1:7355:7355`, never a bare
+  `7355:7355`, which would put it on your network. It carries the web tail, and
+  with it the daemon's MCP and control surface, whose bearer tokens are then the
+  only guard. The attended session still runs inside, which is why it is
+  `docker exec` rather than a `claude` on your machine. Pointing
+  `SELLY_BIND_HOST` at a LAN address will not get you further: requests must
+  still arrive addressed to `localhost`, so it would bind and then refuse
+  everything.
 - **Supervise anything itself.** Your restart policy is the keep-alive, so
   `daemon install|start|stop` refuse. `daemon status` still works — it reads the
   instance lock rather than asking a supervisor.
@@ -221,3 +235,4 @@ your data directory and leave the container running.
 | `SELLY_CDP_FORWARD` | no | `0` turns the forwarder off; the Linux override sets it |
 | `SELLY_CHROME_BIN` | no | read by the launch scripts when Chrome is somewhere unusual |
 | `SELLY_CHROME_PROFILE` | no | where the launch scripts keep the agent's Chrome profile |
+| `SELLY_BIND_HOST` | no | what the daemon's HTTP server binds (image sets `0.0.0.0`) |

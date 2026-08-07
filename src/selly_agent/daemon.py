@@ -320,9 +320,14 @@ def run_daemon(*, once: bool) -> int:
         )
     )
 
+    # Loopback everywhere except a container, whose image sets the wildcard so a published port
+    # has something to reach. The Host guard still only answers to localhost, so a bind address
+    # clients address directly rather than through a port mapping will refuse them.
+    bind_host = os.environ.get("SELLY_BIND_HOST", "").strip() or "127.0.0.1"
     try:
         http = HttpServer(
             port=cfg.http_port,
+            host=bind_host,
             bus=bus,
             store=store,
             events_db_path=events_db.path,
@@ -334,7 +339,7 @@ def run_daemon(*, once: bool) -> int:
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so
         # launchd's throttle paces respawns rather than running half-initialized.
-        log.error("http server bind failed on 127.0.0.1:%s: %s", cfg.http_port, exc)
+        log.error("http server bind failed on %s:%s: %s", bind_host, cfg.http_port, exc)
         lock.clear_holder(paths.lock_path())
         data_db.close()
         events_db.close()

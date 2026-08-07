@@ -26,6 +26,12 @@ services:
     volumes:
       - ${SELLY_DATA:-./selly-data}:/data
 
+    # The web tail, at http://127.0.0.1:7355/tail — `selly-agent logs --web` prints the URL with
+    # its token. Host loopback only: this is the MCP and control surface too, and the daemon's
+    # bearer tokens are all that guard it. Change this alongside `http_port` in config.json.
+    ports:
+      - "127.0.0.1:7355:7355"
+
     # `docker stop` is a SIGTERM the daemon drains on: lanes stop, the browser client closes, the
     # lock body is cleared. Give it room rather than being killed mid-drain.
     stop_grace_period: 30s

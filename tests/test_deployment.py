@@ -17,7 +17,9 @@ import ast
 import json
 from pathlib import Path
 
-from selly_agent import deployment, passes
+import pytest
+
+from selly_agent import daemon, deployment, passes, paths
 from selly_agent.config import Config
 from selly_agent.harness import claude
 from selly_agent.harness.model import PassSpec, StdioServer
@@ -134,3 +136,30 @@ def test_the_workspace_mcp_config_is_loopback_in_a_container_too(container) -> N
     rendered = json.dumps(claude.mcp_config(_browser_spec(command)))
     assert "http://127.0.0.1:9222" in rendered
     assert "host.docker.internal" not in rendered
+
+
+# --- where the daemon's own server binds ---------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("env", "expected"),
+    [(None, "127.0.0.1"), ("", "127.0.0.1"), ("  ", "127.0.0.1"), ("0.0.0.0", "0.0.0.0")],
+)
+def test_the_bind_host_is_loopback_unless_the_environment_widens_it(
+    xdg_tmp, monkeypatch, env, expected
+) -> None:
+    """The image sets 0.0.0.0 so a published port has something to reach. Everywhere else the
+    default holds, including when the variable is present but says nothing."""
+    monkeypatch.delenv("SELLY_BIND_HOST", raising=False)
+    if env is not None:
+        monkeypatch.setenv("SELLY_BIND_HOST", env)
+    paths.ensure_config_dir()
+    paths.config_path().write_text(json.dumps({"http_port": 0}))
+
+    recorded = {}
+    real = daemon.HttpServer
+    monkeypatch.setattr(
+        daemon, "HttpServer", lambda **kwargs: (recorded.update(kwargs), real(**kwargs))[1]
+    )
+    assert daemon.run_daemon(once=True) == 0
+    assert recorded["host"] == expected

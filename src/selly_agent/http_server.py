@@ -1,6 +1,9 @@
 """The daemon's one localhost HTTP server: MCP endpoint, web tail, and the pass-control route.
 
-Bound to 127.0.0.1 only. Three surfaces share it:
+Bound to 127.0.0.1 unless SELLY_BIND_HOST says otherwise — a container binds the wildcard so a
+browser on the host reaches the tail through a published port. The Host guard below does not move
+with it: however this binds, requests still have to arrive addressed to localhost. Three surfaces
+share it:
 
   * POST /mcp   — stateless MCP over streamable HTTP (plain-JSON responses, no SSE). JSON-RPC 2.0
                   with initialize / notifications/initialized / tools/list / tools/call / ping.
@@ -122,6 +125,7 @@ class HttpServer:
         self.config = config
         self.channels = channels  # the ChannelManager, so connect can start a provider at runtime
         self.auth = Auth(attended_token)
+        self.host = host
         self._httpd = ThreadingHTTPServer((host, port), _Handler)
         self._httpd.daemon_threads = True
         self._httpd.app = self  # the handler reaches shared state via self.server.app
@@ -139,7 +143,7 @@ class HttpServer:
             daemon=True,
         )
         self._thread.start()
-        log.info("http server listening on 127.0.0.1:%s", self.port)
+        log.info("http server listening on %s:%s", self.host, self.port)
 
     def stop(self) -> None:
         self._httpd.shutdown()
