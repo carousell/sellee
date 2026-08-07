@@ -1,36 +1,11 @@
 # Installation
 
-- [Linux & MacOS](#linux--macos)
-    - [Native](#native)
-    - [Docker](#docker)
-- [Windows](#windows)
-    - [Native](#native-1)
-    - [Docker](#docker-1)
+- [Docker (all platforms)](#docker-all-platforms)
+- [Linux (native)](#linux-native)
+- [MacOS (native)](#macos-native)
+- [Windows (native)](#windows-native)
 
-## Linux & MacOS
-
-> [!WARNING]  
-> Linux support is coming soon. However it is expected to be similar to MacOS, requiring no additional work.
-
-### Native
-
-Native installation on Linux and MacOS is well supported
-
-```sh
-./setup
-```
-
-### Docker
-
-Coming soon.
-
-## Windows
-
-### Native
-
-Coming soon.
-
-### Docker
+## Docker (all platforms)
 
 > [!NOTE]  
 > These instructions will also apply to Podman or other container engines that support Docker compose files.
@@ -49,11 +24,10 @@ TZ=Asia/Singapore
 CLAUDE_CODE_OAUTH_TOKEN=...
 ```
 
-Since Selly will be running in a container, it cannot manage its own Chrome process. You will have to launch Chrome separately. A `start-chrome.ps1` script is included in the repository. Execute using:
+Since Selly will be running in a container, it cannot manage its own Chrome process. You will have to launch Chrome separately. A `start-chrome` script is included in the repository. Execute using:
 
-```
-powershell -ExecutionPolicy Bypass -File .\start-chrome.ps1
-```
+- **Windows**: `powershell -ExecutionPolicy Bypass -File .\start-chrome.ps1`
+- **Linux/MacOS**: `./start-chrome.sh`
 
 Build and run the container. Omit the `-d` flag if you prefer to run Selly in the foreground.
 
@@ -69,3 +43,42 @@ docker exec -it selly-agent selly-agent setup
 ```
 
 From this point, you can follow the rest of the quick start guide in the [README.md](/README.md#quick-start). Note instead of `selly-agent`, you will need to use `docker exec -it selly-agent selly-agent`. Writing a wrapper script for convenience is recommended.
+
+To update Selly, pull the latest revision, rebuild the image and restart the container:
+
+```
+git pull && docker compose build && docker compose up -d
+```
+
+Supported environment variables:
+
+| variable | required | what it does |
+| --- | --- | --- |
+| `TZ` | yes | the container's timezone; must match where you sell |
+| `CLAUDE_CODE_OAUTH_TOKEN` | yes | how the `claude` CLI authenticates in here |
+| `SELLY_DATA` | no | host directory to mount at `/data` (default `./selly-data`) |
+| `SELLY_CDP_PORT` | no | the CDP port, both sides of the forwarder (default `9222`) |
+| `SELLY_CDP_HOST` | no | what the forwarder points at (default `host.docker.internal`) |
+| `SELLY_CDP_FORWARD` | no | `0` turns the forwarder off; the Linux override sets it |
+| `SELLY_CHROME_BIN` | no | read by the launch scripts when Chrome is somewhere unusual |
+| `SELLY_CHROME_PROFILE` | no | where the launch scripts keep the agent's Chrome profile |
+| `SELLY_BIND_HOST` | no | what the daemon's HTTP server binds (image sets `0.0.0.0`) |
+
+## Linux (native)
+
+> [!WARNING]  
+> Linux support is coming soon. However it is expected to be similar to MacOS, requiring no additional work.
+
+```sh
+./setup
+```
+
+## MacOS (native)
+
+```sh
+./setup
+```
+
+## Windows (native)
+
+Coming soon.
