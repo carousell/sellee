@@ -62,11 +62,15 @@ stays out of `ps`/shell history — and sends it to the running daemon, which:
 
 Run interactively (stdin is a TTY), it prints short BotFather guidance and prompts
 for the token with `getpass` (not echoed); run with a pipe (scripted / installer),
-it reads one line of stdin with no prompt. Either way it then prints the deep link with
-phone-oriented wording — **open it on the phone that has Telegram**, not "tap it"
-(the operator is often at a desktop) — and polls until the chat binds. The
-interactive wait is longer (300s vs 120s piped) to cover relaying the link to a
-phone.
+it reads one line of stdin with no prompt. Either way it then prints the deep link
+as a terminal QR (half-blocks, forced dark-on-light so a phone can scan it off a
+dark theme; plain glyphs under `NO_COLOR` or a pipe) above the link itself, with
+phone-oriented wording — **scan or open it on the phone that has Telegram**, not
+"tap it" (the operator is often at a desktop) — and polls until the chat binds.
+The link is the fallback when the terminal render won't scan; rendering is local
+by design (an online QR service would ship the single-use nonce off the machine).
+The interactive wait is longer (300s vs 120s piped) to cover relaying the link to
+a phone.
 
 Because authorization is nonce possession, not first contact, the hijack race a
 first-contact capture would have can't happen, and an interrupted bind resumes
