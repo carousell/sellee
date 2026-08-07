@@ -18,11 +18,10 @@ services:
     restart: unless-stopped
 
     environment:
-      # Required. Quiet hours and everything else timed to the seller's day are decided against
-      # this process's own clock, which defaults to UTC.
-      TZ: ${TZ:?set TZ to your own timezone, e.g. TZ=Asia/Singapore}
-      # Required to authenticate `claude`. Fetch your token with `claude setup-token`.
-      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?run `claude setup-token` and export it}
+      # Both required; the entrypoint refuses to start without them. Not `${VAR:?}`, which
+      # compose evaluates on every command — including a build that needs neither.
+      TZ: ${TZ:-}
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
 
     volumes:
       - ${SELLY_DATA:-./selly-data}:/data

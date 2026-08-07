@@ -127,11 +127,18 @@ def test_a_linux_host_swaps_the_forwarder_for_the_host_network() -> None:
 # --- compose --------------------------------------------------------------------------------
 
 
-def test_compose_refuses_to_start_without_a_timezone_or_a_token() -> None:
-    """Both are things whose absence is silent rather than loud: a UTC clock moves quiet hours
-    onto the wrong eight hours, and a missing token fails at the first pass, hours later."""
-    assert "TZ: ${TZ:?" in COMPOSE
-    assert "CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:?" in COMPOSE
+def test_the_container_refuses_to_start_without_a_timezone_or_a_token() -> None:
+    """Both absences are silent: a UTC clock moves quiet hours, a missing token dies at the first
+    pass. The entrypoint checks, not compose — compose interpolates on every command, so a
+    `${VAR:?}` here would refuse to build an image containing neither value."""
+    assert "TZ: ${TZ:-}" in COMPOSE
+    assert "CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}" in COMPOSE
+    directives = [line for line in COMPOSE.splitlines() if not line.strip().startswith("#")]
+    assert ":?" not in "\n".join(directives)
+
+    assert "error: TZ is unset" in ENTRYPOINT
+    assert "error: CLAUDE_CODE_OAUTH_TOKEN is unset" in ENTRYPOINT
+    assert "exit 1" in ENTRYPOINT
 
 
 def test_compose_publishes_no_ports() -> None:

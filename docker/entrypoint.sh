@@ -8,6 +8,20 @@
 
 set -eu
 
+# Both fail silently if unset — UTC moves the seller's quiet hours, no token dies at the first
+# pass — so refuse to start. Checked here because compose interpolation runs on every command,
+# including a build that needs neither.
+missing=0
+if [ -z "${TZ:-}" ]; then
+	echo "error: TZ is unset" >&2
+	missing=1
+fi
+if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
+	echo "error: CLAUDE_CODE_OAUTH_TOKEN is unset" >&2
+	missing=1
+fi
+[ "$missing" = 0 ] || exit 1
+
 port="${SELLY_CDP_PORT:-9222}"
 # Docker Desktop's name for the host. Podman calls it host.containers.internal.
 host="${SELLY_CDP_HOST:-host.docker.internal}"

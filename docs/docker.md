@@ -72,13 +72,16 @@ docker compose logs -f selly-agent                      # the worker's own stder
 quiet hours for publishing, and quiet hours for messaging you. A container's
 clock defaults to UTC, so left unset, a 22:00–08:00 quiet window would be
 applied to the wrong eight hours and the agent would list things at four in the
-morning. Compose refuses to start without it, `healthcheck` has a line for it,
-and a mismatch also arrives as a notice.
+morning. The container refuses to start without it, `healthcheck` has a line for
+it, and a mismatch also arrives as a notice.
 
 **`CLAUDE_CODE_OAUTH_TOKEN`.** The `claude` CLI runs inside the container, and a
 container has no browser to complete a sign-in with. Mint a token on your own
-machine (`claude setup-token`) and export it before `docker compose up`. If it
-is missing or expired, `healthcheck`'s harness line says so.
+machine (`claude setup-token`) and set it before `docker compose up`. The
+container refuses to start without one; `healthcheck`'s harness line reports one
+that has expired.
+
+Neither is needed to `docker compose build` — the image holds no secrets.
 
 Both can live in a `.env` file beside `compose.yaml` instead of your shell —
 compose reads it automatically, and it is excluded from git and from the build
