@@ -1,0 +1,7 @@
+# Shell scripts must keep LF wherever they are checked out: cloned on Windows with
+# core.autocrlf=true, a CRLF entrypoint fails inside the image as `/bin/sh^M: bad
+# interpreter`, which names nothing a reader can act on.
+*.sh text eol=lf
+setup text eol=lf
+bin/selly-agent text eol=lf
+Dockerfile text eol=lf

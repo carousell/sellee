@@ -81,7 +81,22 @@ machine (`claude setup-token`) and export it before `docker compose up`. If it
 is missing or expired, `healthcheck`'s harness line says so.
 
 Both can live in a `.env` file beside `compose.yaml` instead of your shell —
-compose reads it automatically. Treat that file as a secret.
+compose reads it automatically, and it is excluded from git and from the build
+context so the token never reaches an image layer:
+
+```
+TZ=Asia/Singapore
+CLAUDE_CODE_OAUTH_TOKEN=sk-ant-oat01-EXAMPLE-NOT-A-REAL-TOKEN
+```
+
+No quotes and no spaces around the `=`. To keep it out of the checkout entirely,
+put it anywhere you like and pass `--env-file C:\path\to\selly.env` to
+`docker compose`.
+
+Either way the token ends up in the container's environment, where
+`docker inspect` can read it. That is inherent to passing a secret this way; if
+that matters for your machine, the alternative is a secrets manager rather than
+a different file.
 
 ## Chrome
 

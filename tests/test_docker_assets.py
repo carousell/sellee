@@ -89,6 +89,20 @@ def test_the_image_pins_the_harness_it_installs() -> None:
     assert re.search(r"ARG CLAUDE_CODE_VERSION=\d+\.\d+\.\d+", DOCKERFILE)
 
 
+def test_the_secrets_file_never_enters_the_build_context() -> None:
+    """docs point the seller at a .env beside compose.yaml, and `COPY . /opt/selly-agent` would
+    otherwise bake their harness token into an image layer — which deleting the file afterwards
+    does not undo, and which travels with any export of that image."""
+    assert "\n.env\n" in (ROOT / ".dockerignore").read_text()
+    assert "\n.env\n" in (ROOT / ".gitignore").read_text()
+
+
+def test_shell_scripts_are_pinned_to_lf() -> None:
+    """A CRLF entrypoint dies inside the image as `/bin/sh^M: bad interpreter`."""
+    attributes = (ROOT / ".gitattributes").read_text()
+    assert "*.sh text eol=lf" in attributes
+
+
 def test_tini_is_pid_one() -> None:
     assert DOCKERFILE.count("ENTRYPOINT") == 1
     assert '"/usr/bin/tini"' in DOCKERFILE
