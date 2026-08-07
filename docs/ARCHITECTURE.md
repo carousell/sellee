@@ -1,8 +1,15 @@
 # Architecture
 
-A high-level map of the repository. It describes the shape of the program and
-where responsibilities live; read the modules themselves for detail. As more
-subsystems land, this page becomes the index that links out to their docs.
+![Architecture overview](architecture-master.png)
+
+1. Sellers interact with Selly using **control surfaces**. Chat apps like Telegram, and agent harnesses like Claude Code are examples of control surfaces.
+2. The **Selly daemon** contains all of the core logic. It uses an event bus for scheduling. It stores data in a SQLite database. It exposes an MCP server; anything an agent does goes through it.
+3. The **agent harness and browser** are the only components that sit outside the daemon. The agent harness interacts with the browser using Playwright, and the daemon using its MCP server.
+4. The seller is signed into **marketplaces** on the browser. Buyers interact with the seller's listings on the marketplaces.
+
+This documen contains a high-level map of the repository. It describes the
+shape of the program and where responsibilities live; read the modules
+themselves for detail.
 
 ## The one-process model
 
@@ -22,7 +29,7 @@ uninstall`, `logs`, `chat`, `version`). launchd's job points at this launcher.
 ```
 setup                     the installer's front door (POSIX sh; provisions uv + Python, hands over)
 install.sh                the curl bootstrap (verify a release, run its own ./setup)
-bin/selly-agent          CLI launcher
+bin/selly-agent           CLI launcher
 src/selly_agent/          the package
 tests/                    plain pytest (guards under tests/guard/)
 docs/                     this document and friends
@@ -31,21 +38,17 @@ Makefile                  local entry points (test, lint, fmt, dist)
 
 ## The package, by responsibility
 
-Foundations:
+*8Foundations**:
 
 - **`paths.py`** — the single path authority. Every location is resolved here,
   honoring the XDG base directories; a guard test enforces that nothing else
   touches home/XDG.
-- **`deployment.py`** — host or container, and what follows from it: whether the
-  daemon manages Chrome, and whether there is a supervisor job to speak of.
 - **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`,
   `container.py`). The "port once" boundary; no launchd string leaks past it.
-- **`clock.py`** — whether this process's clock agrees with the seller's
-  timezone. Only asked in a container, where the two can differ.
 - **`config.py`** — reads `config.json` (missing → defaults; invalid → rejected;
   unknown keys ignored). The daemon only reads config; the installer writes it.
 
-State — two SQLite databases, kept apart:
+**State**: two SQLite databases, kept apart:
 
 - **`db.py`** — WAL, one write connection per database behind a lock, read-only
   connections for readers, explicit transactions.
@@ -55,21 +58,18 @@ State — two SQLite databases, kept apart:
 - **`data/selly.db`** is business data (migrated, snapshotted).
   **`state/events.db`** is the event/transcript store (prunable; recreated from
   migrations if deleted). The two are never joined.
-- **`store.py`** — typed accessors over `selly.db`, the one writer for business
-  state: items/floors, threads + their transcript, wants/budgets, the sell/buy
-  negotiation ledgers, pacing actions, scam signatures, escalations, checkouts,
-  seller config, the Q&A bank of answers the seller has taught, the browser
-  layer's selector cache, and the pass queue. Two confidentials — the floor and the buyer
-  budget — live in their own tables and are never returned by a read an LLM-facing
-  tool can call (only the engines load them). Every money/safety decision runs as
-  one `BEGIN IMMEDIATE` transaction (load → decide → write), the single-writer
-  serialization that gives FCFS single-inventory and atomic pacing. A `ScopedStore`
-  wraps the store per request: for a headless pass bound to a `Scope`, every
-  thread/want/item row-load must be in scope or it answers exactly as a missing
-  row (scope never leaks existence); attended sessions run unscoped. Its stable
-  returns are typed (`TypedDict`, checked under `make typecheck`).
+- **`store.py`** — typed accessors over `selly.db`, the one writer for all business
+  state.
+    - Every money/safety decision runs as one `BEGIN IMMEDIATE` transaction
+      (load → decide → write), the single-writer serialization that gives FCFS
+      single-inventory and atomic pacing.
+    - A `ScopedStore` wraps the store per request: for a headless pass bound to
+      a `Scope`, every thread/want/item row-load must be in scope or it answers
+      exactly as a missing row; attended sessions run unscoped. This restricts
+      what a pass can read, preventing prompt injection attacks where a buyer
+      tries to get the agent to read data from an unrelated conversation.
 
-The engines — pure decision modules, no I/O, no network. A tool composes an
+**Engines**: pure decision modules, no I/O, no network. A tool composes an
 engine with the store; the engine just decides. Ported from the legacy CLIs with
 their tests:
 
@@ -90,7 +90,7 @@ their tests:
   decision ladders, with the never-below-floor / never-above-budget asserts as
   backstops.
 
-Observability — one event record, two readers. Detail in
+**Observability**: one event record, two readers. Detail in
 [`observability.md`](observability.md):
 
 - **`events.py`** — an in-process bus over a durable store, and the one wire
@@ -103,10 +103,9 @@ Observability — one event record, two readers. Detail in
 - **`data/tail.html`** — the localhost web tail, an opinionated *human* view over
   the same wire shape.
 
-Install, update and removal — deterministic, no LLM anywhere in the path. An
-install and an update are the same operation: stage a tree into `versions/<v>`
-and move a symlink, so the default install exercises the update path on every
-machine:
+**Installer**: An install and an update are the same operation: stage a tree
+into `versions/<v>` and move a symlink, so the default install exercises the
+update path on every machine:
 
 - **`installer/ui.py`** — setup's voice. The only home of the `SELLY:` prefix; a
   CLI verb setup invokes owns its own output rather than being wrapped in a
@@ -129,7 +128,7 @@ machine:
   that changes state asks the running daemon rather than opening its database, so
   the single-writer rule holds across processes too.
 
-The tool surface and pass runner — how the LLM touches state and how it runs.
+**Tool surface and pass runner**: How the LLM touches state and how it runs.
 Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
 
 - **`http_server.py`** — the one localhost HTTP server: the MCP endpoint, the
