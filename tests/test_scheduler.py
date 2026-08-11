@@ -106,3 +106,86 @@ def test_backoff_gate_blocks_claim_until_it_passes(bus) -> None:
     assert sched._claim_due(clock.now) == []
     clock.advance(31.0)
     assert [t.name for t in sched._claim_due(clock.now)] == ["t"]
+
+
+def _run_once_claimed(sched, name: str) -> None:
+    """One full attempt: claim (which commits the static next_due), then run."""
+    sched._claim_due(sched._clock())
+    sched._run_task(sched._reg.tasks[name])
+
+
+def test_dynamic_cadence_pulls_the_next_run_forward(bus) -> None:
+    clock = FakeClock()
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(Task("t", interval_sec=300.0, func=lambda: None, next_interval=lambda: 60.0))
+
+    _run_once_claimed(sched, "t")
+    assert sched._reg.state["t"].next_due == clock.now + 60.0
+
+
+def test_dynamic_cadence_never_delays_past_the_static_interval(bus) -> None:
+    clock = FakeClock()
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(Task("t", interval_sec=300.0, func=lambda: None, next_interval=lambda: 9000.0))
+
+    _run_once_claimed(sched, "t")
+    assert sched._reg.state["t"].next_due == clock.now + 300.0
+
+
+def test_dynamic_cadence_is_re_evaluated_each_run_so_it_decays(bus) -> None:
+    clock = FakeClock()
+    interval = {"v": 60.0}
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(
+        Task("t", interval_sec=300.0, func=lambda: None, next_interval=lambda: interval["v"])
+    )
+
+    _run_once_claimed(sched, "t")
+    assert sched._reg.state["t"].next_due == clock.now + 60.0
+
+    # the conversation goes cold: the very next run falls back to the registered interval
+    interval["v"] = 300.0
+    clock.advance(60.0)
+    _run_once_claimed(sched, "t")
+    assert sched._reg.state["t"].next_due == clock.now + 300.0
+
+
+def test_a_raising_cadence_callable_leaves_the_static_schedule_and_no_backoff(bus) -> None:
+    clock = FakeClock()
+
+    def boom() -> float:
+        raise RuntimeError("no store")
+
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(Task("t", interval_sec=300.0, func=lambda: None, next_interval=boom))
+
+    _run_once_claimed(sched, "t")
+    st = sched._reg.state["t"]
+    assert st.next_due == clock.now + 300.0
+    assert st.consecutive_failures == 0
+    assert st.backoff_until == 0.0
+    assert _kinds(bus) == ["task.start", "task.ok"]
+
+
+def test_a_failed_run_backs_off_and_ignores_the_dynamic_cadence(bus) -> None:
+    clock = FakeClock()
+
+    def func():
+        raise RuntimeError("boom")
+
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(Task("t", interval_sec=300.0, func=func, next_interval=lambda: 1.0))
+
+    _run_once_claimed(sched, "t")
+    st = sched._reg.state["t"]
+    assert st.next_due == clock.now + 300.0  # not pulled in to +1.0
+    assert st.backoff_until == clock.now + 5.0
+
+
+def test_a_task_without_a_dynamic_cadence_is_untouched(bus) -> None:
+    clock = FakeClock()
+    sched = Scheduler(bus, tick_interval_sec=1.0, clock=clock)
+    sched.register(Task("t", interval_sec=300.0, func=lambda: None))
+
+    _run_once_claimed(sched, "t")
+    assert sched._reg.state["t"].next_due == clock.now + 300.0
