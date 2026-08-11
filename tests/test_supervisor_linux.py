@@ -31,6 +31,9 @@ class FakeLinuxPlatform(LinuxPlatform):
     def __init__(self):
         self.calls: list[list[str]] = []
         self.active: set[str] = set()
+        # What a started unit reports. Tests set it to walk the manager through the states a real
+        # one passes through, `activating` above all.
+        self.state = "active"
 
     def _systemctl(self, *args: str):
         self.calls.append(list(args))
@@ -40,7 +43,9 @@ class FakeLinuxPlatform(LinuxPlatform):
         elif verb == "disable":
             self.active.discard(args[-1])
         elif verb == "is-active":
-            return _Completed(0 if args[-1] in self.active else 3)
+            state = self.state if args[-1] in self.active else "inactive"
+            # systemd exits 0 only for `active`, and prints the state either way.
+            return _Completed(0 if state == "active" else 3, stdout=f"{state}\n")
         return _Completed(0)
 
     def verbs(self) -> list[str]:
@@ -48,9 +53,9 @@ class FakeLinuxPlatform(LinuxPlatform):
 
 
 class _Completed:
-    def __init__(self, returncode: int):
+    def __init__(self, returncode: int, stdout: str = ""):
         self.returncode = returncode
-        self.stdout = ""
+        self.stdout = stdout
         self.stderr = ""
 
 
@@ -220,6 +225,42 @@ def test_uninstall_disables_the_unit_and_removes_the_file(xdg_tmp) -> None:
     assert supervisor.uninstall(platform=fake) == 0
     assert not (paths.launch_agents_dir(platform=fake) / UNIT).exists()
     assert ["disable", "--now", UNIT] in fake.calls
+
+
+def test_a_unit_waiting_out_its_restart_pause_is_still_ours_to_stop(xdg_tmp) -> None:
+    """A crashed unit sits in `activating` for the whole RestartSec pause, and `is-active` exits
+    non-zero throughout — the same exit code a unit that is gone gives. Reading it as gone would
+    make `daemon stop` print "not running" and do nothing, leaving the unit enabled and the
+    respawn still to come, which is the one moment somebody actually needs stop to work."""
+    fake = FakeLinuxPlatform()
+    supervisor.install(mode="login-start", platform=fake)
+    fake.state = "activating"
+
+    assert fake.is_registered("selly-agent") is True
+    assert supervisor.stop(platform=fake) == 0
+    assert fake.calls[-1] == ["disable", "--now", UNIT]
+
+
+def test_a_unit_waiting_out_its_restart_pause_is_cleaned_up_by_uninstall(xdg_tmp) -> None:
+    """The same window, on the verb where skipping `disable` would unlink the unit file and leave
+    its wants-symlink dangling in the unit directory."""
+    fake = FakeLinuxPlatform()
+    supervisor.install(mode="login-start", platform=fake)
+    fake.state = "activating"
+
+    assert supervisor.uninstall(platform=fake) == 0
+    assert ["disable", "--now", UNIT] in fake.calls
+    assert not (paths.launch_agents_dir(platform=fake) / UNIT).exists()
+
+
+def test_a_stopped_unit_is_not_reported_as_registered(xdg_tmp) -> None:
+    """The other side of reading the state: `inactive` means gone, and `daemon start` has to be
+    willing to start it rather than answer "already running"."""
+    fake = FakeLinuxPlatform()
+    supervisor.install(mode="login-start", platform=fake)
+    fake.state = "inactive"
+
+    assert fake.is_registered("selly-agent") is False
 
 
 def test_the_unit_file_is_reloaded_before_it_is_acted_on(xdg_tmp) -> None:

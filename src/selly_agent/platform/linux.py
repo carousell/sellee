@@ -22,6 +22,12 @@ _DEFAULT_LABEL = "selly-agent"
 # because register() matches a file's location against them.
 _UNIT_DIR_PARTS = (".config", "systemd", "user")
 
+# What `systemctl is-active` prints while the manager is still holding the unit. `activating` is
+# the one that earns this set: a crashed unit sits there for the whole RestartSec pause, and
+# reading that as gone would make `daemon stop` a no-op for 30s — precisely when someone reaches
+# for it — and would let `uninstall` remove the file while leaving its symlinks behind.
+_LIVE_STATES = frozenset({"active", "activating", "reloading", "deactivating"})
+
 
 def _escape(value: str) -> str:
     """A value safe to interpolate into a unit file: `%` starts a systemd specifier (`%h` is the
@@ -117,5 +123,9 @@ class LinuxPlatform(Platform):
         self._systemctl("disable", "--now", self.supervisor_filename(label))
 
     def is_registered(self, label: str) -> bool:
-        unit = self.supervisor_filename(label)
-        return self._systemctl("is-active", "--quiet", unit).returncode == 0
+        # The state rather than the exit code, and so no `--quiet` to suppress it: `is-active`
+        # exits non-zero for a unit mid-restart exactly as it does for one that is gone, and the
+        # two want opposite answers from every caller.
+        result = self._systemctl("is-active", self.supervisor_filename(label))
+        state = (result.stdout or "").strip().splitlines()
+        return bool(state) and state[0].strip() in _LIVE_STATES
