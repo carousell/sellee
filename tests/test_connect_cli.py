@@ -217,6 +217,9 @@ def stub_market_daemon(monkeypatch):
     monkeypatch.setattr(control, "post", fake_post)
     monkeypatch.setattr(control, "get", fake_get)
     monkeypatch.setattr(connect_cli.foreground, "raise_window", fake_raise)
+    # Faked rather than read, so these tests are about the flow on a machine that can raise a
+    # window whichever machine runs the suite.
+    monkeypatch.setattr(connect_cli.foreground, "is_supported", lambda: True)
     monkeypatch.setattr(connect_cli.deployment, "is_container", lambda env=None: False)
     monkeypatch.setattr(connect_cli.config, "load", lambda: Config(chrome_cdp_port=9333))
     return calls
@@ -330,6 +333,21 @@ def test_a_seller_who_chose_background_mode_gets_no_raise_and_a_pointer(
     out = capsys.readouterr().out
     assert "background" in out
     assert "/selly" in out  # the way back to the toggle travels with the consequence
+
+
+def test_an_os_that_cannot_raise_says_so_instead_of_hinting_at_a_failure(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    """A permanent no-op must not read as "it didn't work this time" — and must not blame a
+    setting the seller could change, or name macOS furniture the machine hasn't got."""
+    stub_market_daemon["state"] = "logged_out"
+    monkeypatch.setattr(connect_cli.foreground, "is_supported", lambda: False)
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert stub_market_daemon["raised"] == []
+    out = capsys.readouterr().out
+    assert "on this operating system" in out
+    assert "Dock" not in out
+    assert "your setting" not in out
 
 
 def test_container_mode_points_at_the_sellers_own_chrome_and_never_raises(

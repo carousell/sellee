@@ -38,6 +38,9 @@ def world(monkeypatch, xdg_tmp, tree):
     monkeypatch.setattr(setup_cli, "get_platform", lambda: platform)
     monkeypatch.setattr(materialize, "source_tree", lambda: tree)
     monkeypatch.setattr(setup_cli.sys, "platform", "darwin")
+    # The window raise is macOS-only, and setup skips its question where it cannot happen — faked
+    # so the prompt script is the same whichever machine runs the suite.
+    monkeypatch.setattr(setup_cli.foreground, "is_supported", lambda: True)
     monkeypatch.setattr(preflight, "check_platform", lambda: checks.ok("platform", "macOS"))
     monkeypatch.setattr(
         preflight, "check_runtime", lambda tree: checks.ok("python runtime", "3.14.6")
@@ -592,6 +595,27 @@ def test_the_browser_question_names_the_settings_toggle(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
     out = capsys.readouterr().out
     assert "raise_browser" in out  # the way back to the toggle is part of the phase
+
+
+def test_an_os_that_cannot_raise_a_window_is_never_asked(world, monkeypatch, capsys) -> None:
+    """Offering to turn off a behavior the OS cannot perform teaches the seller something untrue
+    about their install — and would put a question in the script that has no answer to give."""
+    monkeypatch.setattr(setup_cli.foreground, "is_supported", lambda: False)
+    _answer(monkeypatch, ["y", "", "n"])  # region, no marketplace, Telegram — no window question
+    assert setup_main("--manual") == 0
+    out = capsys.readouterr().out
+    assert "Browser window" not in out
+    assert "raise_browser" not in world.calls["settings"]
+
+
+def test_a_container_setup_is_never_asked_about_the_window(world, container, capsys) -> None:
+    """Chrome runs on the seller's own desktop there, so nothing setup could offer to raise.
+
+    The world fakes an OS that *can* raise, which is the point: what excludes a container is the
+    deployment profile, not the incidental fact that the image happens to be a Linux one.
+    """
+    assert setup_main("--yes", "--manual") == 0
+    assert "Browser window" not in capsys.readouterr().out
 
 
 # --- Telegram ------------------------------------------------------------------------------------

@@ -33,6 +33,7 @@ from selly_agent import (
     settings_cli,
     supervisor,
 )
+from selly_agent.browser import foreground
 from selly_agent.browser import markets as market_adapters
 from selly_agent.installer import checks, materialize, preflight
 from selly_agent.installer import region as region_guess
@@ -598,7 +599,14 @@ def _browser_window(ui: Ui, port: int, token: str) -> None:
     `raise_browser` setting defaults to on and nothing has been asked yet. By now the seller has
     seen the behavior, so the question is concrete. Only a "no" is recorded: the default lives in
     code, and writing it back would list the setting as customized on the /selly card.
+
+    Skipped entirely where no window can be raised — an OS the raise doesn't support, or a container
+    whose Chrome is on the seller's own desktop. Offering to turn off something that never happens
+    teaches the seller something untrue about their install; the setting stays registered either
+    way, so a machine that can raise still honors a value set elsewhere.
     """
+    if deployment.is_container() or not foreground.is_supported():
+        return
     ui.step("Browser window")
     ui.say("I do my browser work in a Chrome window of my own. When I open a page you need —")
     ui.say("like a marketplace sign-in — I bring that window to the front.")

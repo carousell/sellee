@@ -145,13 +145,21 @@ def _surface_window(body: dict) -> None:
     not in the daemon. It runs only when the daemon says the seller wants it (the `raise_window`
     field carries their `raise_browser` setting; absent means the default, raise). Success is
     silent: the window arriving in front of them is its own message. Every way it cannot happen —
-    a container's Chrome on another machine, background mode, a raise that failed — prints a hint
-    and nothing more; finding the window is recoverable, a broken sign-in flow is not.
+    a container's Chrome on another machine, an OS the raise doesn't support, background mode, a
+    raise that failed — prints a hint and nothing more; finding the window is recoverable, a broken
+    sign-in flow is not. Checked in that order, so the setting is only ever named where it is
+    actually the reason.
     """
     if deployment.is_container():
         print(
             "  That window is on your own computer — the Chrome you started with "
             "start-chrome.sh (start-chrome.ps1 on Windows)."
+        )
+        return
+    if not foreground.is_supported():
+        print(
+            "  Look for a separate Chrome window (mine, not your usual one) — I can't "
+            "bring it to the front on this operating system."
         )
         return
     if not body.get("raise_window", True):

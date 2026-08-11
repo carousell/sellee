@@ -124,3 +124,16 @@ def test_a_non_darwin_host_never_shells_out(monkeypatch) -> None:
 
     assert foreground.raise_window(9222) is False
     assert runner.calls == []
+
+
+@pytest.mark.parametrize(
+    ("platform", "supported"),
+    [("darwin", True), ("linux", False), ("win32", False)],
+)
+def test_is_supported_answers_for_the_os_before_anything_is_promised(
+    monkeypatch, platform, supported
+) -> None:
+    """Callers ask this to decide what to *say*: a raise that cannot happen here is a different
+    thing from one that was attempted and did not land."""
+    monkeypatch.setattr(foreground.sys, "platform", platform)
+    assert foreground.is_supported() is supported

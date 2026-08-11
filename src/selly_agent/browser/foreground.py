@@ -1,4 +1,8 @@
-"""Bring the agent's own Chrome window in front of the seller — and only that Chrome.
+"""Bring the agent's own Chrome window in front of the seller — and only that Chrome. macOS only.
+
+Nothing here works on any other platform, and `is_supported` says so before a caller promises the
+seller anything — a window that never comes forward is what this exists to prevent, so a setup
+question or a "can't spot it?" hint about a raise that cannot happen is worse than silence.
 
 The seller's personal Chrome is the same app bundle as the agent's, so anything that activates
 "Google Chrome" by name (`open -a`, AppleScript's `activate`) can raise the wrong instance. The
@@ -12,8 +16,8 @@ minimized window (the Dock icon highlights instead), which the connect flow's hi
 
 Every failure here — no lsof, no listener, a refused activation, a hung tool — reads as False,
 never an exception: the callers print a "look for the window" hint on False, and a raise that
-could break a sign-in would be worse than no raise at all. `raise_window` is the seam a future
-Windows port replaces (its body would find the pid by port and call `SetForegroundWindow`).
+could break a sign-in would be worse than no raise at all. `raise_window` and `is_supported` are
+the pair another platform's implementation lands behind.
 """
 
 from __future__ import annotations
@@ -27,8 +31,7 @@ log = logging.getLogger(__name__)
 _LSOF_TIMEOUT_SEC = 3.0
 _OSASCRIPT_TIMEOUT_SEC = 5.0
 
-# JXA — JavaScript for Automation, the language `osascript -l JavaScript` speaks — not browser JS.
-# The only dynamic value interpolated is int(pid), re-validated at the call site, so nothing lsof
+# The only dynamic value interpolated is int(pid), re-validated at the call site — nothing lsof
 # prints can reach this script unparsed. ActivateAllWindows so a multi-window Chrome brings all of
 # its windows forward, not just the key one.
 _MACOS_ACTIVATE_JXA = (
@@ -40,10 +43,16 @@ _MACOS_ACTIVATE_JXA = (
 )
 
 
+def is_supported() -> bool:
+    """Whether this OS can raise the agent's window at all — as opposed to a raise that was
+    attempted and did not land, which is `raise_window` returning False."""
+    return sys.platform == "darwin"
+
+
 def raise_window(cdp_port: int) -> bool:
     """Bring the Chrome that owns `cdp_port` to the front. True only when the activation ran and
     reported success; False for every reason it could not (the caller hints, never errors)."""
-    if sys.platform != "darwin":
+    if not is_supported():
         return False
     pid = chrome_pid(cdp_port)
     if pid is None:
