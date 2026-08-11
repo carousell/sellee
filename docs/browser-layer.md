@@ -19,6 +19,12 @@ and only a silent port makes it safe to clear a `Singleton*` lock left by a kill
 Chrome and launch. Chrome gets its own session, so neither the daemon exiting nor a
 pass being killed takes the seller's browser with it.
 
+**Raising that window is macOS-only.** `browser/foreground.py` finds the agent's Chrome
+by the pid listening on its CDP port — the only thing that tells it apart from the
+seller's own Chrome — and activates that pid. `connect` raises the window (the
+`raise_browser` setting turns it off); everywhere else `is_supported()` is False, so no
+raise is attempted and the CLI says where to look instead.
+
 **Acquiring the browser means ensuring it runs.** Every actor that needs the browser
 — the read lane, the reply send, the selector probe, the fan-out — acquires it through
 the daemon's one factory, and the factory checks Node, brings Chrome up if the port is
