@@ -239,7 +239,9 @@ Lifecycle:
   clean; a dead holder's lock is reclaimed).
 - **`heartbeat.py`** — a `{ts, pid}` file written each tick.
 - **`scheduler.py`** — one loop thread submits due tasks to a small pool; a task
-  never overlaps itself, every attempt is ledgered, repeated failures back off.
+  never overlaps itself, every attempt is ledgered, repeated failures back off. A
+  task may carry a dynamic cadence, which can only pull its next run forward from
+  the registered interval.
 - **`daemon.py`** — the process: lock, ensure dirs, run startup migrations, open
   the bus, run the scheduler; a signal drains cleanly and exits 0.
 - **`supervisor.py`** — the OS-agnostic orchestration behind

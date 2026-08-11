@@ -220,6 +220,17 @@ Per market, per tick: navigate the inbox → login probe → conversation list �
 for each row, adopt or match a thread, skip or open it, reconcile → one
 `browser.read` event.
 
+**The cadence follows the conversations.** The registered interval
+(`inbox_read_interval_sec`) is the idle one; while any active sell thread has a
+message inside `inbox_fast_window_sec` — in *either* direction, since the buyer
+answering our reply is the commonest warm case — the lane reads every
+`inbox_fast_interval_sec` instead, then decays back on its own. It is one
+cadence for the whole lane rather than per thread: the conversation list is a
+single API call carrying every thread's preview, so one read learns about all of
+them and no thread's news is reachable without it. Quiet hours hold the slow
+cadence, because the pacing gate refuses sends inside the window anyway. None of
+this raises the reply rate — every send still reserves through that gate.
+
 **Three rules keep it honest:**
 
 1. *A market that cannot be seen must never look like a market with no news.*
@@ -228,11 +239,14 @@ for each row, adopt or match a thread, skip or open it, reconcile → one
    not be found counts as blindness too — it would otherwise pass for "this buyer
    said nothing new", which is how a buyer gets stranded.
 2. *The skip gate is an optimization, never a correctness input.* A thread whose
-   last stored message still matches the list's preview is left closed — but
-   every `inbox_full_sweep_every`-th tick opens every active thread regardless, so
-   a wrong preview match costs one sweep interval of latency and nothing more.
+   last stored message still matches the list's preview is left closed — but one
+   read per `inbox_full_sweep_interval_sec` opens every active thread regardless,
+   so a wrong preview match costs one sweep interval of latency and nothing more.
    Anything unread, anything whose last message we don't hold, and anything never
-   read is always opened.
+   read is always opened. The sweep is paced by wall clock rather than by a count
+   of reads, so it does not get more frequent when the cadence below speeds up —
+   opening a thread marks it read on the marketplace. The first read of a market
+   after a restart sweeps.
 3. *Reading never advances the reply cursor.* Only a committed reply does, so a
    crash between seeing a message and answering it leaves the buyer eligible
    rather than silently handled.
@@ -454,14 +468,20 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `chrome_cdp_port` | `9222` | the warm Chrome's CDP port on loopback — in a container, the port the forwarder listens on *and* forwards to |
 | `chrome_bin` | `null` | the Chrome executable to start; `null` means the OS default install path |
 | `playwright_mcp_cmd` | `null` | override the server command; `null` means `npx --yes @playwright/mcp@<pinned version>` against the CDP endpoint. The pin lives in `browser/client.py` (`MCP_VERSION`) — bump it there |
-| `inbox_read_interval_sec` | `300.0` | how often the read lane ticks |
+| `inbox_read_interval_sec` | `300.0` | how often the read lane ticks when nothing is live — also the ceiling, since the dynamic cadence can only read sooner |
+| `inbox_fast_interval_sec` | `60.0` | how often it ticks while a conversation is warm; must not exceed `inbox_read_interval_sec` |
+| `inbox_fast_window_sec` | `300.0` | how long after the last message, in either direction, a conversation counts as warm |
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
-| `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
+| `inbox_full_sweep_interval_sec` | `1800.0` | how often one read opens every active thread; at or below the read interval, every read is a full sweep |
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
 
-Lane counters (tick count, consecutive failures, which notices are already
-queued) live **in process** on purpose: they are all counters, and a restart
-re-arming them errs toward reading more rather than less.
+`browser_blind_after` stays a count of reads rather than a duration, so the
+needs-me notice arrives sooner while the lane is reading fast — which is when
+going blind matters most.
+
+Lane state (last full sweep per market, consecutive failures, which notices are
+already queued) lives **in process** on purpose: a restart re-arming it errs
+toward reading more rather than less.
 
 ## Adding a marketplace
 
