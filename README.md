@@ -12,8 +12,8 @@ This section assumes a native installation on Linux or MacOS. For installation g
 Ensure pre-requisites:
 
 - **Browser:** Chrome or Chromium
+- **Node runtime and package manager:** Node.js and NPM
 - **Agent harness:** Claude Code (with Claude subscription)
-- **Linux only:** a glibc distribution running systemd (Ubuntu, Debian, Fedora, Mint). See [docs/install.md](docs/install.md#linux-native) — the native Linux install is implemented but not yet verified on a real desktop.
 
 Clone the repository:
 
