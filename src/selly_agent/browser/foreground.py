@@ -25,12 +25,13 @@ import sys
 log = logging.getLogger(__name__)
 
 _LSOF_TIMEOUT_SEC = 3.0
-_ACTIVATE_TIMEOUT_SEC = 5.0
+_OSASCRIPT_TIMEOUT_SEC = 5.0
 
-# The only dynamic value interpolated is int(pid), re-validated at the call site — nothing lsof
+# JXA — JavaScript for Automation, the language `osascript -l JavaScript` speaks — not browser JS.
+# The only dynamic value interpolated is int(pid), re-validated at the call site, so nothing lsof
 # prints can reach this script unparsed. ActivateAllWindows so a multi-window Chrome brings all of
 # its windows forward, not just the key one.
-_ACTIVATE_JS = (
+_MACOS_ACTIVATE_JXA = (
     'ObjC.import("AppKit");'
     "var app = $.NSRunningApplication.runningApplicationWithProcessIdentifier(%d);"
     'if (app.isNil()) throw "no process with that pid";'
@@ -47,7 +48,7 @@ def raise_window(cdp_port: int) -> bool:
     pid = chrome_pid(cdp_port)
     if pid is None:
         return False
-    return _activate(pid)
+    return _activate_macos(pid)
 
 
 def chrome_pid(cdp_port: int) -> int | None:
@@ -82,13 +83,13 @@ def chrome_pid(cdp_port: int) -> int | None:
     return pids[0]
 
 
-def _activate(pid: int) -> bool:
+def _activate_macos(pid: int) -> bool:
     try:
         result = subprocess.run(
-            ["osascript", "-l", "JavaScript", "-e", _ACTIVATE_JS % int(pid)],
+            ["osascript", "-l", "JavaScript", "-e", _MACOS_ACTIVATE_JXA % int(pid)],
             capture_output=True,
             text=True,
-            timeout=_ACTIVATE_TIMEOUT_SEC,
+            timeout=_OSASCRIPT_TIMEOUT_SEC,
         )
     except (OSError, subprocess.TimeoutExpired) as exc:
         log.debug("could not activate Chrome pid %s: %s", pid, exc)
