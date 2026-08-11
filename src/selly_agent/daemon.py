@@ -78,7 +78,7 @@ CHROME_STARTED_NOTICE = (
 )
 
 
-def ensure_chrome(cfg, store, bus) -> None:
+def ensure_chrome(cfg, store, bus, should_stop=None) -> None:
     """Make Chrome answer on its CDP port, or raise `BrowserUnavailable` with the by-hand command.
 
     Acquiring the browser means ensuring it runs: this is the one place that rule lives, called on
@@ -91,7 +91,10 @@ def ensure_chrome(cfg, store, bus) -> None:
     """
     may_launch = deployment.manages_chrome()
     state = chrome.ensure_running(
-        cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin, may_launch=may_launch
+        cfg.chrome_cdp_port,
+        chrome_bin=cfg.chrome_bin,
+        may_launch=may_launch,
+        should_stop=should_stop,
     )
     if state == chrome.UNAVAILABLE:
         hint = (
@@ -150,7 +153,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
     return thread
 
 
-def make_browser_factory(cfg, store, bus, holder: dict):
+def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
 
@@ -165,7 +168,7 @@ def make_browser_factory(cfg, store, bus, holder: dict):
             browser_client.cdp_endpoint(cfg.chrome_cdp_port)
         )
         browser_client.ensure_available(command)
-        ensure_chrome(cfg, store, bus)
+        ensure_chrome(cfg, store, bus, should_stop)
         client = holder.get("client")
         if client is None:
             client = browser_client.BrowserClient(command=command)
@@ -267,7 +270,7 @@ def run_daemon(*, once: bool) -> int:
     # factory so a machine with no Node still starts, with its browser lanes reporting unavailable
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
-    browser_factory = make_browser_factory(cfg, store, bus, browser_holder)
+    browser_factory = make_browser_factory(cfg, store, bus, browser_holder, stop.is_set)
     warm_browser_server(cfg, once=once)
 
     def reply_sink_factory():

@@ -196,6 +196,7 @@ def ensure_running(
     chrome_bin: str | None = None,
     wait_sec: float = LAUNCH_WAIT_SEC,
     may_launch: bool = True,
+    should_stop=None,
 ):
     """Make sure the agent's Chrome is answering on its debugging port, starting it if it is not.
 
@@ -253,6 +254,12 @@ def ensure_running(
             if is_ready(port):
                 _last_failed_launch_ts = None
                 return LAUNCHED
+            if should_stop is not None and should_stop():
+                # The daemon drains by waiting for its lanes, so a lane still sitting out this wait
+                # is a stop that looks wedged. Chrome is detached and comes up on its own; the next
+                # acquisition finds it ready.
+                log.info("stopping while waiting for Chrome on port %s — leaving it to start", port)
+                return UNAVAILABLE
         log.warning("started Chrome but it did not answer on port %s within %ss", port, wait_sec)
         _last_failed_launch_ts = time.monotonic()
         return UNAVAILABLE

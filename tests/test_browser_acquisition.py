@@ -8,6 +8,8 @@ does: Node first, Chrome ensured on every call, the window announced when a laun
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from selly_agent import daemon
@@ -191,3 +193,38 @@ def test_linux_with_no_chrome_answers_something_a_person_recognises(monkeypatch)
 def test_the_profile_locks_are_named_the_same_on_both_posix_platforms() -> None:
     """Chrome writes these itself; they are not ours to translate per OS."""
     assert chrome.SINGLETON_LOCKS == ("SingletonLock", "SingletonCookie", "SingletonSocket")
+
+
+# --- giving up on a launch when the daemon is stopping --------------------------------------------
+
+
+@pytest.fixture
+def launch_that_never_answers(monkeypatch):
+    """Chrome starts and never binds its port — what a headless machine does, and what a wrong
+    binary on the discovery ladder does."""
+    monkeypatch.setattr(chrome, "_last_failed_launch_ts", None)
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: False)
+    monkeypatch.setattr(chrome, "clear_stale_locks", lambda: [])
+    monkeypatch.setattr(chrome.subprocess, "Popen", lambda *a, **kw: None)
+
+
+def test_a_stop_during_the_launch_wait_gives_up_promptly(launch_that_never_answers) -> None:
+    """The daemon drains by waiting for its lanes, so a lane sitting out the whole launch wait is a
+    `daemon stop` that looks wedged for 20s. Chrome is detached and keeps coming up regardless."""
+    began = time.monotonic()
+    state = chrome.ensure_running(9222, wait_sec=30.0, should_stop=lambda: True)
+
+    assert state == chrome.UNAVAILABLE
+    assert time.monotonic() - began < 5.0
+
+
+def test_a_daemon_that_is_not_stopping_still_waits_the_launch_out(
+    launch_that_never_answers,
+) -> None:
+    """The predicate must not short-circuit an ordinary launch: a cold Chrome on a large profile
+    takes seconds, and giving up early would report a browser that was about to be there."""
+    began = time.monotonic()
+    state = chrome.ensure_running(9222, wait_sec=1.0, should_stop=lambda: False)
+
+    assert state == chrome.UNAVAILABLE
+    assert time.monotonic() - began >= 1.0
