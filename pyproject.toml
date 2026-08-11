@@ -18,6 +18,10 @@ dependencies = [
     # QR encoding for the Telegram bind deep link (terminal half-block + localhost SVG renders).
     # Pure Python, zero transitive deps, py3-none-any wheel.
     "segno>=1.6,<2",
+    # Photo conversion: one converter on every platform, rather than an OS tool per platform.
+    # pillow-heif is the HEIC decoder Pillow does not ship, and HEIC is what a phone produces.
+    "pillow>=12,<13",
+    "pillow-heif>=1.5,<2",
 ]
 
 # Dev tooling. A dependency *group* rather than an extra, because uv installs groups by default
