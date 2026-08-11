@@ -53,13 +53,27 @@ say ""
 
 # --- prerequisites ---------------------------------------------------------------------------
 
-[ "$(uname -s)" = "Darwin" ] || die "selly-agent runs on macOS today (this is $(uname -s))."
+case "$(uname -s)" in
+Darwin | Linux) ;;
+*) die "selly-agent runs on macOS and Linux today (this is $(uname -s))." ;;
+esac
 
 # No python3 here: the release's own ./setup provisions the interpreter it needs, so the machine
 # having one — or having a usable one — is not a precondition for installing.
-for tool in curl tar shasum; do
+for tool in curl tar; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool is required and isn't on your PATH."
 done
+
+# Either digest tool will do, and only one of them is ever present: `shasum` is macOS's (a perl
+# script), `sha256sum` is GNU coreutils'. Requiring both would refuse a Linux machine that can
+# verify the archive perfectly well.
+if command -v shasum >/dev/null 2>&1; then
+	sha256_check() { shasum -a 256 -c "$1"; }
+elif command -v sha256sum >/dev/null 2>&1; then
+	sha256_check() { sha256sum -c "$1"; }
+else
+	die "shasum or sha256sum is required and neither is on your PATH."
+fi
 
 # --- fetch, checksums first -------------------------------------------------------------------
 
@@ -87,7 +101,7 @@ curl -fsSL "$BASE_URL/$archive" -o "$archive" || die "couldn't download $BASE_UR
 
 say "Checking it against the published checksum…"
 grep " \*\{0,1\}$archive\$" SHA256SUMS >expected.sums
-shasum -a 256 -c expected.sums >/dev/null 2>&1 ||
+sha256_check expected.sums >/dev/null 2>&1 ||
 	die "$archive does not match its published checksum — refusing to run it."
 
 # --- unpack and hand off -----------------------------------------------------------------------
