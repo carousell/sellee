@@ -24,6 +24,7 @@ import hmac
 import json
 import logging
 import secrets as _stdlib_secrets
+import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -126,7 +127,7 @@ class HttpServer:
         self.channels = channels  # the ChannelManager, so connect can start a provider at runtime
         self.auth = Auth(attended_token)
         self.host = host
-        self._httpd = ThreadingHTTPServer((host, port), _Handler)
+        self._httpd = _Server((host, port), _Handler)
         self._httpd.daemon_threads = True
         self._httpd.app = self  # the handler reaches shared state via self.server.app
         self._thread: threading.Thread | None = None
@@ -166,6 +167,20 @@ def _localhost_origin(header: str | None) -> bool:
         return True
     parsed = urlparse(header)
     return parsed.scheme in ("http", "https") and (parsed.hostname or "") in _LOCALHOST_NAMES
+
+
+class _Server(ThreadingHTTPServer):
+    def server_bind(self) -> None:
+        """Bind without asking the network who we are.
+
+        HTTPServer.server_bind calls socket.getfqdn() to fill in a `server_name` we never serve —
+        a reverse-DNS lookup that blocks for as long as the resolver takes to give up. It runs
+        after `daemon.start` is recorded and before the loop can act on a signal, so where the
+        machine has no reverse record for its own address the daemon looks started and answers
+        nothing at all, not even SIGTERM.
+        """
+        socketserver.TCPServer.server_bind(self)
+        self.server_name, self.server_port = self.server_address[:2]
 
 
 class _Handler(BaseHTTPRequestHandler):

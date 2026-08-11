@@ -10,7 +10,7 @@ import pytest
 
 import selly_agent.tools  # noqa: F401  registration
 from selly_agent.config import Config
-from selly_agent.http_server import _PAGE_EVENTS, HttpServer
+from selly_agent.http_server import _PAGE_EVENTS, HttpServer, _Handler, _Server
 from selly_agent.paths import PACKAGE_DATA_DIR
 from selly_agent.tools.registry import ToolContext
 
@@ -355,3 +355,25 @@ def test_tail_serves_the_packaged_page(server) -> None:
     assert b"event tail" in served
     # the page is a packaged asset, not an inline string — pin that wiring
     assert served == (PACKAGE_DATA_DIR / "tail.html").read_bytes()
+
+
+# --- binding -------------------------------------------------------------------------------------
+
+
+def test_the_bind_never_asks_the_network_who_we_are(monkeypatch) -> None:
+    """Where the machine has no reverse record for its own address, the getfqdn() the stdlib's
+    bind performs leaves the daemon having recorded daemon.start and then answering nothing — not
+    its stop route, not SIGTERM. Both CI runners reproduce it."""
+    import socket
+
+    def explode(*args):
+        raise AssertionError("server_bind performed a reverse-DNS lookup")
+
+    monkeypatch.setattr(socket, "getfqdn", explode)
+
+    httpd = _Server(("127.0.0.1", 0), _Handler)
+    try:
+        assert httpd.server_name == "127.0.0.1"
+        assert httpd.server_port == httpd.server_address[1]
+    finally:
+        httpd.server_close()
