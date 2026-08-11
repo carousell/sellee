@@ -14,8 +14,8 @@ Three rules keep the lane honest:
   * A market that cannot be seen must never look like a market with no news. A failed read is
     counted, and a run of them raises one needs-me notice rather than passing for silence.
   * The skip gate is an optimization, never a correctness input. A thread whose last message we
-    already hold is left closed this tick — but every Nth tick opens everything regardless, so a
-    stale list costs one sweep interval of latency and nothing more.
+    already hold is left closed this tick — but one read per sweep interval opens everything
+    regardless, so a stale list costs one sweep interval of latency and nothing more.
   * Reading never advances the reply cursor. Only a committed reply does, so a crash between seeing
     a message and answering it leaves the buyer waiting rather than silently handled.
 """
@@ -76,9 +76,9 @@ class InboxDeps:
     bus: object
     config: object
     browser_factory: object
-    # Lane state, in process on purpose: it is all counters, and a restart re-arming them errs
-    # toward reading more rather than less.
-    ticks: dict = field(default_factory=dict)
+    # Lane state, in process on purpose: it is all counters and stamps, and a restart re-arming
+    # them errs toward reading more rather than less.
+    last_full_sweep: dict = field(default_factory=dict)
     blind: dict = field(default_factory=dict)
     notified: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
@@ -195,9 +195,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         return
     rows = answer["conversations"]
 
-    tick = deps.ticks.get(market, 0) + 1
-    deps.ticks[market] = tick
-    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+    full_sweep = _due_for_full_sweep(deps, market)
 
     known = {t["thread_id"]: t for t in deps.store.list_threads(side="sell")}
     items = deps.store.list_items()
@@ -252,6 +250,21 @@ def _thread_key(market: str, native_id) -> str | None:
     if not native_id:
         return None
     return f"{market}:{native_id}"
+
+
+def _due_for_full_sweep(deps: InboxDeps, market: str) -> bool:
+    """Whether this read opens every active thread, skip gate or not. Stamps when it says yes.
+
+    Wall clock rather than a count of reads: the lane's cadence varies with how busy the
+    conversations are, so counting would sweep most often exactly when threads are busiest — and
+    opening a thread marks it read on the marketplace.
+    """
+    now = deps.now()
+    last = deps.last_full_sweep.get(market)
+    if last is not None and now - last < float(deps.config.inbox_full_sweep_interval_sec):
+        return False
+    deps.last_full_sweep[market] = now
+    return True
 
 
 def _can_skip(store, thread: dict, row: dict) -> bool:

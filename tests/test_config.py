@@ -196,8 +196,8 @@ def test_invalid_pacing_and_negotiation_values_are_rejected(xdg_tmp, obj) -> Non
         {"playwright_mcp_cmd": ["npx", 1]},
         {"inbox_read_interval_sec": 0},
         {"inbox_read_interval_sec": -5},
-        {"inbox_full_sweep_every": 0},
-        {"inbox_full_sweep_every": 1.5},
+        {"inbox_full_sweep_interval_sec": 0},
+        {"inbox_full_sweep_interval_sec": "often"},
         {"browser_blind_after": 0},
         {"chrome_bin": ""},
         {"chrome_bin": "   "},
@@ -216,7 +216,7 @@ def test_browser_knobs_round_trip(xdg_tmp) -> None:
             "chrome_cdp_port": 9333,
             "playwright_mcp_cmd": ["node", "/opt/mcp/cli.js"],
             "inbox_read_interval_sec": 120,
-            "inbox_full_sweep_every": 1,
+            "inbox_full_sweep_interval_sec": 120,
             "browser_blind_after": 5,
             "chrome_bin": " /opt/chrome/chrome ",
         }
@@ -226,8 +226,19 @@ def test_browser_knobs_round_trip(xdg_tmp) -> None:
     assert cfg.chrome_cdp_port == 9333
     assert cfg.playwright_mcp_cmd == ["node", "/opt/mcp/cli.js"]
     assert cfg.inbox_read_interval_sec == 120.0
-    assert cfg.inbox_full_sweep_every == 1  # 1 disables the skip gate, a supported posture
+    # a sweep interval at the read interval makes every read a full sweep, a supported posture
+    assert cfg.inbox_full_sweep_interval_sec == 120.0
     assert cfg.browser_blind_after == 5
+
+
+def test_the_retired_tick_counted_sweep_knob_is_ignored(xdg_tmp, caplog) -> None:
+    """The sweep became wall-clock; a config still carrying the old tick count gets the default
+    rather than a startup failure."""
+    _write_config({"inbox_full_sweep_every": 6})
+    with caplog.at_level(logging.WARNING):
+        cfg = load()
+    assert cfg.inbox_full_sweep_interval_sec == 1800.0
+    assert "inbox_full_sweep_every" in caplog.text
 
 
 def test_a_null_playwright_command_means_resolve_npx_at_spawn(xdg_tmp) -> None:
