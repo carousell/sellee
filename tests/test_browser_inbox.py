@@ -9,6 +9,7 @@ would obscure them. The transport itself is covered in test_browser_client.py.
 from __future__ import annotations
 
 import pytest
+from tests.conftest import seed_setting
 
 from selly_agent.browser import inbox
 from selly_agent.browser.client import BrowserToolError, BrowserUnavailable
@@ -69,10 +70,10 @@ class StubClient:
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
 
-def _deps(store, bus, client, *, swept=False, **overrides):
+def _deps(store, bus, client, *, swept=False, now=None, **overrides):
     clock = {"t": 1000.0}
 
-    def now():
+    def ticking_now():
         clock["t"] += 1.0
         return clock["t"]
 
@@ -81,7 +82,7 @@ def _deps(store, bus, client, *, swept=False, **overrides):
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
-        now=now,
+        now=now or ticking_now,
     )
     if swept:
         # a sweep has just happened, so the read under test exercises the skip gate. An unstamped
@@ -198,6 +199,76 @@ def test_a_manual_seller_reply_is_recorded_and_stops_the_reply_lane(store, bus, 
     inbox.inbox_lane(_deps(store, bus, client))
     assert [m["dir"] for m in store.get_thread("carousell:99")["messages"]] == ["in", "out"]
     assert store.threads_with_unhandled_inbound() == []  # our account spoke last
+
+
+# --- the read cadence ---------------------------------------------------------------------------
+
+
+def _at_hour(hour: int):
+    """A clock reading a fixed local hour today — quiet hours are a local-time window."""
+    import time as _time
+
+    stamp = _time.localtime()
+    fixed = _time.mktime(
+        (stamp.tm_year, stamp.tm_mon, stamp.tm_mday, hour, 0, 0, stamp.tm_wday, stamp.tm_yday, -1)
+    )
+    return lambda: fixed
+
+
+def test_an_idle_inbox_is_read_at_the_default_interval(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient())
+    assert inbox.read_interval_sec(deps) == 300.0  # nothing said at all
+
+    _thread(store, seeded)
+    assert inbox.read_interval_sec(deps) == 300.0  # a thread, but nobody has spoken
+
+
+def test_a_warm_conversation_is_read_at_the_fast_interval(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=deps.now() - 30)
+    assert inbox.read_interval_sec(deps) == 60.0
+
+
+def test_our_own_reply_keeps_the_conversation_warm(store, bus, seeded) -> None:
+    """The buyer answering us is the commonest warm case, so a message we sent arms the fast
+    cadence exactly as one we received does."""
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound(
+        "carousell:99", msg_id="m1", text="posting today", ts=deps.now() - 30, direction="out"
+    )
+    assert inbox.read_interval_sec(deps) == 60.0
+
+
+def test_the_cadence_decays_once_the_window_passes(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="hi", ts=deps.now() - 301)
+    assert inbox.read_interval_sec(deps) == 300.0
+
+
+def test_a_thread_nobody_is_waiting_on_does_not_arm_the_fast_cadence(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="hi", ts=deps.now() - 30)
+    store.update_thread("carousell:99", {"status": "closed"})
+    assert inbox.read_interval_sec(deps) == 300.0
+
+
+def test_quiet_hours_hold_the_slow_cadence(store, bus, seeded) -> None:
+    """The pacing gate refuses sends inside the window, so reading every minute for messages
+    nobody may answer yet buys only cost."""
+    seed_setting(store, "quiet_hours", [2300, 800])
+    _thread(store, seeded)
+    asleep = _deps(store, bus, StubClient(), now=_at_hour(2))
+    store.record_inbound("carousell:99", msg_id="m1", text="available?", ts=asleep.now() - 30)
+    assert inbox.read_interval_sec(asleep) == 300.0
+
+    # the same conversation, just as warm, once the window is over
+    awake = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m2", text="anyone?", ts=awake.now() - 30)
+    assert inbox.read_interval_sec(awake) == 60.0
 
 
 # --- the skip gate ------------------------------------------------------------------------------

@@ -9,6 +9,10 @@ The conversation list is the marketplace's own API where it has one, and the mes
 work: identity, the counterpart, the listing and the unread count are facts we want typed and loudly
 wrong when they change; message bubbles are only ever on a page.
 
+How often it reads follows the conversations: warm ones are read every minute or so, an idle inbox
+every few minutes. The list read is one API call that opens nothing, so the fast cadence costs
+requests rather than exposure, and what a buyer waits for is dominated by how soon we look.
+
 Three rules keep the lane honest:
 
   * A market that cannot be seen must never look like a market with no news. A failed read is
@@ -27,11 +31,12 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from selly_agent import deployment, marketplaces
+from selly_agent import deployment, marketplaces, settings
 from selly_agent.browser import markets as market_adapters
 from selly_agent.browser import reconcile
 from selly_agent.browser.client import BrowserError, BrowserUnavailable
 from selly_agent.engines import hosts
+from selly_agent.engines import pacing as pacing_engine
 from selly_agent.engines import scam as scam_engine
 from selly_agent.store import StoreError
 
@@ -130,6 +135,35 @@ def browser_pass_running(store) -> bool:
             # rather than assume the safe case.
             return True
     return False
+
+
+def read_interval_sec(deps: InboxDeps) -> float:
+    """How long until the next inbox read, given how warm the conversations are.
+
+    A conversation nobody has spoken in costs one read every `inbox_read_interval_sec`; one
+    somebody spoke in within `inbox_fast_window_sec` is read every `inbox_fast_interval_sec`, so a
+    buyer's answer is seen in about a minute instead of five. The conversation list is a single API
+    call that opens no thread, so a fast read with no news costs one request — and the reply rate
+    is unchanged either way, since every send still reserves through the pacing gate.
+
+    Quiet hours pin it back to the slow cadence: the gate refuses sends inside the window, so
+    reading for messages nobody may answer yet buys only cost.
+    """
+    default = float(deps.config.inbox_read_interval_sec)
+    if _in_quiet_hours(deps):
+        return default
+    last = deps.store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE_STATUSES)
+    if last is None or deps.now() - last >= float(deps.config.inbox_fast_window_sec):
+        return default
+    return float(deps.config.inbox_fast_interval_sec)
+
+
+def _in_quiet_hours(deps: InboxDeps) -> bool:
+    cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
+    stamp = time.localtime(deps.now())
+    return pacing_engine.in_quiet_window(
+        stamp.tm_hour * 60 + stamp.tm_min, cfg.quiet_start_min, cfg.quiet_end_min
+    )
 
 
 def inbox_lane(deps: InboxDeps) -> None:
