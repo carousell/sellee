@@ -13,16 +13,19 @@ themselves for detail.
 
 ## The one-process model
 
-selly-agent is a single long-running Python process, kept alive by the OS
-(launchd on macOS). Its runtime is provisioned rather than assumed: uv installs a
-standalone CPython at a pinned version plus a short, hash-locked dependency set
-into a venv owned by the install, and a guard test over `src/` imports fails
-anything outside the stdlib and that reviewed list.
+selly-agent is a single long-running Python process, kept alive by the OS: a
+launchd agent on macOS, a systemd user unit on Linux, and the container
+runtime's own restart policy where it runs in a container. Its runtime is
+provisioned rather than assumed: uv installs a standalone CPython at a pinned
+version plus a short, hash-locked dependency set into a venv owned by the
+install, and a guard test over `src/` imports fails anything outside the stdlib
+and that reviewed list.
 Concurrency is a few threads sharing SQLite state.
 
 Everything is reachable from one front door: `bin/selly-agent` resolves the
 package and dispatches argv via `cli.py` (`daemon run/install/start/stop/status/
-uninstall`, `logs`, `chat`, `version`). launchd's job points at this launcher.
+uninstall`, `logs`, `chat`, `version`). The supervisor's job points at this
+launcher.
 
 ## Layout
 
@@ -44,7 +47,10 @@ Makefile                  local entry points (test, lint, fmt, dist)
   honoring the XDG base directories; a guard test enforces that nothing else
   touches home/XDG.
 - **`platform/`** — the OS seam (`get_platform()`, `base.Platform`, `macos.py`,
-  `container.py`). The "port once" boundary; no launchd string leaks past it.
+  `linux.py`, `container.py`). The "port once" boundary; no launchd or systemd
+  string leaks past it. `platform/images.py` is the exception that proves it:
+  photo conversion turned out to be the same everywhere, so it is concrete on the
+  base class rather than per-OS.
 - **`config.py`** — reads `config.json` (missing → defaults; invalid → rejected;
   unknown keys ignored). The daemon only reads config; the installer writes it.
 
@@ -114,7 +120,9 @@ update path on every machine:
 - **`installer/preflight.py`** — the machine gates, each split into a pure
   decision and a shim that fetches its inputs. Node native to the machine (a
   Rosetta Node is the failure this exists for), Chrome present, the `claude` CLI
-  signed in, and a tree macOS will actually let a launchd job read.
+  signed in, a tree macOS will actually let a launchd job read, and on Linux a
+  reachable systemd user manager. Remediation is written per OS — a fix line
+  naming the wrong package manager is worse than none.
 - **`installer/materialize.py`** — the versioned layout: stage, atomic rename,
   swap `current`, the `~/.local/bin` shim, retention, and the marker-fenced PATH
   block. `current` is always a symlink we own; a real directory there is refused.
@@ -245,8 +253,8 @@ Lifecycle:
    pending); a failure aborts startup.
 4. Open the event bus; emit `daemon.start` and one `migration.applied` each.
 5. Ensure the attended MCP token; wire the always-on needs-me handlers; start the
-   localhost HTTP server (a bind failure is fatal — fail loud so launchd's
-   throttle paces respawns).
+   localhost HTTP server (a bind failure is fatal — fail loud so the
+   supervisor's throttle paces respawns).
 6. Register the scheduler's tasks, start any configured channel providers, and
    run the loop, writing the heartbeat each tick.
 7. On SIGTERM/SIGINT: drain, shut down channel providers, stop the HTTP server,
