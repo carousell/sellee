@@ -317,8 +317,8 @@ def check_runtime(tree) -> checks.Check:
 def check_tree_location(tree) -> checks.Check:
     """Refuse to install from a tree macOS will not let the daemon read."""
     if sys.platform != "darwin":
-        # TCC is a macOS mechanism. Nowhere else is a background job refused reads under
-        # ~/Documents, so refusing a tree there would be enforcing a rule that does not exist.
+        # TCC is a macOS mechanism: nowhere else is a background job refused reads under
+        # ~/Documents, so refusing a tree there would enforce a rule that does not exist.
         return checks.ok("install location", str(tree))
     roots = paths.tcc_protected_roots()
     if is_tcc_blocked(tree, roots):

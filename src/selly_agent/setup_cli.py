@@ -202,8 +202,8 @@ def _gates(ui: Ui, tree) -> None:
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
     _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
     if sys.platform == "linux":
-        # Early, and before anything slow: without a user manager there is nothing to register
-        # the worker with, and every later phase would be work thrown away.
+        # Before anything slow: with no user manager there is nothing to register the worker
+        # with, and every later phase would be work thrown away.
         _require(ui, checks.fail_open("systemd", preflight.check_systemd_user))
     _gate_claude(ui, cfg)
     _gate_dependency(ui, "node", lambda: preflight.check_node(), package="node")
@@ -269,8 +269,8 @@ def _gate_dependency(ui: Ui, name: str, probe, *, package: str, cask: bool = Fal
         return
 
     if sys.platform != "darwin":
-        # Only macOS has a package manager that installs into the user's own prefix. Everywhere
-        # else this means `sudo`, and an installer must not wield that on someone's behalf.
+        # Everywhere but macOS a system package needs `sudo`, and an installer must not wield
+        # that on someone's behalf.
         raise Abort(f"{name}: {check.detail}", check.fix)
 
     brew = preflight.homebrew_path()

@@ -7,8 +7,7 @@ something that does not exist, so every one of those methods refuses instead —
 would reach them (`daemon install|start|stop`, `update`, `uninstall`) refuse earlier, in their own
 words, naming the Docker command that does the job.
 
-Photo conversion is the one method left, and it is not overridden: the converter is a bundled
-dependency that behaves the same here as on a host.
+Photo conversion is inherited rather than overridden: the converter behaves the same here.
 """
 
 from __future__ import annotations

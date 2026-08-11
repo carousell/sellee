@@ -53,10 +53,9 @@ _last_failed_launch_ts: float | None = None
 
 _CHROME_MACOS = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
-# What a Linux desktop calls Chrome, most-preferred first — there is no one install location the
-# way there is on a Mac. Google's own .deb/.rpm provides `google-chrome`; the rest are the
-# distributions' Chromium packages. The absolute path last is where that .deb puts the real
-# binary, for a session whose PATH does not reach /usr/bin.
+# What a Linux desktop calls Chrome, most-preferred first: Google's own .deb/.rpm provides
+# `google-chrome`, the rest are the distributions' Chromium packages. The absolute path last is
+# where that .deb puts the binary, for a session whose PATH does not reach /usr/bin.
 _CHROME_LINUX = (
     "google-chrome",
     "google-chrome-stable",
@@ -91,8 +90,8 @@ def resolve_binary(chrome_bin: str | None = None) -> str:
 def _linux_chrome() -> str:
     """The first candidate this machine actually has, or the name to install when it has none.
 
-    Falling back to a name rather than to nothing keeps the installer's report honest: "not found
-    at google-chrome" is something a person can act on, where an empty path is not.
+    A name rather than nothing, because the installer reports "not found at <this>" — which a
+    person can act on where an empty path is not.
     """
     for candidate in _CHROME_LINUX:
         if candidate.startswith("/"):

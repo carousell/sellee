@@ -263,10 +263,10 @@ def shell_rc_path(shell: str) -> Path | None:
     """The rc file a PATH export belongs in for this login shell, or None for a shell we do not
     write config for.
 
-    Only the two we can be right about: zsh reads ~/.zshrc on both platforms, and bash reads
-    ~/.bash_profile for the login shells macOS Terminal opens but ~/.bashrc for the interactive
-    ones a Linux desktop opens. Writing ~/.bash_profile on a distribution whose skeleton does not
-    source ~/.bashrc would hide the export entirely, so the answer is per-OS.
+    Only the two we can be right about: zsh reads ~/.zshrc on both platforms; bash reads
+    ~/.bash_profile for the login shells macOS Terminal opens and ~/.bashrc for the interactive
+    ones a Linux desktop opens, and a distribution whose skeleton does not source ~/.bashrc would
+    hide an export written to the other file.
 
     Everything else answers None rather than falling back to ~/.profile — fish and nushell never
     read it, and a POSIX `export` line is not their syntax either, so writing it would leave a
@@ -285,9 +285,8 @@ def shell_rc_candidates() -> list[Path]:
 
     Removal reads this rather than asking about the shell running right now: install under zsh and
     uninstall from bash and the block would otherwise be left behind for good. Both bash files are
-    here regardless of the OS, so a tree carried between machines still uninstalls cleanly.
-    ~/.profile is here because installs before this ever wrote it, even though nothing writes it
-    now.
+    here whatever the OS, so a tree carried between machines still uninstalls cleanly. ~/.profile
+    is here because installs before this ever wrote it, even though nothing writes it now.
     """
     home = _home()
     return [home / ".zshrc", home / ".bash_profile", home / ".bashrc", home / ".profile"]

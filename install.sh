@@ -64,9 +64,8 @@ for tool in curl tar; do
 	command -v "$tool" >/dev/null 2>&1 || die "$tool is required and isn't on your PATH."
 done
 
-# Either digest tool will do, and only one of them is ever present: `shasum` is macOS's (a perl
-# script), `sha256sum` is GNU coreutils'. Requiring both would refuse a Linux machine that can
-# verify the archive perfectly well.
+# macOS ships `shasum`, GNU coreutils ships `sha256sum`, and a machine rarely has both. Either
+# verifies the archive, so requiring a particular one would refuse a machine that can.
 if command -v shasum >/dev/null 2>&1; then
 	sha256_check() { shasum -a 256 -c "$1"; }
 elif command -v sha256sum >/dev/null 2>&1; then

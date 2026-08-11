@@ -33,8 +33,7 @@ class Platform(ABC):
         """Write src to dest as a JPEG no larger than max_dim on its longest side.
 
         Concrete, and the same on every platform: the converter is a bundled dependency rather
-        than whatever the OS happens to ship. It stays on this surface because that is where
-        every caller already asks for it, not because the answer differs per OS.
+        than whatever the OS happens to ship.
         """
         from selly_agent.platform import images
 

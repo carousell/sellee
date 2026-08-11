@@ -1,10 +1,8 @@
 """The photo converter, against real image bytes.
 
-Every fixture here is generated in-test and decoded back, because what the photo pipeline depends
-on is the pixels that come out — orientation applied, never enlarged, always a JPEG the rail
-accepts — and an argv assertion could pin none of that. HEIC gets its own cases: it is the format
-a phone actually produces, no marketplace takes it, and it is the only one needing a decoder that
-Pillow does not ship.
+Every fixture is generated in-test and decoded back: what the pipeline depends on is the pixels
+that come out — orientation applied, never enlarged, always a JPEG — and an argv assertion could
+pin none of that. HEIC gets its own cases as the format a phone actually produces.
 """
 
 from __future__ import annotations
@@ -70,8 +68,7 @@ def test_a_photo_already_inside_the_bound_is_never_enlarged(tmp_path) -> None:
 @pytest.mark.parametrize("fmt", ["JPEG", "HEIF"])
 def test_exif_orientation_is_baked_into_the_pixels(tmp_path, fmt) -> None:
     """A phone writes the picture unrotated and records which way is up in a tag. A marketplace
-    that ignores the tag shows the listing sideways, so the rotation is applied before upload —
-    which is what the OS tools used to do implicitly, and what a HEIC decoder must also do."""
+    that ignores the tag shows the listing sideways, so the rotation is applied before upload."""
     src = _write(tmp_path / "rotated.in", (120, 40), fmt=fmt, orientation=6)
     to_jpeg(src, tmp_path / "rotated.jpg", 1600)
     assert _opened(tmp_path / "rotated.jpg").size == (40, 120)

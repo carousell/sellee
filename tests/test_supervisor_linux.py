@@ -77,9 +77,9 @@ def test_the_unit_carries_the_marker_that_makes_it_ours() -> None:
 
 
 def test_a_crash_loop_is_paced_rather_than_parked() -> None:
-    """systemd's default start limiter would leave a crash-looping unit in `failed` until
-    somebody ran `reset-failed` by hand, which launchd's throttle never does. Disabling the
-    limiter and pacing with RestartSec keeps a machine that is briefly broken self-healing."""
+    """systemd's default start limiter would leave a crash-looping unit in `failed` until somebody
+    ran `reset-failed` by hand. Pacing with RestartSec keeps a briefly broken machine
+    self-healing."""
     text = _render()
     assert "StartLimitIntervalSec=0" in text
     assert "Restart=on-failure" in text
@@ -241,8 +241,7 @@ def test_install_refuses_a_foreign_unit_with_our_name(xdg_tmp) -> None:
 
 def test_the_default_label_cannot_collide_with_the_macos_one(xdg_tmp) -> None:
     """The label is recorded per machine, so the two defaults never meet — but a Linux unit named
-    `com.selly.agent.service` would still be legal, and this is what stops it happening by
-    accident."""
+    `com.selly.agent.service` would still be legal, so pin the default."""
     fake = FakeLinuxPlatform()
     supervisor.install(mode="manual", platform=fake)
     assert config.load().daemon_label == "selly-agent"

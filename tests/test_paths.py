@@ -91,9 +91,8 @@ def test_zsh_answers_zshrc_on_every_platform(monkeypatch) -> None:
 
 
 def test_bash_answers_the_file_that_platforms_shell_actually_reads(monkeypatch) -> None:
-    """macOS Terminal opens login shells, which read ~/.bash_profile. A Linux desktop opens
-    interactive ones, which read ~/.bashrc — and on a distribution whose skeleton does not source
-    ~/.bashrc from ~/.bash_profile, writing the latter hides the export entirely."""
+    """macOS Terminal opens login shells, which read ~/.bash_profile; a Linux desktop opens
+    interactive ones, which read ~/.bashrc."""
     monkeypatch.setattr(paths.sys, "platform", "darwin")
     assert paths.shell_rc_path("/bin/bash").name == ".bash_profile"
 

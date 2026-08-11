@@ -143,8 +143,8 @@ def test_every_acquisition_re_ensures_chrome_and_reuses_the_client(store, bus, m
 
 
 def test_a_configured_path_wins_on_every_platform(monkeypatch) -> None:
-    """The one override, and it is checked first: a seller with Chrome somewhere unusual said so
-    in config, and no amount of searching should second-guess that."""
+    """Checked first: a seller with Chrome somewhere unusual said so in config, and no amount of
+    searching should second-guess that."""
     for platform in ("darwin", "linux"):
         monkeypatch.setattr(chrome.sys, "platform", platform)
         assert chrome.resolve_binary("/opt/my-chrome") == "/opt/my-chrome"

@@ -1,13 +1,8 @@
 """The photo converter: one implementation, every platform.
 
-The pipeline needs exactly one transform — take whatever a phone or a marketplace hands us and
-produce a JPEG the rail will accept, no larger than a bound. That used to be the OS's job, which
-meant `sips` on macOS and ImageMagick in the image, and no answer at all on a host Linux. Pillow
-does it identically everywhere, so the transform stopped being OS-specific and moved here; what
-stays behind the platform seam is only what genuinely differs between operating systems.
-
-HEIC is the reason a decoder is bundled at all: an iPhone photo arrives in it, no marketplace
-takes it, and Pillow does not read it without pillow-heif.
+The pipeline needs one transform — whatever a phone or a marketplace hands us, out as a JPEG the
+rail will accept, no larger than a bound. HEIC is why a decoder is bundled at all: an iPhone
+photo arrives in it, no marketplace takes it, and Pillow does not read it without pillow-heif.
 """
 
 from __future__ import annotations
@@ -22,8 +17,8 @@ _opener_registered = False
 def _prepare() -> tuple:
     """Import Pillow and teach it HEIC, answering (Image, ImageOps).
 
-    Imported here rather than at module scope because Pillow is a heavy import and this is a rare
-    path: every CLI invocation resolves a platform, and almost none of them convert a photo.
+    Imported here rather than at module scope: every CLI invocation resolves a platform, and
+    almost none of them convert a photo.
     """
     global _opener_registered
     from PIL import Image, ImageOps
@@ -48,17 +43,13 @@ def to_jpeg(src: Path, dest: Path, max_dim: int) -> None:
         Image, ImageOps = _prepare()
         dest.parent.mkdir(parents=True, exist_ok=True)
         with Image.open(src) as opened:
-            # A phone's HEIC can carry a depth map or a burst alongside the picture; Image.open
-            # gives the primary image and the rest is left where it is.
-            #
-            # Orientation is an EXIF tag rather than pixel order, and a JPEG written without
-            # applying it shows sideways wherever the tag is ignored — so it is baked in here.
+            # Image.open gives the primary frame; a HEIC's burst or depth map stays where it is.
+            # Orientation is an EXIF tag rather than pixel order, so bake it in — a viewer that
+            # ignores the tag shows the listing sideways.
             image = ImageOps.exif_transpose(opened) or opened
-            # thumbnail only ever shrinks: a photo already inside the bound is re-encoded at its
-            # own size, never blown up to meet it.
+            # thumbnail only ever shrinks; a photo already inside the bound keeps its own size.
             image.thumbnail((max_dim, max_dim))
-            # JPEG has no alpha and no palette; converting first means a PNG with transparency
-            # writes rather than raising at the last step.
+            # JPEG carries no alpha or palette, so coerce rather than fail at the last step.
             image.convert("RGB").save(dest, format="JPEG")
     except Exception as exc:  # Pillow raises OSError, ValueError and its own types alike
         raise ImageToolUnavailable(f"cannot convert {src.name}: {exc}") from exc

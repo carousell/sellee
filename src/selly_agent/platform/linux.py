@@ -1,14 +1,12 @@
 """Linux platform — a systemd user unit, and the directory the user manager reads at login.
 
-This is the only place systemd knowledge lives, and the unit it renders reproduces what the
-macOS plist earns rather than inventing a policy: respawn on a crash but not on a clean exit
-(`Restart=on-failure`, so a duplicate start that exits 0 stays exited), a 30s pause between
-respawns, the environment pinned into the definition because a supervised job inherits none,
-and the two log files redirected to the paths the log commands already read.
+The only place systemd knowledge lives. The unit reproduces what the macOS plist earns rather
+than inventing a policy: respawn on a crash but not on a clean exit, a pause between respawns,
+the environment pinned in because a supervised job inherits none, and the log files redirected
+to the paths the log commands already read.
 
-`--user` throughout: the unit belongs to the login session, which is also where the Chrome the
-agent drives lives. Lingering is deliberately never enabled — a daemon supervised while nobody
-is logged in could never reach a browser.
+`--user` throughout, and lingering is never enabled: the unit belongs to the login session,
+which is where the Chrome the agent drives lives anyway.
 """
 
 from __future__ import annotations
@@ -20,23 +18,20 @@ from selly_agent.platform.base import Platform
 
 _DEFAULT_LABEL = "selly-agent"
 
-# Where systemd's per-user manager looks for units, relative to home. Kept as parts rather than
-# a string because register() also has to recognise a file that sits there.
+# Where systemd's per-user manager looks for units, relative to home. Parts rather than a string
+# because register() matches a file's location against them.
 _UNIT_DIR_PARTS = (".config", "systemd", "user")
 
 
 def _escape(value: str) -> str:
-    """A value safe to interpolate into a unit file.
-
-    `%` starts a systemd specifier (`%h` is the home directory, `%i` an instance name), so a
-    literal one has to be doubled or a path containing it expands into something else entirely.
-    """
+    """A value safe to interpolate into a unit file: `%` starts a systemd specifier (`%h` is the
+    home directory), so a literal one has to be doubled."""
     return str(value).replace("%", "%%")
 
 
 def _quote(value: str) -> str:
-    """One word, quoted the way systemd's own parser reads it — needed because an install under a
-    home directory with a space in it would otherwise be split into two arguments."""
+    """One word, quoted the way systemd's parser reads it — an install under a home directory
+    with a space in it would otherwise be split into two arguments."""
     escaped = str(value).replace("\\", "\\\\").replace('"', '\\"')
     return f'"{_escape(escaped)}"'
 
@@ -71,9 +66,8 @@ class LinuxPlatform(Platform):
             f"# {_escape(marker)}\n"
             "[Unit]\n"
             f"Description=Selly marketplace agent ({_escape(label)})\n"
-            # Without this a crash loop trips systemd's start rate limiter and the unit is parked
-            # in `failed` until somebody runs `reset-failed` by hand — a state launchd's throttle
-            # never produces. RestartSec below is the pacing instead.
+            # Without this a crash loop trips systemd's start rate limiter and parks the unit in
+            # `failed` until somebody runs `reset-failed` by hand. RestartSec paces it instead.
             "StartLimitIntervalSec=0\n"
             "\n"
             "[Service]\n"
@@ -101,9 +95,8 @@ class LinuxPlatform(Platform):
     def register(self, config_path: Path) -> None:
         """Make the unit known and start it, enabling it only where the mode says to.
 
-        Which of those two it is, is decided by where the file sits — the same trick the plist
-        uses. In the unit directory, `enable` writes the wants-symlink that starts it at every
-        login; anywhere else, `link` makes it startable by name without ever auto-starting.
+        Placement decides which: in the unit directory, `enable` writes the wants-symlink that
+        starts it at every login; anywhere else, `link` makes it startable by name only.
         """
         path = Path(config_path).resolve()
         self._systemctl("daemon-reload")
@@ -116,7 +109,7 @@ class LinuxPlatform(Platform):
 
     def unregister(self, label: str) -> None:
         """Stop the unit and take back both kinds of symlink `register` may have written, so a
-        mode flip or an uninstall leaves nothing dangling in the unit directory."""
+        mode flip or an uninstall leaves nothing dangling."""
         self._systemctl("disable", "--now", self.supervisor_filename(label))
 
     def is_registered(self, label: str) -> bool:
