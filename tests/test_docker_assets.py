@@ -78,10 +78,12 @@ def test_the_image_does_not_restate_the_pinned_browser_server_version() -> None:
 
 
 def test_the_image_installs_what_the_daemon_shells_out_to() -> None:
-    # `ps` for the pass runner's process tree, ImageMagick for photo conversion, socat for the
-    # CDP forwarder, tini to reap the node processes a pass orphans, tzdata for the clock.
-    for package in ("procps", "imagemagick", "socat", "tini", "tzdata"):
+    # `ps` for the pass runner's process tree, socat for the CDP forwarder, tini to reap the node
+    # processes a pass orphans, tzdata for the clock. Photo conversion is not here: it is a
+    # bundled Python dependency rather than a system tool.
+    for package in ("procps", "socat", "tini", "tzdata"):
         assert package in DOCKERFILE
+    assert "imagemagick" not in DOCKERFILE
 
 
 def test_the_image_pins_the_harness_it_installs() -> None:

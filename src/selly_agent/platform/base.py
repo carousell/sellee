@@ -11,7 +11,7 @@ class UnsupportedPlatform(Exception):
 
 
 class ImageToolUnavailable(Exception):
-    """The platform's image converter is missing or failed. Its message names the file."""
+    """The image converter failed on a file. Its message names that file."""
 
 
 class Platform(ABC):
@@ -29,15 +29,16 @@ class Platform(ABC):
 
     # --- images ----------------------------------------------------------------------------
 
-    @abstractmethod
     def to_jpeg(self, src: Path, dest: Path, max_dim: int) -> None:
         """Write src to dest as a JPEG no larger than max_dim on its longest side.
 
-        The runtime is stdlib-only and stdlib cannot transform images, so this shells out to
-        whatever the OS ships. Raises ImageToolUnavailable — naming the file — when the tool is
-        absent or the conversion fails, so the caller can escalate something actionable rather
-        than upload a file the marketplace will reject.
+        Concrete, and the same on every platform: the converter is a bundled dependency rather
+        than whatever the OS happens to ship. It stays on this surface because that is where
+        every caller already asks for it, not because the answer differs per OS.
         """
+        from selly_agent.platform import images
+
+        images.to_jpeg(src, dest, max_dim)
 
     # --- supervisor (keep-alive job) ------------------------------------------------------
 

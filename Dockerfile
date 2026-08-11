@@ -8,8 +8,6 @@ FROM node:26-trixie-slim
 ARG CLAUDE_CODE_VERSION=2.1.220
 
 RUN apt-get update \
-	# imagemagick keeps its recommends: the delegate package they pull in is what gives it HEIC.
-	&& apt-get install -y imagemagick \
 	&& apt-get install -y --no-install-recommends \
 		ca-certificates \
 		curl \

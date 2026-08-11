@@ -239,7 +239,7 @@ def test_a_missing_image_tool_names_the_file_and_stamps_nothing(
 ) -> None:
     class NoTool:
         def to_jpeg(self, src, dest, max_dim):
-            raise ImageToolUnavailable(f"cannot convert {Path(src).name}: `sips` is not available")
+            raise ImageToolUnavailable(f"cannot convert {Path(src).name}: truncated file")
 
     monkeypatch.setattr(photo_tools, "get_platform", NoTool)
     item = _item_with_photos(store, names=("a.heic",), data=HEIC)
