@@ -44,7 +44,7 @@ def _run(args, ui: Ui) -> int:
     preserve = bool(getattr(args, "preserve_data", False))
     platform = get_platform()
 
-    ui.step("Uninstalling selly-agent from this Mac")
+    ui.step("Uninstalling selly-agent from this computer")
     for line in _plan(preserve):
         ui.say(line)
     # Deleting someone's data defaults to no, and `--yes` is read as the consent itself rather

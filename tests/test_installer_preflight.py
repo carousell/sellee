@@ -3,7 +3,10 @@
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+
+import pytest
 
 from selly_agent.config import Config
 from selly_agent.installer import checks, preflight
@@ -67,6 +70,7 @@ def test_agent_context_names_the_variable_that_gave_it_away() -> None:
 
 
 def test_tree_location_gate_refuses_a_protected_folder(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(preflight.sys, "platform", "darwin")
     protected = tmp_path / "Documents"
     (protected / "selly-agent").mkdir(parents=True)
     monkeypatch.setattr(preflight.paths, "tcc_protected_roots", lambda: [protected])
@@ -77,15 +81,26 @@ def test_tree_location_gate_refuses_a_protected_folder(monkeypatch, tmp_path) ->
 
 
 def test_tree_location_gate_accepts_an_ordinary_path(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(preflight.sys, "platform", "darwin")
     monkeypatch.setattr(preflight.paths, "tcc_protected_roots", lambda: [tmp_path / "Documents"])
     assert preflight.check_tree_location(tmp_path / "dev").status == checks.OK
+
+
+def test_tree_location_gate_invents_no_rule_off_macos(monkeypatch, tmp_path) -> None:
+    """TCC is a macOS mechanism. A Linux background job reads ~/Documents like any other
+    process, so refusing a tree there would be enforcing a restriction that does not exist."""
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    protected = tmp_path / "Documents"
+    (protected / "selly-agent").mkdir(parents=True)
+    monkeypatch.setattr(preflight.paths, "tcc_protected_roots", lambda: [protected])
+    assert preflight.check_tree_location(protected / "selly-agent").status == checks.OK
 
 
 def test_node_gate_reports_a_missing_node(monkeypatch) -> None:
     monkeypatch.setattr(preflight.shutil, "which", lambda name: None)
     result = preflight.check_node()
     assert result.status == checks.FAIL
-    assert result.fix == "brew install node"
+    assert result.fix == preflight.node_fix()
 
 
 def test_node_gate_refuses_an_intel_node_on_apple_silicon(monkeypatch) -> None:
@@ -327,3 +342,82 @@ def test_a_missing_binary_records_nothing_rather_than_a_guess(monkeypatch) -> No
         preflight.shutil, "which", lambda name: "/usr/local/bin/npx" if name == "npx" else None
     )
     assert preflight.node_path_fragment() == ""
+
+
+# --- the OS this is running on ------------------------------------------------------------------
+
+
+def test_platform_gate_accepts_both_host_platforms(monkeypatch) -> None:
+    for platform, reported in (("darwin", "macOS"), ("linux", "Linux")):
+        monkeypatch.setattr(preflight.sys, "platform", platform)
+        check = preflight.check_platform()
+        assert check.status == checks.OK
+        assert check.detail == reported
+
+
+def test_platform_gate_refuses_an_os_with_no_implementation(monkeypatch) -> None:
+    monkeypatch.setattr(preflight.sys, "platform", "win32")
+    check = preflight.check_platform()
+    assert check.status == checks.FAIL
+    assert "container install" in check.fix
+
+
+def test_platform_gate_asks_nothing_of_a_container(container) -> None:
+    check = preflight.check_platform()
+    assert check.status == checks.OK
+    assert check.detail == "container"
+
+
+def test_the_apple_silicon_probe_fails_closed_where_there_is_no_sysctl() -> None:
+    """The Rosetta arch check hangs off this, and it is asked on every OS. A machine with no
+    `sysctl hw.optional.arm64` must answer False rather than raise, or the node gate would take
+    the whole install down on Linux."""
+    if sys.platform == "darwin":
+        pytest.skip("this machine really is a Mac")
+    assert preflight.is_apple_silicon() is False
+
+
+def test_the_remediation_names_the_package_manager_this_machine_has(monkeypatch) -> None:
+    monkeypatch.setattr(preflight.sys, "platform", "darwin")
+    assert preflight.node_fix() == "brew install node"
+    assert "--cask" in preflight.chrome_fix()
+
+    monkeypatch.setattr(preflight.sys, "platform", "linux")
+    assert "apt install" in preflight.node_fix() and "dnf install" in preflight.node_fix()
+    assert "brew" not in preflight.node_fix()
+    # The .deb, not a snap: a confined build cannot reach the profile directory the agent owns.
+    assert "google.com/chrome" in preflight.chrome_fix()
+    assert "brew" not in preflight.chrome_fix()
+
+
+# --- the systemd user manager (Linux only) --------------------------------------------------------
+
+
+def test_a_degraded_user_manager_still_counts_as_reachable() -> None:
+    """`is-system-running` exits non-zero when any unrelated unit on the machine has failed. That
+    is not our problem, and refusing the install over it would be wrong."""
+    assert preflight.systemd_user_reachable(1, "degraded\n") is True
+    assert preflight.systemd_user_reachable(0, "running\n") is True
+
+
+def test_a_missing_user_bus_is_not_reachable() -> None:
+    """Bare SSH on some setups, or WSL started without systemd: systemctl runs but has nothing to
+    talk to, and every daemon verb would fail later with this message instead of now."""
+    failure = "Failed to connect to bus: No medium found\n"
+    assert preflight.systemd_user_reachable(1, failure) is False
+    assert preflight.systemd_user_reachable(None, "FileNotFoundError: systemctl") is False
+    assert preflight.systemd_user_reachable(1, "") is False
+
+
+def test_the_systemd_gate_says_what_to_do_about_it(monkeypatch) -> None:
+    monkeypatch.setattr(preflight, "_run", lambda argv, timeout=30.0: (1, "Failed to connect"))
+    check = preflight.check_systemd_user()
+    assert check.status == checks.FAIL
+    assert "wsl.conf" in check.fix and "container install" in check.fix
+
+
+def test_the_systemd_gate_reports_the_state_it_was_told(monkeypatch) -> None:
+    monkeypatch.setattr(preflight, "_run", lambda argv, timeout=30.0: (0, "running\n"))
+    check = preflight.check_systemd_user()
+    assert check.status == checks.OK
+    assert "running" in check.detail

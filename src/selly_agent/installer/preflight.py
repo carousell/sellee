@@ -35,6 +35,35 @@ _BREW_TIMEOUT_SEC = 1800.0
 # rather than an honest "too old".
 NODE_MIN_MAJOR = 18
 
+# Remediation copy differs by OS, and a fix line naming the wrong package manager is worse than
+# none — it sends someone to install a tool that will not install the thing they need.
+_NODE_FIX_DARWIN = "brew install node"
+_NODE_FIX_LINUX = (
+    "sudo apt install nodejs npm      (Debian, Ubuntu, Mint)\n"
+    "sudo dnf install nodejs npm      (Fedora, RHEL)\n"
+    f"Some distributions still ship a Node below v{NODE_MIN_MAJOR}; if yours does, take a "
+    "current one from https://nodejs.org/en/download."
+)
+_CHROME_FIX_DARWIN = "brew install --cask google-chrome"
+_CHROME_FIX_LINUX = (
+    "Install Google Chrome from https://www.google.com/chrome (the .deb or .rpm). A snap or "
+    "flatpak build is untested here — those confine filesystem access, and the agent needs a "
+    "profile directory of its own under your home."
+)
+
+
+def _fix(darwin: str, linux: str) -> str:
+    return darwin if sys.platform == "darwin" else linux
+
+
+def node_fix() -> str:
+    return _fix(_NODE_FIX_DARWIN, _NODE_FIX_LINUX)
+
+
+def chrome_fix() -> str:
+    return _fix(_CHROME_FIX_DARWIN, _CHROME_FIX_LINUX)
+
+
 # Environment variables that mean an agent is running this, not a person. A TTY may well exist —
 # an agent session usually has one — so its presence is not evidence of a human, and the
 # interactive phases must not be offered to a caller that cannot answer them.
@@ -233,18 +262,59 @@ def brew_install(package: str, *, cask: bool = False) -> tuple:
 # --- gates -----------------------------------------------------------------------------------
 
 
+HOST_PLATFORMS = {"darwin": "macOS", "linux": "Linux"}
+
+
 def check_platform() -> checks.Check:
     if deployment.is_container():
         # The image is the machine here, and it is one we built — so the question this gate asks
         # of a host ("is this an OS we support?") is already answered.
         return checks.ok("platform", "container")
-    if sys.platform != "darwin":
+    name = HOST_PLATFORMS.get(sys.platform)
+    if name is None:
         return checks.fail(
             "platform",
             f"{sys.platform} is not supported yet",
-            "selly-agent runs on macOS today; Windows is a planned port.",
+            "selly-agent runs on macOS and Linux today; Windows is a planned port. The container "
+            "install works on any of them — see docs/install.md.",
         )
-    return checks.ok("platform", "macOS")
+    return checks.ok("platform", name)
+
+
+def systemd_user_reachable(code, output: str) -> bool:
+    """Whether `systemctl --user` reached a user manager, read off a probe's exit code and output.
+
+    Not the exit code alone: `is-system-running` exits non-zero for a perfectly healthy manager
+    that merely has some unrelated unit in a failed state ("degraded"). What decides is whether it
+    answered with a state at all, rather than with a bus it could not connect to.
+    """
+    if code is None:
+        return False
+    return bool((output or "").strip()) and "failed to connect" not in output.lower()
+
+
+def check_systemd_user() -> checks.Check:
+    """That a systemd user manager is reachable — the thing that will keep the daemon alive.
+
+    `systemctl --user` talks to a per-login-session manager over the user bus, and that bus is
+    absent over a bare SSH login on some setups and in a WSL distribution started without systemd.
+    Asked here so it reads as one sentence, rather than as `daemon install` failing later with
+    systemd's own message about a bus nobody has heard of.
+    """
+    code, out = _run(["systemctl", "--user", "is-system-running"])
+    if systemd_user_reachable(code, out):
+        return checks.ok("systemd", f"user manager is {out.strip().splitlines()[0]}")
+    return checks.fail(
+        "systemd",
+        "no systemd user manager is reachable from this session",
+        "selly-agent keeps its background worker alive with a systemd user unit, and that needs "
+        "a desktop login session — log in at the machine rather than over SSH.\n"
+        "Under WSL, put this in /etc/wsl.conf and restart the distribution:\n"
+        "  [boot]\n"
+        "  systemd=true\n"
+        "On a system without systemd at all, use the container install instead — see "
+        "docs/install.md.",
+    )
 
 
 def check_runtime(tree) -> checks.Check:
@@ -273,6 +343,10 @@ def check_runtime(tree) -> checks.Check:
 
 def check_tree_location(tree) -> checks.Check:
     """Refuse to install from a tree macOS will not let the daemon read."""
+    if sys.platform != "darwin":
+        # TCC is a macOS mechanism. Nowhere else is a background job refused reads under
+        # ~/Documents, so refusing a tree there would be enforcing a rule that does not exist.
+        return checks.ok("install location", str(tree))
     roots = paths.tcc_protected_roots()
     if is_tcc_blocked(tree, roots):
         names = ", ".join(f"~/{root.name}" for root in roots)
@@ -289,7 +363,7 @@ def check_node() -> checks.Check:
     """Node must be present, recent enough for Playwright MCP, and native to this machine."""
     node = shutil.which("node")
     if not node:
-        return checks.fail("node", "not installed", "brew install node")
+        return checks.fail("node", "not installed", node_fix())
     code, out = _run([node, "--version"])
     major = parse_node_major(out) if code == 0 else 0
     if major < NODE_MIN_MAJOR:
@@ -297,7 +371,7 @@ def check_node() -> checks.Check:
         return checks.fail(
             "node",
             f"{node} reports {found}, below the v{NODE_MIN_MAJOR} the browser layer needs",
-            "brew install node",
+            node_fix(),
         )
     if is_apple_silicon():
         arch = binary_arch(node)
@@ -310,20 +384,14 @@ def check_node() -> checks.Check:
                 "comes first on PATH.",
             )
     if not shutil.which("npx"):
-        return checks.fail(
-            "node", f"{node} is installed but npx is not on PATH", "brew install node"
-        )
+        return checks.fail("node", f"{node} is installed but npx is not on PATH", node_fix())
     return checks.ok("node", f"v{major} at {node}")
 
 
 def check_chrome(chrome_bin=None) -> checks.Check:
     binary = chrome.resolve_binary(chrome_bin)
     if not Path(binary).exists():
-        return checks.fail(
-            "chrome",
-            f"not found at {binary}",
-            "brew install --cask google-chrome",
-        )
+        return checks.fail("chrome", f"not found at {binary}", chrome_fix())
     return checks.ok("chrome", binary)
 
 
@@ -404,8 +472,8 @@ def check_supervised_spawn(config) -> checks.Check:
                 f"`{' '.join(probe)}` does not run under the background worker's PATH "
                 f"({path}): {out.strip()[-200:]}",
                 "The worker is started with that PATH and nothing else. Install Node so that "
-                "`node` and `npx` sit in directories setup can record (`brew install node` puts "
-                "both in one), then re-run ./setup.",
+                "`node` and `npx` sit in directories setup can record (a system package puts "
+                f"both in one), then re-run ./setup.\n{node_fix()}",
             )
     return checks.ok("browser server", f"spawns under the worker's PATH ({path})")
 

@@ -1,8 +1,12 @@
 """`selly-agent setup`, machine half: the gates, the layout it writes, and the daemon gate.
 
-The world is faked at the probe boundary — no brew, no claude, no launchctl, no live daemon —
-but everything between is the real code: real staging, the real symlink swap, the real plist
-render, the real config writes.
+The world is faked at the probe boundary — no package manager, no claude, no supervisor, no live
+daemon — but everything between is the real code: real staging, the real symlink swap, the real
+job-file render, the real config writes.
+
+The supervisor half is faked as macOS throughout, whichever machine runs the suite, so these
+tests are about setup's own orchestration. What differs per OS is covered where it lives: the
+gates in test_installer_preflight.py, the systemd mapping in test_supervisor_linux.py.
 """
 
 from __future__ import annotations
@@ -29,10 +33,11 @@ from selly_agent.installer import region as region_guess
 
 @pytest.fixture
 def world(monkeypatch, xdg_tmp, tree):
-    """Every gate passing, a launchctl that only records, and a daemon that comes up."""
+    """Every gate passing, a supervisor that only records, and a daemon that comes up."""
     platform = FakePlatform()
     monkeypatch.setattr(setup_cli, "get_platform", lambda: platform)
     monkeypatch.setattr(materialize, "source_tree", lambda: tree)
+    monkeypatch.setattr(setup_cli.sys, "platform", "darwin")
     monkeypatch.setattr(preflight, "check_platform", lambda: checks.ok("platform", "macOS"))
     monkeypatch.setattr(
         preflight, "check_runtime", lambda tree: checks.ok("python runtime", "3.14.6")
@@ -673,3 +678,45 @@ def test_setup_records_every_directory_the_worker_needs_not_just_the_first(
 
     assert config.load().node_bin_dir == fragment
     assert fragment in (paths.config_dir() / "com.selly.agent.plist").read_text()
+
+
+# --- the gate that only exists on one OS ---------------------------------------------------------
+
+
+def test_linux_is_asked_for_a_systemd_user_manager_before_anything_slow(world, monkeypatch) -> None:
+    """Without a user manager there is nothing to register the worker with, so this has to stop
+    the run rather than let it get as far as `daemon install` failing in systemd's own words."""
+    monkeypatch.setattr(setup_cli.sys, "platform", "linux")
+    monkeypatch.setattr(
+        preflight,
+        "check_systemd_user",
+        lambda: checks.fail("systemd", "no user manager", "log in at the machine"),
+    )
+    assert setup_main("--yes", "--manual") == 1
+    assert not paths.current().exists()  # stopped before it wrote the layout
+
+
+def test_macos_is_never_asked_about_systemd(world, monkeypatch) -> None:
+    def explode():
+        raise AssertionError("a Mac was asked about systemd")
+
+    monkeypatch.setattr(preflight, "check_systemd_user", explode)
+    assert setup_main("--yes", "--manual") == 0
+
+
+def test_a_missing_dependency_off_macos_is_fatal_rather_than_offered(world, monkeypatch) -> None:
+    """Installing a system package on Linux needs sudo, and an installer must not wield that on
+    someone's behalf — so the fix is printed and the run stops."""
+    monkeypatch.setattr(setup_cli.sys, "platform", "linux")
+    monkeypatch.setattr(preflight, "check_systemd_user", lambda: checks.ok("systemd", "running"))
+    monkeypatch.setattr(
+        preflight, "check_node", lambda: checks.fail("node", "not installed", "sudo apt install")
+    )
+
+    def explode(*args, **kwargs):
+        raise AssertionError("a package manager was run on the seller's behalf")
+
+    monkeypatch.setattr(preflight, "brew_install", explode)
+    monkeypatch.setattr(preflight, "homebrew_path", lambda: "/opt/homebrew/bin/brew")
+
+    assert setup_main("--yes", "--manual") == 1

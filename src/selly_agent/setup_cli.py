@@ -14,6 +14,7 @@ than writing state behind its back.
 from __future__ import annotations
 
 import json
+import sys
 import time
 
 from selly_agent import (
@@ -113,7 +114,7 @@ def _intro(ui: Ui, platform) -> None:
     ui.banner(__version__)
     ui.say("")
     ui.say("Selly is a marketplace agent: it lists items, answers buyers, and negotiates within")
-    ui.say(f"limits you set. This installs version {__version__} on this Mac.")
+    ui.say(f"limits you set. This installs version {__version__} on this computer.")
     ui.say("")
     ui.say("The installer will:")
     ui.say("  • check for Node, Chrome, and the claude CLI (installed and signed in)")
@@ -200,6 +201,10 @@ def _gates(ui: Ui, tree) -> None:
 
     _require(ui, checks.fail_open("install location", lambda: preflight.check_tree_location(tree)))
     _require(ui, checks.fail_open("python runtime", lambda: preflight.check_runtime(tree)))
+    if sys.platform == "linux":
+        # Early, and before anything slow: without a user manager there is nothing to register
+        # the worker with, and every later phase would be work thrown away.
+        _require(ui, checks.fail_open("systemd", preflight.check_systemd_user))
     _gate_claude(ui, cfg)
     _gate_dependency(ui, "node", lambda: preflight.check_node(), package="node")
     _gate_dependency(
@@ -262,6 +267,11 @@ def _gate_dependency(ui: Ui, name: str, probe, *, package: str, cask: bool = Fal
     check = _report(ui, checks.fail_open(name, probe))
     if not check.failed:
         return
+
+    if sys.platform != "darwin":
+        # Only macOS has a package manager that installs into the user's own prefix. Everywhere
+        # else this means `sudo`, and an installer must not wield that on someone's behalf.
+        raise Abort(f"{name}: {check.detail}", check.fix)
 
     brew = preflight.homebrew_path()
     if not brew:
