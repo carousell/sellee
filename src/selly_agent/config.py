@@ -78,11 +78,15 @@ class Config:
     # resolves to the npx default at spawn time. Pinning it avoids an npx cold resolution — a
     # network fetch — landing on the hot path.
     playwright_mcp_cmd: list | None = None
-    # How often the inbox lane reads the marketplace, and how many of those ticks use the skip gate
-    # before one opens every active thread regardless. The sweep is the backstop for a lying inbox
+    # How often the inbox lane reads the marketplace, and how often one of those reads opens every
+    # active thread regardless of the skip gate. The sweep is the backstop for a lying inbox
     # preview: a missed message costs one sweep interval of latency, never a stranded buyer.
+    # The read cadence is dynamic: a thread anyone spoke in within the fast window is read at the
+    # fast interval, everything else at the default.
     inbox_read_interval_sec: float = 300.0
-    inbox_full_sweep_every: int = 6
+    inbox_fast_interval_sec: float = 60.0
+    inbox_fast_window_sec: float = 300.0
+    inbox_full_sweep_interval_sec: float = 1800.0
     # Consecutive failed marketplace reads before one needs-me escalation. A market that cannot be
     # seen must never look like a market with no news.
     browser_blind_after: int = 3
@@ -245,21 +249,30 @@ def _validate(raw: dict) -> Config:
             )
         values["playwright_mcp_cmd"] = list(cmd) if cmd is not None else None
 
-    if "inbox_read_interval_sec" in raw:
-        interval = raw["inbox_read_interval_sec"]
-        if not _is_real_number(interval) or interval <= 0:
-            raise ConfigError(
-                f"inbox_read_interval_sec must be a positive number, got {interval!r}"
-            )
-        values["inbox_read_interval_sec"] = float(interval)
+    # A sweep interval at or below the read interval makes every read a full sweep (the skip gate
+    # disabled) — a supported posture, since the gate is a cost optimization, never a correctness
+    # input.
+    for key in (
+        "inbox_read_interval_sec",
+        "inbox_fast_interval_sec",
+        "inbox_fast_window_sec",
+        "inbox_full_sweep_interval_sec",
+    ):
+        if key in raw:
+            interval = raw[key]
+            if not _is_real_number(interval) or interval <= 0:
+                raise ConfigError(f"{key} must be a positive number, got {interval!r}")
+            values[key] = float(interval)
 
-    if "inbox_full_sweep_every" in raw:
-        every = raw["inbox_full_sweep_every"]
-        # 1 means every tick is a full sweep (the skip gate disabled) — a supported posture, since
-        # the gate is a cost optimization and never a correctness input.
-        if not _is_real_int(every) or every < 1:
-            raise ConfigError(f"inbox_full_sweep_every must be an integer >= 1, got {every!r}")
-        values["inbox_full_sweep_every"] = every
+    # The dynamic cadence can only bring a read forward, so a fast interval above the default would
+    # be silently ignored rather than obeyed.
+    fast = values.get("inbox_fast_interval_sec", Config.inbox_fast_interval_sec)
+    read = values.get("inbox_read_interval_sec", Config.inbox_read_interval_sec)
+    if fast > read:
+        raise ConfigError(
+            f"inbox_fast_interval_sec must not exceed inbox_read_interval_sec, "
+            f"got {fast!r} > {read!r}"
+        )
 
     if "browser_blind_after" in raw:
         blind = raw["browser_blind_after"]

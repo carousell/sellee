@@ -4,8 +4,9 @@ A task never runs concurrently with itself (an in-flight guard). Every attempt i
 task.start, then task.ok or task.error, so a lane that is alive-but-failing-every-attempt is
 detectable from the event log, not hidden behind a ticking heartbeat. Consecutive failures arm
 a capped exponential backoff (reset on success) so a fast-failing task backs off instead of
-retrying hot. Scheduling arithmetic uses the monotonic clock; only the event store stamps wall
-time.
+retrying hot. A task may also carry a dynamic cadence, which can only pull its next run forward
+from the registered interval. Scheduling arithmetic uses the monotonic clock; only the event store
+stamps wall time.
 """
 
 from __future__ import annotations
@@ -36,6 +37,10 @@ class Task:
     name: str
     interval_sec: float
     func: Callable[[], None]
+    # An optional dynamic cadence, consulted after a successful run; it can only bring the next run
+    # forward, never push it out. Evaluated after the run, not in the due computation: that way the
+    # run that finds new work is the one that speeds the lane up, and off the loop lock.
+    next_interval: Callable[[], float] | None = None
 
 
 @dataclass
@@ -129,6 +134,7 @@ class Scheduler:
                 {"task": task.name, "delay_sec": delay, "consecutive_failures": failures},
             )
         else:
+            pull_in = self._dynamic_next_due(task)  # before the lock: it may query the store
             with self._lock:
                 st = self._reg.state.get(task.name)
                 if st is None:  # deregistered mid-run
@@ -136,7 +142,21 @@ class Scheduler:
                 st.consecutive_failures = 0
                 st.backoff_until = 0.0
                 st.running = False
+                if pull_in is not None:
+                    st.next_due = min(st.next_due, pull_in)
             self._bus.publish("task.ok", {"task": task.name})
+
+    def _dynamic_next_due(self, task: Task) -> float | None:
+        """The earliest a dynamically-paced task may run again, or None to keep the static
+        schedule — which is also what a raising callable gets: the task's own work succeeded, and a
+        cadence hint is not worth turning that into an error."""
+        if task.next_interval is None:
+            return None
+        try:
+            return self._clock() + float(task.next_interval())
+        except Exception as exc:
+            log.warning("next_interval for task %s failed: %s", task.name, exc)
+            return None
 
     def tick(self) -> list[Future]:
         if self._on_tick is not None:

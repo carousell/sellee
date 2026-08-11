@@ -9,6 +9,7 @@ would obscure them. The transport itself is covered in test_browser_client.py.
 from __future__ import annotations
 
 import pytest
+from tests.conftest import seed_setting
 
 from selly_agent.browser import inbox
 from selly_agent.browser.client import BrowserToolError, BrowserUnavailable
@@ -69,20 +70,25 @@ class StubClient:
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
 
-def _deps(store, bus, client, **overrides):
+def _deps(store, bus, client, *, swept=False, now=None, **overrides):
     clock = {"t": 1000.0}
 
-    def now():
+    def ticking_now():
         clock["t"] += 1.0
         return clock["t"]
 
-    return inbox.InboxDeps(
+    deps = inbox.InboxDeps(
         store=store,
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
-        now=now,
+        now=now or ticking_now,
     )
+    if swept:
+        # a sweep has just happened, so the read under test exercises the skip gate. An unstamped
+        # market always sweeps, which is what a fresh daemon does.
+        deps.last_full_sweep["carousell"] = clock["t"]
+    return deps
 
 
 @pytest.fixture
@@ -167,8 +173,9 @@ def test_a_scam_message_is_stamped_before_any_model_sees_it(store, bus, seeded) 
 def test_re_reading_records_nothing_new(store, bus, seeded) -> None:
     _thread(store, seeded)
     client = StubClient(conversations=[_conv()], tails={"99": [_bubble("hi")]})
-    deps = _deps(store, bus, client, inbox_full_sweep_every=1)
+    deps = _deps(store, bus, client)
     inbox.inbox_lane(deps)
+    deps.last_full_sweep.clear()  # sweep again rather than let the gate skip the re-read
     inbox.inbox_lane(deps)
     assert store.get_thread("carousell:99")["message_count"] == 1
 
@@ -194,6 +201,76 @@ def test_a_manual_seller_reply_is_recorded_and_stops_the_reply_lane(store, bus, 
     assert store.threads_with_unhandled_inbound() == []  # our account spoke last
 
 
+# --- the read cadence ---------------------------------------------------------------------------
+
+
+def _at_hour(hour: int):
+    """A clock reading a fixed local hour today — quiet hours are a local-time window."""
+    import time as _time
+
+    stamp = _time.localtime()
+    fixed = _time.mktime(
+        (stamp.tm_year, stamp.tm_mon, stamp.tm_mday, hour, 0, 0, stamp.tm_wday, stamp.tm_yday, -1)
+    )
+    return lambda: fixed
+
+
+def test_an_idle_inbox_is_read_at_the_default_interval(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient())
+    assert inbox.read_interval_sec(deps) == 300.0  # nothing said at all
+
+    _thread(store, seeded)
+    assert inbox.read_interval_sec(deps) == 300.0  # a thread, but nobody has spoken
+
+
+def test_a_warm_conversation_is_read_at_the_fast_interval(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=deps.now() - 30)
+    assert inbox.read_interval_sec(deps) == 60.0
+
+
+def test_our_own_reply_keeps_the_conversation_warm(store, bus, seeded) -> None:
+    """The buyer answering us is the commonest warm case, so a message we sent arms the fast
+    cadence exactly as one we received does."""
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound(
+        "carousell:99", msg_id="m1", text="posting today", ts=deps.now() - 30, direction="out"
+    )
+    assert inbox.read_interval_sec(deps) == 60.0
+
+
+def test_the_cadence_decays_once_the_window_passes(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="hi", ts=deps.now() - 301)
+    assert inbox.read_interval_sec(deps) == 300.0
+
+
+def test_a_thread_nobody_is_waiting_on_does_not_arm_the_fast_cadence(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    deps = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m1", text="hi", ts=deps.now() - 30)
+    store.update_thread("carousell:99", {"status": "closed"})
+    assert inbox.read_interval_sec(deps) == 300.0
+
+
+def test_quiet_hours_hold_the_slow_cadence(store, bus, seeded) -> None:
+    """The pacing gate refuses sends inside the window, so reading every minute for messages
+    nobody may answer yet buys only cost."""
+    seed_setting(store, "quiet_hours", [2300, 800])
+    _thread(store, seeded)
+    asleep = _deps(store, bus, StubClient(), now=_at_hour(2))
+    store.record_inbound("carousell:99", msg_id="m1", text="available?", ts=asleep.now() - 30)
+    assert inbox.read_interval_sec(asleep) == 300.0
+
+    # the same conversation, just as warm, once the window is over
+    awake = _deps(store, bus, StubClient(), now=_at_hour(12))
+    store.record_inbound("carousell:99", msg_id="m2", text="anyone?", ts=awake.now() - 30)
+    assert inbox.read_interval_sec(awake) == 60.0
+
+
 # --- the skip gate ------------------------------------------------------------------------------
 
 
@@ -201,7 +278,7 @@ def test_a_thread_whose_last_message_we_already_hold_is_not_opened(store, bus, s
     _thread(store, seeded)
     store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
     client = StubClient(conversations=[_conv(unread=0)])
-    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=99))
+    inbox.inbox_lane(_deps(store, bus, client, swept=True))
     assert client.navigations == [_INBOX]  # the thread page was never opened
 
 
@@ -216,14 +293,14 @@ def test_the_gate_errs_toward_opening(store, bus, seeded, row, reason) -> None:
     _thread(store, seeded)
     store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
     client = StubClient(conversations=[row], tails={"99": [_bubble("still available?")]})
-    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=99))
+    inbox.inbox_lane(_deps(store, bus, client, swept=True))
     assert len(client.navigations) == 2, reason
 
 
 def test_a_never_read_thread_is_always_opened(store, bus, seeded) -> None:
     _thread(store, seeded)
     client = StubClient(conversations=[_conv(unread=0)], tails={"99": [_bubble("hi")]})
-    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=99))
+    inbox.inbox_lane(_deps(store, bus, client, swept=True))
     assert len(client.navigations) == 2
 
 
@@ -236,14 +313,39 @@ def test_the_full_sweep_opens_a_thread_the_gate_would_have_skipped(store, bus, s
         conversations=[_conv(unread=0)],
         tails={"99": [_bubble("still available?"), _bubble("hello?")]},
     )
-    deps = _deps(store, bus, client, inbox_full_sweep_every=2)
-    inbox.inbox_lane(deps)  # tick 1: skipped
+    deps = _deps(store, bus, client, swept=True)
+    inbox.inbox_lane(deps)  # gate skips it
     assert store.get_thread("carousell:99")["message_count"] == 1
-    inbox.inbox_lane(deps)  # tick 2: swept
+    deps.last_full_sweep.clear()  # the sweep interval elapses
+    inbox.inbox_lane(deps)  # swept: opened regardless of the gate
     assert [m["text"] for m in store.get_thread("carousell:99")["messages"]] == [
         "still available?",
         "hello?",
     ]
+
+
+def test_the_sweep_is_paced_by_wall_clock_not_by_a_count_of_reads(store, bus, seeded) -> None:
+    """The lane's cadence varies with how busy the conversations are, so a count of reads would
+    sweep most often exactly when threads are busiest — and opening a thread marks it read."""
+    _thread(store, seeded)
+    store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
+    client = StubClient(
+        conversations=[_conv(unread=0)], tails={"99": [_bubble("still available?")]}
+    )
+    deps = _deps(store, bus, client, inbox_full_sweep_interval_sec=100.0)
+
+    inbox.inbox_lane(deps)  # first read of a market always sweeps
+    assert client.navigations == [_INBOX, "https://www.carousell.sg/inbox/99/"]
+
+    for _ in range(5):  # however many reads follow, none is due inside the interval
+        inbox.inbox_lane(deps)
+    assert client.navigations.count("https://www.carousell.sg/inbox/99/") == 1
+
+
+def test_each_market_carries_its_own_sweep_stamp(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient(conversations=[]))
+    inbox.inbox_lane(deps)
+    assert set(deps.last_full_sweep) == {"carousell"}
 
 
 # --- new threads --------------------------------------------------------------------------------
@@ -366,7 +468,7 @@ def test_a_thread_that_had_messages_cannot_suddenly_read_as_empty(store, bus, se
     _thread(store, seeded)
     store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
     client = StubClient(conversations=[_conv()], tails={"99": []})
-    deps = _deps(store, bus, client, browser_blind_after=1, inbox_full_sweep_every=1)
+    deps = _deps(store, bus, client, browser_blind_after=1)
     inbox.inbox_lane(deps)
     assert deps.blind["carousell"] == 1
     assert store.count_queued_notices() == 1
@@ -377,7 +479,7 @@ def test_a_genuinely_new_empty_thread_is_not_blind(store, bus, seeded) -> None:
     itself. Nothing is being claimed about vanished history."""
     _thread(store, seeded)
     client = StubClient(conversations=[_conv(last_message="")], tails={"99": []})
-    deps = _deps(store, bus, client, browser_blind_after=1, inbox_full_sweep_every=1)
+    deps = _deps(store, bus, client, browser_blind_after=1)
     inbox.inbox_lane(deps)
     assert "carousell" not in deps.blind
     assert store.count_queued_notices() == 0
@@ -389,7 +491,7 @@ def test_a_tail_that_disagrees_with_the_conversation_list_is_blind(store, bus, s
     "the buyer said nothing" is how a live thread went unanswered with no signal at all."""
     _thread(store, seeded)
     client = StubClient(conversations=[_conv(last_message="Any defects?")], tails={"99": []})
-    deps = _deps(store, bus, client, browser_blind_after=1, inbox_full_sweep_every=1)
+    deps = _deps(store, bus, client, browser_blind_after=1)
     inbox.inbox_lane(deps)
     assert deps.blind.get("carousell") == 1
     assert store.count_queued_notices() == 1

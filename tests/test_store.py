@@ -312,6 +312,50 @@ def test_list_threads_filters(store: Store) -> None:
     assert len(store.list_threads()) == 2
 
 
+_ACTIVE = ("active", "liaising", "agreed")
+
+
+def test_latest_thread_activity_ts_is_none_without_messages(store: Store) -> None:
+    item = _item(store)
+    store.create_thread(
+        thread_id="c:1", side="sell", market="c", counterpart_handle="b", item_id=item["id"]
+    )
+    assert store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE) is None
+    assert store.latest_thread_activity_ts(side="sell", statuses=()) is None
+
+
+def test_latest_thread_activity_ts_counts_both_directions(store: Store) -> None:
+    """Our own reply — or one the seller typed by hand — predicts an answer as strongly as the
+    buyer's message does, so the newest of either is what counts."""
+    item = _item(store)
+    store.create_thread(
+        thread_id="c:1", side="sell", market="c", counterpart_handle="b", item_id=item["id"]
+    )
+    store.record_inbound("c:1", msg_id="m1", text="still available?", ts=10.0)
+    assert store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE) == 10.0
+
+    store.record_inbound("c:1", msg_id="m2", text="yes it is", ts=20.0, direction="out")
+    assert store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE) == 20.0
+
+
+def test_latest_thread_activity_ts_filters_by_side_and_status(store: Store) -> None:
+    item = _item(store)
+    want = _want(store)
+    store.create_thread(
+        thread_id="c:1", side="sell", market="c", counterpart_handle="b", item_id=item["id"]
+    )
+    store.create_thread(
+        thread_id="c:2", side="buy", market="c", counterpart_handle="s", want_id=want["want_id"]
+    )
+    store.record_inbound("c:1", msg_id="m1", text="hi", ts=10.0)
+    store.record_inbound("c:2", msg_id="m2", text="hi", ts=99.0)
+    assert store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE) == 10.0
+
+    # a thread nobody is waiting on stops counting as activity
+    store.update_thread("c:1", {"status": "closed"})
+    assert store.latest_thread_activity_ts(side="sell", statuses=_ACTIVE) is None
+
+
 # --- wants ------------------------------------------------------------------------------------
 
 

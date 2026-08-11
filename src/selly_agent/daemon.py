@@ -404,7 +404,8 @@ def run_daemon(*, once: bool) -> int:
         )
     )
     # Read the browser marketplaces' inboxes into durable rows. Deterministic and token-free, which
-    # is what lets the reply loop above it run without any browser access of its own.
+    # is what lets the reply loop above it run without any browser access of its own. The registered
+    # interval is the idle one; the lane reads itself faster while a conversation is live.
     inbox_deps = inbox.InboxDeps(
         store=store,
         bus=bus,
@@ -416,6 +417,7 @@ def run_daemon(*, once: bool) -> int:
             name="inbox_read",
             interval_sec=float(cfg.inbox_read_interval_sec),
             func=lambda: inbox.inbox_lane(inbox_deps),
+            next_interval=lambda: inbox.read_interval_sec(inbox_deps),
         )
     )
     # Answer the buyers who are waiting. Driven off durable rows rather than off the read lane, so a

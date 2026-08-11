@@ -1344,6 +1344,26 @@ class Store:
             for r in rows
         ]
 
+    def latest_thread_activity_ts(self, *, side: str, statuses) -> float | None:
+        """The newest message timestamp across threads in the given statuses, either direction, or
+        None when there are none.
+
+        Both directions on purpose: a reply we just sent — or one the seller typed by hand —
+        predicts an answer as strongly as the buyer's own message does. Statuses come from the
+        caller, which keeps the marketplace and lane knowledge out of here.
+        """
+        statuses = tuple(statuses)
+        if not statuses:
+            return None
+        placeholders = ",".join("?" for _ in statuses)
+        rows = self._db.query(
+            "SELECT MAX(m.ts) AS ts FROM thread_messages m "
+            "JOIN threads t ON t.thread_id = m.thread_id "
+            f"WHERE t.side = ? AND t.status IN ({placeholders})",
+            (side, *statuses),
+        )
+        return rows[0]["ts"] if rows else None
+
     _THREAD_WRITABLE = ("buyer_location", "agent_note", "listed_price", "listing_url")
     # The only status flips this generic writer owns. held is owned by hold/release, escalated by
     # escalate, and the sale states by the confirm-sold / buyer-accept flows.
