@@ -85,12 +85,16 @@ class LinuxPlatform(Platform):
     # --- systemctl --------------------------------------------------------------------------
 
     def _systemctl(self, *args: str) -> subprocess.CompletedProcess:
-        return subprocess.run(
-            ["systemctl", "--user", *args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
+        """One systemctl call, answering a failed result where there is no systemctl to run.
+
+        The gate that refuses such a machine only guards `setup`; the `daemon` verbs are reachable
+        without it, and there "stopped" says more than a FileNotFoundError traceback.
+        """
+        argv = ["systemctl", "--user", *args]
+        try:
+            return subprocess.run(argv, capture_output=True, text=True, check=False)
+        except OSError as exc:
+            return subprocess.CompletedProcess(argv, returncode=1, stdout="", stderr=str(exc))
 
     def register(self, config_path: Path) -> None:
         """Make the unit known and start it, enabling it only where the mode says to.

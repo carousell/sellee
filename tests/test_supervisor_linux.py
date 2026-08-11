@@ -10,7 +10,10 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import pytest
+
 from selly_agent import config, paths, supervisor
+from selly_agent.platform import linux as linux_platform
 from selly_agent.platform.linux import LinuxPlatform
 
 GOLDEN = Path(__file__).resolve().parent / "golden" / "selly-agent.service"
@@ -255,3 +258,29 @@ def test_the_unit_directory_is_composed_from_the_home_it_is_given(tmp_path) -> N
     """Composed from the argument rather than read from the environment: home resolution belongs
     to paths.py, and a platform that reached for it would resolve a different one under test."""
     assert LinuxPlatform().launch_agents_dir(tmp_path) == tmp_path / ".config/systemd/user"
+
+
+# --- a machine with no systemctl at all -----------------------------------------------------------
+
+
+@pytest.fixture
+def no_systemctl(monkeypatch):
+    """A machine where the binary is absent, as a non-systemd distribution's is."""
+
+    def missing(argv, **kwargs):
+        raise FileNotFoundError(2, "No such file or directory", "systemctl")
+
+    monkeypatch.setattr(linux_platform.subprocess, "run", missing)
+
+
+def test_the_daemon_verbs_answer_rather_than_traceback(no_systemctl, tmp_path) -> None:
+    """The gate that refuses such a machine only guards `setup`, and these are reachable without
+    it — a tree copied from another machine, or an install predating the gate."""
+    platform = LinuxPlatform()
+    assert platform.is_registered("selly-agent") is False
+    platform.register(tmp_path / UNIT)
+    platform.unregister("selly-agent")
+
+
+def test_status_reports_stopped_rather_than_failing(no_systemctl, xdg_tmp) -> None:
+    assert supervisor.gather_status(platform=LinuxPlatform()).registered is False
