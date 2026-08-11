@@ -647,10 +647,14 @@ class _Handler(BaseHTTPRequestHandler):
                     try:
                         client.ensure_frontmost(url)
                     except Exception:
-                        # Best-effort by design: a tab that won't come forward must never turn
-                        # a working sign-in page into a 503 (ensure_frontmost self-heals by
-                        # dropping its tab handle).
+                        # A tab that won't come forward must never turn a working sign-in page
+                        # into a 503. But bringing one forward selects a tab before it can check
+                        # which tab it got, and a select repoints every later call — so a failure
+                        # can leave the probe below reading the seller's own page and reporting a
+                        # login state about it. Navigating again re-opens a tab of ours and puts
+                        # the market back in it, which is what the probe has to be answering about.
                         log.debug("could not bring the connect tab forward", exc_info=True)
+                        client.navigate(url)
                 answer = client.evaluate(adapter.login_js) or {}
         except BrowserError as exc:
             raise _BrowserDown(str(exc)) from exc
