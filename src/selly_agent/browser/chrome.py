@@ -18,11 +18,14 @@ from __future__ import annotations
 
 import json
 import logging
+import shutil
 import subprocess
+import sys
 import threading
 import time
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 from selly_agent import paths
 
@@ -50,6 +53,18 @@ _last_failed_launch_ts: float | None = None
 
 _CHROME_MACOS = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 
+# What a Linux desktop calls Chrome, most-preferred first — there is no one install location the
+# way there is on a Mac. Google's own .deb/.rpm provides `google-chrome`; the rest are the
+# distributions' Chromium packages. The absolute path last is where that .deb puts the real
+# binary, for a session whose PATH does not reach /usr/bin.
+_CHROME_LINUX = (
+    "google-chrome",
+    "google-chrome-stable",
+    "chromium",
+    "chromium-browser",
+    "/opt/google/chrome/chrome",
+)
+
 # What ensure_running found or did.
 READY = "ready"
 LAUNCHED = "launched"
@@ -66,7 +81,28 @@ def resolve_binary(chrome_bin: str | None = None) -> str:
     One answer for the launch, the by-hand hint, and the installer's "is Chrome even here" gate —
     a gate that checked a different path from the one the launch uses would pass and then fail.
     """
-    return chrome_bin or _CHROME_MACOS
+    if chrome_bin:
+        return chrome_bin
+    if sys.platform == "linux":
+        return _linux_chrome()
+    return _CHROME_MACOS
+
+
+def _linux_chrome() -> str:
+    """The first candidate this machine actually has, or the name to install when it has none.
+
+    Falling back to a name rather than to nothing keeps the installer's report honest: "not found
+    at google-chrome" is something a person can act on, where an empty path is not.
+    """
+    for candidate in _CHROME_LINUX:
+        if candidate.startswith("/"):
+            if Path(candidate).exists():
+                return candidate
+        else:
+            found = shutil.which(candidate)
+            if found:
+                return found
+    return _CHROME_LINUX[0]
 
 
 def version_url(port: int) -> str:
