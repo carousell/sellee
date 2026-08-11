@@ -35,33 +35,14 @@ _BREW_TIMEOUT_SEC = 1800.0
 # rather than an honest "too old".
 NODE_MIN_MAJOR = 18
 
-# Remediation copy differs by OS, and a fix line naming the wrong package manager is worse than
-# none — it sends someone to install a tool that will not install the thing they need.
+# A fix line naming a package manager the machine does not have is worse than naming none.
 _NODE_FIX_DARWIN = "brew install node"
-_NODE_FIX_LINUX = (
-    "sudo apt install nodejs npm      (Debian, Ubuntu, Mint)\n"
-    "sudo dnf install nodejs npm      (Fedora, RHEL)\n"
-    f"Some distributions still ship a Node below v{NODE_MIN_MAJOR}; if yours does, take a "
-    "current one from https://nodejs.org/en/download."
-)
-_CHROME_FIX_DARWIN = "brew install --cask google-chrome"
-_CHROME_FIX_LINUX = (
-    "Install Google Chrome from https://www.google.com/chrome (the .deb or .rpm). A snap or "
-    "flatpak build is untested here — those confine filesystem access, and the agent needs a "
-    "profile directory of its own under your home."
-)
-
-
-def _fix(darwin: str, linux: str) -> str:
-    return darwin if sys.platform == "darwin" else linux
+_NODE_FIX_LINUX = "Install nodejs and npm with your package manager."
+CHROME_FIX = "Install Chrome or Chromium: https://www.google.com/chrome"
 
 
 def node_fix() -> str:
-    return _fix(_NODE_FIX_DARWIN, _NODE_FIX_LINUX)
-
-
-def chrome_fix() -> str:
-    return _fix(_CHROME_FIX_DARWIN, _CHROME_FIX_LINUX)
+    return _NODE_FIX_DARWIN if sys.platform == "darwin" else _NODE_FIX_LINUX
 
 
 # Environment variables that mean an agent is running this, not a person. A TTY may well exist —
@@ -275,8 +256,7 @@ def check_platform() -> checks.Check:
         return checks.fail(
             "platform",
             f"{sys.platform} is not supported yet",
-            "selly-agent runs on macOS and Linux today; Windows is a planned port. The container "
-            "install works on any of them — see docs/install.md.",
+            "selly-agent runs on macOS and Linux today; Windows is a planned port.",
         )
     return checks.ok("platform", name)
 
@@ -296,8 +276,6 @@ def systemd_user_reachable(code, output: str) -> bool:
 def check_systemd_user() -> checks.Check:
     """That a systemd user manager is reachable — the thing that will keep the daemon alive.
 
-    `systemctl --user` talks to a per-login-session manager over the user bus, and that bus is
-    absent over a bare SSH login on some setups and in a WSL distribution started without systemd.
     Asked here so it reads as one sentence, rather than as `daemon install` failing later with
     systemd's own message about a bus nobody has heard of.
     """
@@ -307,13 +285,8 @@ def check_systemd_user() -> checks.Check:
     return checks.fail(
         "systemd",
         "no systemd user manager is reachable from this session",
-        "selly-agent keeps its background worker alive with a systemd user unit, and that needs "
-        "a desktop login session — log in at the machine rather than over SSH.\n"
-        "Under WSL, put this in /etc/wsl.conf and restart the distribution:\n"
-        "  [boot]\n"
-        "  systemd=true\n"
-        "On a system without systemd at all, use the container install instead — see "
-        "docs/install.md.",
+        "selly-agent keeps its background worker alive with a systemd user unit, which needs a "
+        "desktop login session — log in at the machine rather than over SSH.",
     )
 
 
@@ -391,7 +364,7 @@ def check_node() -> checks.Check:
 def check_chrome(chrome_bin=None) -> checks.Check:
     binary = chrome.resolve_binary(chrome_bin)
     if not Path(binary).exists():
-        return checks.fail("chrome", f"not found at {binary}", chrome_fix())
+        return checks.fail("chrome", f"not found at {binary}", CHROME_FIX)
     return checks.ok("chrome", binary)
 
 

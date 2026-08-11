@@ -359,7 +359,7 @@ def test_platform_gate_refuses_an_os_with_no_implementation(monkeypatch) -> None
     monkeypatch.setattr(preflight.sys, "platform", "win32")
     check = preflight.check_platform()
     assert check.status == checks.FAIL
-    assert "container install" in check.fix
+    assert "macOS and Linux" in check.fix
 
 
 def test_platform_gate_asks_nothing_of_a_container(container) -> None:
@@ -377,17 +377,12 @@ def test_the_apple_silicon_probe_fails_closed_where_there_is_no_sysctl() -> None
     assert preflight.is_apple_silicon() is False
 
 
-def test_the_remediation_names_the_package_manager_this_machine_has(monkeypatch) -> None:
+def test_the_node_remediation_names_a_package_manager_this_machine_has(monkeypatch) -> None:
     monkeypatch.setattr(preflight.sys, "platform", "darwin")
     assert preflight.node_fix() == "brew install node"
-    assert "--cask" in preflight.chrome_fix()
 
     monkeypatch.setattr(preflight.sys, "platform", "linux")
-    assert "apt install" in preflight.node_fix() and "dnf install" in preflight.node_fix()
     assert "brew" not in preflight.node_fix()
-    # The .deb, not a snap: a confined build cannot reach the profile directory the agent owns.
-    assert "google.com/chrome" in preflight.chrome_fix()
-    assert "brew" not in preflight.chrome_fix()
 
 
 # --- the systemd user manager (Linux only) --------------------------------------------------------
@@ -413,7 +408,7 @@ def test_the_systemd_gate_says_what_to_do_about_it(monkeypatch) -> None:
     monkeypatch.setattr(preflight, "_run", lambda argv, timeout=30.0: (1, "Failed to connect"))
     check = preflight.check_systemd_user()
     assert check.status == checks.FAIL
-    assert "wsl.conf" in check.fix and "container install" in check.fix
+    assert "log in at the machine" in check.fix
 
 
 def test_the_systemd_gate_reports_the_state_it_was_told(monkeypatch) -> None:
