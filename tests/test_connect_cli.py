@@ -12,6 +12,7 @@ import pytest
 
 from fake_telegram_api import FAKE_TOKEN as _TOKEN
 from selly_agent import connect_cli, control
+from selly_agent.config import Config
 
 
 @pytest.fixture
@@ -187,8 +188,16 @@ def test_token_never_printed_to_stdout(monkeypatch, stub_daemon, capsys) -> None
 
 @pytest.fixture
 def stub_market_daemon(monkeypatch):
-    """Stub the connect-market POST and the login probe. `state` drives both."""
-    calls = {"posts": [], "gets": [], "state": "logged_in", "post_status": 200}
+    """Stub the connect-market POST and the login probe. `state` drives both. The window raise,
+    the deployment check, and the config read are stubbed too, so a test drives them by hand."""
+    calls = {
+        "posts": [],
+        "gets": [],
+        "state": "logged_in",
+        "post_status": 200,
+        "raised": [],
+        "raise_result": True,
+    }
 
     def fake_post(port, token, route, body, **kwargs):
         calls["posts"].append((route, body))
@@ -201,8 +210,15 @@ def stub_market_daemon(monkeypatch):
         calls["gets"].append((route, params))
         return calls.get("get_status", 200), {"state": calls["state"]}
 
+    def fake_raise(port):
+        calls["raised"].append(port)
+        return calls["raise_result"]
+
     monkeypatch.setattr(control, "post", fake_post)
     monkeypatch.setattr(control, "get", fake_get)
+    monkeypatch.setattr(connect_cli.foreground, "raise_window", fake_raise)
+    monkeypatch.setattr(connect_cli.deployment, "is_container", lambda env=None: False)
+    monkeypatch.setattr(connect_cli.config, "load", lambda: Config(chrome_cdp_port=9333))
     return calls
 
 
@@ -269,6 +285,66 @@ def test_a_busy_browser_says_try_again_rather_than_failing_opaquely(
     err = capsys.readouterr().err
     assert "a pass is using the browser" in err
     assert "try again" in err
+
+
+def test_a_signed_out_market_raises_the_agents_chrome_window(stub_market_daemon, capsys) -> None:
+    stub_market_daemon["post_body"] = {
+        "market": "carousell",
+        "url": "https://www.carousell.sg/",
+        "state": "logged_out",
+        "raise_window": True,
+    }
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert stub_market_daemon["raised"] == [9333]  # the configured CDP port finds the window
+    assert "Can't spot it" not in capsys.readouterr().out  # a raised window is its own message
+
+
+def test_an_older_daemon_without_the_flag_still_raises(stub_market_daemon) -> None:
+    """A response with no raise_window field reads as the setting's default — raise."""
+    stub_market_daemon["state"] = "logged_out"
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert stub_market_daemon["raised"] == [9333]
+
+
+def test_a_window_that_would_not_come_forward_gets_a_hint_not_a_failure(
+    stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["state"] = "logged_out"
+    stub_market_daemon["raise_result"] = False
+    rc = connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert rc == 1  # the exit code never depends on the raise
+    assert "Can't spot it" in capsys.readouterr().out
+
+
+def test_a_seller_who_chose_background_mode_gets_no_raise_and_a_pointer(
+    stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["post_body"] = {
+        "market": "carousell",
+        "url": "https://www.carousell.sg/",
+        "state": "logged_out",
+        "raise_window": False,
+    }
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert stub_market_daemon["raised"] == []
+    out = capsys.readouterr().out
+    assert "background" in out
+    assert "/selly" in out  # the way back to the toggle travels with the consequence
+
+
+def test_container_mode_points_at_the_sellers_own_chrome_and_never_raises(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["state"] = "logged_out"
+    monkeypatch.setattr(connect_cli.deployment, "is_container", lambda env=None: True)
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=False)
+    assert stub_market_daemon["raised"] == []
+    assert "your own computer" in capsys.readouterr().out
+
+
+def test_an_already_signed_in_market_never_touches_the_window(stub_market_daemon) -> None:
+    connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=True)
+    assert stub_market_daemon["raised"] == []  # no window is needed, so none is raised
 
 
 def test_a_refused_enqueue_is_reported_not_a_traceback(monkeypatch, capsys) -> None:

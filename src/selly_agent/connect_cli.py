@@ -28,7 +28,8 @@ import getpass
 import sys
 import time
 
-from selly_agent import config, control, qr
+from selly_agent import config, control, deployment, qr
+from selly_agent.browser import foreground
 
 _POLL_INTERVAL_SEC = 1.0
 # Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
@@ -124,6 +125,7 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
 
     print(f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
     print(f"  {body.get('url', '')}")
+    _surface_window(body)
     if interactive:
         try:
             input("Press Enter once you've signed in (or Ctrl-C to skip)… ")
@@ -134,6 +136,35 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
 
     print(_MARKET_STATE_MESSAGES.get(state or "unknown", "").format(name=name))
     return 0 if state == "logged_in" else 1
+
+
+def _surface_window(body: dict) -> None:
+    """Bring the agent's Chrome window in front of the seller, or say where to look instead.
+
+    The raise happens here — the seller's own frontmost terminal, where macOS honors activation —
+    not in the daemon. It runs only when the daemon says the seller wants it (the `raise_window`
+    field carries their `raise_browser` setting; absent means the default, raise). Success is
+    silent: the window arriving in front of them is its own message. Every way it cannot happen —
+    a container's Chrome on another machine, background mode, a raise that failed — prints a hint
+    and nothing more; finding the window is recoverable, a broken sign-in flow is not.
+    """
+    if deployment.is_container():
+        print(
+            "  That window is on your own computer — the Chrome you started with "
+            "start-chrome.sh (start-chrome.ps1 on Windows)."
+        )
+        return
+    if not body.get("raise_window", True):
+        print(
+            "  My window stays in the background (your setting) — look for a separate "
+            "Chrome window; /selly changes this."
+        )
+        return
+    if not foreground.raise_window(config.load().chrome_cdp_port):
+        print(
+            "  Can't spot it? Look for a separate Chrome window (mine, not your usual "
+            "one) — check the Dock if you minimized it."
+        )
 
 
 def _probe_market(port: int, mcp_token: str, market: str):

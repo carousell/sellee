@@ -711,3 +711,48 @@ register(
         requires_approval=True,
     )
 )
+
+
+# --- the browser window -------------------------------------------------------------------------
+#
+# Whether the agent's Chrome window is brought to the front when it opens a page the seller has to
+# act on (a marketplace sign-in), or left in the background. On by default: a window the seller
+# was asked to sign in to but cannot find is the failure this knob exists to prevent. Low-stakes
+# and purely the seller's own UX, so a change applies immediately with an Undo.
+
+_RAISE_BROWSER_TRUE = frozenset({"true", "yes", "on"})
+_RAISE_BROWSER_FALSE = frozenset({"false", "no", "off"})
+_RAISE_BROWSER_HELP = "this must be true or false (bring my window to the front, or not)"
+
+
+def _parse_raise_browser(raw: object) -> bool:
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        word = raw.strip().lower()
+        if word in _RAISE_BROWSER_TRUE:
+            return True
+        if word in _RAISE_BROWSER_FALSE:
+            return False
+    raise SettingError(_RAISE_BROWSER_HELP)
+
+
+def _render_raise_browser(value: object) -> str:
+    if value:
+        return "comes to the front when I open a page for you"
+    return "stays in the background"
+
+
+register(
+    SettingSpec(
+        key="raise_browser",
+        label="Browser window",
+        parse=_parse_raise_browser,
+        render=_render_raise_browser,
+        default=True,
+        description="Whether my own Chrome window comes to the front when I open a page you need "
+        "to act on (like a marketplace sign-in), or stays in the background for you to find. "
+        "true or false.",
+        take_effect="applies to the next page I open for you.",
+    )
+)

@@ -28,6 +28,8 @@ class FakeBrowser:
     def __init__(self, state="logged_in"):
         self.state = state
         self.visited = []
+        self.fronted = []
+        self.front_error = None
         self.exclusive_depth = 0
 
     def exclusive(self):
@@ -46,6 +48,12 @@ class FakeBrowser:
 
     def navigate(self, url):
         self.visited.append(url)
+
+    def ensure_frontmost(self, url):
+        assert self.exclusive_depth > 0, "the tab select must run under the navigate's hold"
+        if self.front_error is not None:
+            raise self.front_error
+        self.fronted.append(url)
 
     def evaluate(self, function, **kwargs):
         assert self.exclusive_depth > 0, "the probe must run under the same hold as the navigate"
@@ -266,8 +274,52 @@ def test_connect_market_opens_the_regional_site_and_reports_the_probe(
     store.set_seller_config_section("basics", {"region": "SG"})
     status, body = _call(server, "POST", "/control/connect-market", body={"market": "carousell"})
     assert status == 200
-    assert body == {"market": "carousell", "url": "https://www.carousell.sg/", "state": "logged_in"}
+    assert body == {
+        "market": "carousell",
+        "url": "https://www.carousell.sg/",
+        "state": "logged_in",
+        "raise_window": True,
+    }
     assert browser.visited == ["https://www.carousell.sg/"]
+
+
+def test_connect_market_reports_the_sellers_window_preference(server, store) -> None:
+    """The CLI does the OS-level raise, but the setting lives in the daemon's store — so the
+    answer rides in the response for the CLI to obey."""
+    from tests.conftest import seed_setting
+
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "raise_browser", False)
+    _status, body = _call(server, "POST", "/control/connect-market", body={"market": "carousell"})
+    assert body["raise_window"] is False
+
+
+def test_connect_market_brings_the_agents_own_tab_forward(server, store, browser) -> None:
+    store.set_seller_config_section("basics", {"region": "SG"})
+    _call(server, "POST", "/control/connect-market", body={"market": "carousell"})
+    assert browser.fronted == ["https://www.carousell.sg/"]
+
+
+def test_a_tab_that_will_not_come_forward_never_fails_the_sign_in(server, store, browser) -> None:
+    from selly_agent.browser.client import BrowserToolError
+
+    store.set_seller_config_section("basics", {"region": "SG"})
+    browser.front_error = BrowserToolError("the tab stayed hidden")
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "carousell"})
+    assert status == 200
+    assert body["state"] == "logged_in"
+
+
+def test_login_probes_never_touch_the_tab_order(server, store, browser, chrome_up) -> None:
+    """The connect route is the one being asked for a window; a read probe that reordered tabs
+    would elbow the seller mid-browse — the anti-focus-stealing guarantee, pinned."""
+    from tests.conftest import seed_setting
+
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "crosslist_markets", ["carousell"])
+    _call(server, "GET", "/control/market-login?market=carousell")
+    _call(server, "GET", "/control/market-logins")
+    assert browser.fronted == []
 
 
 def test_the_three_login_states_come_back_verbatim(server, store, browser, chrome_up) -> None:

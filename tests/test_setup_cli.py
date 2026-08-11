@@ -524,7 +524,8 @@ def test_nothing_is_provisioned_without_a_region(world, monkeypatch) -> None:
 
 
 def test_picking_a_marketplace_records_the_setting_then_signs_in(world, monkeypatch) -> None:
-    _answer(monkeypatch, ["y", "1", "n"])  # region confirmed, Carousell picked, Telegram declined
+    # region confirmed, Carousell picked, window question defaulted, Telegram declined
+    _answer(monkeypatch, ["y", "1", "", "n"])
 
     assert setup_main("--manual") == 0
 
@@ -535,7 +536,8 @@ def test_picking_a_marketplace_records_the_setting_then_signs_in(world, monkeypa
 
 
 def test_skipping_the_marketplace_offer_enables_nothing(world, monkeypatch, capsys) -> None:
-    _answer(monkeypatch, ["y", "", "n"])  # region confirmed, no marketplace picked
+    # region confirmed, no marketplace picked, window question defaulted, Telegram declined
+    _answer(monkeypatch, ["y", "", "", "n"])
 
     assert setup_main("--manual") == 0
 
@@ -554,6 +556,42 @@ def test_a_region_with_no_marketplaces_says_so_rather_than_offering_an_empty_lis
 ) -> None:
     assert setup_main("--yes", "--manual", "--region", "US") == 0
     assert "none available in this region" in capsys.readouterr().out
+
+
+# --- the browser window --------------------------------------------------------------------------
+
+
+def test_declining_the_browser_window_question_records_the_setting(world, monkeypatch) -> None:
+    # region confirmed, no marketplace, window declined, Telegram declined
+    _answer(monkeypatch, ["y", "", "n", "n"])
+    assert setup_main("--manual") == 0
+    assert world.calls["settings"]["raise_browser"] == "false"
+
+
+def test_accepting_the_browser_window_question_writes_nothing(world, monkeypatch) -> None:
+    """The default lives in code; writing it back would list the setting as customized on the
+    /selly card."""
+    _answer(monkeypatch, ["y", "", "", "n"])
+    assert setup_main("--manual") == 0
+    assert "raise_browser" not in world.calls["settings"]
+
+
+def test_the_browser_question_comes_after_the_marketplace_sign_in(
+    world, monkeypatch, capsys
+) -> None:
+    """The first window of an install must always come forward — a sign-in window the seller
+    cannot find is a wall — so the question that could turn that off is asked only afterwards."""
+    _answer(monkeypatch, ["y", "1", "n", "n"])
+    assert setup_main("--manual") == 0
+    assert world.calls["markets"] == ["carousell"]  # signed in under the raise-by-default
+    out = capsys.readouterr().out
+    assert out.index("Other marketplaces") < out.index("Keep bringing my window to the front?")
+
+
+def test_the_browser_question_names_the_settings_toggle(world, capsys) -> None:
+    assert setup_main("--yes", "--manual") == 0
+    out = capsys.readouterr().out
+    assert "raise_browser" in out  # the way back to the toggle is part of the phase
 
 
 # --- Telegram ------------------------------------------------------------------------------------

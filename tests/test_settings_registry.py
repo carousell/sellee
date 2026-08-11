@@ -142,6 +142,45 @@ def test_check_for_seller_ignores_settings_with_no_seller_dependency(fresh_store
     settings.check_for_seller("quiet_hours", [2300, 800], fresh_store)
 
 
+# --- raise_browser -----------------------------------------------------------------------------
+
+
+def test_raise_browser_parse_accepts_booleans_and_words() -> None:
+    spec = settings.get_spec("raise_browser")
+    assert spec.parse(True) is True
+    assert spec.parse(False) is False
+    assert spec.parse("true") is True
+    assert spec.parse(" False ") is False
+    assert spec.parse("on") is True
+    assert spec.parse("no") is False
+
+
+@pytest.mark.parametrize("bad", ["sometimes", 1, 0, [], {}, None, "yes please"])
+def test_raise_browser_parse_rejects_non_booleans(bad) -> None:
+    spec = settings.get_spec("raise_browser")
+    with pytest.raises(settings.SettingError) as excinfo:
+        spec.parse(bad)
+    assert "true or false" in str(excinfo.value)  # the refusal says what would be accepted
+
+
+def test_raise_browser_render() -> None:
+    spec = settings.get_spec("raise_browser")
+    assert spec.render(True) == "comes to the front when I open a page for you"
+    assert spec.render(False) == "stays in the background"
+
+
+def test_raise_browser_defaults_on_and_applies_immediately() -> None:
+    spec = settings.get_spec("raise_browser")
+    assert spec.default is True
+    assert spec.requires_approval is False  # the seller's own UX preference — no approval door
+
+
+def test_raise_browser_stays_off_the_default_card() -> None:
+    """The raise itself and the setup question are the hints this knob exists, so it earns no
+    headline slot — it appears on the card only once changed from its default."""
+    assert "raise_browser" not in settings.CARD_HEADLINE
+
+
 # --- read helpers + the minutes boundary ------------------------------------------------------
 
 
@@ -184,7 +223,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
         "• Enabled marketplaces: none — carousell.ai only",
-        "2 more settings at defaults — ask me about settings.",
+        "3 more settings at defaults — ask me about settings.",
     ]
 
 
@@ -204,7 +243,7 @@ def test_card_promotes_a_changed_non_headline_setting(fresh_store) -> None:
     )
     lines = settings.card_lines(fresh_store)
     assert "• Persona: terse and businesslike" in lines
-    assert "1 more setting at defaults — ask me about settings." in lines
+    assert "2 more settings at defaults — ask me about settings." in lines
 
 
 def test_describe_carries_policy(fresh_store) -> None:

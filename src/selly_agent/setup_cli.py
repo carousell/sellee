@@ -102,6 +102,7 @@ def _run(args, ui: Ui) -> None:
     region = _seller_region(ui, args, port, token)
     _provision_rail(ui, region)
     _connect_markets(ui, args, port, token, region)
+    _browser_window(ui, port, token)
     _offer_telegram(ui, args, port, token)
     _attended_workspace(ui)
     # Re-probed here rather than threaded through: the bind may have just happened inside
@@ -584,6 +585,30 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     for market in picked:
         ui.say(f"opening {marketplaces.display_name(market)}…")
         connect_cli.market_flow(port, token, market, interactive=ui.interactive)
+
+
+# --- the browser window -------------------------------------------------------------------------
+
+
+def _browser_window(ui: Ui, port: int, token: str) -> None:
+    """Ask whether the agent's Chrome window should keep coming to the front.
+
+    Asked after the marketplace sign-ins on purpose: the first window of an install must always
+    come forward — a sign-in window the seller cannot find is a wall — and it does, because the
+    `raise_browser` setting defaults to on and nothing has been asked yet. By now the seller has
+    seen the behavior, so the question is concrete. Only a "no" is recorded: the default lives in
+    code, and writing it back would list the setting as customized on the /selly card.
+    """
+    ui.step("Browser window")
+    ui.say("I do my browser work in a Chrome window of my own. When I open a page you need —")
+    ui.say("like a marketplace sign-in — I bring that window to the front.")
+    if not ui.confirm("Keep bringing my window to the front?", default=True, lead=False):
+        if settings_cli.set_setting(port, token, "raise_browser", "false") != 0:
+            ui.warn("That could not be recorded — I'll keep raising the window for now.")
+    ui.note(
+        "Change this any time: /selly in chat, or "
+        "`selly-agent settings set raise_browser true|false`."
+    )
 
 
 # --- Telegram ---------------------------------------------------------------------------------

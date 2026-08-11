@@ -502,6 +502,8 @@ class _Handler(BaseHTTPRequestHandler):
         # Open the marketplace in the agent's own Chrome so the seller can sign in there. We
         # never sign in for them, and nothing about their session is recorded: the cookies in
         # that profile are the truth, and the probe re-derives the answer whenever it is asked.
+        from selly_agent import settings
+
         body = self._attended_body()
         if body is None:
             return
@@ -518,12 +520,18 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            state, url = self._open_and_probe(adapter)
+            state, url = self._open_and_probe(adapter, bring_tab_forward=True)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
         self._app.bus.publish("browser.login", {"market": adapter.market, "state": state})
-        self._send_json(200, {"market": adapter.market, "url": url, "state": state})
+        # The OS-level raise happens in the CLI (the seller's own frontmost terminal, where
+        # activation is honored), but whether they want it is a setting only this side can read.
+        raise_window = bool(settings.get(self._app.store, "raise_browser"))
+        self._send_json(
+            200,
+            {"market": adapter.market, "url": url, "state": state, "raise_window": raise_window},
+        )
 
     def _handle_market_login(self, parsed) -> None:
         # A read, so it never opens a window and never elbows a pass off the shared tab. The
@@ -609,11 +617,15 @@ class _Handler(BaseHTTPRequestHandler):
             return None
         return adapter
 
-    def _open_and_probe(self, adapter):
+    def _open_and_probe(self, adapter, *, bring_tab_forward=False):
         """Put the market's own page in front of the seller and read back whether they are in.
 
         Held exclusively across the navigate and the probe: the read lane shares this one tab,
         and a probe that ran after it moved on would be answering about a different page.
+
+        `bring_tab_forward` selects the tab within the agent's window and is set only by the
+        connect route: being asked to open a marketplace is being asked for a window, while a
+        read probe that reordered tabs would elbow the seller mid-browse.
         """
         from selly_agent import marketplaces
         from selly_agent.browser.client import BrowserError
@@ -631,6 +643,14 @@ class _Handler(BaseHTTPRequestHandler):
             client = ctx.browser_factory()
             with client.exclusive():
                 client.navigate(url)
+                if bring_tab_forward:
+                    try:
+                        client.ensure_frontmost(url)
+                    except Exception:
+                        # Best-effort by design: a tab that won't come forward must never turn
+                        # a working sign-in page into a 503 (ensure_frontmost self-heals by
+                        # dropping its tab handle).
+                        log.debug("could not bring the connect tab forward", exc_info=True)
                 answer = client.evaluate(adapter.login_js) or {}
         except BrowserError as exc:
             raise _BrowserDown(str(exc)) from exc
