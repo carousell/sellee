@@ -13,6 +13,11 @@ from selly_agent.platform.base import ImageToolUnavailable
 
 _opener_registered = False
 
+# Pillow defaults to 75, which is visibly soft on a photo of an item someone is trying to sell.
+# ImageMagick wrote these at 92 and sips at its own high default, so this keeps what the OS tools
+# produced rather than quietly downgrading every listing to a library default nobody chose.
+_JPEG_QUALITY = 92
+
 
 def _prepare() -> tuple:
     """Import Pillow and teach it HEIC, answering (Image, ImageOps).
@@ -50,6 +55,6 @@ def to_jpeg(src: Path, dest: Path, max_dim: int) -> None:
             # thumbnail only ever shrinks; a photo already inside the bound keeps its own size.
             image.thumbnail((max_dim, max_dim))
             # JPEG carries no alpha or palette, so coerce rather than fail at the last step.
-            image.convert("RGB").save(dest, format="JPEG")
+            image.convert("RGB").save(dest, format="JPEG", quality=_JPEG_QUALITY)
     except Exception as exc:  # Pillow raises OSError, ValueError and its own types alike
         raise ImageToolUnavailable(f"cannot convert {src.name}: {exc}") from exc
