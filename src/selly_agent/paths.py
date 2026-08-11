@@ -13,6 +13,7 @@ environment) always takes effect.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
 
 from selly_agent.platform import get_platform
@@ -262,16 +263,20 @@ def shell_rc_path(shell: str) -> Path | None:
     """The rc file a PATH export belongs in for this login shell, or None for a shell we do not
     write config for.
 
-    Only the two we can be right about: zsh reads ~/.zshrc (the macOS default), and bash login
-    shells on macOS read ~/.bash_profile. Everything else answers None rather than falling back
-    to ~/.profile — fish and nushell never read it, and a POSIX `export` line is not their syntax
-    either, so writing it would leave a file that does nothing and a command still not found.
+    Only the two we can be right about: zsh reads ~/.zshrc on both platforms, and bash reads
+    ~/.bash_profile for the login shells macOS Terminal opens but ~/.bashrc for the interactive
+    ones a Linux desktop opens. Writing ~/.bash_profile on a distribution whose skeleton does not
+    source ~/.bashrc would hide the export entirely, so the answer is per-OS.
+
+    Everything else answers None rather than falling back to ~/.profile — fish and nushell never
+    read it, and a POSIX `export` line is not their syntax either, so writing it would leave a
+    file that does nothing and a command still not found.
     """
     name = os.path.basename(shell or "")
     if name == "zsh":
         return _home() / ".zshrc"
     if name == "bash":
-        return _home() / ".bash_profile"
+        return _home() / (".bash_profile" if sys.platform == "darwin" else ".bashrc")
     return None
 
 
@@ -279,11 +284,13 @@ def shell_rc_candidates() -> list[Path]:
     """Every rc file any version of the installer might have put its PATH block in.
 
     Removal reads this rather than asking about the shell running right now: install under zsh and
-    uninstall from bash and the block would otherwise be left behind for good. ~/.profile is here
-    because installs before this ever wrote it, even though nothing writes it now.
+    uninstall from bash and the block would otherwise be left behind for good. Both bash files are
+    here regardless of the OS, so a tree carried between machines still uninstalls cleanly.
+    ~/.profile is here because installs before this ever wrote it, even though nothing writes it
+    now.
     """
     home = _home()
-    return [home / ".zshrc", home / ".bash_profile", home / ".profile"]
+    return [home / ".zshrc", home / ".bash_profile", home / ".bashrc", home / ".profile"]
 
 
 def tcc_protected_roots() -> list[Path]:

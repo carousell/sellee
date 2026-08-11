@@ -250,9 +250,11 @@ def test_removing_a_block_leaves_anything_written_after_it_alone(tmp_path) -> No
     assert rc.read_text() == "first\nlater addition\n"
 
 
-def test_rc_target_is_only_offered_for_the_shells_we_can_be_right_about(xdg_tmp) -> None:
+def test_rc_target_is_only_offered_for_the_shells_we_can_be_right_about(xdg_tmp, monkeypatch):
+    # Which bash file is the right one is paths.py's per-OS decision, pinned in test_paths.py;
+    # here it only has to be *a* bash file rather than None.
     assert materialize.shell_rc_target("/bin/zsh").name == ".zshrc"
-    assert materialize.shell_rc_target("/bin/bash").name == ".bash_profile"
+    assert materialize.shell_rc_target("/bin/bash").name in (".bash_profile", ".bashrc")
     # fish never reads ~/.profile and an `export` line is not its syntax, so there is no file
     # here we could write that would do anything.
     assert materialize.shell_rc_target("/usr/local/bin/fish") is None

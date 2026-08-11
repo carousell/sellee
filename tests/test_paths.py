@@ -79,3 +79,40 @@ def test_a_pass_workspace_is_private_from_creation(xdg_tmp) -> None:
     workspace = paths.pass_workspace_dir("pass_x")
     paths.ensure_private_dir(workspace)
     assert os.stat(workspace).st_mode & 0o777 == 0o700
+
+
+# --- the shell rc a PATH export belongs in ------------------------------------------------------
+
+
+def test_zsh_answers_zshrc_on_every_platform(monkeypatch) -> None:
+    for platform in ("darwin", "linux"):
+        monkeypatch.setattr(paths.sys, "platform", platform)
+        assert paths.shell_rc_path("/bin/zsh").name == ".zshrc"
+
+
+def test_bash_answers_the_file_that_platforms_shell_actually_reads(monkeypatch) -> None:
+    """macOS Terminal opens login shells, which read ~/.bash_profile. A Linux desktop opens
+    interactive ones, which read ~/.bashrc — and on a distribution whose skeleton does not source
+    ~/.bashrc from ~/.bash_profile, writing the latter hides the export entirely."""
+    monkeypatch.setattr(paths.sys, "platform", "darwin")
+    assert paths.shell_rc_path("/bin/bash").name == ".bash_profile"
+
+    monkeypatch.setattr(paths.sys, "platform", "linux")
+    assert paths.shell_rc_path("/usr/bin/bash").name == ".bashrc"
+
+
+def test_a_shell_we_cannot_be_right_about_is_left_alone(monkeypatch) -> None:
+    for shell in ("/usr/bin/fish", "/usr/bin/nu", ""):
+        assert paths.shell_rc_path(shell) is None
+
+
+def test_removal_looks_in_every_file_any_install_could_have_written(monkeypatch) -> None:
+    """Uninstall does not ask which shell is running now: install under zsh on a Mac, uninstall
+    from bash on Linux, and the block would otherwise be left behind for good."""
+    names = {path.name for path in paths.shell_rc_candidates()}
+    assert {".zshrc", ".bash_profile", ".bashrc", ".profile"} <= names
+
+    for platform in ("darwin", "linux"):
+        monkeypatch.setattr(paths.sys, "platform", platform)
+        for shell in ("/bin/zsh", "/bin/bash"):
+            assert paths.shell_rc_path(shell) in paths.shell_rc_candidates()
