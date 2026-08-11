@@ -1,9 +1,9 @@
 """Platform abstraction boundary.
 
-All OS-specific knowledge (launch-agent location, launchd operations) lives behind this
-seam so no launchd string leaks into the rest of the daemon. macOS is the only concrete
-host platform today; Windows raises UnsupportedPlatform (the seam exists so the port is a single
-module later).
+All OS-specific knowledge (where the auto-start directory is, how a supervisor is driven) lives
+behind this seam, so no launchd or systemd string leaks into the rest of the daemon. macOS and
+Linux are the concrete host platforms; Windows raises UnsupportedPlatform (the seam exists so
+the port is a single module later).
 
 The container profile is selected before the host OS is even consulted: what the daemon runs on
 there is decided by the image, not by the kernel underneath it — and the image is a Linux one
@@ -27,8 +27,12 @@ def get_platform() -> Platform:
         from selly_agent.platform.macos import MacOSPlatform
 
         return MacOSPlatform()
+    if sys.platform == "linux":
+        from selly_agent.platform.linux import LinuxPlatform
+
+        return LinuxPlatform()
     raise UnsupportedPlatform(
-        f"{sys.platform!r} is not supported yet (macOS only; Windows is a planned port)"
+        f"{sys.platform!r} is not supported yet (macOS and Linux; Windows is a planned port)"
     )
 
 

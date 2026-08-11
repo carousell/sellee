@@ -20,15 +20,17 @@ def test_the_marker_selects_the_container_platform(container) -> None:
     assert isinstance(get_platform(), ContainerPlatform)
 
 
-def test_the_marker_wins_over_the_host_os(container, monkeypatch) -> None:
-    """The image decides what this runs on, not the kernel underneath it — so a Docker Desktop
-    Mac, where the daemon still runs in a Linux container, must not resolve to macOS."""
-    monkeypatch.setattr("sys.platform", "darwin")
+@pytest.mark.parametrize("host", ["darwin", "linux"])
+def test_the_marker_wins_over_the_host_os(container, monkeypatch, host) -> None:
+    """The image decides what this runs on, not the kernel underneath it. A Docker Desktop Mac
+    must not resolve to macOS — and the image's own kernel *is* Linux, so a container on a Linux
+    host must get these refusals rather than a systemd user unit it has no manager for."""
+    monkeypatch.setattr("sys.platform", host)
     assert isinstance(get_platform(), ContainerPlatform)
 
 
-def test_without_the_marker_linux_is_still_unsupported(monkeypatch) -> None:
-    monkeypatch.setattr("sys.platform", "linux")
+def test_an_unsupported_host_os_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr("sys.platform", "freebsd14")
     with pytest.raises(UnsupportedPlatform):
         get_platform()
 
