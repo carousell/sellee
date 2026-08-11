@@ -464,6 +464,15 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: outbound.fold_settled_passes(store=store),
         )
     )
+    # One first-listing nudge, ever, for a seller who connected a day ago and never listed.
+    # Store-only (no network), so unlike update_probe it stays registered in a single-tick run.
+    scheduler.register(
+        Task(
+            name="first_listing_nudge",
+            interval_sec=outbound.FIRST_LISTING_NUDGE_INTERVAL_SEC,
+            func=lambda: outbound.first_listing_nudge(store=store),
+        )
+    )
 
     # Start the providers already configured (their poller + delivery lanes); a fresh `connect`
     # starts one later at runtime. The delivery/typing scheduler tasks are registered inside the

@@ -230,6 +230,39 @@ def test_claim_queued_notices_is_fifo(store) -> None:
     assert [n["id"] for n in claimed] == [a, b]
 
 
+def test_queue_welcome_notices_queues_fifo_and_stamps_welcomed(store) -> None:
+    store.arm_bind("selly_bot", "n1")
+    store.complete_bind(555, update_offset=1)
+    store.queue_welcome_notices([("hello", None), ("list something", [("Skip", "skipcta")])])
+    queued = store.list_queued_notices()
+    assert [n["text"] for n in queued] == ["hello", "list something"]
+    assert queued[0]["controls"] is None
+    assert queued[1]["controls"] == [["Skip", "skipcta"]]
+    assert store.get_channel()["welcomed_at"] is not None  # stamped in the same transaction
+
+
+def test_has_notice_with_ref_spans_queued_and_delivered(store) -> None:
+    assert store.has_notice_with_ref("first-listing-nudge") is False
+    nid = store.queue_notice("nudge", ref="first-listing-nudge")
+    assert store.has_notice_with_ref("first-listing-nudge") is True
+    store.mark_notice_delivered(nid, "channel")
+    assert store.has_notice_with_ref("first-listing-nudge") is True  # delivered still counts
+
+
+# --- meta: the generic durable KV ------------------------------------------------------------
+
+
+def test_meta_missing_key_reads_none(store) -> None:
+    assert store.get_meta("first_listing_cta_skipped_ts") is None
+
+
+def test_meta_set_and_overwrite(store) -> None:
+    store.set_meta("first_listing_cta_skipped_ts", "123.0")
+    assert store.get_meta("first_listing_cta_skipped_ts") == "123.0"
+    store.set_meta("first_listing_cta_skipped_ts", "456.0")  # an upsert, not insert-only
+    assert store.get_meta("first_listing_cta_skipped_ts") == "456.0"
+
+
 # --- pause control: missing row reads as not paused -----------------------------------------
 
 

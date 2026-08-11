@@ -15,6 +15,7 @@ import urllib.request
 
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import secrets
+from selly_agent.channel import fastpaths, outbound
 from selly_agent.channel.telegram.poller import Poller
 from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
@@ -91,23 +92,55 @@ def test_start_with_nonce_binds_atomically(store, bus, xdg_tmp) -> None:
         assert ch["bind_nonce"] is None  # cleared in the same transaction
         assert ch["update_offset"] > 0  # cursor advanced past the /start
         assert api.commands is not None  # setMyCommands registered
-        assert any(m["text"] for m in api.outbox)  # welcome sent
+    # the greeting is queued durably (the drain lane delivers it), never fired from the bind tick —
+    # and a seller with nothing listed yet gets the first-listing CTA with its Skip button
+    queued = store.list_queued_notices()
+    assert [n["text"] for n in queued] == [outbound.WELCOME_TEXT, outbound.FIRST_LISTING_CTA_TEXT]
+    assert queued[1]["controls"] == [[outbound.CTA_SKIP_LABEL, fastpaths.CB_SKIP_CTA]]
+    assert store.get_channel()["welcomed_at"] is not None
     bound = [e for e in bus.store.read() if e.kind == "channel.bound"]
     assert bound and bound[0].payload["bot_username"] == BOT["username"]
 
 
-def test_welcome_sent_once_across_rebind(store, bus, xdg_tmp) -> None:
+def test_welcome_queued_once_across_rebind(store, bus, xdg_tmp) -> None:
     _arm(store)
     with FakeTelegramAPI() as api:
         api.inject_command("/start " + _NONCE)
         _poller(store, bus, api).tick()
-        assert len(api.outbox) == 1
+    assert store.count_queued_notices() == 2  # welcome + first-listing CTA
     # re-connect the SAME bot, bind again — the welcome stamp survives, so no second greeting
     store.arm_bind(BOT["username"], "nonce-2")
     with FakeTelegramAPI() as api:
         api.inject_command("/start nonce-2")
         _poller(store, bus, api).tick()
         assert api.outbox == []  # never re-greet the same bot
+    assert store.count_queued_notices() == 2
+
+
+def test_bind_with_an_item_already_listed_skips_the_first_listing_cta(store, bus, xdg_tmp) -> None:
+    store.create_item(title="Lamp", list_price=80.0, currency="SGD")
+    _arm(store)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        _poller(store, bus, api).tick()
+    # a seller with real usage is greeted but never told to make their "first" listing
+    assert [n["text"] for n in store.list_queued_notices()] == [outbound.WELCOME_TEXT]
+
+
+def test_welcome_queue_failure_leaves_the_bind_complete(store, bus, xdg_tmp, monkeypatch) -> None:
+    _arm(store)
+
+    def _boom(store):
+        raise RuntimeError("disk full")
+
+    monkeypatch.setattr(outbound, "queue_welcome", _boom)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        _poller(store, bus, api).tick()
+    ch = store.get_channel()
+    assert ch["chat_id"] == CHAT_ID  # the bind itself survived
+    assert ch["welcomed_at"] is None  # unstamped, so a rebind can still greet
+    assert [e for e in bus.store.read() if e.kind == "channel.bound"]
 
 
 def test_restart_mid_bind_resumes_from_durable_nonce(store, bus, xdg_tmp) -> None:

@@ -678,6 +678,11 @@ def _insert_notice(
     return notice_id
 
 
+def _stamp_welcomed_in_txn(conn) -> None:
+    now = _now()
+    conn.execute("UPDATE channel SET welcomed_at = ?, updated_ts = ? WHERE id = 1", (now, now))
+
+
 def _json(value: object) -> str:
     """Canonical JSON for a stored setting/proposal value — the same encoding settings.py compares
     on, so a round-tripped value is byte-identical."""
@@ -2899,9 +2904,16 @@ class Store:
 
     def stamp_welcomed(self) -> None:
         with self._db.transaction() as conn:
-            conn.execute(
-                "UPDATE channel SET welcomed_at = ?, updated_ts = ? WHERE id = 1", (_now(), _now())
-            )
+            _stamp_welcomed_in_txn(conn)
+
+    def queue_welcome_notices(self, entries: list) -> None:
+        """Queue the bind greeting's messages FIFO and stamp welcomed_at, one transaction —
+        greeted-and-queued commit together, so a crash can neither greet twice nor stamp a
+        greeting that was never queued. `entries` is [(text, controls | None), ...]."""
+        with self._db.transaction() as conn:
+            for text, controls in entries:
+                _insert_notice(conn, text, controls=controls)
+            _stamp_welcomed_in_txn(conn)
 
     def stamp_commands_hash(self, commands_hash: str) -> None:
         with self._db.transaction() as conn:
@@ -3308,6 +3320,25 @@ class Store:
     def count_queued_notices(self) -> int:
         rows = self._db.query("SELECT COUNT(*) AS n FROM notices WHERE status = 'queued'")
         return rows[0]["n"]
+
+    def has_notice_with_ref(self, ref: str) -> bool:
+        """Whether any notice — queued or delivered — was ever queued under `ref`. The durable
+        once-guard for proactive pushes (retention never prunes notices)."""
+        return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
+
+    # --- meta: the generic durable KV (one key per writer, documented at the writer) ------------
+
+    def get_meta(self, key: str) -> str | None:
+        rows = self._db.query("SELECT value FROM meta WHERE key = ?", (key,))
+        return rows[0]["value"] if rows else None
+
+    def set_meta(self, key: str, value: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) "
+                "ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
 
     # --- settings & the propose->approve->apply change ledger -----------------------------------
     #

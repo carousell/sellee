@@ -9,6 +9,8 @@ so the core never builds a Telegram keyboard or a Slack block; the provider rend
 
 from __future__ import annotations
 
+import time
+
 from selly_agent import settings
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
@@ -21,7 +23,13 @@ _FAST_PATH_COMMANDS = frozenset({"/pause", "/resume", "/status", "/catchup", "/s
 CB_PAUSE = "pause"
 CB_RESUME = "resume"
 CB_NEEDS_ME = "needsme"
-_FAST_PATH_CALLBACKS = frozenset({CB_PAUSE, CB_RESUME, CB_NEEDS_ME})
+# The first-listing CTA's "Skip for now" button (outbound.queue_welcome attaches it).
+CB_SKIP_CTA = "skipcta"
+_FAST_PATH_CALLBACKS = frozenset({CB_PAUSE, CB_RESUME, CB_NEEDS_ME, CB_SKIP_CTA})
+
+# The one meta row this surface writes: when the seller tapped Skip on the first-listing CTA. An
+# explicit seller answer is genuine, underivable state; the nudge lane reads it to stay quiet.
+META_FIRST_LISTING_SKIPPED = "first_listing_cta_skipped_ts"
 
 _DECISION_FOR_CALLBACK = {
     settings.CB_APPROVE: settings.DECIDE_APPROVE,
@@ -108,6 +116,10 @@ def handle_fast_path(store, event: dict) -> tuple:
         return render_status(store), None
     if token == "/catchup":
         return render_catchup(store), None
+    if token == CB_SKIP_CTA:
+        # Idempotent: a stale tap months later just re-acks (buttons live forever in history).
+        store.set_meta(META_FIRST_LISTING_SKIPPED, str(time.time()))
+        return "No problem — whenever you're ready, just send a photo.", None
     # /selly and the what-needs-me button both render the settings card + control row.
     return render_settings_card(store), _control_spec(store)
 
@@ -121,6 +133,21 @@ def _control_spec(store) -> list:
 
 def _needs_me_counts(store) -> tuple:
     return store.count_open_escalations(), store.count_queued_notices()
+
+
+def _listings_line(store) -> str:
+    """One honest line on the card: what is live, what is on its way, what has sold — or the
+    first-listing invitation when nothing exists yet. "Live" means a verified listing URL and no
+    settled sale (the negotiation ledger is the one honest answer to "still for sale")."""
+    items = store.list_items()
+    if not items:
+        return "• Listings: none yet — send a photo to start your first"
+    sold_ids = store.sold_item_ids()
+    sold = sum(1 for i in items if i["id"] in sold_ids)
+    live = sum(1 for i in items if i["listing_urls"] and i["id"] not in sold_ids)
+    in_progress = len(items) - live - sold
+    counts = ((live, "live"), (in_progress, "in progress"), (sold, "sold"))
+    return "• Listings: " + ", ".join(f"{n} {label}" for n, label in counts if n)
 
 
 def render_status(store) -> str:
@@ -170,6 +197,7 @@ def render_settings_card(store) -> str:
         f"• Agent: {paused}",
         f"• Telegram: {bound}",
         f"• Waiting on you: {escalations} decision(s), {notices} update(s)",
+        _listings_line(store),
     ]
     lines.extend(settings.card_lines(store))
     lines += ["", "Tell me in plain language what you'd like to change."]

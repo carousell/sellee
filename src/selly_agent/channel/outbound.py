@@ -1,5 +1,6 @@
 """Provider-agnostic outbound policy: the notice-drain and typing-pulse *decisions*, the
-settled-pass inbox fold, and the escalation-push bus subscriber.
+settled-pass inbox fold, the escalation-push bus subscriber, and the daemon-authored onboarding
+messages (the bind welcome and the first-listing nudge).
 
 The mechanism — how a message or typing action actually reaches the seller — is the provider's:
 `drain_notices` and `pulse_typing` take an injected `deliver(chat_id, text)` / `typing(chat_id)`
@@ -14,6 +15,7 @@ import time
 from datetime import datetime
 
 from selly_agent import settings
+from selly_agent.channel import fastpaths
 from selly_agent.engines import pacing
 
 log = logging.getLogger(__name__)
@@ -26,6 +28,28 @@ TYPING_PULSE_INTERVAL_SEC = 4.0
 _NOTICE_DRAIN_BATCH = 10
 
 FAILED_PASS_NOTICE = "I couldn't process your last message — please send it again."
+
+# The bind greeting, and — when nothing is listed yet — the activation moment: point the seller
+# at their first listing. The CTA never fires for a seller with real items (a rebind after real
+# usage must not say "your first"), and its timing promise is honest: a listing takes minutes.
+WELCOME_TEXT = (
+    "You're connected. I list what you're selling, talk to buyers, and bring you the decisions "
+    "that need your call. Send /selly any time to see your settings and what's waiting."
+)
+FIRST_LISTING_CTA_TEXT = (
+    "Ready when you are: send a photo of something you want to sell. I'll look up what similar "
+    "ones sold for and suggest a price — nothing goes live until you've OK'd it. The whole thing "
+    "takes a few minutes."
+)
+CTA_SKIP_LABEL = "Skip for now"
+
+FIRST_LISTING_NUDGE_TEXT = (
+    "Whenever you're ready: send a photo of something you want to sell. I'll research the price "
+    "and check it with you before anything goes live. I won't ask again."
+)
+FIRST_LISTING_NUDGE_REF = "first-listing-nudge"
+FIRST_LISTING_NUDGE_AGE_SEC = 24 * 3600
+FIRST_LISTING_NUDGE_INTERVAL_SEC = 3600.0
 
 
 def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=None) -> None:
@@ -108,3 +132,33 @@ def escalation_notifier(store):
         store.queue_notice(f"Needs your call: {esc['open_question']}", ref=esc["thread_id"])
 
     return _on
+
+
+def queue_welcome(store) -> None:
+    """Queue the bind greeting — and, for a seller with nothing listed yet, the first-listing CTA
+    with its Skip button — stamping welcomed_at in the same transaction. Delivery is the drain
+    lane's job (retried, catchup-backstopped), never a fire-and-forget send from the bind tick.
+    Not holdable: the seller just scanned the QR, so this delivers at any hour."""
+    entries: list = [(WELCOME_TEXT, None)]
+    if not store.list_items():
+        entries.append((FIRST_LISTING_CTA_TEXT, [(CTA_SKIP_LABEL, fastpaths.CB_SKIP_CTA)]))
+    store.queue_welcome_notices(entries)
+
+
+def first_listing_nudge(*, store, now=None) -> None:
+    """One nudge, ever: bound a day, welcomed, nothing listed, Skip never tapped. Every guard
+    derives from durable rows (the notice's own ref is the once-guard), so a restart can never
+    re-fire it. Holdable: a proactive push waits out quiet hours. Pause gates the queueing too —
+    a paused agent should not solicit work."""
+    if store.is_paused():
+        return
+    ch = store.get_channel()
+    if ch["chat_id"] is None or not ch["welcomed_at"] or not ch["bound_ts"]:
+        return
+    if (time.time() if now is None else now) - ch["bound_ts"] < FIRST_LISTING_NUDGE_AGE_SEC:
+        return
+    if store.list_items() or store.get_meta(fastpaths.META_FIRST_LISTING_SKIPPED) is not None:
+        return
+    if store.has_notice_with_ref(FIRST_LISTING_NUDGE_REF):
+        return
+    store.queue_notice(FIRST_LISTING_NUDGE_TEXT, ref=FIRST_LISTING_NUDGE_REF, holdable=True)

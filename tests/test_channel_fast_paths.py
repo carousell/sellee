@@ -10,7 +10,7 @@ import threading
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from selly_agent import secrets
 from selly_agent.channel import fastpaths
-from selly_agent.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME
+from selly_agent.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME, CB_SKIP_CTA
 from selly_agent.channel.telegram.poller import Poller
 from selly_agent.channel.telegram.transport import TelegramClient
 from selly_agent.config import Config
@@ -131,6 +131,34 @@ def test_selly_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     ]  # active -> Pause toggle
 
 
+def test_selly_card_invites_the_first_listing_when_nothing_is_listed(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/selly")
+        _poller(store, bus, api).tick()
+        text = api.outbox[-1]["text"]
+    assert "none yet — send a photo to start your first" in text
+
+
+def test_selly_card_counts_live_in_progress_and_sold(store, xdg_tmp) -> None:
+    store.create_item(title="Chair", list_price=20.0, currency="SGD")  # draft: in progress
+    live = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
+    store.record_listing_url(live["id"], "carousell", "https://carousell.com/p/1")
+    sold = store.create_item(title="Desk", list_price=50.0, currency="SGD")
+    store.record_listing_url(sold["id"], "carousell", "https://carousell.com/p/2")
+    store.create_thread(
+        thread_id="carousell:t9",
+        side="sell",
+        market="carousell",
+        counterpart_handle="buyer9",
+        item_id=sold["id"],
+    )
+    store.negotiate_confirm_sold(sold["id"], "carousell:t9")
+
+    text = fastpaths.render_settings_card(store)
+    assert "Listings: 1 live, 1 in progress, 1 sold" in text
+
+
 # --- keyboard callback round-trip -----------------------------------------------------------
 
 
@@ -152,3 +180,26 @@ def test_control_row_toggle_reflects_paused_state(store, bus, xdg_tmp) -> None:
         _poller(store, bus, api).tick()
         buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
     assert buttons[0]["callback_data"] == CB_RESUME  # paused -> the toggle offers Resume
+
+
+def test_skip_cta_tap_acks_and_records_the_skip(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_SKIP_CTA)
+        _poller(store, bus, api).tick()
+        assert api.answered == ["cbq1"]  # the spinner was cleared
+        assert "whenever you're ready" in api.outbox[-1]["text"]
+    assert store.get_meta("first_listing_cta_skipped_ts") is not None  # the nudge lane reads this
+    assert store.count_pending_inbox() == 0  # handled, never routed to a pass
+
+
+def test_skip_cta_tap_is_idempotent(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        p = _poller(store, bus, api)
+        api.inject_tap(CB_SKIP_CTA)
+        p.tick()
+        api.inject_tap(CB_SKIP_CTA)  # a stale tap, months later — buttons live forever in history
+        p.tick()
+        assert len(api.outbox) == 2  # re-acked, harmless
+    assert store.count_pending_inbox() == 0

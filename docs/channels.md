@@ -77,6 +77,13 @@ first-contact capture would have can't happen, and an interrupted bind resumes
 after a restart (the nonce is durable). The token never appears in an event or a
 log.
 
+On bind the daemon queues a deterministic welcome as ordinary notices (drain-
+delivered, retried, catchup-backstopped — never a fire-and-forget send), stamping
+`welcomed_at` in the same transaction so the same bot never re-greets. A seller
+with nothing listed yet also gets the **first-listing CTA** — "send a photo of
+something you want to sell" — with an inline *Skip for now* button; a seller with
+real items never sees it.
+
 ## The poller's three states
 
 One thread owns *all* Bot API traffic, so "an unbound channel consumes nothing"
@@ -111,6 +118,11 @@ Delivery follows one rule — never pretend to push:
 - **bound** → the drain lane sends notices FIFO and stamps them delivered;
 - **unbound** → `get_catchup` is the delivery path (queue-and-catchup);
 - each new escalation is pushed as a notice, with catchup as the crash backstop.
+
+One proactive lane feeds this queue: the **first-listing nudge** — a seller bound
+for a day who never listed and never tapped Skip gets one nudge, ever (the
+notice's own `ref` row is the once-guard, so restarts can't re-fire it). It is
+the first `holdable` notice: the drain defers it through quiet hours.
 
 ## The channel pass
 

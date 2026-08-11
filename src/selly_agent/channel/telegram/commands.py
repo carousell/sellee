@@ -1,5 +1,6 @@
-"""Telegram-specific command surface: the "/" menu set, the welcome text, and rendering the core's
-provider-neutral controls spec into a Telegram inline keyboard.
+"""Telegram-specific command surface: the "/" menu set, and rendering the core's provider-neutral
+controls spec into a Telegram inline keyboard. (The welcome copy is core policy —
+channel/outbound.py — queued as ordinary notices at bind time.)
 """
 
 from __future__ import annotations
@@ -16,11 +17,6 @@ BOT_COMMANDS = [
     {"command": "pause", "description": "Pause the agent (it stops acting)"},
     {"command": "resume", "description": "Resume the agent"},
 ]
-
-WELCOME_TEXT = (
-    "You're connected. I'll message you here when a buyer needs a decision or something needs "
-    "your call. Send /selly any time to see your settings and what's waiting."
-)
 
 
 def render_controls(spec) -> dict | None:

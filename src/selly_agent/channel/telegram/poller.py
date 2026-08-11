@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 
 from selly_agent import paths, secrets
-from selly_agent.channel import fastpaths, routing
+from selly_agent.channel import fastpaths, outbound, routing
 from selly_agent.channel.telegram import commands
 from selly_agent.channel.telegram.transport import (
     ChannelError,
@@ -149,12 +149,12 @@ class Poller:
         self._ensure_commands(client)
         ch = self.store.get_channel()
         if not ch["welcomed_at"]:
+            # Queued durably (the drain lane delivers, retried, catchup-backstopped) rather than
+            # sent from here — a network hiccup at bind time must not eat the greeting.
             try:
-                client.send_message(chat_id, commands.WELCOME_TEXT)
-            except ChannelError as exc:
-                log.warning("welcome send failed (bind still complete): %s", exc)
-            else:
-                self.store.stamp_welcomed()
+                outbound.queue_welcome(self.store)
+            except Exception:
+                log.exception("welcome queue failed (bind still complete)")
         self.bus.publish("channel.bound", {"bot_username": ch["bot_username"]})
 
     def _ensure_commands(self, client) -> None:

@@ -103,7 +103,9 @@ def _run(args, ui: Ui) -> None:
     _connect_markets(ui, args, port, token, region)
     _offer_telegram(ui, args, port, token)
     _attended_workspace(ui)
-    _finish(ui, platform)
+    # Re-probed here rather than threaded through: the bind may have just happened inside
+    # _offer_telegram, and the closing next-step depends on where the seller can act.
+    _finish(ui, platform, bound=_channel_bound(port, token))
 
 
 # --- what this is, and what it will touch ---------------------------------------------------
@@ -628,13 +630,21 @@ def _attended_workspace(ui: Ui) -> None:
 # --- the last word ------------------------------------------------------------------------------
 
 
-def _finish(ui: Ui, platform) -> None:
+def _finish(ui: Ui, platform, bound: bool) -> None:
     ui.step("Checking the installation")
     for line in checks.render(healthcheck.run_checks(platform=platform)):
         ui.say(line)
 
     ui.step("Installed")
     ui.say("Selly is running.")
+    ui.say("")
+    ui.say("Next: your first listing.")
+    if bound:
+        ui.say("Open Telegram and send your Selly bot a photo of something you want to sell —")
+        ui.say("it checks the price with you before anything goes live.")
+    else:
+        ui.say("Run `selly-agent chat` and use /sell to list your first item.")
+    ui.say("")
     container = deployment.is_container()
     if container:
         # The CLI lives in here, not on the seller's PATH. How they get back in is their

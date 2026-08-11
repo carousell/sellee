@@ -571,6 +571,22 @@ def test_skip_telegram_never_offers(world, capsys) -> None:
     assert "Connect Telegram now?" not in capsys.readouterr().out
 
 
+def test_finish_points_a_bound_install_at_the_phone(world, capsys) -> None:
+    world.calls["bound"] = True
+    assert setup_main("--yes", "--manual") == 0
+    out = capsys.readouterr().out
+    assert "Next: your first listing." in out
+    assert "Open Telegram" in out and "photo" in out
+
+
+def test_finish_points_an_unbound_install_at_the_terminal(world, capsys) -> None:
+    assert setup_main("--yes", "--manual", "--skip-telegram") == 0
+    out = capsys.readouterr().out
+    assert "Next: your first listing." in out
+    assert "/sell" in out
+    assert "Open Telegram" not in out  # no phone to send the photo to
+
+
 # --- the attended workspace ----------------------------------------------------------------------
 
 
