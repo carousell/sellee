@@ -144,6 +144,16 @@ def test_the_container_refuses_to_start_without_a_timezone_or_a_token() -> None:
     assert "exit 1" in ENTRYPOINT
 
 
+def test_setting_both_credentials_warns_which_one_wins() -> None:
+    """The both-set case happens by accident: compose reads the host shell's environment before
+    .env, so an ANTHROPIC_API_KEY exported in the seller's shell silently outbids the token they
+    put in .env — and the claude CLI prefers the API key, moving billing from their subscription
+    to per-token Console billing. The entrypoint names the winner instead of leaving it to the
+    invoice."""
+    assert "both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set" in ENTRYPOINT
+    assert "will use ANTHROPIC_API_KEY" in ENTRYPOINT
+
+
 def test_the_one_published_port_is_scoped_to_host_loopback() -> None:
     """The web tail shares its server with the MCP and control surface, so publishing it puts all
     three within reach. `"7355:7355"` — no host address — would put them on the seller's LAN."""

@@ -22,6 +22,15 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
 fi
 [ "$missing" = 0 ] || exit 1
 
+# Both set is usually an accident: compose reads the host shell's environment before .env, so an
+# ANTHROPIC_API_KEY exported in the seller's shell silently outbids the token they put in .env.
+# The claude CLI prefers the API key, which moves billing from their Claude subscription to
+# per-token Console billing — warn rather than leave that to the next invoice.
+if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+	echo "selly-agent: both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set;" \
+		"the claude CLI will use ANTHROPIC_API_KEY (per-token Console billing)" >&2
+fi
+
 port="${SELLY_CDP_PORT:-9222}"
 # Docker Desktop's name for the host. Podman calls it host.containers.internal.
 host="${SELLY_CDP_HOST:-host.docker.internal}"
