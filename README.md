@@ -28,7 +28,7 @@ Ensure pre-requisites:
 
 - **Browser:** Chrome or Chromium
 - **Node runtime and package manager:** Node.js and NPM
-- **Agent harness:** Claude Code (with Claude subscription)
+- **Agent harness:** Claude Code
 
 Clone the repository and run the setup script:
 

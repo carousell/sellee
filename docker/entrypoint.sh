@@ -22,10 +22,7 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -z "${ANTHROPIC_API_KEY:-}" ]; the
 fi
 [ "$missing" = 0 ] || exit 1
 
-# Both set is usually an accident: compose reads the host shell's environment before .env, so an
-# ANTHROPIC_API_KEY exported in the seller's shell silently outbids the token they put in .env.
-# The claude CLI prefers the API key, which moves billing from their Claude subscription to
-# per-token Console billing — warn rather than leave that to the next invoice.
+# Both set is usually an accident. API key billing takes precedence, which is rarely what the user wants if they also have an active subscription.
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then
 	echo "selly-agent: both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set;" \
 		"the claude CLI will use ANTHROPIC_API_KEY (per-token Console billing)" >&2

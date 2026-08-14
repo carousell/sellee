@@ -5,6 +5,12 @@
 - [MacOS (native)](#macos-native)
 - [Windows (native)](#windows-native)
 
+Native installations will require the following pre-requisites:
+
+- **Browser:** Chrome or Chromium
+- **Node runtime and package manager:** Node.js and NPM
+- **Agent harness:** Claude Code
+
 ## Docker (all platforms)
 
 > [!NOTE]  
@@ -17,12 +23,16 @@ git clone https://github.com/carousell/selly-agent
 cd selly-agent
 ```
 
-Add a `.env` file containing the `TZ` and `CLAUDE_CODE_OAUTH_TOKEN`/`ANTHROPIC_API_KEY` env vars. If using the oauth token, you can get it using `claude setup-token`. If using an API key, get it from platform.claude.com.
+Add a `.env` file containing the `TZ` env var and **one** credential for the `claude` CLI:
+
+- `CLAUDE_CODE_OAUTH_TOKEN` if you're using a Claude subscription. Get it with `claude setup-token`.
+- `ANTHROPIC_API_KEY` if you're using API key billing.
 
 ```env
 TZ=Asia/Singapore
 CLAUDE_CODE_OAUTH_TOKEN=...
-ANTHROPIC_API_KEY=...
+# or, instead of the token:
+# ANTHROPIC_API_KEY=...
 ```
 
 Since Selly will be running in a container, it cannot manage its own Chrome process. You will have to launch Chrome separately. A `start-chrome` script is included in the repository. Execute using:
@@ -56,7 +66,8 @@ Supported environment variables:
 | variable | required | what it does |
 | --- | --- | --- |
 | `TZ` | yes | the container's timezone; must match where you sell |
-| `CLAUDE_CODE_OAUTH_TOKEN` | yes | how the `claude` CLI authenticates in here |
+| `CLAUDE_CODE_OAUTH_TOKEN` | one of these two | how the `claude` CLI authenticates in here; uses your Claude subscription |
+| `ANTHROPIC_API_KEY` | one of these two | the API-key alternative; per-token Console billing, and it wins if both are set |
 | `SELLY_DATA` | no | host directory to mount at `/data` (default `./selly-data`) |
 | `SELLY_CDP_PORT` | no | the CDP port, both sides of the forwarder (default `9222`) |
 | `SELLY_CDP_HOST` | no | what the forwarder points at (default `host.docker.internal`) |
