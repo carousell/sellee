@@ -689,7 +689,7 @@ wheels = [
 ]
 
 [[package]]
-name = "selly-agent"
+name = "sellee"
 source = { virtual = "." }
 dependencies = [
     { name = "pillow" },
