@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from selly_agent import pass_cli, paths, secrets, skills
+from sellee import pass_cli, paths, secrets, skills
 
 
 @pytest.fixture
@@ -21,7 +21,7 @@ def configured(xdg_tmp, tmp_path):
 
 def test_mcp_points_at_the_daemon_with_the_attended_token(configured) -> None:
     cfg = json.loads((configured / ".mcp.json").read_text())
-    server = cfg["mcpServers"]["selly"]
+    server = cfg["mcpServers"]["sellee"]
     assert server["type"] == "http"
     assert server["url"].endswith("/mcp")
     assert server["headers"]["Authorization"] == "Bearer ATTENDEDTOKEN"
@@ -30,7 +30,7 @@ def test_mcp_points_at_the_daemon_with_the_attended_token(configured) -> None:
 def test_the_five_commands_are_written(configured) -> None:
     written = sorted(p.stem for p in (configured / ".claude" / "commands").glob("*.md"))
     assert written == sorted(skills.available_commands())
-    assert set(written) == {"catchup", "pause", "resume", "sell", "selly"}
+    assert set(written) == {"catchup", "pause", "resume", "sell", "sellee"}
 
 
 def test_command_bodies_resolve_the_skill_paths_they_reference(configured) -> None:
@@ -49,7 +49,7 @@ def test_command_bodies_resolve_the_skill_paths_they_reference(configured) -> No
 def test_claude_md_asks_for_catchup_at_session_start(configured) -> None:
     text = (configured / "CLAUDE.md").read_text()
     assert "get_catchup" in text
-    for name in ("sell", "catchup", "selly", "pause", "resume"):
+    for name in ("sell", "catchup", "sellee", "pause", "resume"):
         assert f"/{name}" in text
 
 
@@ -87,11 +87,11 @@ def test_paths_go_through_current_when_it_is_provisioned(xdg_tmp, tmp_path, monk
     """The `current` symlink is the stable address for installed content: a command written today
     must still resolve after an update swaps the version underneath it."""
     checkout = tmp_path / "versions" / "v1"
-    (checkout / "src" / "selly_agent" / "skills").mkdir(parents=True)
+    (checkout / "src" / "sellee" / "skills").mkdir(parents=True)
     paths.ensure_data_dirs()
     paths.current().symlink_to(checkout)
 
-    assert pass_cli._skills_dir() == paths.current() / "src" / "selly_agent" / "skills"
+    assert pass_cli._skills_dir() == paths.current() / "src" / "sellee" / "skills"
 
 
 def test_paths_fall_back_to_the_package_without_current(xdg_tmp) -> None:

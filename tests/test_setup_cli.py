@@ -1,4 +1,4 @@
-"""`selly-agent setup`, machine half: the gates, the layout it writes, and the daemon gate.
+"""`sellee setup`, machine half: the gates, the layout it writes, and the daemon gate.
 
 The world is faked at the probe boundary — no package manager, no claude, no supervisor, no live
 daemon — but everything between is the real code: real staging, the real symlink swap, the real
@@ -14,7 +14,7 @@ from __future__ import annotations
 import pytest
 from tests.test_supervisor import FakePlatform
 
-from selly_agent import (
+from sellee import (
     cli,
     config,
     connect_cli,
@@ -27,8 +27,8 @@ from selly_agent import (
     settings_cli,
     setup_cli,
 )
-from selly_agent.installer import checks, materialize, preflight
-from selly_agent.installer import region as region_guess
+from sellee.installer import checks, materialize, preflight
+from sellee.installer import region as region_guess
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def world(monkeypatch, xdg_tmp, tree):
     def fake_post(port, token, route, body, **kwargs):
         calls["posts"].append((route, body))
         if route == "/control/seller-basics":
-            from selly_agent.tools.seller import BasicsError, validate_basics
+            from sellee.tools.seller import BasicsError, validate_basics
 
             try:
                 checked = validate_basics(body)
@@ -109,7 +109,7 @@ def world(monkeypatch, xdg_tmp, tree):
 
 
 def setup_main(*argv) -> int:
-    return cli.main(["selly-agent", "setup", *argv])
+    return cli.main(["sellee", "setup", *argv])
 
 
 def _answer(monkeypatch, replies, *, consent: bool = True):
@@ -133,10 +133,10 @@ def _answer(monkeypatch, replies, *, consent: bool = True):
 def test_a_default_install_stages_a_version_and_brings_the_daemon_up(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
 
-    from selly_agent import __version__
+    from sellee import __version__
 
     version_dir = paths.versions_dir() / __version__
-    assert (version_dir / "bin" / "selly-agent").is_file()
+    assert (version_dir / "bin" / "sellee").is_file()
     assert materialize.current_version() == __version__
     assert paths.shim_path().is_symlink()
 
@@ -169,7 +169,7 @@ def test_a_container_setup_runs_only_the_half_that_is_about_the_seller(
 
     out = capsys.readouterr().out
     assert "Checking this machine" not in out
-    assert "Installing Selly" not in out
+    assert "Installing Sellee" not in out
     assert "already running in this container" in out
 
 
@@ -179,8 +179,8 @@ def test_a_container_setup_says_where_the_closing_commands_run(world, container,
     setup_main("--yes")
     out = capsys.readouterr().out
     assert "Run these inside the container" in out
-    assert "selly-agent chat" in out
-    assert "rebuild the image" in out  # `selly-agent update` refuses here
+    assert "sellee chat" in out
+    assert "rebuild the image" in out  # `sellee update` refuses here
     assert "docker" not in out.lower()
 
 
@@ -202,14 +202,14 @@ def test_setup_announces_every_location_before_writing(world, capsys) -> None:
 
 def test_manual_mode_starts_the_daemon_and_says_what_manual_costs(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
-    assert world.is_registered("com.selly.agent")  # started now...
+    assert world.is_registered("com.sellee.agent")  # started now...
     out = capsys.readouterr().out
     assert "will not restart after you log out" in out  # ...but not after a logout
 
 
 def test_login_start_mode_registers_the_plist_in_launch_agents(world) -> None:
     assert setup_main("--yes", "--login-start") == 0
-    plist = paths.launch_agents_dir(platform=world) / "com.selly.agent.plist"
+    plist = paths.launch_agents_dir(platform=world) / "com.sellee.agent.plist"
     assert plist.exists()
     assert config.load().daemon_mode == "login-start"
 
@@ -239,7 +239,7 @@ def test_declining_the_gate_leaves_the_machine_untouched(world, monkeypatch, cap
     assert not paths.versions_dir().exists()
     assert not paths.current().exists()
     assert not paths.shim_path().exists()
-    assert not world.is_registered("com.selly.agent")
+    assert not world.is_registered("com.sellee.agent")
     assert "nothing was written" in capsys.readouterr().out
 
 
@@ -283,11 +283,11 @@ def test_an_unsupported_platform_is_one_honest_line_not_a_banner(monkeypatch, ca
     assert setup_main("--yes") == 1
     captured = capsys.readouterr()
     assert "linux" in captured.err
-    assert "Selly" not in captured.out  # no banner, no path preview
+    assert "Sellee" not in captured.out  # no banner, no path preview
 
 
 def test_a_tree_under_a_protected_folder_stops_setup_before_it_writes(world, capsys) -> None:
-    from selly_agent.installer import preflight as pf
+    from sellee.installer import preflight as pf
 
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(
@@ -489,7 +489,7 @@ def test_a_country_the_rail_does_not_serve_is_refused(world, capsys) -> None:
     assert setup_main("--yes", "--manual", "--region", "my") == 1
     assert world.calls["basics"] == {}
     err = capsys.readouterr().err
-    assert "MY isn't a country selly-agent works in yet" in err
+    assert "MY isn't a country sellee works in yet" in err
     assert "SG, US" in err
 
 
@@ -573,7 +573,7 @@ def test_declining_the_browser_window_question_records_the_setting(world, monkey
 
 def test_accepting_the_browser_window_question_writes_nothing(world, monkeypatch) -> None:
     """The default lives in code; writing it back would list the setting as customized on the
-    /selly card."""
+    /sellee card."""
     _answer(monkeypatch, ["y", "", "", "n"])
     assert setup_main("--manual") == 0
     assert "raise_browser" not in world.calls["settings"]
@@ -624,7 +624,7 @@ def test_a_container_setup_is_never_asked_about_the_window(world, container, cap
 def test_telegram_is_offered_and_declining_points_at_the_verb(world, capsys) -> None:
     # Not interactive, so the offer is declined for us — the path a piped install takes.
     assert setup_main("--manual") == 0
-    assert "selly-agent connect telegram" in capsys.readouterr().out
+    assert "sellee connect telegram" in capsys.readouterr().out
 
 
 def test_an_already_bound_channel_is_not_offered_again(world, capsys) -> None:
@@ -665,7 +665,7 @@ def test_the_attended_workspace_lands_at_a_documented_path(world, monkeypatch, c
     assert setup_main("--yes", "--manual") == 0
     assert written == [paths.data_root() / "attended"]
     # The seller is pointed at the command, not at the directory it happens to use.
-    assert "selly-agent chat" in capsys.readouterr().out
+    assert "sellee chat" in capsys.readouterr().out
 
 
 def test_a_re_run_stops_the_old_worker_before_replacing_its_code(world, capsys) -> None:
@@ -684,12 +684,12 @@ def test_a_re_run_stops_the_old_worker_before_replacing_its_code(world, capsys) 
 def test_a_custom_daemon_label_is_not_replaced_by_the_default_one(world) -> None:
     # Installing under the default label while a custom-labelled job is loaded leaves two plists
     # and two daemons writing one database.
-    config.merge_into_file({"daemon_label": "com.selly.agent.dev"})
+    config.merge_into_file({"daemon_label": "com.sellee.agent.dev"})
 
     assert setup_main("--yes", "--manual") == 0
 
-    assert (paths.config_dir() / "com.selly.agent.dev.plist").exists()
-    assert not (paths.config_dir() / "com.selly.agent.plist").exists()
+    assert (paths.config_dir() / "com.sellee.agent.dev.plist").exists()
+    assert not (paths.config_dir() / "com.sellee.agent.plist").exists()
 
 
 def test_fish_is_told_the_fish_command_and_its_config_is_left_alone(
@@ -741,7 +741,7 @@ def test_setup_pins_the_node_directory_into_the_workers_job(world, monkeypatch) 
     assert setup_main("--yes", "--manual") == 0
 
     assert config.load().node_bin_dir == "/opt/node-versions/v22/bin"
-    plist = (paths.config_dir() / "com.selly.agent.plist").read_text()
+    plist = (paths.config_dir() / "com.sellee.agent.plist").read_text()
     assert "/opt/node-versions/v22/bin" in plist
 
 
@@ -755,7 +755,7 @@ def test_setup_records_every_directory_the_worker_needs_not_just_the_first(
     assert setup_main("--yes", "--manual") == 0
 
     assert config.load().node_bin_dir == fragment
-    assert fragment in (paths.config_dir() / "com.selly.agent.plist").read_text()
+    assert fragment in (paths.config_dir() / "com.sellee.agent.plist").read_text()
 
 
 # --- the gate that only exists on one OS ---------------------------------------------------------

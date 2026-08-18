@@ -10,8 +10,8 @@ from __future__ import annotations
 import pytest
 
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent.channel.telegram import transport
-from selly_agent.channel.telegram.transport import (
+from sellee.channel.telegram import transport
+from sellee.channel.telegram.transport import (
     ChannelError,
     TelegramClient,
     build_inline_keyboard,

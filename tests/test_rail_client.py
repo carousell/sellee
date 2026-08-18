@@ -8,7 +8,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from selly_agent.rail.client import (
+from sellee.rail.client import (
     RailAuthError,
     RailClient,
     RailToolError,

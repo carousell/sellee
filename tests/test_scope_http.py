@@ -9,18 +9,18 @@ import urllib.request
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
-from selly_agent.store import Scope, ScopedStore
-from selly_agent.tools.registry import TIER_PASS_REPLY, ToolContext
+import sellee.tools  # noqa: F401  registration
+from sellee.config import Config
+from sellee.http_server import HttpServer
+from sellee.store import Scope, ScopedStore
+from sellee.tools.registry import TIER_PASS_REPLY, ToolContext
 
 _ATTENDED = "attended-secret"
 
 
 @pytest.fixture
 def scoped_server(bus, store, xdg_tmp):
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_state_dirs()
 

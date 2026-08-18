@@ -25,7 +25,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # A fake seller chat + bot. The digits are on the leak-guard's approved-fake allowlist.
 CHAT_ID = 123456789
-BOT = {"id": 123456789, "is_bot": True, "first_name": "SellyTest", "username": "selly_test_bot"}
+BOT = {"id": 123456789, "is_bot": True, "first_name": "SelleeTest", "username": "sellee_test_bot"}
 # A well-formed but obviously-fake bot token for tests. Its auth part deliberately does NOT start
 # with the "AA" prefix the leak guard keys on, so a real-credential-shape match never trips on it.
 FAKE_TOKEN = "123456789:ZZfakeBotTokenForTestsOnlyNeverRealXX"

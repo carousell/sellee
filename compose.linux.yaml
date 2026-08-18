@@ -5,10 +5,10 @@
 # deliberately sits — so instead of forwarding, share the host's network namespace: the
 # container's loopback *is* the host's, and Chrome is already at 127.0.0.1:9222.
 services:
-  selly-agent:
+  sellee:
     network_mode: host
     environment:
-      SELLY_CDP_FORWARD: "0"
+      SELLEE_CDP_FORWARD: "0"
       # Sharing that namespace, the image's 0.0.0.0 would be the machine's own interfaces. Nothing
       # needs publishing here either — this loopback is the host's, so the tail is already there.
-      SELLY_BIND_HOST: 127.0.0.1
+      SELLEE_BIND_HOST: 127.0.0.1

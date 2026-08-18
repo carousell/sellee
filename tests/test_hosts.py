@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import marketplaces
-from selly_agent.engines import hosts
+from sellee import marketplaces
+from sellee.engines import hosts
 
 BASE = "https://api.carousell.ai/checkout"
 

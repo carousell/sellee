@@ -6,8 +6,8 @@ import re
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  ensures every tool is registered
-from selly_agent.tools.registry import (
+import sellee.tools  # noqa: F401  ensures every tool is registered
+from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_PUBLISH,
     ToolError,
@@ -15,7 +15,7 @@ from selly_agent.tools.registry import (
     dispatch,
     tools_for_tier,
 )
-from selly_agent.tools.schema import ValidationError, validate
+from sellee.tools.schema import ValidationError, validate
 
 # --- the JSON-Schema subset -------------------------------------------------------------------
 

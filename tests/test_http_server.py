@@ -8,11 +8,11 @@ import urllib.request
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent.config import Config
-from selly_agent.http_server import _PAGE_EVENTS, HttpServer, _Handler, _Server
-from selly_agent.paths import PACKAGE_DATA_DIR
-from selly_agent.tools.registry import ToolContext
+import sellee.tools  # noqa: F401  registration
+from sellee.config import Config
+from sellee.http_server import _PAGE_EVENTS, HttpServer, _Handler, _Server
+from sellee.paths import PACKAGE_DATA_DIR
+from sellee.tools.registry import ToolContext
 
 
 class _FakeRail:
@@ -131,7 +131,7 @@ def test_initialize_advertises_tools_only(server) -> None:
     status, body = _rpc(server, "initialize", {"protocolVersion": "2025-06-18"})
     assert status == 200
     assert body["result"]["capabilities"] == {"tools": {}}
-    assert body["result"]["serverInfo"]["name"] == "selly-agent"
+    assert body["result"]["serverInfo"]["name"] == "sellee"
 
 
 def test_notifications_initialized_returns_202(server) -> None:

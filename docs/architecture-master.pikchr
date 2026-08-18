@@ -1,4 +1,4 @@
-// Master architecture diagram — selly-agent
+// Master architecture diagram — sellee
 // Layout: control surfaces / seller's machine (daemon inside) / marketplaces,
 // with the seller and buyers as the endpoints. Content boxes are placed first,
 // zone borders are computed from their bounds and drawn behind, arrows last.
@@ -18,7 +18,7 @@ TG:  box fill white "telegram channel" at SELLER.s - (0, 0.93)
 ATT: box fill white "attended session" "(terminal)" at TG - (1.85, 0)
 OTH: box fill white "... other channels" at TG + (1.85, 0)
 
-// ---------- selly daemon (contents) ----------
+// ---------- sellee daemon (contents) ----------
 ADAPTER: box fill white "channel adapter" at TG - (0, 1.25)
 // event bus: a horizontal ("rotated") cylinder — body + end caps drawn
 // manually since pikchr cylinders are upright-only; BUS is an invisible
@@ -52,7 +52,7 @@ DAEMON: box wid BUS.wid + 0.14 + 2*$m \
     ht (ADAPTER.n.y - PASS.s.y) + 2*$m \
     at (BUS.c.x, (ADAPTER.n.y + PASS.s.y)/2) \
     fill 0xfdf3d6 thick behind ADAPTER
-text "selly daemon" italic with .nw at DAEMON.nw + (-0.18, 0)
+text "sellee daemon" italic with .nw at DAEMON.nw + (-0.18, 0)
 
 MACHINE: box wid DAEMON.wid + 2.4*$m \
     ht (DAEMON.n.y + $label) - (HARNESS.s.y - $m) \

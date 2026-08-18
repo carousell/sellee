@@ -5,7 +5,7 @@
 # Not the machine's python3, which may not exist and whose version and cert store are not ours
 # to rely on — uv provisions a standalone one at the version .python-version pins, then installs
 # this release's dependencies from uv.lock. Every decision, prompt and write after that lives in
-# the Python installer, shared with `selly-agent update`.
+# the Python installer, shared with `sellee update`.
 #
 # installer/runtime.py fetches uv the same way for updates. Both read the pin file, so the
 # version and digests are not duplicated even though this logic is.
@@ -15,7 +15,7 @@
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
-pin="$here/src/selly_agent/data/uv-pin.txt"
+pin="$here/src/sellee/data/uv-pin.txt"
 
 # --bootstrap-only stops once the runtime is ready, without installing anything on the machine;
 # --with-dev also installs the dev dependency group. Together they let `make bootstrap` reuse
@@ -56,7 +56,7 @@ uv_version=$(awk '$1 == "version" { print $2 }' "$pin")
 [ -n "$uv_version" ] || die "$pin names no uv version."
 
 # uv's release archives are named by Rust target triple. Kept in step with the table in
-# selly_agent/installer/runtime.py.
+# sellee/installer/runtime.py.
 case "$(uname -s)/$(uname -m)" in
 Darwin/arm64 | Darwin/aarch64) triple="aarch64-apple-darwin" ;;
 Darwin/x86_64) triple="x86_64-apple-darwin" ;;
@@ -71,7 +71,7 @@ expected=$(awk -v t="$triple" '$1 == "sha256" && $2 == t { print $3 }' "$pin")
 # Deliberately not ~/.local/bin: the user may have their own uv there, and a second thing on
 # PATH that nothing owns is not something an uninstall could clean up. Mirrors paths.uv_path().
 data_home="${XDG_DATA_HOME:-$HOME/.local/share}"
-tools="$data_home/selly-agent/tools"
+tools="$data_home/sellee/tools"
 uv="$tools/uv"
 
 # Whether a uv can offer a *final* build of the interpreter we pin — asked, not inferred from
@@ -144,4 +144,4 @@ if [ "$bootstrap_only" -eq 1 ]; then
 	exit 0
 fi
 
-exec "$python" "$here/bin/selly-agent" setup "$@"
+exec "$python" "$here/bin/sellee" setup "$@"

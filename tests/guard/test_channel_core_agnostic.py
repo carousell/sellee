@@ -11,7 +11,7 @@ import ast
 from pathlib import Path
 
 SRC = Path(__file__).resolve().parents[2] / "src"
-_CORE = SRC / "selly_agent" / "channel"
+_CORE = SRC / "sellee" / "channel"
 # The provider-agnostic core modules — everything directly under channel/, excluding provider
 # subpackages (channel/telegram/ and future siblings).
 _CORE_MODULES = [p for p in _CORE.glob("*.py")]
@@ -38,7 +38,7 @@ def test_core_modules_do_not_import_a_provider() -> None:
     for path in _CORE_MODULES:
         for name in _imports(path):
             # a provider is a subpackage of channel; the core names it via `.telegram`,
-            # `telegram`, or a fully-qualified `selly_agent.channel.telegram`.
+            # `telegram`, or a fully-qualified `sellee.channel.telegram`.
             leaf = name.split(".")[-1]
             if "telegram" in name.split(".") or leaf == "telegram":
                 offenders.append(f"{path.name}: imports {name}")

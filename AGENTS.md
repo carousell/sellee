@@ -1,4 +1,4 @@
-# Agent instructions — selly-agent
+# Agent instructions — sellee
 
 Conventions for anyone (human or agent) writing code in this repo. This
 codebase must stand on its own; the design plans live in a separate projects
@@ -75,8 +75,8 @@ conformance suite runs everywhere rather than skipping under an old floor.
 
 ## Imports are absolute
 
-Intra-package imports use the absolute `from selly_agent.x import y` style (not
-relative `from .x import y`, and not bare `import selly_agent.x.y`), so moving a
+Intra-package imports use the absolute `from sellee.x import y` style (not
+relative `from .x import y`, and not bare `import sellee.x.y`), so moving a
 module never forces rewriting its own imports. Relative imports fail `make lint`
 (ruff TID252, `ban-relative-imports = "all"`).
 
@@ -122,7 +122,7 @@ never touch a real install. Ported legacy tests are converted to plain pytest.
 ## There are two deployment profiles, and one marker decides
 
 A host install and a container install run the same code. `deployment.py` reads
-the one marker that tells them apart (`SELLY_DEPLOYMENT`, an `ENV` baked into
+the one marker that tells them apart (`SELLEE_DEPLOYMENT`, an `ENV` baked into
 the image), and everything conditional on the profile branches on it: whether
 the daemon may launch Chrome, whether a supervisor job exists, whether the clock
 can disagree with the seller. When you write a message that assumes this process
@@ -146,7 +146,7 @@ defense against writing to a location the running daemon never reads.
 
 ## State is two SQLite DBs
 
-`data/selly.db` is business data (migrated, snapshotted before migrations).
+`data/sellee.db` is business data (migrated, snapshotted before migrations).
 `state/events.db` is the event/transcript store (prunable, deletable without
 data loss, never backed up). Never open a cross-DB transaction — events are
 observability, not ledger. All writes go through the single write connection
@@ -180,21 +180,21 @@ Keep these distinct — where a value lives is a decision about what it *is*:
 is deliberately no apply/approve/undo/cancel tool. The daemon decides by policy
 (a registry `requires_approval` flag): high-stakes changes are held for a human
 signal (an Approve/Cancel button, an exact `approve <id>` text token, or the
-attended `selly-agent settings approve <id>` CLI over `/control/settings-decide`);
-low-stakes ones apply immediately in deterministic store code. `selly-agent
+attended `sellee settings approve <id>` CLI over `/control/settings-decide`);
+low-stakes ones apply immediately in deterministic store code. `sellee
 settings set <key> <value>` (over `/control/settings-set`) skips the approval
 round-trip and only that: the gate exists to stop the *model* changing things
 unasked, and someone typing at their own terminal has already given the signal it
 waits for — so the same parser and the same `check_for_seller` run, and the prior
 value is recorded so Undo still works. The installer writes the marketplaces the
 seller opted into through that door rather than touching the database itself. Every apply is one
-`selly.db` transaction (setting upsert + ledger row + echo notice), and every
+`sellee.db` transaction (setting upsert + ledger row + echo notice), and every
 consumer reads its setting at its own decision point (read-at-use — no caching, no
 reload). The no-apply-tool rule is enforced by a guard test, not just convention.
 
 ## Engines stay pure
 
-Modules under `src/selly_agent/engines/` are pure decision layers. They must not
+Modules under `src/sellee/engines/` are pure decision layers. They must not
 import tool or server modules, must not touch the store or the network, and must
 not read the clock except through a `now` parameter. A tool composes an engine
 with the store (one transaction per decision); the engine only decides. This is
@@ -226,7 +226,7 @@ The codebase must read on its own for someone who does not have the plans.
 
 ## Skill content
 
-The markdown under `src/selly_agent/skills/` is prompt content, and the same
+The markdown under `src/sellee/skills/` is prompt content, and the same
 comment rule applies with more force: it is read by a model that has none of our
 context, so a reference it cannot resolve is worse than nothing. Two more:
 

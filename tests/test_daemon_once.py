@@ -6,10 +6,10 @@ import json
 import os
 import subprocess
 
-from selly_agent import config, daemon, heartbeat, lock, paths
-from selly_agent.browser import client as browser_client
-from selly_agent.db import connect_reader
-from selly_agent.events import query_events
+from sellee import config, daemon, heartbeat, lock, paths
+from sellee.browser import client as browser_client
+from sellee.db import connect_reader
+from sellee.events import query_events
 
 
 def _event_kinds(events_db_path) -> list[str]:
@@ -44,7 +44,7 @@ def test_run_once_migrates_heartbeats_and_ledgers(xdg_tmp) -> None:
     assert hb["pid"] == os.getpid()
 
     # both DBs migrated
-    conn = connect_reader(paths.selly_db())
+    conn = connect_reader(paths.sellee_db())
     try:
         assert conn.execute("SELECT count(*) FROM schema_migrations").fetchone()[0] >= 1
     finally:

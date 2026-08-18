@@ -1,9 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "mcp__selly__get_item",
-      "mcp__selly__carousell_ai_publish_listing",
-      "mcp__selly__send_message"
+      "mcp__sellee__get_item",
+      "mcp__sellee__carousell_ai_publish_listing",
+      "mcp__sellee__send_message"
     ],
     "deny": [
       "Bash",

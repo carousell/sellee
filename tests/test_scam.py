@@ -5,15 +5,15 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.engines import hosts, scam
-from selly_agent.store import StoreError
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee.engines import hosts, scam
+from sellee.store import StoreError
+from sellee.tools.registry import ToolError, dispatch
 
 BASE = "https://api.carousell.ai/checkout"
 
 
 def _allowlist():
-    from selly_agent import marketplaces
+    from sellee import marketplaces
 
     return hosts.build_allowlist(marketplaces.all_marketplaces())
 
@@ -159,7 +159,7 @@ def test_store_illegal_transition_refused(store) -> None:
 
 
 def test_registry_unreadable_degrades_to_bank_only(store, monkeypatch) -> None:
-    from selly_agent import marketplaces
+    from sellee import marketplaces
 
     # the store reads marketplaces.SCAM_REGISTRY_PATH at call time — one patch covers both
     monkeypatch.setattr(

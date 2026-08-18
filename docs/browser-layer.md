@@ -261,7 +261,7 @@ Three notices, each queued at most once per condition and cleared on recovery:
 | condition | notice |
 | --- | --- |
 | `browser_blind_after` failed reads on a market | can't read your `<market>` inbox — check Chrome is running and logged in |
-| the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice names `selly-agent connect <market>` — the daemon opens the market and re-probes |
+| the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice names `sellee connect <market>` — the daemon opens the market and re-probes |
 | `BrowserUnavailable` | the browser can't be driven at all; browser markets paused, the rail unaffected |
 
 The reply lane (`reply_lane`, every 10s) is a sibling: it claims every waiting
@@ -474,7 +474,7 @@ re-arming them errs toward reading more rather than less.
 1. **A registry entry** in `data/marketplaces.json`: `connector.type: "browser"`,
    `status: "active"`, the `domains` map for its regions, and `urls` templates for
    at least `inbox` and `thread`.
-1b. Nothing else: `selly-agent connect <market>` picks the new id up from the
+1b. Nothing else: `sellee connect <market>` picks the new id up from the
    adapter registry, and so does the healthcheck's per-market login line.
 2. **An adapter module** under `browser/markets/`, exporting the JS artifacts,
    the composer defaults, the listing-id pattern and its system handles — then one

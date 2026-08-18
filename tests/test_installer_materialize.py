@@ -7,9 +7,9 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import paths
-from selly_agent.installer import materialize
-from selly_agent.installer.materialize import LayoutError
+from sellee import paths
+from sellee.installer import materialize
+from sellee.installer.materialize import LayoutError
 
 # --- staging and swapping -----------------------------------------------------------------
 
@@ -17,8 +17,8 @@ from selly_agent.installer.materialize import LayoutError
 def test_install_version_populates_versions_and_points_current(xdg_tmp, tree) -> None:
     dest = materialize.install_version(tree, "1.0.0")
     assert dest == paths.versions_dir() / "1.0.0"
-    assert (dest / "bin" / "selly-agent").is_file()
-    assert (dest / "src" / "selly_agent" / "__init__.py").is_file()
+    assert (dest / "bin" / "sellee").is_file()
+    assert (dest / "src" / "sellee" / "__init__.py").is_file()
     assert (dest / "README.md").is_file()
     assert paths.current().is_symlink()
     assert materialize.current_target() == dest.resolve()
@@ -28,7 +28,7 @@ def test_install_version_populates_versions_and_points_current(xdg_tmp, tree) ->
 def test_staging_leaves_dev_scaffolding_behind(xdg_tmp, tree) -> None:
     dest = materialize.install_version(tree, "1.0.0")
     assert not (dest / ".git").exists()
-    assert not (dest / "src" / "selly_agent" / "__pycache__").exists()
+    assert not (dest / "src" / "sellee" / "__pycache__").exists()
 
 
 def test_a_version_carries_the_files_it_needs_to_build_its_own_venv(xdg_tmp, tree) -> None:
@@ -72,15 +72,15 @@ def test_a_crash_between_staging_and_the_swap_leaves_current_valid(xdg_tmp, tree
     # The next version stages but never swaps — the shape of a crash mid-install.
     materialize.stage_version(tree, "2.0.0")
     assert materialize.current_version() == "1.0.0"
-    assert (paths.current() / "bin" / "selly-agent").is_file()
+    assert (paths.current() / "bin" / "sellee").is_file()
 
 
 def test_restaging_the_same_version_refreshes_it_in_place(xdg_tmp, tree) -> None:
     materialize.install_version(tree, "0.1.0.dev0")
-    (tree / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n# newer\n")
+    (tree / "bin" / "sellee").write_text("#!/usr/bin/env python3\n# newer\n")
     materialize.install_version(tree, "0.1.0.dev0")
     live = paths.versions_dir() / "0.1.0.dev0"
-    assert "# newer" in (live / "bin" / "selly-agent").read_text()
+    assert "# newer" in (live / "bin" / "sellee").read_text()
     assert materialize.current_version() == "0.1.0.dev0"
     # No debris from the swap-aside.
     assert [p.name for p in paths.versions_dir().iterdir()] == ["0.1.0.dev0"]
@@ -162,12 +162,12 @@ def test_shim_links_through_current_so_updates_do_not_rewrite_it(xdg_tmp, tree) 
     materialize.install_version(tree, "1.0.0")
     shim = materialize.install_shim()
     assert shim.is_symlink()
-    assert os.readlink(shim) == str(paths.current() / "bin" / "selly-agent")
+    assert os.readlink(shim) == str(paths.current() / "bin" / "sellee")
     assert shim.resolve().is_file()
 
     materialize.install_version(tree, "2.0.0")
     # Untouched, and now resolving to the new version through current.
-    assert shim.resolve() == (paths.versions_dir() / "2.0.0" / "bin" / "selly-agent").resolve()
+    assert shim.resolve() == (paths.versions_dir() / "2.0.0" / "bin" / "sellee").resolve()
 
 
 def test_shim_install_is_idempotent(xdg_tmp, tree) -> None:
@@ -275,7 +275,7 @@ def test_the_shell_name_comes_from_the_login_shell(xdg_tmp, monkeypatch) -> None
 
 
 def test_layout_preview_names_every_root_it_will_write(xdg_tmp) -> None:
-    from selly_agent.platform.macos import MacOSPlatform
+    from sellee.platform.macos import MacOSPlatform
 
     text = "\n".join(materialize.layout_preview(platform=MacOSPlatform()))
     for location in (

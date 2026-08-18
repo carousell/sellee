@@ -1,4 +1,4 @@
-"""`selly-agent update`: discovery, the digest gate, the swap, and the rollback matrix.
+"""`sellee update`: discovery, the digest gate, the swap, and the rollback matrix.
 
 The release is real — a tarball built here and served from a local HTTP server — so the fetch,
 the checksum, the extraction and the version swap are all the production code. What is faked is
@@ -18,26 +18,24 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from tests.test_supervisor import FakePlatform
 
-from selly_agent import healthcheck, heartbeat, paths, supervisor
-from selly_agent.config import Config
-from selly_agent.installer import checks, materialize
-from selly_agent.installer import update as update_mod
-from selly_agent.installer.update import Release, UpdateError
+from sellee import healthcheck, heartbeat, paths, supervisor
+from sellee.config import Config
+from sellee.installer import checks, materialize
+from sellee.installer import update as update_mod
+from sellee.installer.update import Release, UpdateError
 
 
 def build_release(into, version: str, *, marker: str = "") -> str:
     """Build a release tarball plus its SHA256SUMS in `into`, and answer the digest."""
     into.mkdir(parents=True, exist_ok=True)
     stage = into / f"stage-{version}"
-    root = stage / f"selly-agent-{version}"
+    root = stage / f"sellee-{version}"
     (root / "bin").mkdir(parents=True)
-    (root / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
-    (root / "src" / "selly_agent").mkdir(parents=True)
-    (root / "src" / "selly_agent" / "__init__.py").write_text(
-        f"__version__ = {version!r}\n{marker}"
-    )
+    (root / "bin" / "sellee").write_text("#!/usr/bin/env python3\n")
+    (root / "src" / "sellee").mkdir(parents=True)
+    (root / "src" / "sellee" / "__init__.py").write_text(f"__version__ = {version!r}\n{marker}")
 
-    name = f"selly-agent-{version}.tar.gz"
+    name = f"sellee-{version}.tar.gz"
     with tarfile.open(into / name, "w:gz") as tar:
         tar.add(root, arcname=root.name)
     digest = hashlib.sha256((into / name).read_bytes()).hexdigest()
@@ -102,17 +100,17 @@ def test_version_ordering_puts_a_dev_build_below_its_own_release() -> None:
 
 
 def test_sums_parsing_ignores_anything_that_is_not_a_checksum_line() -> None:
-    text = "# a comment\n\n" + "a" * 64 + "  selly-agent-1.0.0.tar.gz\nnot a line\n"
-    assert update_mod.parse_sums(text) == {"selly-agent-1.0.0.tar.gz": "a" * 64}
+    text = "# a comment\n\n" + "a" * 64 + "  sellee-1.0.0.tar.gz\nnot a line\n"
+    assert update_mod.parse_sums(text) == {"sellee-1.0.0.tar.gz": "a" * 64}
 
 
 def test_the_release_is_read_out_of_its_own_checksum_file() -> None:
-    release = update_mod.release_from_sums("b" * 64 + "  selly-agent-2.3.4.tar.gz\n")
-    assert release == Release(version="2.3.4", filename="selly-agent-2.3.4.tar.gz", digest="b" * 64)
+    release = update_mod.release_from_sums("b" * 64 + "  sellee-2.3.4.tar.gz\n")
+    assert release == Release(version="2.3.4", filename="sellee-2.3.4.tar.gz", digest="b" * 64)
 
 
 def test_several_releases_in_one_sums_file_resolve_to_the_highest() -> None:
-    text = "a" * 64 + "  selly-agent-2.0.0.tar.gz\n" + "b" * 64 + "  selly-agent-10.0.0.tar.gz\n"
+    text = "a" * 64 + "  sellee-2.0.0.tar.gz\n" + "b" * 64 + "  sellee-10.0.0.tar.gz\n"
     assert update_mod.release_from_sums(text).version == "10.0.0"
 
 
@@ -133,7 +131,7 @@ def test_discovery_reads_the_version_from_the_host(xdg_tmp, served) -> None:
 def test_a_tampered_download_is_refused_and_left_for_inspection(xdg_tmp, served) -> None:
     root, base = served
     build_release(root, "3.0.0")
-    archive = root / "selly-agent-3.0.0.tar.gz"
+    archive = root / "sellee-3.0.0.tar.gz"
     archive.write_bytes(archive.read_bytes() + b"tampered")
 
     release = update_mod.discover(base)
@@ -168,7 +166,7 @@ def test_check_exits_ten_when_there_is_something_to_install(xdg_tmp, served) -> 
 
 
 def test_check_exits_zero_when_current(xdg_tmp, served) -> None:
-    from selly_agent import __version__
+    from sellee import __version__
 
     root, base = served
     build_release(root, __version__)
@@ -185,9 +183,9 @@ def installed(xdg_tmp, tmp_path, monkeypatch):
     """A machine with a version installed and a daemon that is running."""
     tree = tmp_path / "installed"
     (tree / "bin").mkdir(parents=True)
-    (tree / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
-    (tree / "src" / "selly_agent").mkdir(parents=True)
-    (tree / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '0.1.0'\n")
+    (tree / "bin" / "sellee").write_text("#!/usr/bin/env python3\n")
+    (tree / "src" / "sellee").mkdir(parents=True)
+    (tree / "src" / "sellee" / "__init__.py").write_text("__version__ = '0.1.0'\n")
     materialize.install_version(tree, "0.1.0")
 
     platform = FakePlatform()
@@ -217,13 +215,13 @@ def test_the_plist_is_re_rendered_so_it_names_the_new_version(installed, served)
     build_release(root, "0.2.0")
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
 
-    plist = (paths.launch_agents_dir(platform=installed) / "com.selly.agent.plist").read_text()
-    assert str(paths.current() / "bin" / "selly-agent") in plist
+    plist = (paths.launch_agents_dir(platform=installed) / "com.sellee.agent.plist").read_text()
+    assert str(paths.current() / "bin" / "sellee") in plist
     assert supervisor.MARKER in plist
 
 
 def test_updating_to_the_version_already_installed_does_nothing(installed, served) -> None:
-    from selly_agent import __version__
+    from sellee import __version__
 
     root, base = served
     build_release(root, __version__)
@@ -264,7 +262,7 @@ def test_the_release_notice_names_the_command_this_deployment_updates_with(
     )
     notice = store.claim_queued_notices(1)[0]["text"]
     assert update_mod.CONTAINER_UPDATE_HOW in notice
-    assert "selly-agent update" not in notice  # the verb that refuses here
+    assert "sellee update" not in notice  # the verb that refuses here
 
 
 def test_a_manual_daemon_that_was_not_running_is_not_started_by_an_update(
@@ -272,7 +270,7 @@ def test_a_manual_daemon_that_was_not_running_is_not_started_by_an_update(
 ) -> None:
     tree = tmp_path / "installed"
     (tree / "bin").mkdir(parents=True)
-    (tree / "src" / "selly_agent").mkdir(parents=True)
+    (tree / "src" / "sellee").mkdir(parents=True)
     materialize.install_version(tree, "0.1.0")
     platform = FakePlatform()
     supervisor.install(mode="manual", platform=platform)  # manual: installed, not registered
@@ -286,7 +284,7 @@ def test_a_manual_daemon_that_was_not_running_is_not_started_by_an_update(
 
     assert rc == 0
     assert materialize.current_version() == "0.2.0"
-    assert not platform.is_registered("com.selly.agent")  # still off, as it was
+    assert not platform.is_registered("com.sellee.agent")  # still off, as it was
     assert any("Start it to finish" in line for line in lines)
 
 
@@ -341,12 +339,12 @@ def test_a_rollback_restores_the_database_only_when_the_new_version_migrated_it(
     root, base = served
     build_release(root, "0.2.0")
     paths.ensure_state_dirs()
-    write_db(paths.selly_db(), "after the migration")
+    write_db(paths.sellee_db(), "after the migration")
 
     # The migration runner snapshots the database when — and only when — something is pending.
     # Simulate that happening during the new version's first start.
     def start_and_migrate(mode, *, platform=None):
-        write_db(paths.backups_dir() / "selly-2000-pre-0009.db", "before the migration")
+        write_db(paths.backups_dir() / "sellee-2000-pre-0009.db", "before the migration")
         return True
 
     monkeypatch.setattr(update_mod, "_start_daemon", start_and_migrate)
@@ -359,7 +357,7 @@ def test_a_rollback_restores_the_database_only_when_the_new_version_migrated_it(
 
     update_mod.perform(Args(url=base), Config(), lines.append, platform=installed)
 
-    assert read_db(paths.selly_db()) == "before the migration"
+    assert read_db(paths.sellee_db()) == "before the migration"
     assert any("Anything written since then is not in it" in line for line in lines)
 
 
@@ -369,8 +367,8 @@ def test_a_rollback_without_a_migration_leaves_the_database_alone(
     root, base = served
     build_release(root, "0.2.0")
     paths.ensure_state_dirs()
-    write_db(paths.selly_db(), "untouched")
-    write_db(paths.backups_dir() / "selly-1000-pre-0008.db", "an older snapshot")
+    write_db(paths.sellee_db(), "untouched")
+    write_db(paths.backups_dir() / "sellee-1000-pre-0008.db", "an older snapshot")
 
     monkeypatch.setattr(
         healthcheck,
@@ -381,7 +379,7 @@ def test_a_rollback_without_a_migration_leaves_the_database_alone(
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
 
     # No new snapshot appeared, so no migration ran, so the database is the one both versions read.
-    assert read_db(paths.selly_db()) == "untouched"
+    assert read_db(paths.sellee_db()) == "untouched"
 
 
 def test_rollback_by_hand_goes_back_one_version(installed, served) -> None:
@@ -489,10 +487,10 @@ def test_a_manual_rollback_restores_a_database_the_old_code_can_read(
     root, base = served
     build_release(root, "0.2.0")
     paths.ensure_state_dirs()
-    write_db(paths.selly_db(), "migrated by 0.2.0")
+    write_db(paths.sellee_db(), "migrated by 0.2.0")
 
     def start_and_migrate(mode, *, platform=None):
-        write_db(paths.backups_dir() / "selly-3000-pre-0009.db", "as 0.1.0 left it")
+        write_db(paths.backups_dir() / "sellee-3000-pre-0009.db", "as 0.1.0 left it")
         return True
 
     monkeypatch.setattr(update_mod, "_start_daemon", start_and_migrate)
@@ -503,7 +501,7 @@ def test_a_manual_rollback_restores_a_database_the_old_code_can_read(
     update_mod.rollback(Args(rollback=True), Config(), lines.append, platform=installed)
 
     assert materialize.current_version() == "0.1.0"
-    assert read_db(paths.selly_db()) == "as 0.1.0 left it"
+    assert read_db(paths.sellee_db()) == "as 0.1.0 left it"
     assert any("Restored the database" in line for line in lines)
 
 
@@ -517,15 +515,15 @@ def test_a_manual_rollback_with_no_migration_since_leaves_the_database_alone(
     root, base = served
     build_release(root, "0.2.0")
     paths.ensure_state_dirs()
-    write_db(paths.backups_dir() / "selly-1000-pre-0001.db", "as 0.1.0 first found it")
-    write_db(paths.selly_db(), "weeks of listings and threads")
+    write_db(paths.backups_dir() / "sellee-1000-pre-0001.db", "as 0.1.0 first found it")
+    write_db(paths.sellee_db(), "weeks of listings and threads")
 
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
     lines = []
     update_mod.rollback(Args(rollback=True), Config(), lines.append, platform=installed)
 
     assert materialize.current_version() == "0.1.0"
-    assert read_db(paths.selly_db()) == "weeks of listings and threads"
+    assert read_db(paths.sellee_db()) == "weeks of listings and threads"
     assert not any("Restored the database" in line for line in lines)
 
 
@@ -558,10 +556,10 @@ def test_a_successful_update_clears_the_download_cache(installed, served) -> Non
     build_release(root, "0.2.0")
     stale = paths.cache_dir()
     stale.mkdir(parents=True, exist_ok=True)
-    (stale / "selly-agent-0.0.9.tar.gz").write_text("an old download")
+    (stale / "sellee-0.0.9.tar.gz").write_text("an old download")
 
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
 
-    assert not (stale / "selly-agent-0.0.9.tar.gz").exists()
+    assert not (stale / "sellee-0.0.9.tar.gz").exists()
     assert not (stale / "unpacked").exists()
-    assert (stale / "selly-agent-0.2.0.tar.gz").exists()
+    assert (stale / "sellee-0.2.0.tar.gz").exists()

@@ -9,23 +9,23 @@ import threading
 import time
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import passes, secrets
-from selly_agent.channel import outbound
-from selly_agent.channel.prompt import (
+from sellee import passes, secrets
+from sellee.channel import outbound
+from sellee.channel.prompt import (
     TRANSCRIPT_CHAR_CAP,
     _format_transcript,
     build_channel_prompt,
 )
-from selly_agent.channel.telegram.poller import Poller
-from selly_agent.channel.telegram.transport import TelegramClient
-from selly_agent.config import Config
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
-from selly_agent.tools import TIER_PASS_CHANNEL, tools_for_tier
+from sellee.channel.telegram.poller import Poller
+from sellee.channel.telegram.transport import TelegramClient
+from sellee.config import Config
+from sellee.proc_tree import PASS_PROMPT_MARKER
+from sellee.tools import TIER_PASS_CHANNEL, tools_for_tier
 
 
 def _bound(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
 
 

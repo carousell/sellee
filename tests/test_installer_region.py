@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from selly_agent import marketplaces
-from selly_agent.installer import region
+from sellee import marketplaces
+from sellee.installer import region
 
 
 def test_the_supported_regions_are_the_ones_the_rail_serves() -> None:

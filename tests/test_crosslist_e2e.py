@@ -17,16 +17,16 @@ import time as _time
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
+import sellee.tools  # noqa: F401  registration
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import crosslist, passes, secrets, settings
-from selly_agent.channel import fastpaths, outbound
-from selly_agent.channel.telegram.transport import TelegramClient
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
-from selly_agent.rail.client import RailUnprovisioned
-from selly_agent.store import ScopedStore
-from selly_agent.tools.registry import TIER_PASS_CHANNEL, ToolContext, dispatch
+from sellee import crosslist, passes, secrets, settings
+from sellee.channel import fastpaths, outbound
+from sellee.channel.telegram.transport import TelegramClient
+from sellee.config import Config
+from sellee.http_server import HttpServer
+from sellee.rail.client import RailUnprovisioned
+from sellee.store import ScopedStore
+from sellee.tools.registry import TIER_PASS_CHANNEL, ToolContext, dispatch
 
 _ATTENDED = "attended-secret"
 _RAIL_URL = "https://www.carousell.ai/listing/teak-lamp-1"
@@ -47,7 +47,7 @@ class FakeRail:
 _PUBLISH_HARNESS = """\
 import json, sys, urllib.request
 cfg = json.load(open(".mcp.json"))
-srv = cfg["mcpServers"]["selly"]
+srv = cfg["mcpServers"]["sellee"]
 endpoint, auth = srv["url"], srv["headers"]["Authorization"]
 item_id, url = sys.argv[1], sys.argv[2]
 def emit(o):
@@ -79,7 +79,7 @@ sys.exit(1)
 
 @pytest.fixture
 def wired(bus, store, xdg_tmp):
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_state_dirs()
 
@@ -146,7 +146,7 @@ def _pass_deps(server, bus, store, script, *argv):
 
 def _bind(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
 
 

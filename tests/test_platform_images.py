@@ -12,10 +12,10 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from selly_agent.platform.base import ImageToolUnavailable
-from selly_agent.platform.container import ContainerPlatform
-from selly_agent.platform.images import to_jpeg
-from selly_agent.platform.macos import MacOSPlatform
+from sellee.platform.base import ImageToolUnavailable
+from sellee.platform.container import ContainerPlatform
+from sellee.platform.images import to_jpeg
+from sellee.platform.macos import MacOSPlatform
 
 
 def _exif_orientation(value: int) -> bytes:

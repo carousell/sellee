@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import passes, reply_prompt
-from selly_agent.browser import inbox
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
-from selly_agent.store import Scope, ScopedStore
-from selly_agent.tools import tools_for_tier
-from selly_agent.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch
+from sellee import passes, reply_prompt
+from sellee.browser import inbox
+from sellee.proc_tree import PASS_PROMPT_MARKER
+from sellee.store import Scope, ScopedStore
+from sellee.tools import tools_for_tier
+from sellee.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch
 
 REPLY = passes.PASS_TYPES["reply"]
 
@@ -58,7 +58,7 @@ def test_list_reads_show_only_the_claimed_conversations(store) -> None:
 
 def test_the_scope_reaches_the_token_at_the_mint(store) -> None:
     """The scope is carried by the token, so it is enforced per request rather than trusted."""
-    from selly_agent.http_server import Auth
+    from sellee.http_server import Auth
 
     auth = Auth("attended-token")
     payload = {"thread_ids": ["carousell:1"], "item_ids": ["item_1"]}

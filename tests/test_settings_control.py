@@ -9,11 +9,11 @@ import urllib.request
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import settings
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
-from selly_agent.tools.registry import ToolContext
+import sellee.tools  # noqa: F401  registration
+from sellee import settings
+from sellee.config import Config
+from sellee.http_server import HttpServer
+from sellee.tools.registry import ToolContext
 
 
 @pytest.fixture

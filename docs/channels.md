@@ -16,7 +16,7 @@ a guard test enforces that the core imports no provider.
 
 - **Core** (`channel/`):
   - `fastpaths` — the deterministic commands (`/pause` `/resume` `/status`
-    `/catchup` `/selly`): decide, render reply text, and emit a provider-neutral
+    `/catchup` `/sellee`): decide, render reply text, and emit a provider-neutral
     **control spec** (a list of `(label, token)` buttons).
   - `routing` — after a batch is ingested: the `channel.in` event and coalesced
     routing of pending free text to a channel pass.
@@ -52,7 +52,7 @@ removes those lanes).
 
 ## Bind (Telegram)
 
-`selly-agent connect telegram` reads the BotFather token — never from argv, so it
+`sellee connect telegram` reads the BotFather token — never from argv, so it
 stays out of `ps`/shell history — and sends it to the running daemon, which:
 
 1. validates it (`getMe`), writes it to a 0600 file, and mints a one-time
@@ -107,7 +107,7 @@ tick, always failing toward the less-capable one:
 
 ## The needs-me queue
 
-Two durable tables in `selly.db`, so nothing the seller must eventually see lives
+Two durable tables in `sellee.db`, so nothing the seller must eventually see lives
 only behind the cursor or in the prunable event store:
 
 - open **escalations** (a decision the agent couldn't make),

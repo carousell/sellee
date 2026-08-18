@@ -9,8 +9,8 @@ from __future__ import annotations
 import json
 import re
 
-from selly_agent import marketplaces
-from selly_agent.engines import scam
+from sellee import marketplaces
+from sellee.engines import scam
 
 VALID_KINDS = frozenset({"domain", "url_pattern", "message_pattern", "playbook"})
 VALID_SEVERITIES = frozenset({"low", "medium", "high"})

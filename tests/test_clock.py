@@ -11,8 +11,8 @@ import time
 
 import pytest
 
-from selly_agent import clock, healthcheck
-from selly_agent.installer import checks
+from sellee import clock, healthcheck
+from sellee.installer import checks
 
 # +08:00 all year (no DST), which makes an offset assertion stable whenever the suite runs.
 SINGAPORE = "Asia/Singapore"
@@ -110,7 +110,7 @@ def test_the_clock_line_is_a_failure_only_when_the_two_disagree() -> None:
 
 def test_the_clock_is_asked_about_only_where_it_can_be_wrong(xdg_tmp, monkeypatch) -> None:
     """On a host the daemon's clock is the seller's clock, so there is no question to ask."""
-    from selly_agent import deployment
+    from sellee import deployment
 
     assert [result.name for result in healthcheck.run_checks()] == [
         "daemon",

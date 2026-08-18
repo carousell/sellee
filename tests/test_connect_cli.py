@@ -1,4 +1,4 @@
-"""`selly-agent connect telegram` client UX: interactive getpass + BotFather guidance, the piped
+"""`sellee connect telegram` client UX: interactive getpass + BotFather guidance, the piped
 token read, the printed phone-delivery URL, the interactive/piped timeout defaults, and token
 hygiene. The daemon routes are exercised in test_channel_bind; here the HTTP calls are stubbed so
 the CLI's own behaviour is isolated.
@@ -11,8 +11,8 @@ import io
 import pytest
 
 from fake_telegram_api import FAKE_TOKEN as _TOKEN
-from selly_agent import connect_cli, control
-from selly_agent.config import Config
+from sellee import connect_cli, control
+from sellee.config import Config
 
 
 @pytest.fixture
@@ -23,11 +23,12 @@ def stub_daemon(monkeypatch):
     def fake_post(port, token, route, body, **kwargs):
         calls["posts"].append((route, token, body))
         return calls.get("post_status", 200), calls.get(
-            "post_body", {"bot_username": "sellybot", "start_url": "https://t.me/sellybot?start=n0"}
+            "post_body",
+            {"bot_username": "selleebot", "start_url": "https://t.me/selleebot?start=n0"},
         )
 
     def fake_get(port, token, route, params=None, **kwargs):
-        return 200, {"bound": calls.get("bound", True), "bot_username": "sellybot"}
+        return 200, {"bound": calls.get("bound", True), "bot_username": "selleebot"}
 
     monkeypatch.setattr(control, "post", fake_post)
     monkeypatch.setattr(control, "get", fake_get)
@@ -64,7 +65,7 @@ def test_piped_reads_token_via_readline_and_binds(monkeypatch, stub_daemon, caps
     assert rc == 0
     assert stub_daemon["posts"][0][2] == {"token": _TOKEN}  # exact token forwarded
     out = capsys.readouterr().out
-    assert "Connected as @sellybot." in out
+    assert "Connected as @selleebot." in out
     assert "BotFather" not in out  # no interactive guidance on the piped path
 
 
@@ -146,7 +147,7 @@ def test_prints_prominent_url_with_phone_wording(monkeypatch, stub_daemon, capsy
     assert rc == 0
     out = capsys.readouterr().out
     assert "Scan the code with the phone that has Telegram" in out
-    assert "https://t.me/sellybot?start=n0" in out
+    assert "https://t.me/selleebot?start=n0" in out
 
 
 def test_prints_a_terminal_qr_above_the_link(monkeypatch, stub_daemon, capsys) -> None:
@@ -332,7 +333,7 @@ def test_a_seller_who_chose_background_mode_gets_no_raise_and_a_pointer(
     assert stub_market_daemon["raised"] == []
     out = capsys.readouterr().out
     assert "background" in out
-    assert "/selly" in out  # the way back to the toggle travels with the consequence
+    assert "/sellee" in out  # the way back to the toggle travels with the consequence
 
 
 def test_an_os_that_cannot_raise_says_so_instead_of_hinting_at_a_failure(
@@ -368,8 +369,8 @@ def test_an_already_signed_in_market_never_touches_the_window(stub_market_daemon
 def test_a_refused_enqueue_is_reported_not_a_traceback(monkeypatch, capsys) -> None:
     # control.post returns (status, body) for HTTP errors rather than raising, so a caller that
     # ignores the status reads a missing key out of an error body.
-    from selly_agent import config as config_mod
-    from selly_agent import pass_cli
+    from sellee import config as config_mod
+    from sellee import pass_cli
 
     monkeypatch.setattr(control, "require_token", lambda: "tok")
     monkeypatch.setattr(config_mod, "load", lambda path=None: config_mod.Config())
@@ -386,7 +387,7 @@ def test_a_refused_enqueue_is_reported_not_a_traceback(monkeypatch, capsys) -> N
 
 
 def test_a_refused_settings_decision_is_not_reported_as_done(monkeypatch, capsys) -> None:
-    from selly_agent import settings_cli
+    from sellee import settings_cli
 
     monkeypatch.setattr(control, "post", lambda *a, **k: (400, {"error": "unknown change id"}))
     assert settings_cli._decide(9999, "tok", "approve", "chg_nope") == 1

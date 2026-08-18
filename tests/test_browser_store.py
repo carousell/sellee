@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.store import ItemNotFound, StoreError, ThreadNotFound, ui_cache_is_stale
+from sellee.store import ItemNotFound, StoreError, ThreadNotFound, ui_cache_is_stale
 
 _DAY = 86400.0
 

@@ -14,12 +14,12 @@ import urllib.request
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  tool registration
-from selly_agent import settings
-from selly_agent.browser.client import BrowserUnavailable
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
-from selly_agent.tools.registry import ToolContext
+import sellee.tools  # noqa: F401  tool registration
+from sellee import settings
+from sellee.browser.client import BrowserUnavailable
+from sellee.config import Config
+from sellee.http_server import HttpServer
+from sellee.tools.registry import ToolContext
 
 
 class FakeBrowser:
@@ -82,7 +82,7 @@ def browser():
 @pytest.fixture
 def chrome_up(monkeypatch):
     """Chrome already answering, which is what lets a read probe run at all."""
-    from selly_agent.browser import chrome
+    from sellee.browser import chrome
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: True)
 
@@ -315,7 +315,7 @@ def test_connect_market_brings_the_agents_own_tab_forward(server, store, browser
 
 
 def test_a_tab_that_will_not_come_forward_never_fails_the_sign_in(server, store, browser) -> None:
-    from selly_agent.browser.client import BrowserToolError
+    from sellee.browser.client import BrowserToolError
 
     store.set_seller_config_section("basics", {"region": "SG"})
     browser.front_error = BrowserToolError("the tab stayed hidden")
@@ -330,7 +330,7 @@ def test_a_raise_that_lost_our_tab_reports_our_page_not_whatever_it_landed_on(
     """The select that brings a tab forward happens before it can tell which tab it got, so a
     failure can point every later call at the seller's own page — and the probe is a later call.
     Answering about that page would report a signed-in seller as signed out."""
-    from selly_agent.browser.client import BrowserToolError
+    from sellee.browser.client import BrowserToolError
 
     store.set_seller_config_section("basics", {"region": "SG"})
     browser.front_error = BrowserToolError("selecting our own tab landed somewhere else")
@@ -431,7 +431,7 @@ def test_market_logins_reports_the_enabled_set_and_probes_when_chrome_is_up(
 ) -> None:
     from tests.conftest import seed_setting
 
-    from selly_agent.browser import chrome
+    from sellee.browser import chrome
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: True)
     store.set_seller_config_section("basics", {"region": "SG"})
@@ -451,7 +451,7 @@ def test_market_logins_never_opens_a_window_just_to_answer(
     # list still comes back and no probe is attempted.
     from tests.conftest import seed_setting
 
-    from selly_agent.browser import chrome
+    from sellee.browser import chrome
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: False)
     store.set_seller_config_section("basics", {"region": "SG"})
@@ -489,7 +489,7 @@ def test_market_logins_filters_to_what_is_still_publishable(
     # Carousell runs no US site, so a stored id stops counting when the region moves.
     from tests.conftest import seed_setting
 
-    from selly_agent.browser import chrome
+    from sellee.browser import chrome
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: True)
     store.set_seller_config_section("basics", {"region": "US"})
@@ -506,7 +506,7 @@ def test_a_login_read_never_opens_a_window_when_chrome_is_closed(
     # Probing acquires the browser, and acquiring starts Chrome. A read must not do that.
     # The port has to be silenced explicitly: is_ready does a real loopback GET, so left alone
     # this passes or fails on whether the machine running the suite has a Chrome of its own.
-    from selly_agent.browser import chrome
+    from sellee.browser import chrome
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: False)
     store.set_seller_config_section("basics", {"region": "SG"})
@@ -565,26 +565,26 @@ def test_a_structurally_invalid_timezone_is_refused_not_shrugged_at(server) -> N
 def test_a_country_the_rail_does_not_serve_is_refused_at_the_door(server, store) -> None:
     status, body = _call(server, "POST", "/control/seller-basics", body={"region": "MY"})
     assert status == 400
-    assert "MY isn't a country selly-agent works in yet" in body["error"]
+    assert "MY isn't a country sellee works in yet" in body["error"]
     assert "SG, US" in body["error"]
     assert store.seller_region() is None
 
 
 def test_the_model_is_held_to_the_same_region_rule_as_the_installer(make_ctx) -> None:
     # One validator behind both writers, so the LLM cannot record what the door refuses.
-    from selly_agent.tools.registry import ToolError, dispatch
+    from sellee.tools.registry import ToolError, dispatch
 
     ctx = make_ctx("attended")
     with pytest.raises(ToolError) as caught:
         dispatch("update_seller_config", {"basics": {"region": "MY"}}, ctx)
-    assert "isn't a country selly-agent works in yet" in str(caught.value)
+    assert "isn't a country sellee works in yet" in str(caught.value)
 
 
 def test_the_model_updating_one_basics_key_keeps_the_rest(make_ctx, store) -> None:
     # Merged like the door writes it. validate_basics accepts partial updates, so a currency
     # tweak that replaced the whole section would silently drop the region the installer
     # recorded — after which nothing can publish and nothing says why.
-    from selly_agent.tools.registry import dispatch
+    from sellee.tools.registry import dispatch
 
     store.set_seller_config_section(
         "basics", {"region": "SG", "currency": "SGD", "timezone": "Asia/Singapore"}
@@ -605,7 +605,7 @@ def test_the_control_client_speaks_the_server_dialect_end_to_end(server, store) 
     # Every CLI verb funnels through control.post/get, and every CLI test stubs them — so this
     # is the one place a drift between client and server (the token in the wrong place, an
     # error body dropped) shows up before a live daemon does.
-    from selly_agent import control
+    from sellee import control
 
     status, body = control.post(
         server.port, "attended-secret", "/control/seller-basics", {"region": "SG"}
@@ -619,7 +619,7 @@ def test_the_control_client_speaks_the_server_dialect_end_to_end(server, store) 
 def test_the_control_client_returns_a_refusal_rather_than_calling_the_daemon_down(server) -> None:
     # A 4xx is the daemon *answering*. Reporting it as unreachable sends whoever reads the
     # message off to restart a daemon that is running fine.
-    from selly_agent import control
+    from sellee import control
 
     status, body = control.post(
         server.port, "attended-secret", "/control/seller-basics", {"region": "ZZ"}
@@ -634,7 +634,7 @@ def test_the_control_client_returns_a_refusal_rather_than_calling_the_daemon_dow
 def test_the_control_client_reserves_unreachable_for_nothing_answering() -> None:
     import socket
 
-    from selly_agent import control
+    from sellee import control
 
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))

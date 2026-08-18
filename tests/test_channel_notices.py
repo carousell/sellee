@@ -8,16 +8,16 @@ from __future__ import annotations
 import pytest
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import secrets
-from selly_agent.channel import outbound
-from selly_agent.channel.telegram.transport import ChannelError, TelegramClient
-from selly_agent.tools import TIER_ATTENDED
-from selly_agent.tools.registry import dispatch
+from sellee import secrets
+from sellee.channel import outbound
+from sellee.channel.telegram.transport import ChannelError, TelegramClient
+from sellee.tools import TIER_ATTENDED
+from sellee.tools.registry import dispatch
 
 
 def _bind(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
 
 

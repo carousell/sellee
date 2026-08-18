@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from selly_agent import marketplaces
-from selly_agent.browser import markets as market_adapters
-from selly_agent.engines import hosts
+from sellee import marketplaces
+from sellee.browser import markets as market_adapters
+from sellee.engines import hosts
 
 
 def test_resolve_regional_host_exact() -> None:

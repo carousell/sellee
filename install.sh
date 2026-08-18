@@ -11,9 +11,9 @@
 
 set -eu
 
-REPO_URL="https://github.com/carousell/selly-agent"
+REPO_URL="https://github.com/carousell/sellee"
 DEFAULT_BASE_URL="$REPO_URL/releases/latest/download"
-BASE_URL="${SELLY_INSTALL_BASE_URL:-}"
+BASE_URL="${SELLEE_INSTALL_BASE_URL:-}"
 
 say() {
 	echo "$1"
@@ -29,9 +29,9 @@ die() {
 # than a 404 halfway through. Setting a base URL is how the end-to-end test exercises the real
 # code path. REMOVE THIS BLOCK at cutover, when releases are published.
 if [ -z "$BASE_URL" ]; then
-	echo "SELLY: installing with this script isn't supported yet." >&2
-	echo "SELLY:   Clone the repo and run ./setup instead:" >&2
-	echo "SELLY:     git clone $REPO_URL && cd selly-agent && ./setup" >&2
+	echo "SELLEE: installing with this script isn't supported yet." >&2
+	echo "SELLEE:   Clone the repo and run ./setup instead:" >&2
+	echo "SELLEE:     git clone $REPO_URL && cd sellee && ./setup" >&2
 	exit 1
 fi
 
@@ -45,7 +45,7 @@ done
 
 say "Here's what this does, before it does any of it:"
 say "  1. Download $BASE_URL/SHA256SUMS"
-say "  2. Download the selly-agent archive it names, and check it against that checksum"
+say "  2. Download the sellee archive it names, and check it against that checksum"
 say "  3. Unpack it into a temporary directory, deleted when this finishes"
 say "  4. Run the unpacked ./setup, which fetches the Python it runs on and then lists"
 say "     everywhere it writes before writing"
@@ -55,7 +55,7 @@ say ""
 
 case "$(uname -s)" in
 Darwin | Linux) ;;
-*) die "selly-agent runs on macOS and Linux today (this is $(uname -s))." ;;
+*) die "sellee runs on macOS and Linux today (this is $(uname -s))." ;;
 esac
 
 # No python3 here: the release's own ./setup provisions the interpreter it needs, so the machine
@@ -86,8 +86,8 @@ curl -fsSL "$BASE_URL/SHA256SUMS" -o SHA256SUMS ||
 
 # The archive's name is read out of the checksum file, so there is no second source to disagree
 # with it, no API call, and nothing to parse JSON with.
-archives="$(awk '$2 ~ /^\*?selly-agent-.*\.tar\.gz$/ { sub(/^\*/, "", $2); print $2 }' SHA256SUMS)"
-[ -n "$archives" ] || die "SHA256SUMS doesn't name a selly-agent archive."
+archives="$(awk '$2 ~ /^\*?sellee-.*\.tar\.gz$/ { sub(/^\*/, "", $2); print $2 }' SHA256SUMS)"
+[ -n "$archives" ] || die "SHA256SUMS doesn't name a sellee archive."
 if [ "$(echo "$archives" | wc -l)" -gt 1 ]; then
 	# A release directory holds exactly one. More than one means we would be guessing which,
 	# and guessing which code to run is not something this should do.
@@ -107,7 +107,7 @@ sha256_check expected.sums >/dev/null 2>&1 ||
 
 say "Unpacking…"
 tar -xzf "$archive"
-tree="$(find . -maxdepth 1 -type d -name 'selly-agent-*' | head -n 1)"
+tree="$(find . -maxdepth 1 -type d -name 'sellee-*' | head -n 1)"
 [ -n "$tree" ] && [ -x "$tree/setup" ] || die "the archive doesn't contain a runnable ./setup."
 
 say "Handing over to the installer."

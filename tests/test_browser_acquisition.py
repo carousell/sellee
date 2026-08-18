@@ -12,10 +12,10 @@ import time
 
 import pytest
 
-from selly_agent import daemon
-from selly_agent.browser import chrome
-from selly_agent.browser.client import BrowserUnavailable
-from selly_agent.config import Config
+from sellee import daemon
+from sellee.browser import chrome
+from sellee.browser.client import BrowserUnavailable
+from sellee.config import Config
 
 
 def _notices(store):

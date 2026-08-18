@@ -6,7 +6,7 @@ import stat
 
 import pytest
 
-from selly_agent import paths, secrets
+from sellee import paths, secrets
 
 
 def _mode(path) -> int:

@@ -8,7 +8,7 @@
 .local
 .venv*
 dist
-selly-data
+sellee-data
 __pycache__
 *.pyc
 .pytest_cache

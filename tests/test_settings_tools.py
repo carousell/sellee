@@ -5,10 +5,10 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import settings
-from selly_agent.channel import fastpaths
-from selly_agent.tools import TIER_ATTENDED, TIER_PASS_CHANNEL, tools_for_tier
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee import settings
+from sellee.channel import fastpaths
+from sellee.tools import TIER_ATTENDED, TIER_PASS_CHANNEL, tools_for_tier
+from sellee.tools.registry import ToolError, dispatch
 
 
 def _parse_greeting(raw):

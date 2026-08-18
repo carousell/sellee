@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import settings
-from selly_agent.browser import markets as market_adapters
+from sellee import settings
+from sellee.browser import markets as market_adapters
 
 # --- quiet_hours parse / render ---------------------------------------------------------------
 

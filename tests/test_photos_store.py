@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import paths
-from selly_agent.store import ItemNotFound, StoreError
+from sellee import paths
+from sellee.store import ItemNotFound, StoreError
 
 
 def _media_photo(name: str = "a.jpg") -> str:
@@ -40,7 +40,7 @@ def test_photo_outside_the_media_store_is_refused(store, xdg_tmp, tmp_path) -> N
 
 
 def test_photo_traversal_out_of_the_media_store_is_refused(store, xdg_tmp) -> None:
-    escape = str(paths.media_dir() / ".." / "data" / "selly.db")
+    escape = str(paths.media_dir() / ".." / "data" / "sellee.db")
     with pytest.raises(StoreError, match="inside the media store"):
         store.create_item(title="Lamp", list_price=80.0, photos=[escape])
 

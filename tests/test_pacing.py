@@ -12,9 +12,9 @@ from datetime import datetime
 
 import pytest
 
-from selly_agent.config import Config
-from selly_agent.engines import pacing
-from selly_agent.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
+from sellee.config import Config
+from sellee.engines import pacing
+from sellee.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
 
 
 def _noon_on(day="2026-07-22") -> float:

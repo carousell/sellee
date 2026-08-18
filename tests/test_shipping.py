@@ -5,8 +5,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.engines import shipping
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee.engines import shipping
+from sellee.tools.registry import ToolError, dispatch
 
 _ZONES = [
     {"zone": "central", "match": {"areas": ["tampines", "bedok"]}, "fee": 5},

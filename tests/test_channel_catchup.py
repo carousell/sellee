@@ -7,8 +7,8 @@ from __future__ import annotations
 
 import time
 
-from selly_agent.tools import TIER_ATTENDED
-from selly_agent.tools.registry import dispatch
+from sellee.tools import TIER_ATTENDED
+from sellee.tools.registry import dispatch
 
 
 def _sell_thread(store):
@@ -43,7 +43,7 @@ def test_catchup_lists_and_stamps_notices_but_not_escalations(make_ctx, store) -
 
 def test_connect_hint_only_when_unbound_and_escalation_aged(make_ctx, store, monkeypatch) -> None:
     _sell_thread(store)
-    import selly_agent.store as store_mod
+    import sellee.store as store_mod
 
     # stamp the escalation 25h in the past (older than the 24h connect-hint threshold)
     monkeypatch.setattr(store_mod, "_now", lambda: time.time() - 25 * 3600)
@@ -54,7 +54,7 @@ def test_connect_hint_only_when_unbound_and_escalation_aged(make_ctx, store, mon
     assert dispatch("get_catchup", {}, ctx)["connect_hint"] is True  # unbound + aged
 
     # once bound, the hint never fires (the escalation can be pushed instead)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(999, update_offset=1)
     assert dispatch("get_catchup", {}, ctx)["connect_hint"] is False
 
@@ -74,7 +74,7 @@ def test_get_status_carries_channel_and_pause_state(make_ctx, store) -> None:
     assert status["paused"] is False
     assert status["queued_notices"] == 1
     store.set_paused(True, source="test")
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(999, update_offset=1)
     status = dispatch("get_status", {}, ctx)
     assert status["channel_bound"] is True and status["paused"] is True

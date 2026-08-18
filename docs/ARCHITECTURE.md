@@ -2,8 +2,8 @@
 
 ![Architecture overview](architecture-master.png)
 
-1. Sellers interact with Selly using **control surfaces**. Chat apps like Telegram, and agent harnesses like Claude Code are examples of control surfaces.
-2. The **Selly daemon** contains all of the core logic. It uses an event bus for scheduling. It stores data in a SQLite database. It exposes an MCP server; anything an agent does goes through it.
+1. Sellers interact with Sellee using **control surfaces**. Chat apps like Telegram, and agent harnesses like Claude Code are examples of control surfaces.
+2. The **Sellee daemon** contains all of the core logic. It uses an event bus for scheduling. It stores data in a SQLite database. It exposes an MCP server; anything an agent does goes through it.
 3. The **agent harness and browser** are the only components that sit outside the daemon. The agent harness interacts with the browser using Playwright, and the daemon using its MCP server.
 4. The seller is signed into **marketplaces** on the browser. Buyers interact with the seller's listings on the marketplaces.
 
@@ -13,7 +13,7 @@ themselves for detail.
 
 ## The one-process model
 
-selly-agent is a single long-running Python process, kept alive by the OS: a
+sellee is a single long-running Python process, kept alive by the OS: a
 launchd agent on macOS, a systemd user unit on Linux, and the container
 runtime's own restart policy where it runs in a container. Its runtime is
 provisioned rather than assumed: uv installs a standalone CPython at a pinned
@@ -22,7 +22,7 @@ install, and a guard test over `src/` imports fails anything outside the stdlib
 and that reviewed list.
 Concurrency is a few threads sharing SQLite state.
 
-Everything is reachable from one front door: `bin/selly-agent` resolves the
+Everything is reachable from one front door: `bin/sellee` resolves the
 package and dispatches argv via `cli.py` (`daemon run/install/start/stop/status/
 uninstall`, `logs`, `chat`, `version`). The supervisor's job points at this
 launcher.
@@ -32,8 +32,8 @@ launcher.
 ```
 setup                     the installer's front door (POSIX sh; provisions uv + Python, hands over)
 install.sh                the curl bootstrap (verify a release, run its own ./setup)
-bin/selly-agent           CLI launcher
-src/selly_agent/          the package
+bin/sellee           CLI launcher
+src/sellee/          the package
 tests/                    plain pytest (guards under tests/guard/)
 docs/                     this document and friends
 Makefile                  local entry points (test, lint, fmt, dist)
@@ -61,10 +61,10 @@ Makefile                  local entry points (test, lint, fmt, dist)
 - **`migrations/`** — one forward-only runner for both databases; numbered SQL
   applied at startup, each in one transaction. The business database is
   snapshotted before pending migrations run.
-- **`data/selly.db`** is business data (migrated, snapshotted).
+- **`data/sellee.db`** is business data (migrated, snapshotted).
   **`state/events.db`** is the event/transcript store (prunable; recreated from
   migrations if deleted). The two are never joined.
-- **`store.py`** — typed accessors over `selly.db`, the one writer for all business
+- **`store.py`** — typed accessors over `sellee.db`, the one writer for all business
   state.
     - Every money/safety decision runs as one `BEGIN IMMEDIATE` transaction
       (load → decide → write), the single-writer serialization that gives FCFS
@@ -104,7 +104,7 @@ their tests:
   that timestamp is the sole ordering key.
 - **`retention.py`** — the daily prune. The event store is disposable by design;
   a kept kind (`pass.end`) outlives its own detail.
-- **`logs_cli.py`** — `selly-agent logs`, a read-only tail that needs no
+- **`logs_cli.py`** — `sellee logs`, a read-only tail that needs no
   daemon. `--json` is the machine form.
 - **`data/tail.html`** — the localhost web tail, an opinionated *human* view over
   the same wire shape.
@@ -113,7 +113,7 @@ their tests:
 into `versions/<v>` and move a symlink, so the default install exercises the
 update path on every machine:
 
-- **`installer/ui.py`** — setup's voice. The only home of the `SELLY:` prefix; a
+- **`installer/ui.py`** — setup's voice. The only home of the `SELLEE:` prefix; a
   CLI verb setup invokes owns its own output rather than being wrapped in a
   second voice. Colour and the banner are gated on a real terminal, and no prompt
   blocks when there is nobody to answer it.
@@ -267,10 +267,10 @@ Lifecycle:
 Resolved by `paths.py` from the XDG base directories:
 
 ```
-~/.local/share/selly-agent/   versions/, current -> …, data/selly.db, media/ (business data)
-~/.local/state/selly-agent/   events.db, backups/, logs/, passes/, heartbeat, lock (prunable)
-~/.config/selly-agent/        config.json + secret files (0700 dir, 0600 secrets)
-~/.cache/selly-agent/         downloaded release artifacts
+~/.local/share/sellee/   versions/, current -> …, data/sellee.db, media/ (business data)
+~/.local/state/sellee/   events.db, backups/, logs/, passes/, heartbeat, lock (prunable)
+~/.config/sellee/        config.json + secret files (0700 dir, 0600 secrets)
+~/.cache/sellee/         downloaded release artifacts
 ```
 
 Secrets (the attended MCP token, the carousell.ai guest key, the Telegram bot

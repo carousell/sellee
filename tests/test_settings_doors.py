@@ -9,14 +9,14 @@ from __future__ import annotations
 from datetime import datetime
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import secrets, settings
-from selly_agent.channel import fastpaths, outbound
-from selly_agent.channel.telegram.poller import Poller
+from sellee import secrets, settings
+from sellee.channel import fastpaths, outbound
+from sellee.channel.telegram.poller import Poller
 
 
 def _bind(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
 
 
@@ -179,7 +179,7 @@ def test_button_tap_through_poller_applies_and_acks(store, bus, xdg_tmp) -> None
     _bind(store)
     cid = _propose(store)
     with FakeTelegramAPI() as api:
-        from selly_agent.config import Config
+        from sellee.config import Config
 
         cfg = Config(telegram_api_base=api.base_url)
         api.inject_tap(f"{cid}:{settings.CB_APPROVE}")

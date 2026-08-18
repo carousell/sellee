@@ -1,4 +1,4 @@
-"""`selly-agent daemon <verb>` — and which of those verbs a container has no answer for.
+"""`sellee daemon <verb>` — and which of those verbs a container has no answer for.
 
 Registering, starting and stopping are launchd's vocabulary. In a container the process is
 Docker's, so a verb that appeared to work would either do nothing or leave the seller believing
@@ -12,7 +12,7 @@ import argparse
 
 import pytest
 
-from selly_agent import daemon_cli, supervisor
+from sellee import daemon_cli, supervisor
 
 
 def _args(command: str) -> argparse.Namespace:

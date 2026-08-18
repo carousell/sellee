@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent.harness import claude, codex
-from selly_agent.harness.model import PassSpec, StdioServer
+from sellee.harness import claude, codex
+from sellee.harness.model import PassSpec, StdioServer
 
 GOLDEN = Path(__file__).parent / "golden"
 
@@ -27,9 +27,9 @@ def _spec(**overrides) -> PassSpec:
         mcp_endpoint="http://127.0.0.1:7355/mcp",
         mcp_token="TESTTOKEN",
         allowed_tools=(
-            "mcp__selly__get_item",
-            "mcp__selly__carousell_ai_publish_listing",
-            "mcp__selly__send_message",
+            "mcp__sellee__get_item",
+            "mcp__sellee__carousell_ai_publish_listing",
+            "mcp__sellee__send_message",
         ),
         max_turns=20,
     )
@@ -163,14 +163,14 @@ def test_stream_json_forces_verbose() -> None:
 
 def test_token_is_in_the_header_not_bare() -> None:
     cfg = claude.mcp_config(_spec())
-    assert cfg["mcpServers"]["selly"]["headers"]["Authorization"] == "Bearer TESTTOKEN"
+    assert cfg["mcpServers"]["sellee"]["headers"]["Authorization"] == "Bearer TESTTOKEN"
 
 
 # --- the second (browser) MCP server ------------------------------------------------------------
 
 
 def test_a_browser_pass_renders_both_servers() -> None:
-    from selly_agent import passes
+    from sellee import passes
 
     spec = _spec(
         browser_server=StdioServer(
@@ -190,7 +190,7 @@ def test_a_browser_pass_renders_both_servers() -> None:
 
 def test_a_pass_with_no_browser_renders_only_our_server() -> None:
     servers = claude.mcp_config(_spec())["mcpServers"]
-    assert set(servers) == {"selly"}
+    assert set(servers) == {"sellee"}
 
 
 def test_the_browser_server_is_stdio_not_a_port() -> None:
@@ -212,7 +212,7 @@ def test_the_browser_diet_becomes_allow_list_rules() -> None:
 def test_the_diet_excludes_the_tools_that_would_undo_the_posture() -> None:
     """browser_close would shut the seller's warm Chrome; run_code_unsafe is arbitrary Playwright
     code — the browser's version of the shell this whole surface exists to replace."""
-    from selly_agent import passes
+    from sellee import passes
 
     assert "browser_close" not in passes.PUBLISH_BROWSER_TOOLS
     assert "browser_run_code_unsafe" not in passes.PUBLISH_BROWSER_TOOLS
@@ -227,7 +227,7 @@ def test_a_browser_server_with_no_tools_is_refused_at_the_spec() -> None:
 
 def test_a_browser_server_may_not_shadow_our_own() -> None:
     with pytest.raises(ValueError, match="must not share"):
-        _spec(browser_server=StdioServer(name="selly", command="npx", tools=("browser_navigate",)))
+        _spec(browser_server=StdioServer(name="sellee", command="npx", tools=("browser_navigate",)))
 
 
 def test_the_validator_catches_an_unrequested_server() -> None:
@@ -265,13 +265,13 @@ def test_codex_config_matches_golden() -> None:
 def test_codex_round_trips_and_points_at_proxy() -> None:
     parsed = codex.parse_toml_min(codex.render_config(_spec(model="opus")))
     assert parsed["model"] == "opus"
-    assert parsed["mcp_servers"]["selly"] == {"command": "selly-agent", "args": ["mcp-proxy"]}
+    assert parsed["mcp_servers"]["sellee"] == {"command": "sellee", "args": ["mcp-proxy"]}
 
 
 def test_codex_carries_the_browser_server_too() -> None:
     """Keeping the second emitter honest is what forces PassSpec to stay genuinely common; Codex has
     no spawn path yet, but the shape it renders is the same one."""
-    from selly_agent import passes
+    from sellee import passes
 
     spec = _spec(
         browser_server=StdioServer(

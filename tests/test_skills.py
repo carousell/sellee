@@ -9,19 +9,19 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent import passes, skills
-from selly_agent.harness import claude
-from selly_agent.proc_tree import PASS_PROMPT_MARKER
+from sellee import passes, skills
+from sellee.harness import claude
+from sellee.proc_tree import PASS_PROMPT_MARKER
 
 # What each pass type composes, per payload where the payload decides it. A change here should be a
 # deliberate diff, because every skill is paid on every pass of that type.
 EXPECTED_SKILL_SETS = {
-    ("publish", ()): ("selly-conventions", "listing-flow"),
-    ("publish", (("market", "carousell-ai"),)): ("selly-conventions", "listing-flow"),
-    ("publish", (("market", "carousell"),)): ("selly-conventions", "listing-flow-carousell"),
-    ("channel", ()): ("selly-conventions", "voice-and-style", "seller-comms", "listing-flow"),
+    ("publish", ()): ("sellee-conventions", "listing-flow"),
+    ("publish", (("market", "carousell-ai"),)): ("sellee-conventions", "listing-flow"),
+    ("publish", (("market", "carousell"),)): ("sellee-conventions", "listing-flow-carousell"),
+    ("channel", ()): ("sellee-conventions", "voice-and-style", "seller-comms", "listing-flow"),
     ("reply", ()): (
-        "selly-conventions",
+        "sellee-conventions",
         "voice-and-style",
         "buyer-conversation",
         "scam-guard",
@@ -93,12 +93,12 @@ def test_every_pass_type_composes_resolvable_skills() -> None:
 def test_a_market_with_no_recorded_recipe_gets_the_conventions_alone() -> None:
     """Better a pass with no recipe than one following another marketplace's steps."""
     composed = passes.PASS_TYPES["publish"].skills_for({"market": "mercari"})
-    assert composed == ("selly-conventions",)
+    assert composed == ("sellee-conventions",)
 
 
 def test_composition_concatenates_in_declared_order() -> None:
-    composed = skills.compose_system_prompt(("selly-conventions", "listing-flow"))
-    assert composed.index(skills.load("selly-conventions")) < composed.index(
+    composed = skills.compose_system_prompt(("sellee-conventions", "listing-flow"))
+    assert composed.index(skills.load("sellee-conventions")) < composed.index(
         skills.load("listing-flow")
     )
 
@@ -116,7 +116,7 @@ def test_the_size_cap_holds_for_every_pass_type() -> None:
 def test_the_size_cap_is_enforced_not_decorative(monkeypatch) -> None:
     monkeypatch.setattr(skills, "MAX_SYSTEM_PROMPT_CHARS", 10)
     with pytest.raises(ValueError, match="over the"):
-        skills.compose_system_prompt(("selly-conventions",))
+        skills.compose_system_prompt(("sellee-conventions",))
 
 
 # --- what lands where in the spec ---------------------------------------------------------------
@@ -213,7 +213,7 @@ def test_the_publish_pass_grants_no_media() -> None:
 
 
 def test_granted_media_reaches_the_spec_resolved(xdg_tmp) -> None:
-    from selly_agent import paths
+    from sellee import paths
 
     photo = paths.media_dir() / "1" / "photo.jpg"
     photo.parent.mkdir(parents=True, exist_ok=True)
@@ -254,7 +254,7 @@ def test_the_live_pass_tiers_are_pinned() -> None:
     import json
     from pathlib import Path
 
-    from selly_agent.tools import tools_for_tier
+    from sellee.tools import tools_for_tier
 
     golden = json.loads((Path(__file__).parent / "golden" / "pass_tiers.json").read_text())
     for tier, expected in golden.items():
@@ -267,14 +267,14 @@ def test_every_tool_a_pass_type_can_call_is_reachable_by_name() -> None:
     for name, pass_type in passes.PASS_TYPES.items():
         allowed = passes.allowed_tools_for(pass_type.tier)
         assert allowed, f"{name} has an empty tool surface"
-        assert all(t.startswith("mcp__selly__") for t in allowed)
+        assert all(t.startswith("mcp__sellee__") for t in allowed)
 
 
 # --- commands -----------------------------------------------------------------------------------
 
 
 def test_the_five_attended_commands_ship() -> None:
-    assert set(skills.available_commands()) == {"sell", "selly", "catchup", "pause", "resume"}
+    assert set(skills.available_commands()) == {"sell", "sellee", "catchup", "pause", "resume"}
 
 
 def test_command_bodies_keep_their_frontmatter() -> None:

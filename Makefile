@@ -8,8 +8,8 @@ RUN ?= $(UV) run
 
 DIST ?= dist
 VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
-	import selly_agent; print(selly_agent.__version__)")
-STAGE = $(DIST)/selly-agent-$(VERSION)
+	import sellee; print(sellee.__version__)")
+STAGE = $(DIST)/sellee-$(VERSION)
 
 .PHONY: bootstrap test lint fmt typecheck dist diagrams
 
@@ -39,10 +39,10 @@ fmt:
 	$(RUN) ruff format .
 
 # The release artifact: the same tree ./setup stages into versions/<v>, plus the checksum file
-# that both `selly-agent update` and install.sh read the version out of. Publishing is manual
+# that both `sellee update` and install.sh read the version out of. Publishing is manual
 # (`gh release create`) until a cadence justifies automating it.
 dist:
-	@rm -rf $(STAGE) $(DIST)/selly-agent-$(VERSION).tar.gz $(DIST)/SHA256SUMS
+	@rm -rf $(STAGE) $(DIST)/sellee-$(VERSION).tar.gz $(DIST)/SHA256SUMS
 	@mkdir -p $(STAGE)
 	@cp -R bin src $(STAGE)/
 	@cp README.md $(STAGE)/ 2>/dev/null || true
@@ -55,9 +55,9 @@ dist:
 	@find $(STAGE) -name '*.py[co]' -delete
 # COPYFILE_DISABLE: macOS tar otherwise writes an AppleDouble `._name` entry beside every file
 # carrying extended attributes, and those ship inside the published archive.
-	@COPYFILE_DISABLE=1 tar -czf $(DIST)/selly-agent-$(VERSION).tar.gz -C $(DIST) selly-agent-$(VERSION)
+	@COPYFILE_DISABLE=1 tar -czf $(DIST)/sellee-$(VERSION).tar.gz -C $(DIST) sellee-$(VERSION)
 	@rm -rf $(STAGE)
-	@cd $(DIST) && { shasum -a 256 selly-agent-$(VERSION).tar.gz 2>/dev/null \
-		|| sha256sum selly-agent-$(VERSION).tar.gz; } > SHA256SUMS
-	@echo "$(DIST)/selly-agent-$(VERSION).tar.gz"
+	@cd $(DIST) && { shasum -a 256 sellee-$(VERSION).tar.gz 2>/dev/null \
+		|| sha256sum sellee-$(VERSION).tar.gz; } > SHA256SUMS
+	@echo "$(DIST)/sellee-$(VERSION).tar.gz"
 	@cat $(DIST)/SHA256SUMS

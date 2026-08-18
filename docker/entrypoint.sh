@@ -4,7 +4,7 @@
 # The endpoint has to be loopback on this side too: Chrome refuses a /json request whose Host
 # header is a DNS name, and the WebSocket URL it answers with is loopback-shaped and dialled
 # verbatim by Playwright. So socat listens on 127.0.0.1 in here and forwards to the host. A Linux
-# host shares the host's network namespace instead and sets SELLY_CDP_FORWARD=0.
+# host shares the host's network namespace instead and sets SELLEE_CDP_FORWARD=0.
 
 set -eu
 
@@ -24,18 +24,18 @@ fi
 
 # Both set is usually an accident. API key billing takes precedence, which is rarely what the user wants if they also have an active subscription.
 if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; then
-	echo "selly-agent: both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set;" \
+	echo "sellee: both CLAUDE_CODE_OAUTH_TOKEN and ANTHROPIC_API_KEY are set;" \
 		"the claude CLI will use ANTHROPIC_API_KEY (per-token Console billing)" >&2
 fi
 
-port="${SELLY_CDP_PORT:-9222}"
+port="${SELLEE_CDP_PORT:-9222}"
 # Docker Desktop's name for the host. Podman calls it host.containers.internal.
-host="${SELLY_CDP_HOST:-host.docker.internal}"
+host="${SELLEE_CDP_HOST:-host.docker.internal}"
 
-if [ "${SELLY_CDP_FORWARD:-1}" = "1" ]; then
+if [ "${SELLEE_CDP_FORWARD:-1}" = "1" ]; then
 	if ! getent hosts "$host" >/dev/null 2>&1; then
-		echo "selly-agent: cannot resolve $host, so the browser will be unreachable" >&2
-		echo "selly-agent: on a Linux host, add -f compose.yaml -f compose.linux.yaml" >&2
+		echo "sellee: cannot resolve $host, so the browser will be unreachable" >&2
+		echo "sellee: on a Linux host, add -f compose.yaml -f compose.linux.yaml" >&2
 	fi
 	socat "TCP-LISTEN:${port},bind=127.0.0.1,fork,reuseaddr" "TCP:${host}:${port}" &
 fi

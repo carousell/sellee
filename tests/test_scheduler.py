@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from selly_agent.scheduler import (
+from sellee.scheduler import (
     BACKOFF_CAP_SEC,
     Scheduler,
     Task,

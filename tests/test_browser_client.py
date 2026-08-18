@@ -9,8 +9,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent.browser import chrome
-from selly_agent.browser.client import (
+from sellee.browser import chrome
+from sellee.browser.client import (
     PINNED_MCP_SPEC,
     BrowserClient,
     BrowserToolError,
@@ -155,13 +155,13 @@ def test_a_server_that_dies_at_startup_is_unavailable(make_client) -> None:
 
 
 def test_a_missing_binary_is_unavailable_before_anything_spawns(monkeypatch) -> None:
-    monkeypatch.setattr("selly_agent.browser.client.shutil.which", lambda _name: None)
+    monkeypatch.setattr("sellee.browser.client.shutil.which", lambda _name: None)
     with pytest.raises(BrowserUnavailable, match="playwright_mcp_cmd"):
         ensure_available(["npx", "--yes", "@playwright/mcp"])
 
 
 def test_a_present_binary_passes_the_availability_check(monkeypatch) -> None:
-    monkeypatch.setattr("selly_agent.browser.client.shutil.which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr("sellee.browser.client.shutil.which", lambda name: f"/usr/bin/{name}")
     ensure_available(["npx"])
 
 
@@ -427,7 +427,7 @@ def test_the_readiness_probe_is_false_with_nothing_listening() -> None:
 
 
 def test_the_launch_command_uses_the_agents_own_profile(xdg_tmp) -> None:
-    from selly_agent import paths
+    from sellee import paths
 
     argv = chrome.launch_command(9222, chrome_bin="/bin/chrome")
     assert f"--user-data-dir={paths.browser_profile_dir()}" in argv
@@ -443,7 +443,7 @@ def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_t
 
 def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     """A SIGKILLed Chrome leaves these behind and the next launch hangs on them."""
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_data_dirs()
     for name in chrome.SINGLETON_LOCKS:
@@ -463,7 +463,7 @@ def test_ensure_running_launches_nothing_when_chrome_already_answers(monkeypatch
 
 
 def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatch) -> None:
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_data_dirs()
     (paths.browser_profile_dir() / chrome.SINGLETON_LOCKS[0]).write_text("")
@@ -511,7 +511,7 @@ def test_two_concurrent_callers_launch_one_chrome(xdg_tmp, monkeypatch) -> None:
     one profile. The loser must instead find the port answering and launch nothing."""
     import threading
 
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_data_dirs()
     up = threading.Event()
@@ -597,7 +597,7 @@ def test_the_default_command_pins_the_endpoint_and_its_own_output_dir(xdg_tmp) -
     """The server saves a page snapshot per navigation. Left to itself it writes them into whatever
     directory it started in — a checkout, or wherever the daemon was launched — and those files are
     page content, including the seller's own address off a composer page."""
-    from selly_agent import paths
+    from sellee import paths
 
     argv = default_command("http://127.0.0.1:9222")
     assert argv[:2] == ["npx", "--yes"]

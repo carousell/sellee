@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import time
 
-from selly_agent import migrations
-from selly_agent.db import Database, connect_reader
-from selly_agent.events import EventBus, EventStore, latest_seq, routine_kinds
+from sellee import migrations
+from sellee.db import Database, connect_reader
+from sellee.events import EventBus, EventStore, latest_seq, routine_kinds
 
 
 def _store(tmp_path) -> EventStore:
     events_db = Database(tmp_path / "events.db")
-    data_db = Database(tmp_path / "selly.db")
+    data_db = Database(tmp_path / "sellee.db")
     migrations.run_startup_migrations(
         data_db=data_db,
         events_db=events_db,

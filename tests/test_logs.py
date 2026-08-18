@@ -14,12 +14,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from selly_agent import daemon, logs_cli, migrations, paths
-from selly_agent.db import Database
-from selly_agent.events import Event, EventStore, level_for
+from sellee import daemon, logs_cli, migrations, paths
+from sellee.db import Database
+from sellee.events import Event, EventStore, level_for
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "bin" / "selly-agent"
+LAUNCHER = REPO_ROOT / "bin" / "sellee"
 
 
 def _args(**overrides) -> SimpleNamespace:
@@ -68,7 +68,7 @@ def _seed(*kinds: str) -> None:
     paths.ensure_runtime_dirs()
     events_db = Database(paths.events_db())
     migrations.run_startup_migrations(
-        data_db=Database(paths.selly_db()),
+        data_db=Database(paths.sellee_db()),
         events_db=events_db,
         backups_dir=paths.backups_dir(),
         backups_keep=5,
@@ -170,9 +170,9 @@ def test_follow_sees_live_writer(tmp_path) -> None:
     ).start()
 
     writer = (
-        "from selly_agent import paths;"
-        "from selly_agent.db import Database;"
-        "from selly_agent.events import EventStore;"
+        "from sellee import paths;"
+        "from sellee.db import Database;"
+        "from sellee.events import EventStore;"
         "EventStore(Database(paths.events_db())).record('e2e.marker', {'hi': 1})"
     )
     try:
@@ -209,7 +209,7 @@ def opened(monkeypatch):
 
 @pytest.fixture
 def daemon_up(xdg_tmp, monkeypatch):
-    from selly_agent import control, secrets
+    from sellee import control, secrets
 
     paths.ensure_config_dir()
     secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
@@ -251,7 +251,7 @@ def test_web_refuses_the_flags_the_page_cannot_honour(daemon_up, opened, capsys,
 
 def test_web_needs_a_running_daemon(xdg_tmp, opened, monkeypatch, capsys) -> None:
     """Unlike the plain tail, the page is served by the daemon — it cannot read the DB directly."""
-    from selly_agent import control, secrets
+    from sellee import control, secrets
 
     paths.ensure_config_dir()
     secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")

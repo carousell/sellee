@@ -10,10 +10,10 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.browser import inbox
-from selly_agent.browser.client import BrowserToolError, BrowserUnavailable
-from selly_agent.browser.markets import carousell as carousell_market
-from selly_agent.config import Config
+from sellee.browser import inbox
+from sellee.browser.client import BrowserToolError, BrowserUnavailable
+from sellee.browser.markets import carousell as carousell_market
+from sellee.config import Config
 
 _INBOX = "https://www.carousell.sg/inbox/"
 _LISTING = "https://www.carousell.sg/p/teak-lamp-1328307791/"
@@ -417,7 +417,7 @@ def test_the_notices_name_commands_the_seller_can_actually_run(
     _thread(store, seeded)
     deps = _deps(store, bus, StubClient(login="logged_out", conversations=[_conv()]))
     inbox.inbox_lane(deps)
-    assert "`selly-agent connect carousell` in the container" in _texts(store)[0]
+    assert "`sellee connect carousell` in the container" in _texts(store)[0]
 
     blind = _deps(store, bus, StubClient(error="boom"), browser_blind_after=1)
     inbox.inbox_lane(blind)

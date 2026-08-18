@@ -8,8 +8,8 @@
 
 set -eu
 
-port="${SELLY_CDP_PORT:-9222}"
-profile="${SELLY_CHROME_PROFILE:-$HOME/.selly-agent/chrome-profile}"
+port="${SELLEE_CDP_PORT:-9222}"
+profile="${SELLEE_CHROME_PROFILE:-$HOME/.sellee/chrome-profile}"
 
 die() {
 	echo "$1" >&2
@@ -36,9 +36,9 @@ Darwin)
 	;;
 esac
 
-chrome="${SELLY_CHROME_BIN:-$default}"
+chrome="${SELLEE_CHROME_BIN:-$default}"
 [ -n "$chrome" ] && [ -x "$chrome" ] ||
-	die "Could not find Google Chrome. Install it, or set SELLY_CHROME_BIN to its path."
+	die "Could not find Google Chrome. Install it, or set SELLEE_CHROME_BIN to its path."
 
 mkdir -p "$profile"
 

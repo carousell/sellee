@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from selly_agent import heartbeat
+from sellee import heartbeat
 
 
 def test_write_then_read(tmp_path) -> None:

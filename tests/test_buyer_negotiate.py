@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.store import Store, StoreError
+from sellee.store import Store, StoreError
 
 
 def _want(store: Store, *, max_budget=None, target=None, step=None, rounds=None, ratio=None):

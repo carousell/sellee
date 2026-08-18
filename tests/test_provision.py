@@ -9,8 +9,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from selly_agent import paths, secrets
-from selly_agent.rail import provision
+from sellee import paths, secrets
+from sellee.rail import provision
 
 
 class _GuestsHandler(BaseHTTPRequestHandler):

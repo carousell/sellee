@@ -8,8 +8,8 @@ import concurrent.futures
 
 import pytest
 
-from selly_agent.config import Config
-from selly_agent.store import Store, StoreError
+from sellee.config import Config
+from sellee.store import Store, StoreError
 
 CFG = Config()
 

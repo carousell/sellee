@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import deployment
-from selly_agent.browser import chrome, client
+from sellee import deployment
+from sellee.browser import chrome, client
 
 ROOT = Path(__file__).resolve().parents[1]
 DOCKERFILE = (ROOT / "Dockerfile").read_text()
@@ -92,7 +92,7 @@ def test_the_image_pins_the_harness_it_installs() -> None:
 
 
 def test_the_secrets_file_never_enters_the_build_context() -> None:
-    """docs point the seller at a .env beside compose.yaml, and `COPY . /opt/selly-agent` would
+    """docs point the seller at a .env beside compose.yaml, and `COPY . /opt/sellee` would
     otherwise bake their harness token into an image layer — which deleting the file afterwards
     does not undo, and which travels with any export of that image."""
     assert "\n.env\n" in (ROOT / ".dockerignore").read_text()
@@ -123,7 +123,7 @@ def test_the_forwarder_listens_on_loopback_only() -> None:
 
 def test_a_linux_host_swaps_the_forwarder_for_the_host_network() -> None:
     assert "network_mode: host" in COMPOSE_LINUX
-    assert 'SELLY_CDP_FORWARD: "0"' in COMPOSE_LINUX
+    assert 'SELLEE_CDP_FORWARD: "0"' in COMPOSE_LINUX
 
 
 # --- compose --------------------------------------------------------------------------------
@@ -165,12 +165,12 @@ def test_the_one_published_port_is_scoped_to_host_loopback() -> None:
 
 def test_a_container_binds_wide_enough_for_that_port_to_reach_it() -> None:
     """A published port arrives on the bridge address, so a loopback-only bind answers nothing."""
-    assert "ENV SELLY_BIND_HOST=0.0.0.0" in DOCKERFILE
+    assert "ENV SELLEE_BIND_HOST=0.0.0.0" in DOCKERFILE
 
 
 def test_sharing_a_host_s_network_namespace_puts_the_bind_back_on_loopback() -> None:
     """0.0.0.0 there is the machine's real interfaces, and the control surface with it."""
-    assert "SELLY_BIND_HOST: 127.0.0.1" in COMPOSE_LINUX
+    assert "SELLEE_BIND_HOST: 127.0.0.1" in COMPOSE_LINUX
 
 
 def test_compose_mounts_one_directory_and_lets_docker_supervise() -> None:

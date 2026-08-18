@@ -10,7 +10,7 @@
       "command": "npx",
       "type": "stdio"
     },
-    "selly": {
+    "sellee": {
       "headers": {
         "Authorization": "Bearer TESTTOKEN"
       },

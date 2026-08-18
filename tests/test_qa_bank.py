@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.config import Config
-from selly_agent.store import Scope, ScopedStore
-from selly_agent.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch
+from sellee.config import Config
+from sellee.store import Scope, ScopedStore
+from sellee.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch
 
 _FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
 
@@ -20,7 +20,7 @@ class FakeRail:
 
     def update_listing(self, listing_id, *, status=None, external_urls=None):
         if self.fail:
-            from selly_agent.rail.client import RailToolError
+            from sellee.rail.client import RailToolError
 
             raise RailToolError("listing not found")
         self.updates.append((listing_id, status))

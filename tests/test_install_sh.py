@@ -71,12 +71,12 @@ def release(tmp_path):
     """A served release whose ./setup records that it ran, and with what."""
     served = tmp_path / "releases"
     served.mkdir()
-    stage = tmp_path / "stage" / "selly-agent-1.2.3"
+    stage = tmp_path / "stage" / "sellee-1.2.3"
     stage.mkdir(parents=True)
     receipt = tmp_path / "setup-ran.txt"
     _executable(stage / "setup", f'#!/bin/sh\necho "setup ran: $*" > {receipt}\nexit 0\n')
 
-    name = "selly-agent-1.2.3.tar.gz"
+    name = "sellee-1.2.3.tar.gz"
     with tarfile.open(served / name, "w:gz") as tar:
         tar.add(stage, arcname=stage.name)
     digest = hashlib.sha256((served / name).read_bytes()).hexdigest()
@@ -95,9 +95,9 @@ def release(tmp_path):
 def run_install(*args, base_url=None, path=None):
     env = dict(os.environ)
     if base_url is not None:
-        env["SELLY_INSTALL_BASE_URL"] = base_url
+        env["SELLEE_INSTALL_BASE_URL"] = base_url
     else:
-        env.pop("SELLY_INSTALL_BASE_URL", None)
+        env.pop("SELLEE_INSTALL_BASE_URL", None)
     if path:
         env["PATH"] = path
     return subprocess.run(
@@ -135,7 +135,7 @@ def test_a_verified_release_is_unpacked_and_its_own_setup_takes_over(host_shims,
 
 def test_a_tampered_archive_is_refused_and_setup_never_runs(host_shims, release) -> None:
     served, base, receipt = release
-    archive = served / "selly-agent-1.2.3.tar.gz"
+    archive = served / "sellee-1.2.3.tar.gz"
     archive.write_bytes(archive.read_bytes() + b"tampered")
 
     result = run_install(base_url=base, path=host_shims)
@@ -176,7 +176,7 @@ def test_a_machine_with_only_sha256sum_still_refuses_a_tampered_archive(
     coreutils_only_shims, release
 ):
     served, base, receipt = release
-    archive = served / "selly-agent-1.2.3.tar.gz"
+    archive = served / "sellee-1.2.3.tar.gz"
     archive.write_bytes(archive.read_bytes() + b"tampered")
 
     result = run_install(base_url=base, path=coreutils_only_shims)
@@ -199,7 +199,7 @@ def test_dev_is_refused_because_the_tree_it_would_point_at_is_temporary(
 def test_an_ambiguous_checksum_file_is_refused_rather_than_guessed(host_shims, release) -> None:
     served, base, receipt = release
     sums = served / "SHA256SUMS"
-    sums.write_text(sums.read_text() + f"{'a' * 64}  selly-agent-9.9.9.tar.gz\n")
+    sums.write_text(sums.read_text() + f"{'a' * 64}  sellee-9.9.9.tar.gz\n")
 
     result = run_install(base_url=base, path=host_shims)
 

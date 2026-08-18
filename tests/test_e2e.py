@@ -18,13 +18,13 @@ import urllib.request
 import pytest
 from tests.conftest import leak_paths
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import passes
-from selly_agent.config import Config
-from selly_agent.db import connect_reader
-from selly_agent.events import query_events
-from selly_agent.http_server import HttpServer
-from selly_agent.tools.registry import ToolContext
+import sellee.tools  # noqa: F401  registration
+from sellee import passes
+from sellee.config import Config
+from sellee.db import connect_reader
+from sellee.events import query_events
+from sellee.http_server import HttpServer
+from sellee.tools.registry import ToolContext
 
 _ATTENDED = "attended-secret"
 _LISTING_URL = "https://www.carousell.ai/listing/42-lamp"
@@ -43,7 +43,7 @@ class FakeRail:
 _E2E_HARNESS = """\
 import json, sys, urllib.request
 cfg = json.load(open(".mcp.json"))
-srv = cfg["mcpServers"]["selly"]
+srv = cfg["mcpServers"]["sellee"]
 endpoint, auth = srv["url"], srv["headers"]["Authorization"]
 item_id = sys.argv[1]
 def emit(o):
@@ -70,7 +70,7 @@ sys.exit(0)
 
 @pytest.fixture
 def wired(bus, store, xdg_tmp):
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_state_dirs()
 

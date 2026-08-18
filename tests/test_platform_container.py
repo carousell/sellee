@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.platform import get_platform
-from selly_agent.platform.base import Platform, UnsupportedPlatform
-from selly_agent.platform.container import ContainerPlatform
+from sellee.platform import get_platform
+from sellee.platform.base import Platform, UnsupportedPlatform
+from sellee.platform.container import ContainerPlatform
 
 # --- selection ------------------------------------------------------------------------------
 
@@ -45,12 +45,12 @@ def test_every_supervisor_question_is_refused_rather_than_answered(tmp_path) -> 
     calls = (
         lambda: platform.launch_agents_dir(tmp_path),
         lambda: platform.default_label(),
-        lambda: platform.supervisor_filename("com.selly.agent"),
+        lambda: platform.supervisor_filename("com.sellee.agent"),
         lambda: platform.register(tmp_path / "job"),
-        lambda: platform.unregister("com.selly.agent"),
-        lambda: platform.is_registered("com.selly.agent"),
+        lambda: platform.unregister("com.sellee.agent"),
+        lambda: platform.is_registered("com.sellee.agent"),
         lambda: platform.render_supervisor(
-            label="com.selly.agent",
+            label="com.sellee.agent",
             program_args=["/bin/true"],
             stdout_path=tmp_path / "out",
             stderr_path=tmp_path / "err",

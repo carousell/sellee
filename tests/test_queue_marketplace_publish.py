@@ -10,10 +10,10 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import crosslist
-from selly_agent.browser.client import BrowserUnavailable
-from selly_agent.tools.registry import TIER_PASS_CHANNEL, ToolError, dispatch
+import sellee.tools  # noqa: F401  registration
+from sellee import crosslist
+from sellee.browser.client import BrowserUnavailable
+from sellee.tools.registry import TIER_PASS_CHANNEL, ToolError, dispatch
 
 _RAIL_URL = "https://www.carousell.ai/listing/abc123"
 _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
@@ -198,7 +198,7 @@ def test_no_browser_is_answered_in_the_conversation_not_by_a_doomed_pass(
 
 def test_the_buyer_facing_reply_pass_cannot_publish(make_ctx, store, enabled) -> None:
     """A publish is a public post on the seller's account; nothing a buyer says should reach it."""
-    from selly_agent.tools.registry import TIER_PASS_REPLY, UnknownTool
+    from sellee.tools.registry import TIER_PASS_REPLY, UnknownTool
 
     ctx = make_ctx(TIER_PASS_REPLY, pass_id="p1", browser_factory=lambda: object())
     with pytest.raises(UnknownTool):

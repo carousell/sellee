@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent.rail.client import RailToolError, RailUnprovisioned
-from selly_agent.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
+import sellee.tools  # noqa: F401  registration
+from sellee.rail.client import RailToolError, RailUnprovisioned
+from sellee.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
 
 
 class FakeRail:

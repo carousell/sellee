@@ -6,8 +6,8 @@ import sqlite3
 
 import pytest
 
-from selly_agent import migrations
-from selly_agent.db import Database
+from sellee import migrations
+from sellee.db import Database
 
 
 def _table_exists(db: Database, name: str) -> bool:
@@ -16,7 +16,7 @@ def _table_exists(db: Database, name: str) -> bool:
 
 
 def _make_dbs(tmp_path):
-    data_db = Database(tmp_path / "data" / "selly.db")
+    data_db = Database(tmp_path / "data" / "sellee.db")
     events_db = Database(tmp_path / "state" / "events.db")
     return data_db, events_db
 
@@ -84,11 +84,11 @@ def test_second_run_applies_nothing_and_writes_no_snapshot(tmp_path) -> None:
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
     backups_dir = tmp_path / "state" / "backups"
-    after_first = sorted(backups_dir.glob("selly-*.db"))
+    after_first = sorted(backups_dir.glob("sellee-*.db"))
 
     applied = _run(tmp_path, data_db, events_db)
     assert applied == []
-    assert sorted(backups_dir.glob("selly-*.db")) == after_first
+    assert sorted(backups_dir.glob("sellee-*.db")) == after_first
 
 
 def test_events_db_recreated_after_deletion(tmp_path) -> None:
@@ -157,23 +157,23 @@ def test_snapshot_only_created_when_data_pending(tmp_path, custom_root) -> None:
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
     backups_dir = tmp_path / "state" / "backups"
-    assert len(list(backups_dir.glob("selly-*.db"))) == 1  # pre-0001
+    assert len(list(backups_dir.glob("sellee-*.db"))) == 1  # pre-0001
 
-    # events-only pending must NOT snapshot selly.db
+    # events-only pending must NOT snapshot sellee.db
     custom_root("events", "0002_more.sql", "CREATE TABLE ev2 (x);")
     _run(tmp_path, data_db, events_db)
-    assert len(list(backups_dir.glob("selly-*.db"))) == 1
+    assert len(list(backups_dir.glob("sellee-*.db"))) == 1
 
 
 def test_snapshot_pruning_keeps_newest(tmp_path) -> None:
     backups_dir = tmp_path / "backups"
     backups_dir.mkdir()
     for i in range(1, 6):
-        f = backups_dir / f"selly-100000000{i}-pre-{i:04d}.db"
+        f = backups_dir / f"sellee-100000000{i}-pre-{i:04d}.db"
         f.write_bytes(b"x")
     migrations.prune_backups(backups_dir, backups_keep=2)
-    remaining = {p.name for p in backups_dir.glob("selly-*.db")}
+    remaining = {p.name for p in backups_dir.glob("sellee-*.db")}
     assert remaining == {
-        "selly-1000000005-pre-0005.db",
-        "selly-1000000004-pre-0004.db",
+        "sellee-1000000005-pre-0005.db",
+        "sellee-1000000004-pre-0004.db",
     }

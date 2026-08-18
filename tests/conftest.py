@@ -8,10 +8,10 @@ import time
 
 import pytest
 
-from selly_agent import migrations, paths
-from selly_agent.config import Config
-from selly_agent.db import Database
-from selly_agent.events import EventBus, EventStore
+from sellee import migrations, paths
+from sellee.config import Config
+from sellee.db import Database
+from sellee.events import EventBus, EventStore
 
 
 def leak_paths(node, sentinel, path="$") -> list:
@@ -62,7 +62,7 @@ def seed_setting(store, key, value) -> None:
 @pytest.fixture
 def bus(tmp_path):
     """A ready EventBus backed by freshly-migrated data/events DBs under tmp_path."""
-    data_db = Database(tmp_path / "selly.db")
+    data_db = Database(tmp_path / "sellee.db")
     events_db = Database(tmp_path / "events.db")
     migrations.run_startup_migrations(
         data_db=data_db,
@@ -75,13 +75,13 @@ def bus(tmp_path):
 
 @pytest.fixture
 def store(bus):
-    """A Store over the same freshly-migrated selly.db the bus fixture created. Quiet hours are
+    """A Store over the same freshly-migrated sellee.db the bus fixture created. Quiet hours are
     seeded off so a pacing-gated tool isn't blocked by the wall-clock hour a test runs in (quiet
     hours moved from a config knob to a setting); a settings-behavior test that needs the registry
     default or a specific window builds its own store or re-seeds."""
-    from selly_agent.store import Store
+    from sellee.store import Store
 
-    st = Store(Database(bus.store.db.path.parent / "selly.db"))
+    st = Store(Database(bus.store.db.path.parent / "sellee.db"))
     seed_setting(st, "quiet_hours", [0, 0])
     return st
 
@@ -90,7 +90,7 @@ def store(bus):
 def fresh_store(tmp_path):
     """A migrated Store with nothing seeded — for settings tests that need the registry default
     (the `store` fixture seeds quiet hours off)."""
-    from selly_agent.store import Store
+    from sellee.store import Store
 
     data_db = Database(tmp_path / "fresh.db")
     events_db = Database(tmp_path / "fresh-events.db")
@@ -106,8 +106,8 @@ def make_ctx(bus, store, xdg_tmp):
 
     Depends on xdg_tmp so secret and heartbeat reads inside handlers stay hermetic.
     """
-    from selly_agent.store import ScopedStore
-    from selly_agent.tools.registry import Session, ToolContext
+    from sellee.store import ScopedStore
+    from sellee.tools.registry import Session, ToolContext
 
     def _make(
         tier,
@@ -155,14 +155,14 @@ def xdg_tmp(tmp_path, monkeypatch):
 @pytest.fixture
 def container(monkeypatch):
     """Run the test as if inside the container image, whose Dockerfile sets this marker."""
-    from selly_agent import deployment
+    from sellee import deployment
 
     monkeypatch.setenv(deployment.MARKER_VAR, deployment.CONTAINER)
 
 
 @pytest.fixture
 def tree(tmp_path):
-    """A minimal selly-agent tree: what a checkout or an unpacked release looks like.
+    """A minimal sellee tree: what a checkout or an unpacked release looks like.
 
     Lives here rather than in each installer test module because it has to stay in step with
     what a version directory is required to contain — miss a file and staging produces a version
@@ -170,12 +170,12 @@ def tree(tmp_path):
     """
     root = tmp_path / "checkout"
     (root / "bin").mkdir(parents=True)
-    (root / "bin" / "selly-agent").write_text("#!/usr/bin/env python3\n")
-    (root / "src" / "selly_agent" / "__pycache__").mkdir(parents=True)
-    (root / "src" / "selly_agent" / "__init__.py").write_text("__version__ = '9.9.9'\n")
-    (root / "src" / "selly_agent" / "__pycache__" / "stale.pyc").write_text("junk")
+    (root / "bin" / "sellee").write_text("#!/usr/bin/env python3\n")
+    (root / "src" / "sellee" / "__pycache__").mkdir(parents=True)
+    (root / "src" / "sellee" / "__init__.py").write_text("__version__ = '9.9.9'\n")
+    (root / "src" / "sellee" / "__pycache__" / "stale.pyc").write_text("junk")
     (root / "README.md").write_text("docs\n")
-    (root / "pyproject.toml").write_text("[project]\nname = 'selly-agent'\n")
+    (root / "pyproject.toml").write_text("[project]\nname = 'sellee'\n")
     (root / "uv.lock").write_text("version = 1\n")
     (root / ".python-version").write_text("3.14\n")
     (root / ".git").mkdir()
@@ -193,7 +193,7 @@ def stub_provision(monkeypatch):
     Autouse so no test can accidentally download an interpreter and a wheel set: provisioning
     against real uv belongs in tests/integration. Records what it was asked to provision.
     """
-    from selly_agent.installer import runtime
+    from sellee.installer import runtime
 
     provisioned = []
 

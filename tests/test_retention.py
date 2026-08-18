@@ -4,14 +4,14 @@ from __future__ import annotations
 
 import time
 
-from selly_agent import migrations, retention
-from selly_agent.db import Database
-from selly_agent.events import EventBus, EventStore
+from sellee import migrations, retention
+from sellee.db import Database
+from sellee.events import EventBus, EventStore
 
 
 def _bus(tmp_path) -> EventBus:
     events_db = Database(tmp_path / "events.db")
-    data_db = Database(tmp_path / "selly.db")
+    data_db = Database(tmp_path / "sellee.db")
     migrations.run_startup_migrations(
         data_db=data_db,
         events_db=events_db,

@@ -7,8 +7,8 @@ from __future__ import annotations
 
 from tests.conftest import leak_paths
 
-from selly_agent.config import Config
-from selly_agent.tools.registry import TIER_ATTENDED, dispatch
+from sellee.config import Config
+from sellee.tools.registry import TIER_ATTENDED, dispatch
 
 # Distinctive sentinels for the leak sweep — none should ever surface in an event or a return.
 FLOOR_SENTINEL = 7331

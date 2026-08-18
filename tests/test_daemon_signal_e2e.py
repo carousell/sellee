@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "bin" / "selly-agent"
+LAUNCHER = REPO_ROOT / "bin" / "sellee"
 
 
 def _env(tmp_path) -> dict:
@@ -30,14 +30,14 @@ def _env(tmp_path) -> dict:
 
 
 def _write_config(tmp_path) -> None:
-    cfg_dir = tmp_path / "config" / "selly-agent"
+    cfg_dir = tmp_path / "config" / "sellee"
     cfg_dir.mkdir(parents=True)
     # http_port 0 → an ephemeral port, so two daemon subprocesses never collide on a fixed port.
     (cfg_dir / "config.json").write_text(json.dumps({"tick_interval_sec": 0.3, "http_port": 0}))
 
 
 def _events_db(tmp_path) -> Path:
-    return tmp_path / "state" / "selly-agent" / "events.db"
+    return tmp_path / "state" / "sellee" / "events.db"
 
 
 def _kinds(db_path: Path) -> list[str]:
@@ -87,7 +87,7 @@ def test_sigterm_stops_cleanly(tmp_path) -> None:
     kinds = _kinds(_events_db(tmp_path))
     assert "daemon.stop" in kinds
 
-    lock_body = (tmp_path / "state" / "selly-agent" / "daemon.lock").read_text()
+    lock_body = (tmp_path / "state" / "sellee" / "daemon.lock").read_text()
     assert lock_body == ""  # clean shutdown cleared our own holder record
 
 

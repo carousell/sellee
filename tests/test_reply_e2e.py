@@ -17,15 +17,15 @@ import threading
 import pytest
 from tests.conftest import leak_paths
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import passes
-from selly_agent.browser import inbox
-from selly_agent.config import Config
-from selly_agent.db import connect_reader
-from selly_agent.events import query_events
-from selly_agent.http_server import HttpServer
-from selly_agent.store import ScopedStore
-from selly_agent.tools.registry import ToolContext
+import sellee.tools  # noqa: F401  registration
+from sellee import passes
+from sellee.browser import inbox
+from sellee.config import Config
+from sellee.db import connect_reader
+from sellee.events import query_events
+from sellee.http_server import HttpServer
+from sellee.store import ScopedStore
+from sellee.tools.registry import ToolContext
 
 _ATTENDED = "attended-secret"
 _FLOOR = 61.0  # the sentinel: this number must never leave the daemon
@@ -37,7 +37,7 @@ _LIST_PRICE = 80.0
 _REPLY_HARNESS = """\
 import json, sys, urllib.request
 cfg = json.load(open(".mcp.json"))
-srv = cfg["mcpServers"]["selly"]
+srv = cfg["mcpServers"]["sellee"]
 endpoint, auth = srv["url"], srv["headers"]["Authorization"]
 thread_id, item_id, other_thread = sys.argv[1], sys.argv[2], sys.argv[3]
 def emit(o):
@@ -82,7 +82,7 @@ class RecordingSink:
 
 @pytest.fixture
 def wired(bus, store, xdg_tmp):
-    from selly_agent import paths
+    from sellee import paths
 
     paths.ensure_state_dirs()
     sink = RecordingSink(store)
@@ -136,7 +136,7 @@ class StubBrowser:
         self.url = url
 
     def evaluate(self, function, **kwargs):
-        from selly_agent.browser.markets import carousell as market
+        from sellee.browser.markets import carousell as market
 
         if function == market.LOGIN_JS:
             return {"state": "logged_in"}
@@ -271,7 +271,7 @@ def test_the_scope_stops_the_pass_reading_another_buyers_thread(wired, tmp_path)
     workspaces: list = []
 
     def argv_builder(spec):
-        from selly_agent import paths
+        from sellee import paths
 
         workspaces.append(paths.pass_workspace_dir(claimed.pass_id))
         return [sys.executable, str(script), "carousell:1", item["id"], "carousell:999"]

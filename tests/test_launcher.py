@@ -14,12 +14,12 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-LAUNCHER = REPO_ROOT / "bin" / "selly-agent"
+LAUNCHER = REPO_ROOT / "bin" / "sellee"
 
 
 @pytest.fixture(scope="module")
 def launcher():
-    """Load bin/selly-agent as a module without running its dispatch.
+    """Load bin/sellee as a module without running its dispatch.
 
     Importing it would re-exec and then call main(); loading the source and executing only the
     function definitions is enough to test the decision.
@@ -107,4 +107,4 @@ def test_launcher_imports_nothing_beyond_the_stdlib():
             imported.update(alias.name.split(".")[0] for alias in node.names)
         elif isinstance(node, ast.ImportFrom) and node.module:
             imported.add(node.module.split(".")[0])
-    assert imported == {"__future__", "os", "sys", "selly_agent"}
+    assert imported == {"__future__", "os", "sys", "sellee"}

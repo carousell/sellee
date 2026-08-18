@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.config import Config
-from selly_agent.tools.registry import TIER_ATTENDED, ToolError, dispatch
+from sellee.config import Config
+from sellee.tools.registry import TIER_ATTENDED, ToolError, dispatch
 
 _CFG = Config(carousell_ai_api_base="https://api.carousell.ai")
 _URL = "https://api.carousell.ai/checkout/abc123?listing_id=L1"

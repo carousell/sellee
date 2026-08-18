@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import paths
-from selly_agent.installer import checks, preflight, runtime
+from sellee import paths
+from sellee.installer import checks, preflight, runtime
 
 # Captured before the autouse fixture that stubs provisioning for every other test replaces it —
 # this module is where provision itself is under test.

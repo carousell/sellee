@@ -12,10 +12,10 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import marketplaces, passes, paths, skills
-from selly_agent.config import Config
-from selly_agent.harness import claude
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee import marketplaces, passes, paths, skills
+from sellee.config import Config
+from sellee.harness import claude
+from sellee.tools.registry import ToolError, dispatch
 
 _ENDPOINT = "http://127.0.0.1:7355/mcp"
 
@@ -74,14 +74,14 @@ def test_the_rail_publish_is_handed_no_browser() -> None:
     spec = _spec()
     assert spec.browser_server is None
     assert not any("playwright" in rule for rule in claude.allowed_tools(spec))
-    assert set(claude.mcp_config(spec)["mcpServers"]) == {"selly"}
+    assert set(claude.mcp_config(spec)["mcpServers"]) == {"sellee"}
 
 
 def test_a_browser_market_publish_gets_the_diet(store) -> None:
     spec = _spec("carousell", browser_command=_browser_command())
     assert spec.browser_server is not None
     assert spec.browser_server.tools == passes.PUBLISH_BROWSER_TOOLS
-    assert set(claude.mcp_config(spec)["mcpServers"]) == {"selly", "playwright"}
+    assert set(claude.mcp_config(spec)["mcpServers"]) == {"sellee", "playwright"}
 
 
 def test_an_absent_market_means_the_rail() -> None:
@@ -124,7 +124,7 @@ def test_the_default_browser_command_points_at_the_configured_chrome_port() -> N
 
 
 def test_the_cli_can_name_a_market() -> None:
-    from selly_agent import cli
+    from sellee import cli
 
     parser = cli._build_parser()  # noqa: SLF001 — the CLI's own parser is what we mean to check
     args = parser.parse_args(

@@ -9,7 +9,7 @@ import subprocess
 
 import pytest
 
-from selly_agent.browser import foreground
+from sellee.browser import foreground
 
 
 class RecordingRunner:

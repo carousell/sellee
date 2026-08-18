@@ -22,15 +22,15 @@ import urllib.request
 from pathlib import Path
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import passes, paths, secrets
-from selly_agent.channel import outbound
-from selly_agent.channel.telegram.poller import Poller
-from selly_agent.channel.telegram.transport import TelegramClient
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
-from selly_agent.store import ScopedStore
-from selly_agent.tools import TIER_ATTENDED
-from selly_agent.tools.registry import Session, ToolContext, dispatch
+from sellee import passes, paths, secrets
+from sellee.channel import outbound
+from sellee.channel.telegram.poller import Poller
+from sellee.channel.telegram.transport import TelegramClient
+from sellee.config import Config
+from sellee.http_server import HttpServer
+from sellee.store import ScopedStore
+from sellee.tools import TIER_ATTENDED
+from sellee.tools.registry import Session, ToolContext, dispatch
 
 _ATTENDED = "attended-secret"
 _LISTING_URL = "https://www.carousell.ai/listing/lamp"
@@ -58,7 +58,7 @@ class FakeRail:
 _CHANNEL_HARNESS = """\
 import json, sys, urllib.request
 cfg = json.load(open(".mcp.json"))
-srv = cfg["mcpServers"]["selly"]
+srv = cfg["mcpServers"]["sellee"]
 endpoint, auth = srv["url"], srv["headers"]["Authorization"]
 def emit(o): print(json.dumps(o), flush=True)
 def rpc(method, params, mid):
@@ -86,7 +86,7 @@ sys.exit(0)
 _LISTING_HARNESS = """\
 import json, re, sys, urllib.request
 cfg = json.load(open(".mcp.json"))
-srv = cfg["mcpServers"]["selly"]
+srv = cfg["mcpServers"]["sellee"]
 endpoint, auth = srv["url"], srv["headers"]["Authorization"]
 prompt = sys.argv[1]
 def emit(o): print(json.dumps(o), flush=True)
@@ -274,7 +274,7 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
     but MCP tools, and the photo is on the listing the rail received."""
     paths.ensure_runtime_dirs()
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
     rail = FakeRail()
 
@@ -348,7 +348,7 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
 
 def test_pause_fastpath_while_a_channel_pass_is_queued(bus, store, xdg_tmp) -> None:
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
     with FakeTelegramAPI() as api:
         cfg = Config(telegram_api_base=api.base_url)

@@ -12,11 +12,11 @@ import re
 
 import pytest
 
-from selly_agent.browser import markets as market_adapters
-from selly_agent.browser import selectors, sink
-from selly_agent.browser.client import BrowserToolError
-from selly_agent.browser.markets import carousell as carousell_market
-from selly_agent.config import Config
+from sellee.browser import markets as market_adapters
+from sellee.browser import selectors, sink
+from sellee.browser.client import BrowserToolError
+from sellee.browser.markets import carousell as carousell_market
+from sellee.config import Config
 
 _THREAD_URL = "https://www.carousell.sg/inbox/99/"
 _FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
@@ -130,7 +130,7 @@ def thread(store):
 
 
 def _reserve(store, thread_id="carousell:99", text="yes, still available!"):
-    from selly_agent.engines import pacing
+    from sellee.engines import pacing
 
     reserved = store.reserve_reply(
         thread_id=thread_id,
@@ -343,7 +343,7 @@ def test_a_read_back_failure_after_the_commit_is_unverified_never_retryable(stor
 
 
 def test_the_sweep_escalates_an_unverified_send_without_resending(store, bus, thread) -> None:
-    from selly_agent import intent_sweep
+    from sellee import intent_sweep
 
     client = StubClient(echo_on_send=False)
     intent = _reserve(store)

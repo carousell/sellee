@@ -1,4 +1,4 @@
-"""`selly-agent chat`: the gates it refuses at, and what it hands to Claude Code."""
+"""`sellee chat`: the gates it refuses at, and what it hands to Claude Code."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from selly_agent import config, control, pass_cli, paths, secrets
+from sellee import config, control, pass_cli, paths, secrets
 
 
 @pytest.fixture
@@ -23,7 +23,7 @@ def ready(xdg_tmp, monkeypatch):
     paths.ensure_config_dir()
     secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
     monkeypatch.setattr(control, "get", lambda *a, **k: (200, {"bound": False}))
-    monkeypatch.setattr("selly_agent.passes.resolve_claude_bin", lambda cfg: "/usr/bin/claude")
+    monkeypatch.setattr("sellee.passes.resolve_claude_bin", lambda cfg: "/usr/bin/claude")
 
 
 def test_it_launches_claude_in_the_attended_workspace(ready, launched, monkeypatch) -> None:
@@ -70,10 +70,10 @@ def test_the_workspace_is_regenerated_at_launch(ready, launched, monkeypatch) ->
     monkeypatch.setattr(pass_cli.os, "chdir", lambda _: None)
     dest = pass_cli.attended_dir()
     dest.mkdir(parents=True)
-    (dest / ".mcp.json").write_text('{"mcpServers": {"selly": {"url": "http://stale"}}}')
+    (dest / ".mcp.json").write_text('{"mcpServers": {"sellee": {"url": "http://stale"}}}')
 
     assert pass_cli.chat() == 0
-    server = json.loads((dest / ".mcp.json").read_text())["mcpServers"]["selly"]
+    server = json.loads((dest / ".mcp.json").read_text())["mcpServers"]["sellee"]
     assert server["headers"]["Authorization"] == "Bearer ATTENDEDTOKEN"
     assert str(config.load().http_port) in server["url"]
 
@@ -118,7 +118,7 @@ def test_without_a_token_it_says_the_daemon_has_never_run(xdg_tmp, launched, cap
 def test_a_missing_claude_binary_is_reported_not_execed(
     ready, launched, monkeypatch, capsys
 ) -> None:
-    monkeypatch.setattr("selly_agent.passes.resolve_claude_bin", lambda cfg: None)
+    monkeypatch.setattr("sellee.passes.resolve_claude_bin", lambda cfg: None)
 
     assert pass_cli.chat() == 1
     assert launched == []

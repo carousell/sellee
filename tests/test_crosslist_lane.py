@@ -11,10 +11,10 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from selly_agent import crosslist, settings
-from selly_agent.browser.client import BrowserUnavailable
-from selly_agent.config import Config
-from selly_agent.rail.client import RailUnprovisioned
+from sellee import crosslist, settings
+from sellee.browser.client import BrowserUnavailable
+from sellee.config import Config
+from sellee.rail.client import RailUnprovisioned
 
 _RAIL_URL = "https://www.carousell.ai/listing/abc123"
 _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
@@ -349,7 +349,7 @@ def test_enabling_a_market_picks_up_items_listed_before(store, bus) -> None:
 def test_the_listing_flow_names_the_destinations_without_claiming_the_fan_out() -> None:
     """Listing something sets expectations and stops there — the fan-out is the daemon's, and a
     recipe that thought it had to trigger it would fire a publish per listing."""
-    from selly_agent import skills
+    from sellee import skills
 
     recipe = skills.load("listing-flow")
     assert "crosslist_markets" in recipe
@@ -362,7 +362,7 @@ def test_the_listing_flow_points_a_retry_at_the_tool() -> None:
     """The other half: after a failure, asking is what restarts it, so the recipe has to know the
     tool exists — otherwise the model repeats the "nothing for me to trigger" line at a seller who
     is asking for exactly that."""
-    from selly_agent import skills
+    from sellee import skills
 
     recipe = skills.load("listing-flow")
     assert "queue_marketplace_publish" in recipe

@@ -18,10 +18,10 @@ pytest.importorskip("mcp", reason="the MCP SDK is a dev-only conformance client"
 from mcp import ClientSession  # noqa: E402
 from mcp.client.streamable_http import streamablehttp_client  # noqa: E402
 
-import selly_agent.tools  # noqa: E402,F401  registration
-from selly_agent.config import Config  # noqa: E402
-from selly_agent.http_server import HttpServer  # noqa: E402
-from selly_agent.tools.registry import ToolContext  # noqa: E402
+import sellee.tools  # noqa: E402,F401  registration
+from sellee.config import Config  # noqa: E402
+from sellee.http_server import HttpServer  # noqa: E402
+from sellee.tools.registry import ToolContext  # noqa: E402
 
 _TOKEN = "attended-secret"
 

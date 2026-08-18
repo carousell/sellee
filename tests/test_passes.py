@@ -7,9 +7,9 @@ import threading
 
 import pytest
 
-from selly_agent import passes, paths, retention
-from selly_agent.config import Config
-from selly_agent.store import ClaimedPass
+from sellee import passes, paths, retention
+from sellee.config import Config
+from sellee.store import ClaimedPass
 
 
 class FakeAuth:

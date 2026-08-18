@@ -9,7 +9,7 @@ import time
 
 import pytest
 
-from selly_agent import proc_tree
+from sellee import proc_tree
 
 _IGNORE_SIGTERM = (
     "import signal, time\n"

@@ -7,7 +7,7 @@ import io
 
 import pytest
 
-from selly_agent.installer.ui import Abort, Ui
+from sellee.installer.ui import Abort, Ui
 
 
 def make_ui(**kwargs) -> tuple:
@@ -21,9 +21,9 @@ def test_a_step_opens_with_a_blank_line_and_what_follows_is_flat() -> None:
     # The blank line above a heading is the whole navigation scheme: it is what separates one
     # phase's report from the next in a scroll that runs for pages. Nothing else is indented.
     ui, out, _ = make_ui()
-    ui.step("Installing Selly")
+    ui.step("Installing Sellee")
     ui.say("/opt/versions/1.0.0")
-    assert out.getvalue().splitlines() == ["", "Installing Selly", "/opt/versions/1.0.0"]
+    assert out.getvalue().splitlines() == ["", "Installing Sellee", "/opt/versions/1.0.0"]
 
 
 def test_colour_marks_headings_and_questions_but_not_what_they_report() -> None:
@@ -58,7 +58,7 @@ def test_color_is_off_when_the_stream_is_not_a_tty(monkeypatch) -> None:
 def test_narrow_terminal_falls_back_to_a_one_line_banner() -> None:
     ui, out, _ = make_ui(width=40)
     ui.banner("1.2.3")
-    assert out.getvalue() == "Selly v1.2.3\n"
+    assert out.getvalue() == "Sellee v1.2.3\n"
 
 
 def test_wide_terminal_draws_the_banner() -> None:
@@ -68,7 +68,7 @@ def test_wide_terminal_draws_the_banner() -> None:
 
 
 def test_banner_art_fits_its_own_width_gate() -> None:
-    from selly_agent.installer import ui as ui_module
+    from sellee.installer import ui as ui_module
 
     assert max(len(line) for line in ui_module.BANNER) <= ui_module.BANNER_MIN_COLUMNS
 

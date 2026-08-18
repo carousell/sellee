@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from selly_agent.pass_stream import is_cap_hit, parse_stream_line
+from sellee.pass_stream import is_cap_hit, parse_stream_line
 
 
 def test_system_init_becomes_pass_init() -> None:

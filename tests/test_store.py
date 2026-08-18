@@ -7,7 +7,7 @@ import concurrent.futures
 
 import pytest
 
-from selly_agent.store import (
+from sellee.store import (
     ItemNotFound,
     Store,
     StoreError,

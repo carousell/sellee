@@ -12,10 +12,10 @@ import threading
 
 import pytest
 
-from selly_agent.browser import inbox, sink
-from selly_agent.browser.client import BrowserClient
-from selly_agent.browser.markets import carousell as carousell_market
-from selly_agent.config import Config
+from sellee.browser import inbox, sink
+from sellee.browser.client import BrowserClient
+from sellee.browser.markets import carousell as carousell_market
+from sellee.config import Config
 
 
 class SlowClient:
@@ -128,7 +128,7 @@ def test_a_send_arriving_mid_read_serializes_and_both_complete(store, bus, seede
             break
         threading.Event().wait(0.01)
 
-    from selly_agent.engines import pacing
+    from sellee.engines import pacing
 
     reserved = store.reserve_reply(
         thread_id="carousell:99",

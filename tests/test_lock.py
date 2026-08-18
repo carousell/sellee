@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from selly_agent import lock
+from sellee import lock
 
 
 def test_acquire_on_fresh_path(tmp_path) -> None:

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import secrets
-from selly_agent.config import Config
-from selly_agent.tools.registry import TIER_ATTENDED, ToolError, dispatch
+import sellee.tools  # noqa: F401  registration
+from sellee import secrets
+from sellee.config import Config
+from sellee.tools.registry import TIER_ATTENDED, ToolError, dispatch
 
 
 def _mk_item(ctx, **kw):

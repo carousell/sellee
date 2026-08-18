@@ -6,11 +6,11 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from selly_agent import settings
-from selly_agent.config import Config
-from selly_agent.engines import negotiate as engine
-from selly_agent.settings import PERSONA_MAX_CHARS, SettingError
-from selly_agent.store import Store
+from sellee import settings
+from sellee.config import Config
+from sellee.engines import negotiate as engine
+from sellee.settings import PERSONA_MAX_CHARS, SettingError
+from sellee.store import Store
 
 CFG = Config()
 
@@ -96,8 +96,8 @@ def test_an_unknown_firmness_falls_back_to_config(fresh_store) -> None:
 
 
 def _offer_with_firmness(store: Store, level: str | None, make_ctx, offer: float) -> dict:
-    from selly_agent.tools import dispatch
-    from selly_agent.tools.registry import TIER_ATTENDED
+    from sellee.tools import dispatch
+    from sellee.tools.registry import TIER_ATTENDED
 
     if level is not None:
         seed_setting(store, "firmness", level)

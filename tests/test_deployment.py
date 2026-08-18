@@ -19,10 +19,10 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import daemon, deployment, passes, paths
-from selly_agent.config import Config
-from selly_agent.harness import claude
-from selly_agent.harness.model import PassSpec, StdioServer
+from sellee import daemon, deployment, passes, paths
+from sellee.config import Config
+from sellee.harness import claude
+from sellee.harness.model import PassSpec, StdioServer
 
 # --- the marker ---------------------------------------------------------------------------------
 
@@ -82,7 +82,7 @@ def test_no_runtime_string_names_a_container_engine() -> None:
 
     Which engine is running it, and what the container is called, are the operator's business:
     `podman`, a hand-written `docker run`, something we have never heard of. A message printing
-    `docker exec -it selly-agent …` at someone whose setup is none of those is worse than one
+    `docker exec -it sellee …` at someone whose setup is none of those is worse than one
     saying "in the container" and letting them translate.
     """
     offenders = []
@@ -112,7 +112,7 @@ def _browser_spec(command) -> PassSpec:
         model="sonnet",
         mcp_endpoint="http://127.0.0.1:7355/mcp",
         mcp_token="TESTTOKEN",
-        allowed_tools=("mcp__selly__get_item",),
+        allowed_tools=("mcp__sellee__get_item",),
         max_turns=20,
         browser_server=StdioServer(
             name="playwright",
@@ -150,9 +150,9 @@ def test_the_bind_host_is_loopback_unless_the_environment_widens_it(
 ) -> None:
     """The image sets 0.0.0.0 so a published port has something to reach. Everywhere else the
     default holds, including when the variable is present but says nothing."""
-    monkeypatch.delenv("SELLY_BIND_HOST", raising=False)
+    monkeypatch.delenv("SELLEE_BIND_HOST", raising=False)
     if env is not None:
-        monkeypatch.setenv("SELLY_BIND_HOST", env)
+        monkeypatch.setenv("SELLEE_BIND_HOST", env)
     paths.ensure_config_dir()
     paths.config_path().write_text(json.dumps({"http_port": 0}))
 

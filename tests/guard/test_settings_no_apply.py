@@ -8,14 +8,14 @@ propose_setting_change, and no tool anywhere is named for a decision transition.
 
 from __future__ import annotations
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent.tools import (
+import sellee.tools  # noqa: F401  registration
+from sellee.tools import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
     TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
 )
-from selly_agent.tools.registry import all_specs, tools_for_tier
+from sellee.tools.registry import all_specs, tools_for_tier
 
 _ALL_TIERS = (TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY, TIER_PASS_CHANNEL)
 

@@ -8,8 +8,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent.config import Config
-from selly_agent.installer import checks, preflight
+from sellee.config import Config
+from sellee.installer import checks, preflight
 
 # --- pure decisions ---------------------------------------------------------------------------
 
@@ -54,9 +54,9 @@ def test_auth_status_says_unknown_rather_than_signed_out() -> None:
 def test_tcc_gate_covers_the_protected_roots_and_their_contents() -> None:
     home = Path("/Users/someone")
     roots = [home / "Documents", home / "Desktop", home / "Downloads"]
-    assert preflight.is_tcc_blocked(home / "Documents" / "selly-agent", roots) is True
+    assert preflight.is_tcc_blocked(home / "Documents" / "sellee", roots) is True
     assert preflight.is_tcc_blocked(home / "Documents", roots) is True
-    assert preflight.is_tcc_blocked(home / "dev" / "selly-agent", roots) is False
+    assert preflight.is_tcc_blocked(home / "dev" / "sellee", roots) is False
 
 
 def test_agent_context_names_the_variable_that_gave_it_away() -> None:
@@ -72,9 +72,9 @@ def test_agent_context_names_the_variable_that_gave_it_away() -> None:
 def test_tree_location_gate_refuses_a_protected_folder(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(preflight.sys, "platform", "darwin")
     protected = tmp_path / "Documents"
-    (protected / "selly-agent").mkdir(parents=True)
+    (protected / "sellee").mkdir(parents=True)
     monkeypatch.setattr(preflight.paths, "tcc_protected_roots", lambda: [protected])
-    result = preflight.check_tree_location(protected / "selly-agent")
+    result = preflight.check_tree_location(protected / "sellee")
     assert result.status == checks.FAIL
     assert "Documents" in result.detail
     assert "Move the tree" in result.fix
@@ -91,9 +91,9 @@ def test_tree_location_gate_invents_no_rule_off_macos(monkeypatch, tmp_path) -> 
     process, so refusing a tree there would be enforcing a restriction that does not exist."""
     monkeypatch.setattr(preflight.sys, "platform", "linux")
     protected = tmp_path / "Documents"
-    (protected / "selly-agent").mkdir(parents=True)
+    (protected / "sellee").mkdir(parents=True)
     monkeypatch.setattr(preflight.paths, "tcc_protected_roots", lambda: [protected])
-    assert preflight.check_tree_location(protected / "selly-agent").status == checks.OK
+    assert preflight.check_tree_location(protected / "sellee").status == checks.OK
 
 
 def test_node_gate_reports_a_missing_node(monkeypatch) -> None:
@@ -290,11 +290,11 @@ def test_render_and_exit_code() -> None:
     rendered = checks.render(
         [
             checks.ok("daemon", "running"),
-            checks.warn("channel", "not bound", "selly-agent connect telegram"),
+            checks.warn("channel", "not bound", "sellee connect telegram"),
         ]
     )
     assert rendered[0].startswith("✅ daemon: running")
-    assert rendered[-1] == "   → selly-agent connect telegram"
+    assert rendered[-1] == "   → sellee connect telegram"
     assert checks.exit_code([checks.ok("a", "b"), checks.warn("c", "d")]) == 0
     assert checks.exit_code([checks.ok("a", "b"), checks.fail("c", "d")]) == 1
 

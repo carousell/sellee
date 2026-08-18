@@ -15,7 +15,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
 
-AUTHORITY = "selly_agent/paths.py"
+AUTHORITY = "sellee/paths.py"
 
 FORBIDDEN = (
     re.compile(r"\bPath\.home\b"),

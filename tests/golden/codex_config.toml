@@ -1,5 +1,5 @@
 model = "sonnet"
 
-[mcp_servers.selly]
-command = "selly-agent"
+[mcp_servers.sellee]
+command = "sellee"
 args = ["mcp-proxy"]

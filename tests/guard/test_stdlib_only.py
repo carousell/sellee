@@ -21,7 +21,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 SRC = ROOT / "src"
-OWN_TOP_LEVEL = "selly_agent"
+OWN_TOP_LEVEL = "sellee"
 
 # Third-party packages runtime code may import. Keep in sync with [project].dependencies in
 # pyproject.toml — this set is the review gate, so a name appears here only alongside a
@@ -34,15 +34,15 @@ ALLOWED_RUNTIME_DEPS = {"psutil", "segno", "PIL", "pillow_heif"}
 # to open sockets, and a review should treat that as a real capability grant.
 NETWORK_MODULES = {"socket", "ssl", "urllib", "http", "asyncio", "ftplib", "smtplib", "telnetlib"}
 NETWORK_ALLOWLIST: set[str] = {
-    "selly_agent/http_server.py",  # the daemon's localhost HTTP server (MCP + tail + control)
-    "selly_agent/mcp_proxy.py",  # stdio shim forwarding JSON-RPC to the daemon over HTTP
-    "selly_agent/control.py",  # the one client for the daemon's localhost control routes
-    "selly_agent/installer/update.py",  # fetches the release archive and its checksums
-    "selly_agent/installer/runtime.py",  # fetches the pinned uv release archive
-    "selly_agent/rail/client.py",  # carousell.ai MCP client + live listing verify
-    "selly_agent/rail/provision.py",  # carousell.ai guest-key provisioning
-    "selly_agent/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)
-    "selly_agent/browser/chrome.py",  # the warm Chrome's CDP readiness probe (loopback GET)
+    "sellee/http_server.py",  # the daemon's localhost HTTP server (MCP + tail + control)
+    "sellee/mcp_proxy.py",  # stdio shim forwarding JSON-RPC to the daemon over HTTP
+    "sellee/control.py",  # the one client for the daemon's localhost control routes
+    "sellee/installer/update.py",  # fetches the release archive and its checksums
+    "sellee/installer/runtime.py",  # fetches the pinned uv release archive
+    "sellee/rail/client.py",  # carousell.ai MCP client + live listing verify
+    "sellee/rail/provision.py",  # carousell.ai guest-key provisioning
+    "sellee/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)
+    "sellee/browser/chrome.py",  # the warm Chrome's CDP readiness probe (loopback GET)
 }
 
 

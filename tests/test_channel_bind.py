@@ -14,12 +14,12 @@ import urllib.error
 import urllib.request
 
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import secrets
-from selly_agent.channel import fastpaths, outbound
-from selly_agent.channel.telegram.poller import Poller
-from selly_agent.channel.telegram.transport import TelegramClient
-from selly_agent.config import Config
-from selly_agent.http_server import HttpServer
+from sellee import secrets
+from sellee.channel import fastpaths, outbound
+from sellee.channel.telegram.poller import Poller
+from sellee.channel.telegram.transport import TelegramClient
+from sellee.config import Config
+from sellee.http_server import HttpServer
 
 _NONCE = "nonce-abc123"
 

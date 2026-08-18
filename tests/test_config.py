@@ -7,8 +7,8 @@ import logging
 
 import pytest
 
-from selly_agent import paths
-from selly_agent.config import Config, ConfigError, load
+from sellee import paths
+from sellee.config import Config, ConfigError, load
 
 
 def _write_config(obj) -> None:

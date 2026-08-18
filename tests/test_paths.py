@@ -4,18 +4,18 @@ from __future__ import annotations
 
 import os
 
-from selly_agent import paths
+from sellee import paths
 
 
 def test_xdg_overrides_are_honored(xdg_tmp) -> None:
-    assert paths.data_root() == xdg_tmp / "data" / "selly-agent"
-    assert paths.state_dir() == xdg_tmp / "state" / "selly-agent"
-    assert paths.config_dir() == xdg_tmp / "config" / "selly-agent"
-    assert paths.cache_dir() == xdg_tmp / "cache" / "selly-agent"
+    assert paths.data_root() == xdg_tmp / "data" / "sellee"
+    assert paths.state_dir() == xdg_tmp / "state" / "sellee"
+    assert paths.config_dir() == xdg_tmp / "config" / "sellee"
+    assert paths.cache_dir() == xdg_tmp / "cache" / "sellee"
 
 
 def test_derived_paths_hang_off_the_roots(xdg_tmp) -> None:
-    assert paths.selly_db() == paths.data_dir() / "selly.db"
+    assert paths.sellee_db() == paths.data_dir() / "sellee.db"
     assert paths.versions_dir() == paths.data_root() / "versions"
     assert paths.current() == paths.data_root() / "current"
     assert paths.events_db() == paths.state_dir() / "events.db"
@@ -34,10 +34,10 @@ def test_default_layout_without_xdg(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("HOME", str(home))
     for var in ("XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME"):
         monkeypatch.delenv(var, raising=False)
-    assert paths.data_root() == home / ".local/share/selly-agent"
-    assert paths.state_dir() == home / ".local/state/selly-agent"
-    assert paths.config_dir() == home / ".config/selly-agent"
-    assert paths.cache_dir() == home / ".cache/selly-agent"
+    assert paths.data_root() == home / ".local/share/sellee"
+    assert paths.state_dir() == home / ".local/state/sellee"
+    assert paths.config_dir() == home / ".config/sellee"
+    assert paths.cache_dir() == home / ".cache/sellee"
 
 
 def test_config_dir_is_0700_from_creation(xdg_tmp) -> None:

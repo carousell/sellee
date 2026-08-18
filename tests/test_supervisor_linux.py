@@ -12,13 +12,13 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import config, paths, supervisor
-from selly_agent.platform import linux as linux_platform
-from selly_agent.platform.linux import LinuxPlatform
+from sellee import config, paths, supervisor
+from sellee.platform import linux as linux_platform
+from sellee.platform.linux import LinuxPlatform
 
-GOLDEN = Path(__file__).resolve().parent / "golden" / "selly-agent.service"
+GOLDEN = Path(__file__).resolve().parent / "golden" / "sellee.service"
 
-UNIT = "selly-agent.service"
+UNIT = "sellee.service"
 
 
 class FakeLinuxPlatform(LinuxPlatform):
@@ -64,10 +64,10 @@ class _Completed:
 
 def test_unit_render_matches_golden() -> None:
     text = LinuxPlatform().render_supervisor(
-        label="selly-agent",
+        label="sellee",
         program_args=[
             "/opt/current/.venv/bin/python",
-            "/opt/current/bin/selly-agent",
+            "/opt/current/bin/sellee",
             "daemon",
             "run",
         ],
@@ -113,8 +113,8 @@ def test_the_unit_starts_at_login_only_where_it_is_installed_to() -> None:
 def test_argv_survives_a_home_directory_with_a_space_in_it() -> None:
     """systemd splits ExecStart on whitespace, so an unquoted path under /home/Ada Lovelace
     becomes two arguments and the job fails to start with a file-not-found nobody expects."""
-    text = _render(program_args=["/home/Ada Lovelace/py", "/home/Ada Lovelace/bin/selly-agent"])
-    assert 'ExecStart="/home/Ada Lovelace/py" "/home/Ada Lovelace/bin/selly-agent"' in text
+    text = _render(program_args=["/home/Ada Lovelace/py", "/home/Ada Lovelace/bin/sellee"])
+    assert 'ExecStart="/home/Ada Lovelace/py" "/home/Ada Lovelace/bin/sellee"' in text
 
 
 def test_a_percent_in_a_path_is_not_read_as_a_systemd_specifier() -> None:
@@ -137,8 +137,8 @@ def test_the_log_paths_are_appended_to_rather_than_truncated() -> None:
 
 def _render(**overrides) -> str:
     kwargs = {
-        "label": "selly-agent",
-        "program_args": ["/usr/bin/python3", "/opt/current/bin/selly-agent", "daemon", "run"],
+        "label": "sellee",
+        "program_args": ["/usr/bin/python3", "/opt/current/bin/sellee", "daemon", "run"],
         "stdout_path": Path("/state/logs/agent.out.log"),
         "stderr_path": Path("/state/logs/agent.err.log"),
         "marker": supervisor.MARKER,
@@ -178,7 +178,7 @@ def test_login_start_enables_the_unit_from_the_user_unit_directory(xdg_tmp) -> N
     assert (paths.launch_agents_dir(platform=fake) / UNIT).exists()
     assert fake.verbs() == ["daemon-reload", "enable"]
     assert fake.calls[-1] == ["enable", "--now", UNIT]
-    assert fake.is_registered("selly-agent")
+    assert fake.is_registered("sellee")
 
 
 def test_manual_mode_links_the_unit_without_enabling_it(xdg_tmp) -> None:
@@ -201,7 +201,7 @@ def test_stop_disables_the_unit(xdg_tmp) -> None:
 
     assert supervisor.stop(platform=fake) == 0
     assert fake.calls[-1] == ["disable", "--now", UNIT]
-    assert not fake.is_registered("selly-agent")
+    assert not fake.is_registered("sellee")
 
 
 def test_a_flip_moves_the_unit_and_disables_it_at_the_old_location(xdg_tmp) -> None:
@@ -236,7 +236,7 @@ def test_a_unit_waiting_out_its_restart_pause_is_still_ours_to_stop(xdg_tmp) -> 
     supervisor.install(mode="login-start", platform=fake)
     fake.state = "activating"
 
-    assert fake.is_registered("selly-agent") is True
+    assert fake.is_registered("sellee") is True
     assert supervisor.stop(platform=fake) == 0
     assert fake.calls[-1] == ["disable", "--now", UNIT]
 
@@ -260,7 +260,7 @@ def test_a_stopped_unit_is_not_reported_as_registered(xdg_tmp) -> None:
     supervisor.install(mode="login-start", platform=fake)
     fake.state = "inactive"
 
-    assert fake.is_registered("selly-agent") is False
+    assert fake.is_registered("sellee") is False
 
 
 def test_the_unit_file_is_reloaded_before_it_is_acted_on(xdg_tmp) -> None:
@@ -285,11 +285,11 @@ def test_install_refuses_a_foreign_unit_with_our_name(xdg_tmp) -> None:
 
 def test_the_default_label_cannot_collide_with_the_macos_one(xdg_tmp) -> None:
     """The label is recorded per machine, so the two defaults never meet — but a Linux unit named
-    `com.selly.agent.service` would still be legal, so pin the default."""
+    `com.sellee.agent.service` would still be legal, so pin the default."""
     fake = FakeLinuxPlatform()
     supervisor.install(mode="manual", platform=fake)
-    assert config.load().daemon_label == "selly-agent"
-    assert (paths.config_dir() / "selly-agent.service").exists()
+    assert config.load().daemon_label == "sellee"
+    assert (paths.config_dir() / "sellee.service").exists()
 
 
 # --- the unit directory --------------------------------------------------------------------------
@@ -318,9 +318,9 @@ def test_the_daemon_verbs_answer_rather_than_traceback(no_systemctl, tmp_path) -
     """The gate that refuses such a machine only guards `setup`, and these are reachable without
     it — a tree copied from another machine, or an install predating the gate."""
     platform = LinuxPlatform()
-    assert platform.is_registered("selly-agent") is False
+    assert platform.is_registered("sellee") is False
     platform.register(tmp_path / UNIT)
-    platform.unregister("selly-agent")
+    platform.unregister("sellee")
 
 
 def test_status_reports_stopped_rather_than_failing(no_systemctl, xdg_tmp) -> None:

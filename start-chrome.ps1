@@ -10,11 +10,11 @@
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 
-$port = if ($env:SELLY_CDP_PORT) { $env:SELLY_CDP_PORT } else { '9222' }
-$profileDir = if ($env:SELLY_CHROME_PROFILE) {
-	$env:SELLY_CHROME_PROFILE
+$port = if ($env:SELLEE_CDP_PORT) { $env:SELLEE_CDP_PORT } else { '9222' }
+$profileDir = if ($env:SELLEE_CHROME_PROFILE) {
+	$env:SELLEE_CHROME_PROFILE
 } else {
-	Join-Path $env:LOCALAPPDATA 'selly-agent\chrome-profile'
+	Join-Path $env:LOCALAPPDATA 'sellee\chrome-profile'
 }
 
 # Two Chromes on one profile: the second either hangs or opens it read-only.
@@ -27,7 +27,7 @@ try {
 	# Not answering, which is the normal case: carry on and start it.
 }
 
-$chrome = $env:SELLY_CHROME_BIN
+$chrome = $env:SELLEE_CHROME_BIN
 if (-not $chrome) {
 	$candidates = @(
 		"$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
@@ -37,7 +37,7 @@ if (-not $chrome) {
 	$chrome = $candidates | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
 }
 if (-not $chrome) {
-	Write-Error 'Could not find Google Chrome. Install it, or set SELLY_CHROME_BIN to its path.'
+	Write-Error 'Could not find Google Chrome. Install it, or set SELLEE_CHROME_BIN to its path.'
 	exit 1
 }
 

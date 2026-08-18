@@ -11,9 +11,9 @@ import json
 
 from tests.conftest import seed_setting
 
-from selly_agent import crosslist
-from selly_agent.config import Config
-from selly_agent.rail.client import RailNetworkError, RailUnprovisioned
+from sellee import crosslist
+from sellee.config import Config
+from sellee.rail.client import RailNetworkError, RailUnprovisioned
 
 _RAIL_URL = "https://www.carousell.ai/listing/abc123"
 _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"

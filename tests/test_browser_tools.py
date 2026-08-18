@@ -7,9 +7,9 @@ import re
 
 import pytest
 
-from selly_agent.browser.client import BrowserUnavailable
-from selly_agent.tools import tools_for_tier
-from selly_agent.tools.registry import ToolError, UnknownTool, dispatch
+from sellee.browser.client import BrowserUnavailable
+from sellee.tools import tools_for_tier
+from sellee.tools.registry import ToolError, UnknownTool, dispatch
 
 _RECORD = {
     "market": "carousell",

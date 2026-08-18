@@ -3,7 +3,7 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "selly-agent"
+name = "sellee"
 description = "Local single-tenant agent that sells/buys on P2P marketplaces from the user's own machine"
 # uv pins the interpreter (see .python-version), so this floor describes the code, not a
 # precondition a user's machine could fail to meet.
@@ -40,13 +40,13 @@ dev = [
 ]
 
 [tool.uv]
-# Dependencies only — never selly-agent itself. An editable install would build this package on
+# Dependencies only — never sellee itself. An editable install would build this package on
 # the user's machine mid-install and leave a .pth holding an absolute path into a version
 # directory that update prunes. The launcher and pytest both put src/ on the path already.
 package = false
 
 [tool.setuptools.dynamic]
-version = { attr = "selly_agent.__version__" }
+version = { attr = "sellee.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -55,7 +55,7 @@ where = ["src"]
 # registries, the web tail's page, and the prompt layer. A versioned install is an unpacked
 # source tree, so these are already in place there; the stanza is what keeps a wheel build honest.
 [tool.setuptools.package-data]
-selly_agent = [
+sellee = [
     "migrations/*/*.sql",
     "data/*.json",
     "data/*.html",
@@ -74,7 +74,7 @@ testpaths = ["tests"]
 target-version = "py39"
 line-length = 100
 src = ["src", "tests"]
-extend-include = ["bin/selly-agent"]
+extend-include = ["bin/sellee"]
 
 [tool.ruff.lint]
 select = [
@@ -88,7 +88,7 @@ select = [
 ]
 
 [tool.ruff.lint.flake8-tidy-imports]
-# Intra-package imports are absolute (from selly_agent.x import y) so moving a
+# Intra-package imports are absolute (from sellee.x import y) so moving a
 # module never forces rewriting its own imports.
 ban-relative-imports = "all"
 
@@ -97,6 +97,6 @@ ban-relative-imports = "all"
 # store surface — the JSON-boundary tool handlers (params: dict), the engines, and
 # everything else stay unchecked and green. Scoped tight so the first run is not
 # drowned by the rest of the still-untyped tree; widening is a separate decision.
-include = ["src/selly_agent/store.py"]
+include = ["src/sellee/store.py"]
 typeCheckingMode = "basic"
 pythonVersion = "3.14"

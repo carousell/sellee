@@ -8,12 +8,12 @@ from __future__ import annotations
 import threading
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import secrets
-from selly_agent.channel import fastpaths
-from selly_agent.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME, CB_SKIP_CTA
-from selly_agent.channel.telegram.poller import Poller
-from selly_agent.channel.telegram.transport import TelegramClient
-from selly_agent.config import Config
+from sellee import secrets
+from sellee.channel import fastpaths
+from sellee.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME, CB_SKIP_CTA
+from sellee.channel.telegram.poller import Poller
+from sellee.channel.telegram.transport import TelegramClient
+from sellee.config import Config
 
 
 def _poller(store, bus, api):
@@ -29,7 +29,7 @@ def _poller(store, bus, api):
 
 def _bound(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
 
 
@@ -116,10 +116,10 @@ def test_catchup_render_lists_questions_and_updates(store, bus, xdg_tmp) -> None
     assert "Accept $70?" in text and "Your listing went live." in text
 
 
-def test_selly_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
+def test_sellee_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     _bound(store)
     with FakeTelegramAPI() as api:
-        api.inject_command("/selly")
+        api.inject_command("/sellee")
         _poller(store, bus, api).tick()
         msg = api.outbox[-1]
     assert "where things stand" in msg["text"]
@@ -131,16 +131,16 @@ def test_selly_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     ]  # active -> Pause toggle
 
 
-def test_selly_card_invites_the_first_listing_when_nothing_is_listed(store, bus, xdg_tmp) -> None:
+def test_sellee_card_invites_the_first_listing_when_nothing_is_listed(store, bus, xdg_tmp) -> None:
     _bound(store)
     with FakeTelegramAPI() as api:
-        api.inject_command("/selly")
+        api.inject_command("/sellee")
         _poller(store, bus, api).tick()
         text = api.outbox[-1]["text"]
     assert "none yet — send a photo to start your first" in text
 
 
-def test_selly_card_counts_live_in_progress_and_sold(store, xdg_tmp) -> None:
+def test_sellee_card_counts_live_in_progress_and_sold(store, xdg_tmp) -> None:
     store.create_item(title="Chair", list_price=20.0, currency="SGD")  # draft: in progress
     live = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(live["id"], "carousell", "https://carousell.com/p/1")

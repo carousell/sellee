@@ -17,7 +17,7 @@ any live subscriber; a subscriber that raises never breaks a publish.
   store, never by the caller — a transport's own timestamp rides inside `payload`
   (e.g. `channel.in.src_ts`) and is never used to order anything.
 - **The store is disposable.** It is prunable and deletable without data loss;
-  never open a transaction across it and `data/selly.db`. Events are
+  never open a transaction across it and `data/sellee.db`. Events are
   observability, not ledger.
 
 ### Wire shape
@@ -72,7 +72,7 @@ so `pass.tool_use` and `tool.call` are two separate records of the same call, no
 something to fold together. The one `tool.error` with no `call_id` is the
 validation failure — it fires before a call exists, so there is nothing to pair.
 
-## `selly-agent logs`
+## `sellee logs`
 
 A read-only tail over its own connection: it needs no cooperation from the daemon
 and works whether or not one is running, including against a stopped daemon's
@@ -98,7 +98,7 @@ silently ignored — the page has its own equivalents.
 ## The web tail
 
 `http://127.0.0.1:<http_port>/tail?token=<attended-token>` (the token is a 0600
-file in the config dir); `selly-agent logs --web` composes and opens it. The page
+file in the config dir); `sellee logs --web` composes and opens it. The page
 is `data/tail.html`, a packaged asset read per request; it polls `/events.json`
 and appends to the DOM.
 

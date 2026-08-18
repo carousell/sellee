@@ -6,8 +6,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.store import ItemNotFound, Scope, ScopedStore, ThreadNotFound
-from selly_agent.tools.registry import Session, ToolContext, ToolError, dispatch
+from sellee.store import ItemNotFound, Scope, ScopedStore, ThreadNotFound
+from sellee.tools.registry import Session, ToolContext, ToolError, dispatch
 
 
 def _two_of_everything(store):

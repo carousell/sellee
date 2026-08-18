@@ -10,10 +10,10 @@ import threading
 
 import pytest
 
-from selly_agent import passes, paths
-from selly_agent.config import Config
-from selly_agent.tools import TIER_ATTENDED
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee import passes, paths
+from sellee.config import Config
+from sellee.tools import TIER_ATTENDED
+from sellee.tools.registry import ToolError, dispatch
 
 # A fake harness that emits an init line then sleeps well past any test deadline, so the only way
 # it ends is the babysitter killing it.

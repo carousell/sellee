@@ -10,10 +10,10 @@ from datetime import datetime
 
 import pytest
 
-from selly_agent import intent_sweep
-from selly_agent.config import Config
-from selly_agent.engines import pacing
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee import intent_sweep
+from sellee.config import Config
+from sellee.engines import pacing
+from sellee.tools.registry import ToolError, dispatch
 
 _FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
 
@@ -63,7 +63,7 @@ def test_a_browser_that_cannot_start_returns_no_send_path_recording_nothing(
     """The sink is acquired before the reserve on purpose: a send with no browser must spend no
     pacing slot and write no intent — a pending intent would have the sweep asking a human about a
     send that provably never happened."""
-    from selly_agent.browser.client import BrowserUnavailable
+    from sellee.browser.client import BrowserUnavailable
 
     _sell_thread(store)
     ctx = make_ctx("attended", config=_FAST)

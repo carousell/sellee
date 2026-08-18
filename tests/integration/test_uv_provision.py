@@ -14,8 +14,8 @@ from pathlib import Path
 
 import pytest
 
-from selly_agent import paths
-from selly_agent.installer import runtime
+from sellee import paths
+from sellee.installer import runtime
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -83,7 +83,7 @@ def test_our_own_package_is_not_installed_into_the_venv(provisioned):
     user's machine and leave a path pinned into a directory that update prunes."""
     _, interpreter = provisioned
     result = subprocess.run(
-        [str(interpreter), "-c", "import selly_agent"],
+        [str(interpreter), "-c", "import sellee"],
         capture_output=True,
         text=True,
         check=False,

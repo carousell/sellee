@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.browser.markets.carousell import LISTING_ID_PATTERN as PATTERN
-from selly_agent.browser.reconcile import (
+from sellee.browser.markets.carousell import LISTING_ID_PATTERN as PATTERN
+from sellee.browser.reconcile import (
     classify_tail,
     listing_id,
     matching_items,

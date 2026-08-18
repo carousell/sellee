@@ -7,8 +7,8 @@ import time
 
 import pytest
 
-from selly_agent import settings as settings_mod
-from selly_agent import store as store_mod
+from sellee import settings as settings_mod
+from sellee import store as store_mod
 
 
 def _propose(store, key="quiet_hours", value=None, prior=None):

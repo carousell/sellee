@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import pytest
 
-from selly_agent.tools.registry import ToolError, dispatch
+from sellee.tools.registry import ToolError, dispatch
 
 
 def _sell_thread(store, tid="fb:1"):

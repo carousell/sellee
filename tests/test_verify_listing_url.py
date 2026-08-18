@@ -3,8 +3,8 @@ live check delegated to the rail client."""
 
 from __future__ import annotations
 
-from selly_agent.rail.client import RailToolError
-from selly_agent.tools.registry import dispatch
+from sellee.rail.client import RailToolError
+from sellee.tools.registry import dispatch
 
 
 def test_real_permalink_passes(make_ctx) -> None:

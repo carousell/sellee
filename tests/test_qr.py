@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from selly_agent import qr
+from sellee import qr
 
 
 def test_render_uses_half_block_glyphs_without_color_codes() -> None:

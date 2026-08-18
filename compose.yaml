@@ -1,20 +1,20 @@
-# selly-agent in a container — the secondary install profile; ./setup on the host is the primary
+# sellee in a container — the secondary install profile; ./setup on the host is the primary
 # one. Chrome is deliberately not in here: it runs on your own desktop, with your own logged-in
 # marketplace sessions, and you start it.
 #
 #   docker compose build
 #   ./start-chrome.sh                                # start-chrome.ps1 on Windows
 #   docker compose up -d
-#   docker exec -it selly-agent selly-agent setup
+#   docker exec -it sellee sellee setup
 #
 # On a Linux host, add the override: -f compose.yaml -f compose.linux.yaml
 # Full reference: docs/docker.md
 
 services:
-  selly-agent:
+  sellee:
     build: .
-    image: selly-agent:local
-    container_name: selly-agent
+    image: sellee:local
+    container_name: sellee
     restart: unless-stopped
 
     environment:
@@ -26,9 +26,9 @@ services:
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
 
     volumes:
-      - ${SELLY_DATA:-./selly-data}:/data
+      - ${SELLEE_DATA:-./sellee-data}:/data
 
-    # The web tail, at http://127.0.0.1:7355/tail — `selly-agent logs --web` prints the URL with
+    # The web tail, at http://127.0.0.1:7355/tail — `sellee logs --web` prints the URL with
     # its token. Host loopback only: this is the MCP and control surface too, and the daemon's
     # bearer tokens are all that guard it. Change this alongside `http_port` in config.json.
     ports:

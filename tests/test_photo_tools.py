@@ -7,12 +7,12 @@ from pathlib import Path
 
 import pytest
 
-import selly_agent.tools  # noqa: F401  registration
-from selly_agent import paths
-from selly_agent.platform.base import ImageToolUnavailable
-from selly_agent.rail.client import RailToolError, RailUnprovisioned
-from selly_agent.tools import photos as photo_tools
-from selly_agent.tools.registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolError, dispatch
+import sellee.tools  # noqa: F401  registration
+from sellee import paths
+from sellee.platform.base import ImageToolUnavailable
+from sellee.rail.client import RailToolError, RailUnprovisioned
+from sellee.tools import photos as photo_tools
+from sellee.tools.registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolError, dispatch
 
 JPEG = b"\xff\xd8\xff\xe0" + b"jpegbytes"
 PNG = b"\x89PNG\r\n\x1a\n" + b"pngbytes"

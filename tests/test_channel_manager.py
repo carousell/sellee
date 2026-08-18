@@ -8,11 +8,11 @@ from __future__ import annotations
 import threading
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from selly_agent import secrets
-from selly_agent.channel.manager import ChannelManager
-from selly_agent.channel.telegram import provider as telegram_provider
-from selly_agent.config import Config
-from selly_agent.scheduler import Scheduler
+from sellee import secrets
+from sellee.channel.manager import ChannelManager
+from sellee.channel.telegram import provider as telegram_provider
+from sellee.config import Config
+from sellee.scheduler import Scheduler
 
 
 class _FakeProvider:
@@ -92,7 +92,7 @@ def test_is_configured_reflects_the_token(store, bus, xdg_tmp) -> None:
 
 def test_start_spins_poller_and_registers_lanes_then_shuts_down(store, bus, xdg_tmp) -> None:
     secrets.write_telegram_bot_token(FAKE_TOKEN)
-    store.arm_bind("selly_test_bot", "n1")
+    store.arm_bind("sellee_test_bot", "n1")
     store.complete_bind(CHAT_ID, update_offset=1)
     scheduler = Scheduler(bus, tick_interval_sec=60, stop_event=threading.Event())
     with FakeTelegramAPI():
@@ -110,7 +110,7 @@ def test_start_spins_poller_and_registers_lanes_then_shuts_down(store, bus, xdg_
 
 
 def test_scheduler_deregister_stops_scheduling(bus) -> None:
-    from selly_agent.scheduler import Task
+    from sellee.scheduler import Task
 
     ran = []
     sched = Scheduler(bus, tick_interval_sec=60, stop_event=threading.Event())
