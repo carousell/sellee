@@ -12,7 +12,7 @@ from sellee.installer.ui import Abort, Ui
 
 def make_ui(**kwargs) -> tuple:
     out, err = io.StringIO(), io.StringIO()
-    defaults = {"stream": out, "err": err, "interactive": False, "color": False, "width": 100}
+    defaults = {"stream": out, "err": err, "interactive": False, "color": False}
     defaults.update(kwargs)
     return Ui(**defaults), out, err
 
@@ -44,33 +44,15 @@ def test_no_color_strips_escapes(monkeypatch) -> None:
     monkeypatch.setenv("NO_COLOR", "1")
     out = io.StringIO()
     out.isatty = lambda: True  # a TTY that has nonetheless asked for no colour
-    ui = Ui(stream=out, interactive=False, width=100)
+    ui = Ui(stream=out, interactive=False)
     ui.say("hello")
     assert "\033" not in out.getvalue()
 
 
 def test_color_is_off_when_the_stream_is_not_a_tty(monkeypatch) -> None:
     monkeypatch.delenv("NO_COLOR", raising=False)
-    ui = Ui(stream=io.StringIO(), interactive=False, width=100)
+    ui = Ui(stream=io.StringIO(), interactive=False)
     assert ui.color is False
-
-
-def test_narrow_terminal_falls_back_to_a_one_line_banner() -> None:
-    ui, out, _ = make_ui(width=40)
-    ui.banner("1.2.3")
-    assert out.getvalue() == "Sellee v1.2.3\n"
-
-
-def test_wide_terminal_draws_the_banner() -> None:
-    ui, out, _ = make_ui(width=100)
-    ui.banner("1.2.3")
-    assert len(out.getvalue().splitlines()) > 1
-
-
-def test_banner_art_fits_its_own_width_gate() -> None:
-    from sellee.installer import ui as ui_module
-
-    assert max(len(line) for line in ui_module.BANNER) <= ui_module.BANNER_MIN_COLUMNS
 
 
 # --- prompts ---------------------------------------------------------------------------------
