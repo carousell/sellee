@@ -1,12 +1,3 @@
-```
-███████╗███████╗██╗     ██╗     ██╗   ██╗    ▟██▙     ▟██▙
-██╔════╝██╔════╝██║     ██║     ╚██╗ ██╔╝   ▟█████████████▙
-███████╗█████╗  ██║     ██║      ╚████╔╝   ▐████  ███  ████▌
-╚════██║██╔══╝  ██║     ██║       ╚██╔╝    ▐███████▄███████▌
-███████║███████╗███████╗███████╗   ██║      ▜█████████████▛
-╚══════╝╚══════╝╚══════╝╚══════╝   ╚═╝        ▀▀▀▀▀▀▀▀▀▀▀
-```
-
 Sellee is a marketplace agent. It helps you list items on peer-to-peer marketplaces, negotiate with buyers, and close sales. It runs locally on your machine.
 
 - **Supported marketplaces**: Carousell
