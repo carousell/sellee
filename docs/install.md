@@ -68,7 +68,7 @@ Supported environment variables:
 | `TZ` | yes | the container's timezone; must match where you sell |
 | `CLAUDE_CODE_OAUTH_TOKEN` | one of these two | how the `claude` CLI authenticates in here; uses your Claude subscription |
 | `ANTHROPIC_API_KEY` | one of these two | the API-key alternative; per-token Console billing, and it wins if both are set |
-| `SELLEE_DATA` | no | host directory to mount at `/data` (default `./sellee-data`) |
+| `SELLEE_DATA` | no | host directory to mount at `/data` (default `./sellee-data`) — holds your tokens and session, so point it **outside** this repository; only the default name is git-ignored |
 | `SELLEE_CDP_PORT` | no | the CDP port, both sides of the forwarder (default `9222`). Pinned here because the forwarder must be listening before Chrome starts. If you change it, set `chrome_cdp_port` to match |
 | `SELLEE_CDP_HOST` | no | what the forwarder points at (default `host.docker.internal`) |
 | `SELLEE_CDP_FORWARD` | no | `0` turns the forwarder off; the Linux override sets it |

@@ -99,6 +99,13 @@ def test_the_secrets_file_never_enters_the_build_context() -> None:
     assert "\n.env\n" in (ROOT / ".gitignore").read_text()
 
 
+def test_the_data_directory_never_enters_the_build_context_or_a_commit() -> None:
+    """Same reasoning as the secrets file, but the default sits inside the clone and the documented
+    update flow is `git pull` in that tree. It was ignored by the build and not by git."""
+    assert "\nsellee-data\n" in (ROOT / ".dockerignore").read_text()
+    assert "\nsellee-data/\n" in (ROOT / ".gitignore").read_text()
+
+
 @pytest.mark.parametrize(
     "script", [ENTRYPOINT, START_SH, START_PS1], ids=["entrypoint", "sh", "ps1"]
 )

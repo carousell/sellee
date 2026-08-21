@@ -8,3 +8,6 @@ dist/
 .DS_Store
 .claude/settings.local.json
 .env
+
+# SELLEE_DATA's default. Only this name is covered — point it outside the repo.
+sellee-data/
