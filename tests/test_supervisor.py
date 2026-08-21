@@ -291,7 +291,7 @@ def test_a_container_status_never_resolves_a_host_platform(container, xdg_tmp, m
 def test_gather_status_reads_channel_adapter_when_bound(store, xdg_tmp, monkeypatch) -> None:
     paths.ensure_state_dirs()
     store.arm_bind("test_bot", "nonce1", adapter="discord")
-    store.complete_bind(12345, 1)  # chat_id, update_offset
+    store.complete_bind(12345, 1, nonce=store.get_channel()["bind_nonce"])  # chat_id, update_offset
     monkeypatch.setattr(supervisor.paths, "sellee_db", lambda: store._db.path)
 
     status = supervisor.gather_status()

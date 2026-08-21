@@ -47,7 +47,7 @@ def test_state_awaiting_bind_with_token_and_nonce(store, xdg_tmp) -> None:
 def test_state_bound_once_chat_id_is_set(store, xdg_tmp) -> None:
     secrets.write_discord_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", _NONCE, adapter="discord")
-    store.complete_bind(CHANNEL_ID, 0)
+    store.complete_bind(CHANNEL_ID, 0, nonce=store.get_channel()["bind_nonce"])
     gw = DiscordGateway(store=store, config=Config(), bus=None)
     assert gw._state(FAKE_TOKEN, store.get_channel()) == "bound"
 
@@ -76,10 +76,42 @@ def test_a_dm_not_matching_the_nonce_never_binds(store, bus, xdg_tmp) -> None:
         assert store.get_channel()["chat_id"] is None
 
 
+def test_state_off_once_the_nonce_expires(store, xdg_tmp) -> None:
+    """The TTL rides on the shared arming path, so an abandoned Discord bind lapses exactly like a
+    Telegram one — and off means no WebSocket is held open for it."""
+    secrets.write_discord_bot_token(FAKE_TOKEN)
+    store.arm_bind("sellee_test_bot", _NONCE, adapter="discord", expires_ts=time.time() - 1)
+    gw = DiscordGateway(store=store, config=Config(), bus=None)
+    assert gw._state(FAKE_TOKEN, store.get_channel()) == "off"
+
+
+def test_a_dm_matching_an_expired_nonce_never_binds(store, bus, xdg_tmp) -> None:
+    """A gateway session outlives the deadline, so the DM handler re-checks it: the right code,
+    arriving too late, is dropped like any other unattributable pre-bind traffic."""
+    secrets.write_discord_bot_token(FAKE_TOKEN)
+    store.arm_bind("sellee_test_bot", _NONCE, adapter="discord", expires_ts=time.time() - 1)
+    with FakeDiscordAPI() as api:
+        gw = _gateway(store, bus, api)
+        gw._handle_awaiting_bind_message(
+            {"id": "1", "channel_id": str(CHANNEL_ID), "author": {"bot": False}, "content": _NONCE}
+        )
+        assert store.get_channel()["chat_id"] is None
+
+
+def test_an_expired_nonce_is_retired_on_the_next_pass(store, xdg_tmp) -> None:
+    secrets.write_discord_bot_token(FAKE_TOKEN)
+    store.arm_bind("sellee_test_bot", _NONCE, adapter="discord", expires_ts=time.time() - 1)
+    gw = DiscordGateway(store=store, config=Config(), bus=None)
+    gw._retire_lapsed_nonce(store.get_channel())
+    ch = store.get_channel()
+    assert ch["bind_nonce"] is None
+    assert ch["bind_nonce_expires_ts"] is None
+
+
 def test_fast_path_command_replies_and_marks_handled(store, bus, xdg_tmp) -> None:
     secrets.write_discord_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", _NONCE, adapter="discord")
-    store.complete_bind(CHANNEL_ID, 0)
+    store.complete_bind(CHANNEL_ID, 0, nonce=store.get_channel()["bind_nonce"])
     with FakeDiscordAPI() as api:
         gw = _gateway(store, bus, api)
         gw._handle_bound_message(
@@ -96,7 +128,7 @@ def test_fast_path_command_replies_and_marks_handled(store, bus, xdg_tmp) -> Non
 def test_free_text_stays_pending_for_the_channel_pass(store, bus, xdg_tmp) -> None:
     secrets.write_discord_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", _NONCE, adapter="discord")
-    store.complete_bind(CHANNEL_ID, 0)
+    store.complete_bind(CHANNEL_ID, 0, nonce=store.get_channel()["bind_nonce"])
     with FakeDiscordAPI() as api:
         gw = _gateway(store, bus, api)
         gw._handle_bound_message(
@@ -113,7 +145,7 @@ def test_free_text_stays_pending_for_the_channel_pass(store, bus, xdg_tmp) -> No
 def _bound(store) -> None:
     secrets.write_discord_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", _NONCE, adapter="discord")
-    store.complete_bind(CHANNEL_ID, 0)
+    store.complete_bind(CHANNEL_ID, 0, nonce=store.get_channel()["bind_nonce"])
 
 
 def _dm(content="hello", event_id="1", channel_id=CHANNEL_ID, attachments=None):

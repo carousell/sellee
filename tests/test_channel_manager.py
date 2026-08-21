@@ -242,7 +242,7 @@ def test_is_configured_reflects_the_token(store, bus, xdg_tmp) -> None:
 def test_start_spins_poller_and_registers_lanes_then_shuts_down(store, bus, xdg_tmp) -> None:
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(CHAT_ID, update_offset=1)
+    store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     scheduler = Scheduler(bus, tick_interval_sec=60, stop_event=threading.Event())
     with FakeTelegramAPI():
         handle = telegram_provider.start(store=store, bus=bus, config=Config(), scheduler=scheduler)

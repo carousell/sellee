@@ -10,16 +10,20 @@ exactly the nonce. `gateway.py`'s awaiting-bind state watches for that DM the sa
 poller watches for a `/start` carrying the matching payload — first (and only) match binds.
 
 The nonce is returned to the connecting localhost caller only (never an event, never a log) —
-the same trust boundary Telegram's own bind embeds its nonce in `start_url` under.
+the same trust boundary Telegram's own bind embeds its nonce in `start_url` under — and it expires
+after `BIND_NONCE_TTL_SEC`, on the shared arming path, so an abandoned bind lapses to `off` here
+too rather than leaving the bot adoptable by whoever ends up with the code.
 """
 
 from __future__ import annotations
 
 import re
 import secrets as _stdlib_secrets
+import time
 
 from sellee import secrets
 from sellee.channel.discord.transport import ChannelError, DiscordClient
+from sellee.store import BIND_NONCE_TTL_SEC, bind_nonce_live
 
 # Discord bot token shape: three dot-separated base64url segments (user id, timestamp, HMAC).
 _TOKEN_RE = re.compile(r"^[A-Za-z0-9_-]{20,28}\.[A-Za-z0-9_-]{6,7}\.[A-Za-z0-9_-]{27,80}$")
@@ -75,7 +79,9 @@ def connect_discord(store, config, token, *, make_client=_default_client, mint_n
         raise BindError("api_error", "GET /oauth2/applications/@me returned no id")
     secrets.write_discord_bot_token(token)
     nonce = mint_nonce()
-    store.arm_bind(bot_username, nonce, adapter="discord")
+    store.arm_bind(
+        bot_username, nonce, adapter="discord", expires_ts=time.time() + BIND_NONCE_TTL_SEC
+    )
     invite_url = (
         f"https://discord.com/oauth2/authorize?client_id={application_id}&scope=bot&permissions=0"
     )
@@ -94,10 +100,7 @@ def channel_status(store) -> dict:
     token = secrets.read_discord_bot_token()
     bound = token is not None and ch["chat_id"] is not None and ch["adapter"] == "discord"
     awaiting = (
-        token is not None
-        and not bound
-        and ch["bind_nonce"] is not None
-        and ch["adapter"] == "discord"
+        token is not None and not bound and bind_nonce_live(ch) and ch["adapter"] == "discord"
     )
     return {
         "adapter": "discord",

@@ -7,7 +7,7 @@ import sqlite3
 
 import pytest
 
-from sellee import migrations
+from sellee import migrations, store
 from sellee.db import Database
 
 
@@ -49,6 +49,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 8),
         ("data", 9),
         ("data", 10),
+        ("data", 11),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -79,6 +80,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         8,
         9,
         10,
+        11,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -125,13 +127,14 @@ def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
     """0010 recreates the channel table, so the singleton row has to survive the copy: a returning
     seller's bound channel — cursor, greeting stamp and all — must not be reset by an upgrade.
     Driven by applying the real migrations with 0010 withheld, binding a channel, then letting
-    0010 land on top of it."""
+    0010 land on top of it. 0011 is withheld with it: it adds a column to the table 0010 recreates,
+    so applying them out of order would leave a schema no real install ever has."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
     (root / "events").mkdir(parents=True)
     for src in sorted(real_data.glob("*.sql")):
-        if not src.name.startswith("0010"):
+        if not src.name.startswith(("0010", "0011")):
             shutil.copy(src, root / "data" / src.name)
     for src in (migrations._MIGRATIONS_ROOT / "events").glob("*.sql"):
         shutil.copy(src, root / "events" / src.name)
@@ -146,10 +149,11 @@ def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
             " VALUES (1, 'telegram', 'sellee_bot', 555, 7, NULL, 100.0, 'abc123', 90.0, 110.0)"
         )
 
-    shutil.copy(real_data / "0010_discord_channel.sql", root / "data" / "0010_discord_channel.sql")
+    for name in ("0010_discord_channel.sql", "0011_channel_nonce_ttl.sql"):
+        shutil.copy(real_data / name, root / "data" / name)
     applied = _run(tmp_path, data_db, events_db)
 
-    assert [(a.db, a.version) for a in applied] == [("data", 10)]
+    assert [(a.db, a.version) for a in applied] == [("data", 10), ("data", 11)]
     row = data_db.query("SELECT * FROM channel WHERE id = 1")[0]
     assert row["adapter"] == "telegram"
     assert row["bot_username"] == "sellee_bot"
@@ -158,6 +162,39 @@ def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
     assert row["welcomed_at"] == 100.0
     assert row["commands_hash"] == "abc123"
     assert row["bound_ts"] == 90.0
+
+
+def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeypatch) -> None:
+    """A nonce armed before the TTL existed gets no expiry from the upgrade — the column is
+    nullable and NULL, which the store reads as already expired. Failing closed is the point: those
+    are the unbounded nonces the column was added to retire."""
+    real_data = migrations._MIGRATIONS_ROOT / "data"
+    root = tmp_path / "migrations"
+    (root / "data").mkdir(parents=True)
+    (root / "events").mkdir(parents=True)
+    for src in sorted(real_data.glob("*.sql")):
+        if not src.name.startswith("0011"):
+            shutil.copy(src, root / "data" / src.name)
+    for src in (migrations._MIGRATIONS_ROOT / "events").glob("*.sql"):
+        shutil.copy(src, root / "events" / src.name)
+    monkeypatch.setattr(migrations, "_MIGRATIONS_ROOT", root)
+
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO channel (id, adapter, bot_username, bind_nonce, updated_ts)"
+            " VALUES (1, 'telegram', 'sellee_bot', 'armed-long-ago', 110.0)"
+        )
+
+    ttl_sql = "0011_channel_nonce_ttl.sql"
+    shutil.copy(real_data / ttl_sql, root / "data" / ttl_sql)
+    _run(tmp_path, data_db, events_db)
+
+    row = data_db.query("SELECT * FROM channel WHERE id = 1")[0]
+    assert row["bind_nonce"] == "armed-long-ago"  # the row survives the ALTER
+    assert row["bind_nonce_expires_ts"] is None
+    assert store.bind_nonce_live(store._channel_from_row(row)) is False
 
 
 # --- against synthetic migration sets ------------------------------------------------------

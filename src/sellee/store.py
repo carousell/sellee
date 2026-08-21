@@ -367,13 +367,17 @@ PassRecord = TypedDict(
 class ChannelRecord(TypedDict):
     """The bound-channel singleton (see `get_channel`) — synthesized to defaults when no row
     exists yet (unbound: chat_id/bind_nonce None, update_offset 0). Holds no secret (the bot
-    token lives in its own 0600 file, never here)."""
+    token lives in its own 0600 file, never here).
+
+    `bind_nonce_expires_ts` is the armed nonce's deadline — read it through `bind_nonce_live`
+    rather than comparing it directly, so the NULL-is-expired rule stays in one place."""
 
     adapter: str
     bot_username: str | None
     chat_id: int | None
     update_offset: int
     bind_nonce: str | None
+    bind_nonce_expires_ts: float | None
     welcomed_at: float | None
     commands_hash: str | None
     bound_ts: float | None
@@ -567,12 +571,19 @@ def _want_from_row(row: sqlite3.Row) -> WantRecord:
 # in through `arm_bind`. A guard test pins it against the daemon's actual provider map.
 KNOWN_ADAPTERS = ("telegram", "discord")
 
+# How long an armed bind nonce stays adoptable. The connect flow tells the seller to relay it to
+# their phone, so a copy of it sits in a chat history — and an abandoned bind would leave the
+# channel armed forever, since nothing else closes the window. 15 minutes is generous for getting
+# a link onto a phone.
+BIND_NONCE_TTL_SEC = 900
+
 _DEFAULT_CHANNEL: ChannelRecord = {
     "adapter": "telegram",
     "bot_username": None,
     "chat_id": None,
     "update_offset": 0,
     "bind_nonce": None,
+    "bind_nonce_expires_ts": None,
     "welcomed_at": None,
     "commands_hash": None,
     "bound_ts": None,
@@ -587,11 +598,24 @@ def _channel_from_row(row: sqlite3.Row) -> ChannelRecord:
         "chat_id": row["chat_id"],
         "update_offset": row["update_offset"],
         "bind_nonce": row["bind_nonce"],
+        "bind_nonce_expires_ts": row["bind_nonce_expires_ts"],
         "welcomed_at": row["welcomed_at"],
         "commands_hash": row["commands_hash"],
         "bound_ts": row["bound_ts"],
         "updated_ts": row["updated_ts"],
     }
+
+
+def bind_nonce_live(ch: ChannelRecord, *, now: float | None = None) -> bool:
+    """Whether the row's armed nonce can still bind a chat. The one reader of the expiry, so every
+    caller (both providers' loops, both status routes) fails the same way.
+
+    A missing deadline reads as expired, not as "no limit": those rows were armed before nonces had
+    one, which is exactly the unbounded state this guards against."""
+    if not ch["bind_nonce"]:
+        return False
+    expires_ts = ch["bind_nonce_expires_ts"]
+    return expires_ts is not None and (_now() if now is None else now) < expires_ts
 
 
 def _inbox_from_row(row: sqlite3.Row) -> InboxRecord:
@@ -2866,19 +2890,31 @@ class Store:
         rows = self._db.query("SELECT * FROM channel WHERE id = 1")
         return _channel_from_row(rows[0]) if rows else dict(_DEFAULT_CHANNEL)  # type: ignore[return-value]
 
-    def arm_bind(self, bot_username: str, bind_nonce: str, *, adapter: str = "telegram") -> None:
+    def arm_bind(
+        self,
+        bot_username: str,
+        bind_nonce: str,
+        *,
+        adapter: str = "telegram",
+        expires_ts: float | None = None,
+    ) -> None:
         """Reset the channel row for a fresh bind and mint the nonce, one transaction: chat_id
-        NULL, cursor 0, the connecting bot's username, the new nonce. welcomed_at and commands_hash
-        survive only when the SAME bot on the SAME adapter re-binds — a re-connect must neither
-        re-greet nor re-register commands; a different bot, or a switch to the other provider,
-        resets both, so the new bot greets and registers.
+        NULL, cursor 0, the connecting bot's username, the new nonce and its deadline. welcomed_at
+        and commands_hash survive only when the SAME bot on the SAME adapter re-binds — a
+        re-connect must neither re-greet nor re-register commands; a different bot, or a switch to
+        the other provider, resets both, so the new bot greets and registers.
 
         `adapter` must name a known provider: this is the only write path to the column, so it is
         where an adapter typo is caught rather than silently binding to a provider that will never
-        be started."""
+        be started.
+
+        `expires_ts` defaults to the standard TTL from now, so arming without one is impossible
+        rather than merely discouraged — an immortal nonce is the failure this column exists for."""
         if adapter not in KNOWN_ADAPTERS:
             raise ValueError(f"unknown channel adapter: {adapter!r}")
         now = _now()
+        if expires_ts is None:
+            expires_ts = now + BIND_NONCE_TTL_SEC
         with self._db.transaction() as conn:
             existing = conn.execute("SELECT * FROM channel WHERE id = 1").fetchone()
             if (
@@ -2895,24 +2931,50 @@ class Store:
             conn.execute(
                 "INSERT INTO channel "
                 "(id, adapter, bot_username, chat_id, update_offset, bind_nonce, "
-                " welcomed_at, commands_hash, bound_ts, updated_ts) "
-                "VALUES (1, ?, ?, NULL, 0, ?, ?, ?, NULL, ?)",
-                (adapter, bot_username, bind_nonce, welcomed_at, commands_hash, now),
+                " bind_nonce_expires_ts, welcomed_at, commands_hash, bound_ts, updated_ts) "
+                "VALUES (1, ?, ?, NULL, 0, ?, ?, ?, ?, NULL, ?)",
+                (
+                    adapter,
+                    bot_username,
+                    bind_nonce,
+                    expires_ts,
+                    welcomed_at,
+                    commands_hash,
+                    now,
+                ),
             )
 
-    def complete_bind(self, chat_id: int, update_offset: int) -> None:
+    def complete_bind(self, chat_id: int, update_offset: int, nonce: str) -> bool:
         """Bind the authorized chat: set chat_id, clear the nonce (single-use), stamp bound_ts, and
         advance the cursor past the /start — all one transaction, so a crash never leaves a half-
         bind. Raises if no row was armed (arm_bind must precede)."""
         now = _now()
         with self._db.transaction() as conn:
             cur = conn.execute(
-                "UPDATE channel SET chat_id = ?, bind_nonce = NULL, bound_ts = ?, "
-                "update_offset = ?, updated_ts = ? WHERE id = 1",
-                (chat_id, now, update_offset, now),
+                "UPDATE channel SET chat_id = ?, bind_nonce = NULL, "
+                "bind_nonce_expires_ts = NULL, bound_ts = ?, "
+                "update_offset = ?, updated_ts = ? "
+                "WHERE id = 1 AND bind_nonce = ? AND bind_nonce_expires_ts > ?",
+                (chat_id, now, update_offset, now, nonce, now),
             )
-            if cur.rowcount == 0:
+            if cur.rowcount:
+                return True
+            if conn.execute("SELECT 1 FROM channel WHERE id = 1").fetchone() is None:
                 raise StoreError("no channel row to bind — arm_bind must run first")
+            return False
+
+    def clear_bind_nonce(self, nonce: str) -> None:
+        """Retire `nonce` if it is still the armed one, leaving the cursor where it is:
+        the updates already acked while awaiting the bind stay acked. Drops the row to `off`, so a
+        fresh `connect` is what revives it. Guarded on the nonce because the callers decide to
+        retire from a row they read earlier — a seller re-running connect in between re-arms the
+        row, and an unconditional clear would wipe the fresh nonce."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE channel SET bind_nonce = NULL, bind_nonce_expires_ts = NULL, "
+                "updated_ts = ? WHERE id = 1 AND bind_nonce = ?",
+                (_now(), nonce),
+            )
 
     def advance_offset(self, update_offset: int) -> None:
         """Advance the Telegram cursor without ingesting — the awaiting-bind path acking (and thus

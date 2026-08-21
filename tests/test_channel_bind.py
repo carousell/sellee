@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 
@@ -18,6 +19,7 @@ from fake_discord_api import FAKE_TOKEN as DISCORD_FAKE_TOKEN
 from fake_discord_api import FakeDiscordAPI
 from fake_telegram_api import BOT, CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import secrets
+from sellee import store as store_mod
 from sellee.channel import fastpaths, outbound
 from sellee.channel.telegram.poller import Poller
 from sellee.channel.telegram.transport import TelegramClient
@@ -146,6 +148,100 @@ def test_welcome_queue_failure_leaves_the_bind_complete(store, bus, xdg_tmp, mon
     assert [e for e in bus.store.read() if e.kind == "channel.bound"]
 
 
+def test_expired_nonce_never_binds(store, bus, xdg_tmp) -> None:
+    """The armed nonce leaves the machine by design (the CLI has the seller relay the link to a
+    phone), so the window it is worth anything in has to close on its own."""
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind(BOT["username"], _NONCE, expires_ts=time.time() - 1)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        _poller(store, bus, api).tick()
+    ch = store.get_channel()
+    assert ch["chat_id"] is None  # the right nonce, too late
+    assert ch["bind_nonce"] is None  # and retired, so nothing keeps a dead secret armed
+
+
+def test_expired_nonce_drops_the_channel_to_off(store, bus, xdg_tmp) -> None:
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind(BOT["username"], _NONCE, expires_ts=time.time() - 1)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        poller = _poller(store, bus, api)
+        assert poller._state(FAKE_TOKEN, store.get_channel()) == "off"
+        poller.tick()
+        assert api.calls == []  # off, so not even a getUpdates — an abandoned bind stops polling
+
+
+def test_nonce_within_ttl_still_binds(store, bus, xdg_tmp, monkeypatch) -> None:
+    frozen = 1_700_000_000.0
+    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind(BOT["username"], _NONCE)  # the standard TTL, off the frozen clock
+    monkeypatch.setattr(store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC - 1)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        _poller(store, bus, api).tick()
+    assert store.get_channel()["chat_id"] == CHAT_ID
+
+
+def test_advance_offset_does_not_extend_the_nonce_ttl(store, bus, xdg_tmp, monkeypatch) -> None:
+    """The deadline is its own column rather than a read of updated_ts, which the awaiting-bind
+    path bumps on every batch of unattributable traffic: otherwise a stranger spamming the bot
+    would keep the nonce alive for as long as they cared to keep typing."""
+    frozen = 1_700_000_000.0
+    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind(BOT["username"], _NONCE)
+    expires_ts = store.get_channel()["bind_nonce_expires_ts"]
+
+    late = frozen + store_mod.BIND_NONCE_TTL_SEC - 1
+    monkeypatch.setattr(store_mod, "_now", lambda: late)
+    with FakeTelegramAPI() as api:
+        api.inject_text("hi bot", chat_id=CHAT_ID + 99)  # pre-bind spam: acked and discarded
+        _poller(store, bus, api).tick()
+    ch = store.get_channel()
+    assert ch["updated_ts"] == late  # the spam did move updated_ts...
+    assert ch["bind_nonce_expires_ts"] == expires_ts  # ...and bought the nonce nothing
+
+    monkeypatch.setattr(store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        _poller(store, bus, api).tick()
+        assert api.calls == []
+    assert store.get_channel()["chat_id"] is None
+
+
+def test_a_nonce_that_lapses_mid_poll_never_binds(store, bus, xdg_tmp, monkeypatch) -> None:
+    """A long poll can straddle the deadline, so the tick re-reads it before binding: the /start is
+    acked and discarded rather than adopting a chat on a nonce that died while the poll was open."""
+    frozen = 1_700_000_000.0
+    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    secrets.write_telegram_bot_token(FAKE_TOKEN)
+    store.arm_bind(BOT["username"], _NONCE)
+
+    class _LapsingClient(TelegramClient):
+        def get_updates(self, offset, timeout, allowed_updates) -> list:
+            updates = super().get_updates(offset, timeout, allowed_updates)
+            monkeypatch.setattr(
+                store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1
+            )
+            return updates
+
+    with FakeTelegramAPI() as api:
+        api.inject_command("/start " + _NONCE)
+        Poller(
+            store=store,
+            config=Config(telegram_api_base=api.base_url),
+            bus=bus,
+            stop_event=threading.Event(),
+            client_factory=lambda token: _LapsingClient(FAKE_TOKEN, api_base=api.base_url),
+            poll_timeout=0,
+        ).tick()
+    ch = store.get_channel()
+    assert ch["chat_id"] is None
+    assert ch["update_offset"] > 0  # the /start was still acked, not left to be re-offered
+
+
 def test_restart_mid_bind_resumes_from_durable_nonce(store, bus, xdg_tmp) -> None:
     _arm(store)
     # a "restart": a fresh poller instance reads the same durable state and still binds
@@ -167,7 +263,7 @@ def test_restart_mid_bind_resumes_from_durable_nonce(store, bus, xdg_tmp) -> Non
 
 def _bind(store):
     _arm(store)
-    store.complete_bind(CHAT_ID, update_offset=1)
+    store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
 
 
 def test_bound_ingests_authorized_chat(store, bus, xdg_tmp) -> None:
@@ -287,9 +383,22 @@ def test_channel_status_reports_states(store, bus, xdg_tmp) -> None:
         _post(server, "/control/connect-telegram", {"token": FAKE_TOKEN})
         awaiting = _get(server, base)
         assert awaiting["awaiting_bind"] is True and awaiting["bound"] is False
-        store.complete_bind(CHAT_ID, update_offset=1)
+        store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
         bound = _get(server, base)
         assert bound["bound"] is True and bound["chat_id"] == CHAT_ID
+
+
+def test_channel_status_reports_an_expired_nonce_as_not_awaiting(store, bus, xdg_tmp) -> None:
+    """The connecting CLI polls this route, so an armed-but-lapsed row must not read as awaiting —
+    otherwise the wait keeps promising a link that can no longer bind."""
+    with FakeTelegramAPI() as api, _Server(store, bus, api) as server:
+        base = "/control/channel-status?token=attended-secret"
+        _post(server, "/control/connect-telegram", {"token": FAKE_TOKEN})
+        assert _get(server, base)["awaiting_bind"] is True
+        store.arm_bind(BOT["username"], _NONCE, expires_ts=time.time() - 1)
+        status = _get(server, base)
+        assert status["awaiting_bind"] is False
+        assert status["bound"] is False
 
 
 def test_reconnect_while_bound_re_arms(store, bus, xdg_tmp) -> None:
@@ -375,7 +484,7 @@ def test_discord_channel_status_reports_states(store, bus, xdg_tmp) -> None:
         awaiting = _get(server, base)
         assert awaiting["awaiting_bind"] is True and awaiting["bound"] is False
         assert awaiting["adapter"] == "discord"
-        store.complete_bind(111, update_offset=1)
+        store.complete_bind(111, update_offset=1, nonce=store.get_channel()["bind_nonce"])
         bound = _get(server, base)
         assert bound["bound"] is True and bound["chat_id"] == 111
 
@@ -417,7 +526,7 @@ def test_channel_status_follows_whichever_adapter_is_actually_bound(store, bus, 
             assert status["awaiting_bind"] is True
             assert status["adapter"] == "telegram"
 
-            store.complete_bind(CHAT_ID, update_offset=1)
+            store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
             assert _get(server, base) == {
                 "adapter": "telegram",
                 "bound": True,

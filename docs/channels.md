@@ -77,6 +77,11 @@ first-contact capture would have can't happen, and an interrupted bind resumes
 after a restart (the nonce is durable). The token never appears in an event or a
 log.
 
+The nonce is single-use and expires **15 minutes** after arming
+(`store.BIND_NONCE_TTL_SEC`): the connect flow puts the link in a chat history, and an
+abandoned bind would otherwise leave the channel adoptable forever. Past the deadline
+the provider reads `off` and clears the nonce.
+
 On bind the daemon queues a deterministic welcome as ordinary notices (drain-
 delivered, retried, catchup-backstopped — never a fire-and-forget send), stamping
 `welcomed_at` in the same transaction so the same bot never re-greets. A seller
@@ -99,7 +104,8 @@ out of `ps`/shell history — and sends it to the running daemon, which:
 The flow is deliberately two-step: unlike Telegram's one-tap deep link, the seller
 invites the bot to their server first (via OAuth), then sends the nonce in a DM to
 establish the binding. This decouples bot installation from session binding and makes
-the nonce flow harder to race.
+the nonce flow harder to race. Arming goes through the shared `store.arm_bind`, so the nonce has
+the same 15-minute deadline as Telegram's.
 
 The provider uses Discord's Gateway connection (WebSocket) instead of long-poll,
 connecting once and streaming all events. The gateway intent is scoped to **DIRECT_MESSAGES**
@@ -149,9 +155,11 @@ One thread owns *all* Bot API traffic, so "an unbound channel consumes nothing"
 is a property of that single consumer. State is derived from durable rows each
 tick, always failing toward the less-capable one:
 
-- **off** — no token (or a token with no nonce and no chat): zero API calls.
-- **awaiting-bind** — token + nonce, no chat: only a `/start` matching the nonce
-  binds; everything else is consumed and discarded.
+- **off** — no token (or a token with no live nonce and no chat): zero API calls.
+  An expired nonce lands here and is cleared on the tick.
+- **awaiting-bind** — token + an unexpired nonce, no chat: only a `/start`
+  matching the nonce binds; everything else is consumed and discarded. The
+  deadline is re-read before binding, since a long poll can straddle it.
 - **bound** — a chat is bound: only that chat's updates are ingested.
 
 Discord's gateway derives the same three states from the same rows, re-reading

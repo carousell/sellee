@@ -26,7 +26,7 @@ from sellee.tools import TIER_PASS_CHANNEL, tools_for_tier
 def _bound(store):
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(CHAT_ID, update_offset=1)
+    store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
 
 
 def _poller(store, bus, api):

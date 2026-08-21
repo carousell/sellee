@@ -30,8 +30,11 @@ import time
 
 from sellee import channel, config, control, deployment, qr
 from sellee.browser import chrome, foreground
+from sellee.store import BIND_NONCE_TTL_SEC
 
 _POLL_INTERVAL_SEC = 1.0
+# The seller is told the same deadline the daemon enforces, so "timed out" never means "still live".
+_NONCE_TTL_MIN = BIND_NONCE_TTL_SEC // 60
 # Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
 # default is generous; the piped/scripted default stays tight (a script isn't waiting on a human).
 _INTERACTIVE_TIMEOUT_SEC = 300
@@ -267,6 +270,7 @@ def _print_bind_prompt(bot_username: str, start_url: str, *, timeout: int) -> No
     print("  On a desktop with no Telegram? Send the link to your phone (message it to")
     print("  yourself) and open it there — don't just type /start, the link carries a")
     print("  one-time code that binds your chat.")
+    print(f"  Code expires in {_NONCE_TTL_MIN} minutes.")
     print(f"\nWaiting for you to start the bot (up to {timeout}s)...")
 
 
@@ -374,6 +378,7 @@ def _print_discord_bind_prompt(
     print(f"  {invite_url}")
     print("\nThen send the bot a direct message containing exactly this code:")
     print(f"\n  {nonce}\n")
+    print(f"Code expires in {_NONCE_TTL_MIN} minutes.")
     print(f"Waiting for that DM (up to {timeout}s)...")
 
 

@@ -275,7 +275,7 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
     paths.ensure_runtime_dirs()
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(CHAT_ID, update_offset=1)
+    store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     rail = FakeRail()
 
     with FakeTelegramAPI() as api:
@@ -349,7 +349,7 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
 def test_pause_fastpath_while_a_channel_pass_is_queued(bus, store, xdg_tmp) -> None:
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(CHAT_ID, update_offset=1)
+    store.complete_bind(CHAT_ID, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     with FakeTelegramAPI() as api:
         cfg = Config(telegram_api_base=api.base_url)
         poller = _poller(store, bus, api, cfg)

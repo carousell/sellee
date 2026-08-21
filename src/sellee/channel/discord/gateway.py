@@ -41,6 +41,7 @@ from sellee.channel import fastpaths, outbound, routing
 from sellee.channel.discord import transport as discord_transport
 from sellee.channel.discord.transport import ChannelError, DiscordClient
 from sellee.channel.discord.ws_client import ConnectionClosed, connect
+from sellee.store import bind_nonce_live
 
 log = logging.getLogger(__name__)
 
@@ -209,6 +210,7 @@ class DiscordGateway:
             state = self._state(token, ch)
             latched = token == self._refused_token and ch["bind_nonce"] == self._refused_bind_nonce
             if state == "off" or latched:
+                self._retire_lapsed_nonce(ch)
                 stopper.wait(OFF_IDLE_SEC)
                 continue
             try:
@@ -267,13 +269,21 @@ class DiscordGateway:
 
     @staticmethod
     def _state(token, ch) -> str:
+        # Same precedence as the Telegram poller's, including a nonce past its deadline reading as
+        # off: no WebSocket is held open for a bind that can no longer complete.
         if not token:
             return "off"
         if ch["chat_id"] is not None:
             return "bound"
-        if ch["bind_nonce"]:
+        if bind_nonce_live(ch):
             return "awaiting_bind"
         return "off"
+
+    def _retire_lapsed_nonce(self, ch) -> None:
+        """Drop a nonce whose window closed, so the row stops holding a dead secret."""
+        if ch["bind_nonce"] and ch["chat_id"] is None and not bind_nonce_live(ch):
+            self.store.clear_bind_nonce(ch["bind_nonce"])
+            log.info("bind nonce expired before the DM arrived — channel off until a fresh connect")
 
     def _run_session(self, token: str) -> None:
         client = self._client_factory(token)
@@ -307,8 +317,13 @@ class DiscordGateway:
         nonce = ch["bind_nonce"]
         if nonce is None or data.get("content") != nonce:
             return  # unattributable pre-bind traffic — never adopts a stranger
+        if not bind_nonce_live(ch):
+            # A session outlives the nonce's window, so the deadline is checked here as well as at
+            # the state derivation that opened the connection.
+            return
         channel_id = int(data["channel_id"])
-        self.store.complete_bind(channel_id, 0)
+        if not self.store.complete_bind(channel_id, 0, nonce):
+            return
         ch = self.store.get_channel()
         if not ch["welcomed_at"]:
             try:

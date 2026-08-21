@@ -55,7 +55,7 @@ def test_connect_hint_only_when_unbound_and_escalation_aged(make_ctx, store, mon
 
     # once bound, the hint never fires (the escalation can be pushed instead)
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(999, update_offset=1)
+    store.complete_bind(999, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     assert dispatch("get_catchup", {}, ctx)["connect_hint"] is False
 
 
@@ -75,7 +75,7 @@ def test_get_status_carries_channel_and_pause_state(make_ctx, store) -> None:
     assert status["queued_notices"] == 1
     store.set_paused(True, source="test")
     store.arm_bind("sellee_test_bot", "n1")
-    store.complete_bind(999, update_offset=1)
+    store.complete_bind(999, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     status = dispatch("get_status", {}, ctx)
     assert status["channel_bound"] is True and status["paused"] is True
 

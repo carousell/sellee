@@ -7,7 +7,11 @@ single-use nonce and arm the channel row for it. The daemon returns a deep link
 hijack race a first-contact capture would have is gone by construction.
 
 The nonce is returned only to the connecting caller (embedded in the deep link) and never enters an
-event or a log. The token travels token-file only — never argv, never an event, never error text
+event or a log, and it stops working `BIND_NONCE_TTL_SEC` after it is armed: the flow deliberately
+relays the link to a phone, so the copy that lands in a chat history has to stop being worth
+anything on its own — an abandoned bind lapses back to `off` rather than staying adoptable forever.
+
+The token travels token-file only — never argv, never an event, never error text
 (the transport strips any URL echo). A crash between the token write and arming the nonce leaves a
 token with no nonce → the poller reads `off`, cured by re-running connect.
 """
@@ -15,6 +19,7 @@ token with no nonce → the poller reads `off`, cured by re-running connect.
 from __future__ import annotations
 
 import secrets as _stdlib_secrets
+import time
 
 from sellee import secrets
 from sellee.channel.telegram.transport import (
@@ -22,6 +27,7 @@ from sellee.channel.telegram.transport import (
     TelegramClient,
     is_valid_token_format,
 )
+from sellee.store import BIND_NONCE_TTL_SEC, bind_nonce_live
 
 
 class BindError(Exception):
@@ -65,7 +71,7 @@ def connect_telegram(store, config, token, *, make_client=_default_client, mint_
         raise BindError("api_error", "getMe returned no bot username")
     secrets.write_telegram_bot_token(token)
     nonce = mint_nonce()
-    store.arm_bind(bot_username, nonce)
+    store.arm_bind(bot_username, nonce, expires_ts=time.time() + BIND_NONCE_TTL_SEC)
     return {"bot_username": bot_username, "start_url": f"https://t.me/{bot_username}?start={nonce}"}
 
 
@@ -79,7 +85,9 @@ def channel_status(store) -> dict:
     token = secrets.read_telegram_bot_token()
     mine = ch["adapter"] == "telegram"
     bound = mine and token is not None and ch["chat_id"] is not None
-    awaiting = mine and token is not None and not bound and ch["bind_nonce"] is not None
+    # A lapsed nonce is not awaiting anything — the CLI polls this, so reporting otherwise would
+    # leave it waiting on a link that can no longer bind.
+    awaiting = mine and token is not None and not bound and bind_nonce_live(ch)
     return {
         "adapter": "telegram",
         "bound": bound,

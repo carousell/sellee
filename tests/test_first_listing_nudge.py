@@ -10,7 +10,7 @@ from sellee.channel import outbound
 
 def _bind_and_welcome(store) -> None:
     store.arm_bind("sellee_bot", "n1")
-    store.complete_bind(555, update_offset=1)
+    store.complete_bind(555, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     store.stamp_welcomed()
 
 
@@ -54,7 +54,7 @@ def test_nudge_skips_when_unbound(store) -> None:
 def test_nudge_skips_before_the_welcome(store) -> None:
     # bound but never greeted (the welcome queue failed): greet first, nudge never
     store.arm_bind("sellee_bot", "n1")
-    store.complete_bind(555, update_offset=1)
+    store.complete_bind(555, update_offset=1, nonce=store.get_channel()["bind_nonce"])
     outbound.first_listing_nudge(store=store, now=_a_day_later(store))
     assert store.count_queued_notices() == 0
 

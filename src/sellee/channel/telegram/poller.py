@@ -4,11 +4,13 @@ Because it is the one consumer of getUpdates, "an unbound channel consumes nothi
 of this thread's state, not a convention spread across callers. Three states, derived from durable
 rows every tick (so a restart resumes correctly), always failing toward the *less* capable one:
 
-  * off            — no token, or a token with neither a nonce nor a bound chat. Zero Bot API
+  * off            — no token, or a token with neither a live nonce nor a bound chat. Zero Bot API
                      calls; the thread idles and re-checks (a fresh `connect` flips it to
-                     awaiting-bind).
-  * awaiting-bind  — token + nonce, no chat. getUpdates runs; a /start whose payload matches the
-                     nonce binds; everything else is consumed and discarded (unattributable).
+                     awaiting-bind). A nonce that outlived its TTL lands here and is cleared on the
+                     tick, so an abandoned bind stops waiting for a /start it must not honour.
+  * awaiting-bind  — token + an unexpired nonce, no chat. getUpdates runs; a /start whose payload
+                     matches the nonce binds; everything else is consumed and discarded
+                     (unattributable).
   * bound          — a chat is bound. Only that chat's updates are ingested (persist-then-ack in
                      one transaction); other chats are dropped before ingest.
 
@@ -30,6 +32,7 @@ from sellee.channel.telegram.transport import (
     _normalize,
     commands_hash,
 )
+from sellee.store import bind_nonce_live
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +102,7 @@ class Poller:
         ch = self.store.get_channel()
         state = self._state(token, ch)
         if state == "off":
+            self._retire_lapsed_nonce(ch)
             return OFF_IDLE_SEC
         client = self._client_factory(token)
         if state == "awaiting_bind":
@@ -110,14 +114,23 @@ class Poller:
     @staticmethod
     def _state(token, ch) -> str:
         # Precedence fails toward the less capable state: no token is off even with a live row; a
-        # token with neither nonce nor chat is off (e.g. a crash between token write and arm_bind).
+        # token with neither nonce nor chat is off (e.g. a crash between token write and arm_bind);
+        # a nonce past its deadline is off too, so an abandoned bind stops long-polling for a
+        # /start it must no longer honour.
         if not token:
             return "off"
         if ch["chat_id"] is not None:
             return "bound"
-        if ch["bind_nonce"]:
+        if bind_nonce_live(ch):
             return "awaiting_bind"
         return "off"
+
+    def _retire_lapsed_nonce(self, ch) -> None:
+        """Drop a nonce whose window closed. Without this the row keeps a dead secret and reads as
+        armed to anything that looks at the column rather than the deadline."""
+        if ch["bind_nonce"] and ch["chat_id"] is None and not bind_nonce_live(ch):
+            self.store.clear_bind_nonce(ch["bind_nonce"])
+            log.info("bind nonce expired before the chat bound — channel off until a fresh connect")
 
     # --- awaiting-bind --------------------------------------------------------------------
 
@@ -137,15 +150,21 @@ class Poller:
                 and chat is not None
                 and ev["payload"].get("start_param") == nonce
             ):
-                self._complete_bind(client, chat, upd["update_id"] + 1)
-                return
+                # A long poll can straddle the deadline, so the nonce that was live when this poll
+                # started is re-read here rather than trusted from the batch's own snapshot.
+                if not bind_nonce_live(self.store.get_channel()):
+                    break
+                if self._complete_bind(client, chat, upd["update_id"] + 1, nonce):
+                    return
+                break  # a re-arm retired this nonce — ack the /start, never bind it
         # No matching /start: the whole batch is unattributable pre-bind traffic — discard it (ack
         # by advancing the cursor). A bare /start or a stranger's message never binds.
         self.store.advance_offset(max_id + 1)
 
-    def _complete_bind(self, client, chat_id, update_offset) -> None:
+    def _complete_bind(self, client, chat_id, update_offset, nonce) -> bool:
         # chat_id + nonce-clear + cursor advance in one transaction (the store enforces atomicity).
-        self.store.complete_bind(chat_id, update_offset)
+        if not self.store.complete_bind(chat_id, update_offset, nonce):
+            return False
         self._ensure_commands(client)
         ch = self.store.get_channel()
         if not ch["welcomed_at"]:
@@ -156,6 +175,7 @@ class Poller:
             except Exception:
                 log.exception("welcome queue failed (bind still complete)")
         self.bus.publish("channel.bound", {"bot_username": ch["bot_username"]})
+        return True
 
     def _ensure_commands(self, client) -> None:
         """Register the "/" menu, content-hash idempotent so a re-bind of the same bot is free."""
