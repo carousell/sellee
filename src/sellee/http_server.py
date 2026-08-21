@@ -28,7 +28,7 @@ import socketserver
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, urlparse, urlsplit
 
 from sellee import __version__, passes
 from sellee.db import connect_reader
@@ -221,7 +221,12 @@ class HttpServer:
 def _localhost_host(header: str | None) -> bool:
     if not header:
         return False  # a request with no Host header is not a browser we trust
-    hostname = header.rsplit(":", 1)[0].strip("[]") if ":" in header else header
+    if "@" in header:
+        return False  # urlsplit would strip userinfo, so "evil@localhost" would parse as localhost
+    try:
+        hostname = urlsplit("//" + header).hostname
+    except ValueError:
+        return False  # unparseable (e.g. a bracketed non-IPv6 host) fails closed
     return hostname in _LOCALHOST_NAMES
 
 

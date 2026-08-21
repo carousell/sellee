@@ -13,7 +13,14 @@ import pytest
 import sellee.http_server as http_server
 import sellee.tools  # noqa: F401  registration
 from sellee.config import Config
-from sellee.http_server import _MAX_BODY_BYTES, _PAGE_EVENTS, HttpServer, _Handler, _Server
+from sellee.http_server import (
+    _MAX_BODY_BYTES,
+    _PAGE_EVENTS,
+    HttpServer,
+    _Handler,
+    _localhost_host,
+    _Server,
+)
 from sellee.paths import PACKAGE_DATA_DIR
 from sellee.tools.registry import ToolContext
 
@@ -131,6 +138,28 @@ def test_bad_host_is_forbidden(server) -> None:
         server, "POST", "/mcp", token="attended-secret", body={}, headers={"Host": "evil.example"}
     )
     assert status == 403
+
+
+@pytest.mark.parametrize(
+    ("host", "allowed"),
+    [
+        ("localhost", True),
+        ("localhost:7355", True),
+        ("127.0.0.1", True),
+        ("127.0.0.1:7355", True),
+        ("[::1]", True),
+        ("[::1]:7355", True),
+        ("[::ffff:127.0.0.1]", False),
+        ("evil.com:7355", False),
+        ("[evil.com]:80", False),
+        ("127.0.0.1.evil.com", False),
+        ("evil@localhost", False),
+        ("", False),
+        (None, False),
+    ],
+)
+def test_localhost_host_guard_accepts_only_localhost_names(host, allowed) -> None:
+    assert _localhost_host(host) is allowed
 
 
 def test_non_localhost_origin_is_forbidden(server) -> None:
