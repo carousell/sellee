@@ -15,6 +15,8 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
+from sellee.paths import ensure_private_file
+
 _BUSY_TIMEOUT_MS = 5000
 
 
@@ -27,6 +29,9 @@ def _apply_pragmas(conn: sqlite3.Connection, *, writable: bool) -> None:
 
 def connect_writer(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
+    # Owner-only before sqlite ever opens it: the DB holds buyer conversations and the
+    # seller's own details, and SQLite gives the -wal/-shm sidecars the main file's mode.
+    ensure_private_file(path)
     conn = sqlite3.connect(str(path), isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _apply_pragmas(conn, writable=True)

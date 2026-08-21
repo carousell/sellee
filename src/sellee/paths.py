@@ -16,6 +16,7 @@ import os
 import sys
 from pathlib import Path
 
+from sellee import deployment
 from sellee.platform import get_platform
 
 APP = "sellee"
@@ -323,12 +324,40 @@ def ensure_private_dir(path: Path) -> Path:
 
 def _ensure(path: Path, mode: int) -> Path:
     """Create a directory with an exact mode, from creation (umask neutralized so a sensitive
-    mode like 0700 is never widened, and never applied via a post-creation chmod window)."""
+    mode like 0700 is never widened, and never applied via a post-creation chmod window).
+
+    Missing ancestors are created one by one at 0o755, never via mkdir(parents=True): the
+    `mode` argument applies only to the final component, so parents would land at the process
+    default — under the zeroed umask a world-writable 0o777, and on a fresh account the first
+    ancestor this creates is ~/.local itself.
+    """
     old_umask = os.umask(0)
     try:
-        path.mkdir(mode=mode, parents=True, exist_ok=True)
+        for parent in reversed(path.parents):
+            if not parent.exists():
+                parent.mkdir(mode=0o755, exist_ok=True)
+        path.mkdir(mode=mode, exist_ok=True)
     finally:
         os.umask(old_umask)
+    return path
+
+
+def ensure_private_file(path: Path) -> Path:
+    """Create (or narrow) a file readable only by its owner, before anything writes content
+    into it — for the DBs and logs, which hold buyer conversations and the seller's own
+    details.
+
+    In a container the umask default stands: the daemon runs as root against the seller's
+    bind-mounted data directory, so a root-owned 0600 file would lock the seller out of their
+    own data on the host — the isolation boundary there is the container, not the mode.
+    """
+    if deployment.is_container():
+        path.touch()
+        return path
+    fd = os.open(path, os.O_CREAT, 0o600)
+    os.close(fd)
+    if os.name != "nt" and os.stat(path).st_mode & 0o777 != 0o600:
+        os.chmod(path, 0o600)
     return path
 
 
@@ -343,9 +372,15 @@ def ensure_data_dirs() -> None:
 
 
 def ensure_state_dirs() -> None:
-    _ensure(state_dir(), 0o755)
-    _ensure(backups_dir(), 0o755)
-    _ensure(logs_dir(), 0o755)
+    # Owner-only: the state tree holds transcripts, DB snapshots and logs — buyer
+    # conversations and the seller's own details. In a container the wider mode stands, for
+    # the same reason ensure_private_file leaves the umask default there: the daemon runs as
+    # root against a bind mount, and a root-owned 0700 tree would lock the seller out of
+    # their own files on the host.
+    state_mode = 0o755 if deployment.is_container() else 0o700
+    _ensure(state_dir(), state_mode)
+    _ensure(backups_dir(), state_mode)
+    _ensure(logs_dir(), state_mode)
     # 0700: a browser publish stages the item's photographs into its pass workspace.
     _ensure(passes_dir(), 0o700)
     # 0700: page snapshots can carry the seller's own address off a composer page.

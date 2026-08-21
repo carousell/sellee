@@ -622,7 +622,8 @@ def run_pass(deps: PassDeps, claimed) -> str:
             )
             return "spawn_error"
 
-        stderr_path = paths.pass_stderr_log(pass_id)
+        # Owner-only: harness stderr can quote prompt content, i.e. buyer conversations.
+        stderr_path = paths.ensure_private_file(paths.pass_stderr_log(pass_id))
         with open(stderr_path, "wb") as errf:
             proc = subprocess.Popen(  # noqa: S603 — argv is composed by our emitter, not a shell
                 argv,

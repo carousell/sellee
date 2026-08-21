@@ -3,8 +3,14 @@
 from __future__ import annotations
 
 import os
+import sys
 
-from sellee import paths
+import pytest
+
+from sellee import deployment, paths
+
+# Windows does not honor POSIX modes, so every mode assertion is meaningless there.
+posix_only = pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="POSIX file modes")
 
 
 def test_xdg_overrides_are_honored(xdg_tmp) -> None:
@@ -79,6 +85,104 @@ def test_a_pass_workspace_is_private_from_creation(xdg_tmp) -> None:
     workspace = paths.pass_workspace_dir("pass_x")
     paths.ensure_private_dir(workspace)
     assert os.stat(workspace).st_mode & 0o777 == 0o700
+
+
+# --- modes: intermediates, the state tree, files ------------------------------------------------
+
+
+def _fresh_default_home(monkeypatch, tmp_path):
+    """A HOME where ~/.local does not pre-exist — the exposed case for parent creation —
+    with the XDG overrides cleared so the default layout resolves."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    for var in paths._XDG_VARS:
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv(deployment.MARKER_VAR, raising=False)
+    return home
+
+
+@posix_only
+def test_missing_intermediates_are_created_sane_not_world_writable(monkeypatch, tmp_path) -> None:
+    """mkdir(parents=True) under the zeroed umask used to leave ~/.local itself at 0o777."""
+    home = _fresh_default_home(monkeypatch, tmp_path)
+    paths.ensure_runtime_dirs()
+    for intermediate in (
+        home / ".local",
+        home / ".local/share",
+        home / ".local/state",
+        home / ".config",
+    ):
+        assert os.stat(intermediate).st_mode & 0o777 == 0o755, intermediate
+
+
+@posix_only
+def test_the_state_tree_is_owner_only(xdg_tmp) -> None:
+    paths.ensure_state_dirs()
+    for d in (paths.state_dir(), paths.backups_dir(), paths.logs_dir()):
+        assert os.stat(d).st_mode & 0o777 == 0o700, d
+
+
+@posix_only
+def test_a_private_file_is_owner_only_from_creation(xdg_tmp) -> None:
+    paths.ensure_config_dir()
+    target = paths.config_dir() / "some.db"
+    paths.ensure_private_file(target)
+    assert os.stat(target).st_mode & 0o777 == 0o600
+
+
+@posix_only
+def test_a_private_file_that_already_exists_wider_is_narrowed(xdg_tmp) -> None:
+    paths.ensure_config_dir()
+    target = paths.config_dir() / "some.db"
+    target.write_bytes(b"")
+    os.chmod(target, 0o644)
+    paths.ensure_private_file(target)
+    assert os.stat(target).st_mode & 0o777 == 0o600
+
+
+@posix_only
+def test_a_database_file_is_owner_only_from_creation(xdg_tmp) -> None:
+    """The DB (not just its directory) must be 0600: sellee.db sits under the 0755 data dir."""
+    from sellee.db import Database
+
+    paths.ensure_runtime_dirs()
+    db = Database(paths.sellee_db())
+    try:
+        db.run_atomic_script("BEGIN; CREATE TABLE t (x); COMMIT;")
+        created = [paths.sellee_db(), *paths.sellee_db().parent.glob("sellee.db-*")]
+        assert len(created) > 1  # WAL mode: the sidecars exist and carry the same content
+        for file in created:
+            assert os.stat(file).st_mode & 0o777 == 0o600, file
+    finally:
+        db.close()
+
+
+@posix_only
+def test_container_deployment_keeps_the_bind_mount_readable(xdg_tmp, monkeypatch) -> None:
+    """In a container the daemon runs as root against the seller's bind-mounted data dir;
+    owner-only modes there would lock the seller out of their own files on the host."""
+    monkeypatch.setenv(deployment.MARKER_VAR, deployment.CONTAINER)
+    old_umask = os.umask(0o022)
+    try:
+        paths.ensure_runtime_dirs()
+        for d in (paths.state_dir(), paths.backups_dir(), paths.logs_dir()):
+            assert os.stat(d).st_mode & 0o777 == 0o755, d
+        target = paths.data_dir() / "sellee.db"
+        paths.ensure_private_file(target)
+        assert os.stat(target).st_mode & 0o777 == 0o644
+    finally:
+        os.umask(old_umask)
+
+
+@posix_only
+def test_container_intermediates_are_still_not_world_writable(monkeypatch, tmp_path) -> None:
+    """The intermediates fix applies everywhere — 0o755 never blocks the owner, and a
+    world-writable parent would let any host user write into the seller's data dir."""
+    home = _fresh_default_home(monkeypatch, tmp_path)
+    monkeypatch.setenv(deployment.MARKER_VAR, deployment.CONTAINER)
+    paths.ensure_runtime_dirs()
+    assert os.stat(home / ".local").st_mode & 0o777 == 0o755
 
 
 # --- the shell rc a PATH export belongs in ------------------------------------------------------
