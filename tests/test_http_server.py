@@ -300,6 +300,34 @@ def test_initialize_advertises_tools_only(server) -> None:
     assert body["result"]["serverInfo"]["name"] == "sellee"
 
 
+def test_initialize_echoes_a_supported_protocol_version(server) -> None:
+    status, body = _rpc(server, "initialize", {"protocolVersion": "2025-06-18"})
+    assert status == 200
+    assert body["result"]["protocolVersion"] == "2025-06-18"
+
+
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"protocolVersion": "9999.invalid"},
+        # a real older revision, but one whose transport this server does not implement: the
+        # honest answer is the version we do speak, not the one that would please the client
+        {"protocolVersion": "2024-11-05"},
+        {"protocolVersion": {"a": 1}},
+        {"protocolVersion": ["x"]},
+        {"protocolVersion": 12345},
+        {"protocolVersion": None},
+        {},
+    ],
+)
+def test_initialize_falls_back_to_the_default_protocol_version(server, params) -> None:
+    status, body = _rpc(server, "initialize", params)
+    assert status == 200
+    negotiated = body["result"]["protocolVersion"]
+    assert isinstance(negotiated, str)
+    assert negotiated == "2025-06-18"
+
+
 def test_notifications_initialized_returns_202(server) -> None:
     status, body = _request(
         server,

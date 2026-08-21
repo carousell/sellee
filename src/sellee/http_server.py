@@ -47,6 +47,11 @@ _LOCALHOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 # rather than pulling the page out from under one of these.
 _BROWSER_PASS_TYPES = ("reply", "publish")
 _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
+# Revisions we will echo back to a client that asks for one — just the one we actually speak.
+# Echoing an older revision to be accommodating would claim a transport this server does not
+# implement; answering with what we do speak lets the client decide whether that works for it,
+# which is what the spec's negotiation model is for.
+_SUPPORTED_PROTOCOL_VERSIONS = frozenset({_DEFAULT_PROTOCOL_VERSION})
 
 # How long a minted web-tail ticket stays redeemable. Long enough to copy the printed URL into a
 # browser by hand; short enough that a URL lifted from a terminal scrollback later is dead.
@@ -494,8 +499,15 @@ class _Handler(BaseHTTPRequestHandler):
     def _dispatch_rpc(self, method, params, session) -> dict:
         if method == "initialize":
             requested = params.get("protocolVersion")
+            # Negotiation answers with a version we support rather than erroring — an unknown or
+            # malformed request falls back so older clients keep working.
+            negotiated = (
+                requested
+                if isinstance(requested, str) and requested in _SUPPORTED_PROTOCOL_VERSIONS
+                else _DEFAULT_PROTOCOL_VERSION
+            )
             return {
-                "protocolVersion": requested or _DEFAULT_PROTOCOL_VERSION,
+                "protocolVersion": negotiated,
                 "capabilities": {"tools": {}},
                 "serverInfo": {"name": "sellee", "version": __version__},
             }
