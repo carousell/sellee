@@ -297,6 +297,14 @@ thread into **one** coalesced reply pass, refuses to enqueue a second while one 
 in flight, and auto-refires nothing — eligibility comes from the rows, so a failed
 pass's threads are simply picked up next tick.
 
+One kind of thread is never claimed. If a thread's newest buyer message carries a `scam`
+verdict, the lane escalates it to the seller instead, before any pass is spawned. The
+verdict was stamped offline when the message was written, so the decision not to engage
+is made before any model reads the message arguing otherwise. The cursor advances over
+that message, because the escalation is the handling — otherwise resolving it would make
+the thread look unanswered again. `send_reply` and the checkout mint refuse on a flagged
+thread too, in case the verdict lands while a pass is already composing.
+
 ## Reconcile
 
 `browser/reconcile.py` — pure functions, no I/O. **The rule is reconcile, not

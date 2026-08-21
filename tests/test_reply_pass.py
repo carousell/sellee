@@ -375,3 +375,90 @@ def test_the_seller_facing_scaffolding_is_not_fenced(store) -> None:
     prompt = REPLY.build_prompt(payload, _scoped(store, payload), "pass_1")
     assert f"(item {item['id']}, listed at 80.0 SGD)" in prompt
     assert "Status: active" in prompt
+
+
+# --- the never-engage rule, in code ---------------------------------------------------------------
+#
+# The scam verdict is stamped offline as a message is written. These assert it decides what happens
+# next, rather than only annotating the prompt for a model the flagged message is trying to steer.
+
+
+def _flagged(store, tid="carousell:1", *, msg_id="m1", ts=10.0):
+    """A thread whose newest buyer message carries a scam verdict."""
+    item = _thread(store, tid)
+    store.record_inbound(tid, msg_id=msg_id, text="pay via this link", ts=ts, scam_verdict="scam")
+    return item
+
+
+def test_a_flagged_thread_is_escalated_instead_of_answered(store, bus) -> None:
+    _flagged(store)
+    inbox.reply_lane(store=store, bus=bus)
+
+    assert [e.payload["kind"] for e in bus.store.read(kinds=["escalation.open"])] == ["scam"]
+    assert bus.store.read(kinds=["pass.queued"]) == []
+    assert store.get_thread("carousell:1")["status"] == "escalated"
+
+
+def test_a_flagged_thread_is_never_claimed_even_before_the_sweep(store) -> None:
+    """The claim itself refuses: a pass would carry the flagged message into its prompt."""
+    _flagged(store)
+    assert store.enqueue_reply_pass() is None
+    assert store.threads_with_unhandled_inbound() == []
+
+
+def test_one_buyer_being_a_scammer_does_not_stop_the_others(store, bus) -> None:
+    _flagged(store, "carousell:1")
+    item = _thread(store, "carousell:2")
+    store.record_inbound("carousell:2", msg_id="m2", text="still available?", ts=11.0)
+    inbox.reply_lane(store=store, bus=bus)
+
+    claimed = store.claim_queued_pass()
+    assert claimed.payload["thread_ids"] == ["carousell:2"]
+    assert claimed.payload["item_ids"] == [item["id"]]
+
+
+def test_only_a_scam_verdict_blocks(store) -> None:
+    """`suspicious` is the engine hedging, not deciding — it stays a note in the prompt."""
+    _thread(store, "carousell:1")
+    store.record_inbound(
+        "carousell:1", msg_id="m1", text="is this available", ts=10.0, scam_verdict="suspicious"
+    )
+    assert store.enqueue_reply_pass() is not None
+
+
+def test_the_sweep_is_idempotent(store) -> None:
+    _flagged(store)
+    first = store.scam_guard_sweep()
+    assert [r["escalation_new"] for r in first] == [True]
+    assert store.scam_guard_sweep() == []
+
+
+def test_resolving_a_false_positive_does_not_re_escalate_forever(store) -> None:
+    """The escalation IS the handling, so the cursor advances over the flagged message. Without
+    that, releasing a false positive would hand it straight back to the sweep."""
+    _flagged(store)
+    swept = store.scam_guard_sweep()
+    store.resolve_escalation(swept[0]["escalation_id"], "false alarm")
+    store.update_thread("carousell:1", fields={"status": "active"})
+
+    assert store.scam_guard_sweep() == []
+    assert store.enqueue_reply_pass() is None
+
+
+def test_a_verdict_landing_after_the_claim_still_refuses_the_send(store) -> None:
+    """The lane cannot catch a message that arrives while the pass composes, so the store does."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="still available?", ts=10.0)
+    claimed = store.enqueue_reply_pass()
+    assert claimed is not None
+    store.record_inbound(
+        "carousell:1", msg_id="m2", text="pay via this link", ts=11.0, scam_verdict="scam"
+    )
+
+    reserved = store.reserve_reply(
+        thread_id="carousell:1", kind="reply", text="sure!", in_msg_id="m1", cfg=None
+    )
+    assert reserved["verdict"] == "scam_flagged"
+    # A blocked verdict leaves nothing behind: no intent for a sweep to re-drive, no pacing spent.
+    assert "intent_id" not in reserved
+    assert [m["dir"] for m in store.get_thread_messages("carousell:1", limit=None)] == ["in", "in"]

@@ -192,3 +192,15 @@ def test_a_scoped_pass_cannot_attach_a_thread_to_another_sellers_item(store) -> 
         thread_id="fb:8", side="sell", market="fb", counterpart_handle="x", item_id=i1["id"]
     )
     assert made["thread_id"] == "fb:8"
+
+
+def test_the_scam_gate_refuses_an_out_of_scope_thread_as_absent(store) -> None:
+    """A security predicate must not fail open: an out-of-scope thread raises rather than
+    answering "not flagged", and the refusal is the missing-row behavior so scope leaks nothing."""
+    i1, _, _, _ = _two_of_everything(store)
+    scoped = ScopedStore(store, Scope.of(threads={"fb:1"}, items={i1["id"]}))
+    store.record_inbound("fb:2", msg_id="m1", text="pay via this link", scam_verdict="scam")
+
+    assert scoped.thread_scam_blocked("fb:1") is False
+    with pytest.raises(ThreadNotFound, match="fb:2"):
+        scoped.thread_scam_blocked("fb:2")

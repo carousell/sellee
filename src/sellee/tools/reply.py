@@ -145,7 +145,8 @@ register(
         "reply|holding|followup|nudge. Statuses: send_failed = nothing was delivered, retrying is "
         "safe; send_unverified = the page took it but it could not be confirmed — never resend, an "
         "escalation follows; unverified_open = an earlier send on this thread is still "
-        "unconfirmed, wait for its escalation to be resolved.",
+        "unconfirmed, wait for its escalation to be resolved; scam_flagged = this thread carries a "
+        "scam signal and is the seller's to answer, never yours.",
         input_schema={
             "type": "object",
             "properties": {

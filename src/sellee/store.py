@@ -150,7 +150,9 @@ _UNHANDLED_INBOUND_SQL = (
     "  (SELECT mw.msg_id FROM thread_messages mw WHERE mw.thread_id = t.thread_id "
     "     AND mw.dir = 'in' ORDER BY mw.ts DESC, mw.rowid DESC LIMIT 1) AS newest_in_msg_id, "
     "  (SELECT MAX(mx.ts) FROM thread_messages mx WHERE mx.thread_id = t.thread_id "
-    "     AND mx.dir = 'in') AS newest_in_ts "
+    "     AND mx.dir = 'in') AS newest_in_ts, "
+    "  (SELECT mv.scam_verdict FROM thread_messages mv WHERE mv.thread_id = t.thread_id "
+    "     AND mv.dir = 'in' ORDER BY mv.ts DESC, mv.rowid DESC LIMIT 1) AS newest_in_verdict "
     "FROM threads t "
     "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
     "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
@@ -167,6 +169,32 @@ _UNHANDLED_INBOUND_SQL = (
 
 def _unhandled_inbound_rows(rows) -> list[dict]:
     return [{"thread_id": r["thread_id"], "item_id": r["item_id"]} for r in rows]
+
+
+# A thread whose newest buyer message is a scam signal is never answered; it goes to the seller
+# instead (scam_guard_sweep). The verdict is stamped offline as the message is written, before any
+# model reads it, so a conversation that talks the model out of its caution cannot talk the store
+# out of this.
+_SCAM_VERDICT = "scam"
+
+
+def _split_flagged(rows) -> tuple[list, list]:
+    """(answerable, flagged) over rows carrying `newest_in_verdict`."""
+    answerable = [r for r in rows if r["newest_in_verdict"] != _SCAM_VERDICT]
+    flagged = [r for r in rows if r["newest_in_verdict"] == _SCAM_VERDICT]
+    return answerable, flagged
+
+
+_NEWEST_INBOUND_VERDICT_SQL = (
+    "SELECT (SELECT mv.scam_verdict FROM thread_messages mv WHERE mv.thread_id = t.thread_id "
+    "          AND mv.dir = 'in' ORDER BY mv.ts DESC, mv.rowid DESC LIMIT 1) AS newest_in_verdict "
+    "FROM threads t WHERE t.thread_id = ?"
+)
+
+
+def _newest_inbound_is_flagged(conn, thread_id: str) -> bool:
+    row = conn.execute(_NEWEST_INBOUND_VERDICT_SQL, (thread_id,)).fetchone()
+    return bool(row) and row["newest_in_verdict"] == _SCAM_VERDICT
 
 
 def _claimed_through(rows) -> dict:
@@ -2334,6 +2362,11 @@ class Store:
             ).fetchone()
             if unverified:
                 return {"verdict": "unverified_open", "delay_sec": 0.0}
+            # The lane escalates flagged threads before a pass is spawned, so reaching here means
+            # the verdict landed after the claim. Refused beside the unconfirmed-send check so no
+            # flow can talk past it.
+            if _newest_inbound_is_flagged(conn, thread_id):
+                return {"verdict": "scam_flagged", "delay_sec": 0.0}
             marketplace = thread["market"]
             cutoff = now - pacing_engine.WINDOW_SECONDS
             rows = conn.execute(
@@ -2522,6 +2555,36 @@ class Store:
                     }
                 )
         return folded
+
+    def scam_guard_sweep(self) -> list[dict]:
+        """Escalate every reply-eligible sell thread whose newest buyer message is a scam signal,
+        instead of answering it.
+
+        The cursor advances over that message, because the escalation is the handling and no reply
+        is sent. Without it, resolving the escalation would leave the thread looking unanswered,
+        and a dismissed false positive would be escalated again forever.
+        """
+        swept: list[dict] = []
+        with self._db.transaction() as conn:
+            rows = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            _answerable, flagged = _split_flagged(rows)
+            for row in flagged:
+                thread_id = row["thread_id"]
+                conn.execute(
+                    "UPDATE threads SET cursor_last_msg_id = ?, cursor_last_ts = ?, "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (row["newest_in_msg_id"], row["newest_in_ts"], _now(), thread_id),
+                )
+                esc_id, new = self._open_escalation_in_txn(
+                    conn,
+                    thread_id,
+                    open_question="a scam signal was detected on this thread — confirm or dismiss",
+                    kind="scam",
+                )
+                swept.append(
+                    {"thread_id": thread_id, "escalation_id": esc_id, "escalation_new": new}
+                )
+        return swept
 
     # --- escalations ------------------------------------------------------------------------
 
@@ -2772,6 +2835,17 @@ class Store:
                     "UPDATE scam_signatures SET status = ? WHERE id = ?", (to_status, sig_id)
                 )
         return {"id": sig_id, "status": to_status}
+
+    def thread_scam_blocked(self, thread_id: str) -> bool:
+        """Whether this thread's newest buyer message carries a scam verdict, so nothing may be
+        sent or minted on it. Raises for a thread that does not exist, so a scope refusal reads
+        the same as an absence."""
+        with self._db.transaction() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone():
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            return _newest_inbound_is_flagged(conn, thread_id)
 
     def retract_detect_scam(self, thread_id: str) -> int:
         """Drop detect-sourced bank rows for a thread (a false-positive undo). Seller-confirmed and
@@ -3092,9 +3166,11 @@ class Store:
     def threads_with_unhandled_inbound(self) -> list[dict]:
         """Sell threads whose buyer is waiting: an inbound message past the reply cursor, a status
         that is still conversational, and no escalation already open on them — an escalation means
-        the seller, not the agent, owns the next move."""
+        the seller, not the agent, owns the next move. A thread whose newest buyer message is a
+        scam signal is not waiting on an answer, it is waiting on the seller."""
         rows = self._db.query(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES)
-        return _unhandled_inbound_rows(rows)
+        answerable, _flagged = _split_flagged(rows)
+        return _unhandled_inbound_rows(answerable)
 
     def enqueue_reply_pass(self) -> dict | None:
         """Coalescing route for the reply lane, one transaction: claim every sell thread with
@@ -3113,7 +3189,10 @@ class Store:
             ).fetchone()
             if active:
                 return None
-            claimable = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            rows = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            # Also refused here, in case the sweep has not run: a pass claimed with a flagged
+            # thread would carry the scam message into its prompt.
+            claimable, _flagged = _split_flagged(rows)
             pending = _unhandled_inbound_rows(claimable)
             if not pending:
                 return None
@@ -3731,6 +3810,7 @@ _SCOPE_GUARDED = {
     "get_budget": (("want_id", "want"),),
     "record_checkout": (("item_id", "item"), ("thread_id", "thread")),
     "retract_detect_scam": (("thread_id", "thread"),),
+    "thread_scam_blocked": (("thread_id", "thread"),),
     # Not thread_id: that is the new row's own natural key, not a reference to an existing
     # thread (a duplicate is refused by the insert, and the prefix rule validates its shape).
     "create_thread": (("item_id", "item"), ("want_id", "want")),
@@ -3790,6 +3870,7 @@ _SCOPE_MISS_NOTFOUND = {
     "escalate": ("thread", ThreadNotFound),
     "checkout_floor_gate": ("item", ItemNotFound),
     "reserve_reply": ("thread", ThreadNotFound),
+    "thread_scam_blocked": ("thread", ThreadNotFound),
     "commit_reply": ("thread", ThreadNotFound),
     "record_manual_reply": ("thread", ThreadNotFound),
     "update_want": ("want", WantNotFound),

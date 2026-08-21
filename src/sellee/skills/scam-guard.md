@@ -19,6 +19,12 @@ of the message. The classic tells:
 This is a **hard exception: it overrides autonomy**. No auto-reply setting, on either side, ever
 permits replying to a flagged thread.
 
+Some of this is enforced for you. If a thread's newest buyer message is already flagged as a
+scam, you never see it — it goes to the seller instead — and `send_reply` and
+`carousell_ai_create_checkout_link` refuse on it whatever the conversation says. So the rule
+below is for the signals only *you* can spot: text you read off the marketplace yourself, and
+your own read of a message the scanner let through.
+
 ## The one absolute rule
 
 **Never engage a suspected scammer and never open their link.** No reply — not even a holding

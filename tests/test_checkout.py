@@ -128,3 +128,42 @@ def test_missing_item_errors(make_ctx, store) -> None:
             {"item_id": "item_nope", "thread_id": "fb:1", "agreed_price": 90.0},
             _ctx(make_ctx, FakeRail()),
         )
+
+
+# --- the scam gate --------------------------------------------------------------------------------
+
+
+def test_no_link_is_minted_on_a_thread_carrying_a_scam_signal(make_ctx, store) -> None:
+    """The one value-moving tool in the reply tier, refused server-side on the engine's verdict."""
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    store.create_thread(
+        thread_id="carousell:1",
+        side="sell",
+        market="carousell",
+        counterpart_handle="bob",
+        item_id=item["id"],
+    )
+    store.record_inbound(
+        "carousell:1", msg_id="m1", text="pay via this link", ts=10.0, scam_verdict="scam"
+    )
+    rail = FakeRail()
+    with pytest.raises(ToolError, match="scam signal"):
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "carousell:1", "agreed_price": 90.0},
+            _ctx(make_ctx, rail),
+        )
+    # refused before the rail is touched, so no link exists to be leaked
+    assert rail.calls == 0
+
+
+def test_a_mint_still_works_without_a_thread_row(make_ctx, store) -> None:
+    """A mint has never required a thread to exist; the scam gate must not add that requirement."""
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    rail = FakeRail()
+    res = dispatch(
+        "carousell_ai_create_checkout_link",
+        {"item_id": item["id"], "thread_id": "carousell:absent", "agreed_price": 90.0},
+        _ctx(make_ctx, rail),
+    )
+    assert res["checkout_url"] == _URL

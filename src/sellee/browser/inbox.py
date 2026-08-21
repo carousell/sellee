@@ -407,6 +407,17 @@ def reply_lane(*, store, bus) -> None:
     """
     if store.is_paused():
         return
+    # Flagged threads go to the seller instead of being answered, before any pass is spawned.
+    for swept in store.scam_guard_sweep():
+        if swept["escalation_new"]:
+            bus.publish(
+                "escalation.open",
+                {
+                    "id": swept["escalation_id"],
+                    "thread_id": swept["thread_id"],
+                    "kind": "scam",
+                },
+            )
     claimed = store.enqueue_reply_pass()
     if claimed is None:
         return

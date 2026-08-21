@@ -14,7 +14,7 @@ import hashlib
 
 from sellee.money import to_price_cents
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
-from sellee.store import StoreError
+from sellee.store import StoreError, ThreadNotFound
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -49,6 +49,20 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     item = ctx.store.get_item(item_id)
     if item is None:
         raise ToolError(f"no item with id {item_id!r}")
+
+    # No money moves on a thread flagged as a scam. A mint has never required the thread row to
+    # exist, and this gate must not add that requirement: no thread means no message to have
+    # flagged.
+    try:
+        flagged = ctx.store.thread_scam_blocked(thread_id)
+    except ThreadNotFound:
+        flagged = False
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    if flagged:
+        raise ToolError(
+            "this thread carries a scam signal — it is the seller's call, not this pass's"
+        )
 
     # floor gate first — the store returns only a status, never the floor value
     try:
