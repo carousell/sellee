@@ -72,8 +72,10 @@ Makefile                  local entry points (test, lint, fmt, dist)
     - A `ScopedStore` wraps the store per request: for a headless pass bound to
       a `Scope`, every thread/want/item row-load must be in scope or it answers
       exactly as a missing row; attended sessions run unscoped. This restricts
-      what a pass can read, preventing prompt injection attacks where a buyer
-      tries to get the agent to read data from an unrelated conversation.
+      what a pass can read, so a buyer who talks the agent into reading another
+      conversation gets "no such thread" — for any conversation the pass did not
+      claim. The bound is the pass: a burst of buyers is coalesced into one pass
+      over one scope, so it is not per-buyer isolation.
 
 **Engines**: pure decision modules, no I/O, no network. A tool composes an
 engine with the store; the engine just decides. Ported from the legacy CLIs with

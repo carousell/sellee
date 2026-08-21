@@ -153,8 +153,11 @@ needs but the tier omits is a flow that dead-ends mid-conversation.
   not the pass type.
 - **`reply`** answers buyers, and is the most constrained flow in the system
   because it is the only one acting on words a stranger wrote. It runs **scoped**
-  to the threads the lane claimed for it, so another buyer's thread reads as
-  absent rather than forbidden. It has no web research and no browser: the send
+  to the threads the lane claimed for it, so a thread outside the pass reads as
+  absent rather than forbidden. The scope is per **pass**, not per thread: a
+  burst of buyers is deliberately coalesced into one pass over one scope, so
+  within a pass those conversations share a prompt and a scope, and the bound is
+  "the threads this pass claimed" rather than per-buyer isolation. It has no web research and no browser: the send
   goes out through the daemon's own sink, which the model never touches. Absent by
   design is anything that writes on the seller's behalf — banking an answer,
   confirming a sale, recording a scam signature — since it has only ever heard the

@@ -269,8 +269,13 @@ def _reply_scope(payload: dict):
     """Exactly the threads this pass was spawned for, plus the items they are about.
 
     The reply pass is the one flow that acts on text a stranger wrote, so it is held to the entities
-    the lane claimed for it: another buyer's thread reads as absent rather than forbidden, which is
-    what stops one conversation from being used to reach into another.
+    the lane claimed for it: a thread outside the pass reads as absent rather than forbidden.
+
+    The bound is the **pass**, not the thread. `enqueue_reply_pass` deliberately coalesces every
+    waiting thread into one pass and this mints one scope over all of them, so within a pass a
+    buyer's message sits in the same prompt as, and in scope with, every other buyer coalesced
+    into it. What the scope stops is reaching a thread the lane did not claim — it is not
+    per-buyer isolation.
     """
     return Scope.of(
         threads=payload.get("thread_ids") or (),
