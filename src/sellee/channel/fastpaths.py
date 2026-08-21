@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import settings
+from sellee import prompt_data, settings
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
@@ -167,11 +167,15 @@ def render_catchup(store) -> str:
     escalations = store.list_open_escalations()
     if escalations:
         lines.append("Waiting on your call:")
-        lines.extend(f"• {e['open_question']}" for e in escalations)
+        # One bullet per escalation: the question is buyer-derived (the reply pass composed it
+        # while reading a stranger), and a newline in it would read as an extra escalation.
+        lines.extend(f"• {prompt_data.one_line(e['open_question'])}" for e in escalations)
     notices = store.list_queued_notices()
     if notices:
         lines.append("Updates:" if lines else "Updates for you:")
-        lines.extend(f"• {n['text']}" for n in notices)
+        # Flattened for the same reason: this is a bulleted list, so one notice has to be one
+        # bullet whatever it contains.
+        lines.extend(f"• {prompt_data.one_line(n['text'])}" for n in notices)
     pending = settings.pending_view(store)
     if pending:
         lines.append("Changes awaiting your OK:")

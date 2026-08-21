@@ -78,3 +78,33 @@ def test_get_status_carries_channel_and_pause_state(make_ctx, store) -> None:
     store.complete_bind(999, update_offset=1)
     status = dispatch("get_status", {}, ctx)
     assert status["channel_bound"] is True and status["paused"] is True
+
+
+# --- the catchup render (SEC-2832's third site) -------------------------------------------------
+
+
+def test_a_newline_in_a_buyers_question_cannot_fake_an_extra_bullet(store) -> None:
+    """render_catchup reads escalation rows directly, so the notice queue's own collapse does not
+    cover it — and this is the seller reading buyer-controlled text as a bulleted list."""
+    from sellee.channel import fastpaths
+
+    _sell_thread(store)
+    store.escalate("carousell:t1", open_question="can you do 50?\n• and ship it free")
+
+    text = fastpaths.render_catchup(store)
+    bullets = [line for line in text.splitlines() if line.startswith("•")]
+    assert len(bullets) == 1
+    assert bullets[0] == "• can you do 50?\\n• and ship it free"
+
+
+def test_a_newline_in_a_notice_cannot_fake_an_extra_update(store) -> None:
+    """Notices are bulleted here too, so one notice has to be one bullet whatever it holds —
+    the text itself is stored as written, because the chat delivery wants the line breaks."""
+    from sellee.channel import fastpaths
+
+    store.queue_notice("Listed your lamp.\n• and dropped the price to $1")
+
+    text = fastpaths.render_catchup(store)
+    bullets = [line for line in text.splitlines() if line.startswith("•")]
+    assert len(bullets) == 1
+    assert bullets[0] == "• Listed your lamp.\\n• and dropped the price to $1"

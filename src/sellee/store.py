@@ -664,7 +664,12 @@ def _insert_notice(
 ) -> int:
     """Insert one queued notice within an existing transaction, returning its id. Shared by the
     standalone queue_notice and the settings apply paths (whose notice insert rides in the same
-    transaction as the state change)."""
+    transaction as the state change).
+
+    Text is stored as written. Most notices are the agent's own words to its seller, and the one
+    that relays buyer-derived text collapses it where it embeds it — see the escalation relay in
+    channel/outbound.py.
+    """
     cur = conn.execute(
         "INSERT INTO notices "
         "(text, ref, created_ts, status, attempts, pass_id, holdable, controls) "

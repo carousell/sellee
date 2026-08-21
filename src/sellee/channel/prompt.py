@@ -11,6 +11,7 @@ context (capped by count and chars), not a memory system; long-term facts stay b
 
 from __future__ import annotations
 
+from sellee import prompt_data
 from sellee.proc_tree import PASS_PROMPT_MARKER
 
 # The conversational window caps (F13): the most recent N entries, further trimmed to a char budget.
@@ -43,12 +44,22 @@ def _format_transcript(transcript: list, char_cap: int, skip_paths=()) -> str:
     claimed the photo's row sees it under "messages to handle now", so without this the paths would
     vanish the moment the conversation moved on. Paths already in that block are skipped: it is the
     authoritative copy, and listing the same file twice invites attaching it twice.
+
+    The seller's own turns render verbatim — they are the principal this agent acts for, and
+    escaping their words would degrade the most quality-sensitive text in the product to no end.
+    A notice is different: it is the agent's past output, and an escalation's carries text the
+    reply pass composed while reading a buyer. Those render under their own attribution and
+    fenced, because this prompt drives the full-scope tier and attacker text wearing the agent's
+    own `[you]` is the sharp edge here.
     """
     skip = set(skip_paths)
     blocks = []
     for entry in transcript:
-        who = "seller" if entry["direction"] == "in" else "you"
-        lines = [f"[{who}] {entry['text']}"]
+        if entry.get("kind") == "notice":
+            lines = [f"[notice] {prompt_data.as_data(entry['text'])}"]
+        else:
+            who = "seller" if entry["direction"] == "in" else "you"
+            lines = [f"[{who}] {entry['text']}"]
         for path in entry.get("media_paths") or []:
             if path not in skip:
                 lines.append(f"     {path}")

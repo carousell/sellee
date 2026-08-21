@@ -14,7 +14,7 @@ import logging
 import time
 from datetime import datetime
 
-from sellee import settings
+from sellee import prompt_data, settings
 from sellee.channel import fastpaths
 from sellee.engines import pacing
 
@@ -125,11 +125,13 @@ def escalation_notifier(store):
         esc = store.get_escalation(event.payload.get("id"))
         if esc is None:  # resolved/pruned between publish and here — catchup covers it
             return
+        # Buyer-derived: a newline here would stage a second "Needs your call:" nobody raised.
+        question = prompt_data.one_line(esc["open_question"])
         # An escalation is a decision the seller must make; it is not holdable, so it delivers at
         # any hour (a meetup confirmation shouldn't wait until morning — the seller can mute
         # Telegram themselves if they want silence). holdable defaults to False, so this is just a
         # plain queue_notice — spelled out here because the non-hold is a deliberate policy.
-        store.queue_notice(f"Needs your call: {esc['open_question']}", ref=esc["thread_id"])
+        store.queue_notice(f"Needs your call: {question}", ref=esc["thread_id"])
 
     return _on
 
