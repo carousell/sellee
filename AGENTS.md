@@ -107,7 +107,7 @@ Run these, green:
 make bootstrap  # once, or after a dependency change: uv, the interpreter, the deps
 make lint       # ruff check + ruff format --check
 make typecheck  # pyright over the annotated store surface
-make test
+make test       # parallel via pytest-xdist; `make test-serial` for -s/--pdb debugging
 ```
 
 Every target runs through `uv run`, so what you test on is what a user's install

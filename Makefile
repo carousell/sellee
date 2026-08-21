@@ -11,7 +11,7 @@ VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
 	import sellee; print(sellee.__version__)")
 STAGE = $(DIST)/sellee-$(VERSION)
 
-.PHONY: bootstrap test lint fmt typecheck dist diagrams
+.PHONY: bootstrap test test-serial lint fmt typecheck dist diagrams
 
 # Provision the toolchain this repo builds against: uv itself if it is missing or too old, the
 # pinned interpreter, then the dev dependency set. ./setup does the same thing for a user, from
@@ -19,7 +19,15 @@ STAGE = $(DIST)/sellee-$(VERSION)
 bootstrap:
 	@./setup --bootstrap-only --with-dev
 
+# Parallel by default: the suite is wait-bound (sleeps/timeouts, not CPU), so xdist workers
+# cut wall time several-fold. worksteal keeps the last workers busy through the long tail of
+# multi-second tests.
 test:
+	$(RUN) python -m pytest -n auto --dist worksteal
+
+# Serial run, for debugging: under xdist there is no live stdout (-s), --pdb does not work,
+# and failure output is grouped per worker.
+test-serial:
 	$(RUN) python -m pytest
 
 # Regenerate all diagrams (SVG + PNG) under docs/.
