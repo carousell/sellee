@@ -42,8 +42,7 @@ dev = [
     # Held below 2.0, which renamed the streamable-HTTP client entry point; moving the
     # conformance client to that API is its own change.
     "mcp>=1.29,<2",
-    # parallel test execution for `make test` (the suite is wait-bound, so workers are
-    # nearly free speedup). Dev-only; execnet is its single transitive dependency.
+    # parallel test execution for `make test`
     "pytest-xdist",
 ]
 

@@ -19,14 +19,11 @@ STAGE = $(DIST)/sellee-$(VERSION)
 bootstrap:
 	@./setup --bootstrap-only --with-dev
 
-# Parallel by default: the suite is wait-bound (sleeps/timeouts, not CPU), so xdist workers
-# cut wall time several-fold. worksteal keeps the last workers busy through the long tail of
-# multi-second tests.
+# Runs tests in parallel.
 test:
 	$(RUN) python -m pytest -n auto --dist worksteal
 
-# Serial run, for debugging: under xdist there is no live stdout (-s), --pdb does not work,
-# and failure output is grouped per worker.
+# Runs tests serially.
 test-serial:
 	$(RUN) python -m pytest
 
