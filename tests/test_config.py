@@ -210,6 +210,14 @@ def test_invalid_browser_values_are_rejected(xdg_tmp, obj) -> None:
         load()
 
 
+def test_an_unset_chrome_port_means_chrome_chooses_one(xdg_tmp) -> None:
+    """The default. A fixed port is one a local process can bind before Chrome does; letting Chrome
+    choose leaves nothing to bind ahead of it."""
+    assert Config().chrome_cdp_port is None
+    _write_config({"chrome_cdp_port": None})
+    assert load().chrome_cdp_port is None
+
+
 def test_browser_knobs_round_trip(xdg_tmp) -> None:
     _write_config(
         {
@@ -223,7 +231,7 @@ def test_browser_knobs_round_trip(xdg_tmp) -> None:
     )
     cfg = load()
     assert cfg.chrome_bin == "/opt/chrome/chrome"
-    assert cfg.chrome_cdp_port == 9333
+    assert cfg.chrome_cdp_port == 9333  # pinning still works, for the container and the by-hand run
     assert cfg.playwright_mcp_cmd == ["node", "/opt/mcp/cli.js"]
     assert cfg.inbox_read_interval_sec == 120.0
     assert cfg.inbox_full_sweep_every == 1  # 1 disables the skip gate, a supported posture

@@ -686,7 +686,7 @@ class _Handler(BaseHTTPRequestHandler):
         from sellee.browser import chrome
 
         cfg = self._app.config or config_module.load()
-        if not chrome.is_ready(cfg.chrome_cdp_port):
+        if not chrome.is_ready(chrome.resolve_port(cfg.chrome_cdp_port)):
             return "Chrome isn't running"
         if self._app.store.active_passes_of_types(_BROWSER_PASS_TYPES):
             return "a pass is using the browser"

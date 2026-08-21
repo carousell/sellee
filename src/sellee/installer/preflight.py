@@ -426,7 +426,7 @@ def check_supervised_spawn(config) -> checks.Check:
     hiccup.
     """
     command = config.playwright_mcp_cmd or browser_client.default_command(
-        browser_client.cdp_endpoint(config.chrome_cdp_port)
+        browser_client.cdp_endpoint(chrome.resolve_port(config.chrome_cdp_port))
     )
     fragment = node_path_fragment()
     path = supervised_path(fragment)
@@ -455,7 +455,7 @@ def prewarm_playwright(config) -> checks.Check:
     """Resolve the Playwright MCP package now, so the daemon's first browser use is not a
     download. A miss is a warning: it costs latency on the first publish, nothing more."""
     command = config.playwright_mcp_cmd or browser_client.default_command(
-        browser_client.cdp_endpoint(config.chrome_cdp_port)
+        browser_client.cdp_endpoint(chrome.resolve_port(config.chrome_cdp_port))
     )
     npx = shutil.which(str(command[0]))
     if not npx:

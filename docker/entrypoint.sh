@@ -28,6 +28,11 @@ if [ -n "${CLAUDE_CODE_OAUTH_TOKEN:-}" ] && [ -n "${ANTHROPIC_API_KEY:-}" ]; the
 		"the claude CLI will use ANTHROPIC_API_KEY (per-token Console billing)" >&2
 fi
 
+# A fixed number on both sides on purpose. Chrome announces an unpinned port inside its own
+# profile directory, and that profile is on the seller's desktop — unreadable from in here, and in
+# any case the forwarder has to be listening before Chrome is started. So the container keeps the
+# pinned port; only a Chrome the daemon starts itself gets to choose one. Overriding this means
+# overriding it for start-chrome.sh too, and setting chrome_cdp_port to match.
 port="${SELLEE_CDP_PORT:-9222}"
 # Docker Desktop's name for the host. Podman calls it host.containers.internal.
 host="${SELLEE_CDP_HOST:-host.docker.internal}"

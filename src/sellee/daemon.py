@@ -79,34 +79,42 @@ CHROME_STARTED_NOTICE = (
 )
 
 
-def ensure_chrome(cfg, store, bus, should_stop=None) -> None:
-    """Make Chrome answer on its CDP port, or raise `BrowserUnavailable` with the by-hand command.
+def ensure_chrome(cfg, store, bus, should_stop=None) -> int:
+    """Make Chrome answer on its CDP port and return that port, or raise `BrowserUnavailable`
+    with the by-hand command.
 
     Acquiring the browser means ensuring it runs: this is the one place that rule lives, called on
     every acquisition because Chrome can be closed at any moment after the client is built. A launch
     queues the seller notice before anything drives the window, so it never appears unexplained.
 
+    The port comes back rather than going in, because unpinned it is Chrome's to choose and is only
+    known once Chrome is up.
+
     Where the browser is the seller's own, on a machine this process only reaches over a port, the
     acquisition is the probe and nothing else — so no window is ever started, and a closed one is
-    reported with the instruction for starting it there.
+    reported with the instruction for starting it there. That side has to be given a number: the
+    profile Chrome announces its port into is on the other machine, so the port is an agreement
+    between two processes that share no filesystem, and the only thing to do is resolve it here.
     """
     may_launch = deployment.manages_chrome()
-    state = chrome.ensure_running(
-        cfg.chrome_cdp_port,
+    asked = cfg.chrome_cdp_port if may_launch else chrome.resolve_port(cfg.chrome_cdp_port)
+    state, port = chrome.ensure_running(
+        asked,
         chrome_bin=cfg.chrome_bin,
         may_launch=may_launch,
         should_stop=should_stop,
     )
-    if state == chrome.UNAVAILABLE:
+    if state == chrome.UNAVAILABLE or port is None:
         hint = (
-            chrome.bring_up_hint(cfg.chrome_cdp_port, chrome_bin=cfg.chrome_bin)
+            chrome.bring_up_hint(asked, chrome_bin=cfg.chrome_bin)
             if may_launch
-            else chrome.container_bring_up_hint(cfg.chrome_cdp_port)
+            else chrome.container_bring_up_hint(asked)
         )
         raise browser_client.BrowserUnavailable(hint)
     if state == chrome.LAUNCHED:
         store.queue_notice(CHROME_STARTED_NOTICE)
-        bus.publish("browser.chrome_launched", {"port": cfg.chrome_cdp_port})
+        bus.publish("browser.chrome_launched", {"port": port})
+    return port
 
 
 def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
@@ -127,7 +135,7 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
         return None
 
     def warm() -> None:
-        argv = ["npx", "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
+        argv = [browser_client.SERVER_BINARY, "--yes", browser_client.PINNED_MCP_SPEC, "--version"]
         try:
             proc = subprocess.run(
                 argv,
@@ -161,19 +169,28 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     Both preconditions are re-checked on every acquisition, not just at construction: the client is
     cached (in `holder`, so the daemon's shutdown can close it), but Chrome can be closed at any
     point after — and Node is checked first, so a machine that cannot drive a browser never has one
-    opened for it.
+    opened for it. That check only ever looks at the binary, which is why it can still come first
+    now that the CDP endpoint is not known until Chrome is up.
+
+    A cached client is only reusable while it dials the right endpoint. An unpinned Chrome that was
+    closed and started again comes back on a different port, so the command is compared and a client
+    holding the old one is replaced rather than left to fail every call.
     """
 
     def browser_factory():
+        browser_client.ensure_available(cfg.playwright_mcp_cmd or [browser_client.SERVER_BINARY])
+        port = ensure_chrome(cfg, store, bus, should_stop)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
-            browser_client.cdp_endpoint(cfg.chrome_cdp_port)
+            browser_client.cdp_endpoint(port)
         )
-        browser_client.ensure_available(command)
-        ensure_chrome(cfg, store, bus, should_stop)
         client = holder.get("client")
+        if client is not None and holder.get("command") != command:
+            client.close()
+            client = None
         if client is None:
             client = browser_client.BrowserClient(command=command)
             holder["client"] = client
+            holder["command"] = command
         return client
 
     return browser_factory

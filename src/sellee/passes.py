@@ -22,6 +22,7 @@ from typing import Callable
 
 from sellee import marketplaces, paths, settings, skills
 from sellee import reply_prompt as reply_prompt_mod
+from sellee.browser import chrome
 from sellee.browser import client as browser_client
 from sellee.browser import markets as market_adapters
 from sellee.channel import prompt as channel_prompt_mod
@@ -363,11 +364,15 @@ def browser_command(config) -> tuple:
     Each pass gets its own instance, spawned by the harness inside the pass's process group, so it
     dies with the pass and the daemon's own instance is untouched. Both attach to the same warm
     Chrome over CDP.
+
+    The port is resolved here, at spawn time, rather than carried from anywhere earlier: unpinned it
+    is whatever the live Chrome announced, and a pass built against a port from a Chrome that has
+    since restarted would dial nothing.
     """
     configured = getattr(config, "playwright_mcp_cmd", None)
     if configured:
         return tuple(configured)
-    port = getattr(config, "chrome_cdp_port", 9222)
+    port = chrome.resolve_port(getattr(config, "chrome_cdp_port", None))
     return tuple(browser_client.default_command(browser_client.cdp_endpoint(port)))
 
 

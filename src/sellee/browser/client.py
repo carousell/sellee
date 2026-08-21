@@ -40,6 +40,10 @@ DEFAULT_MCP_PACKAGE = "@playwright/mcp"
 # cache key stops being exact. Bumping this is a one-line change that ships like any other.
 MCP_VERSION = "0.0.78"
 PINNED_MCP_SPEC = f"{DEFAULT_MCP_PACKAGE}@{MCP_VERSION}"
+# What actually gets executed. Named separately because "is this machine able to spawn the server at
+# all" is answerable from the binary alone — no CDP endpoint, hence no port, hence askable before
+# Chrome has been brought up and chosen one.
+SERVER_BINARY = "npx"
 _PROTOCOL_VERSION = "2025-06-18"
 # How much of its own output the server may keep before evicting the oldest. Small on purpose: these
 # files are page content, useful for diagnosis for a short while and not worth hoarding.
@@ -105,7 +109,7 @@ def default_command(cdp_endpoint: str) -> list:
     never grows without bound.
     """
     return [
-        "npx",
+        SERVER_BINARY,
         "--yes",
         PINNED_MCP_SPEC,
         "--cdp-endpoint",

@@ -5,6 +5,12 @@
 # The switches are the ones every other platform uses. The debugging port stays on loopback: it
 # is browser control with no authentication.
 #
+# The port is pinned here, unlike a Chrome the daemon starts for itself — that one is given
+# --remote-debugging-port=0 and announces its choice inside its own profile directory. Nothing
+# started from here can do that: the daemon is on the other side of a container boundary or at
+# least reads a different config, so the port has to be a number both sides already know. Set
+# SELLEE_CDP_PORT on both if the default is taken, and set chrome_cdp_port to match.
+#
 # Run it with:  powershell -ExecutionPolicy Bypass -File .\start-chrome.ps1
 
 $ErrorActionPreference = 'Stop'

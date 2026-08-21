@@ -19,6 +19,16 @@ and only a silent port makes it safe to clear a `Singleton*` lock left by a kill
 Chrome and launch. Chrome gets its own session, so neither the daemon exiting nor a
 pass being killed takes the seller's browser with it.
 
+**The port is Chrome's to choose.** The daemon launches Chrome with
+`--remote-debugging-port=0` and reads the chosen port from
+`<profile>/DevToolsActivePort`; consumers resolve it from there at the moment of use. A
+port that does not exist in advance cannot be squatted, and the `0700` profile keeps it
+from other users. Setting `chrome_cdp_port` pins a port instead, for the two paths where
+another process must know it in advance and cannot read the profile: the container's
+forwarder and a Chrome the seller starts by hand. The readiness probe
+(`chrome.is_ready`) also checks *whose* Chrome answered, not just that something served
+JSON on the port.
+
 **Raising that window is macOS-only.** `browser/foreground.py` finds the agent's Chrome
 by the pid listening on its CDP port — the only thing that tells it apart from the
 seller's own Chrome — and activates that pid. `connect` raises the window (the
@@ -50,9 +60,27 @@ The endpoint stays `http://127.0.0.1:<port>` on both sides of that boundary, and
 is load-bearing rather than incidental. Chrome refuses a `/json*` request whose `Host`
 header is a DNS name (its DNS-rebinding protection) and Playwright's first act is
 exactly that request; the `webSocketDebuggerUrl` it answers with is loopback-shaped and
-Playwright dials it verbatim. So the container forwards its own `127.0.0.1:9222` to the
-host rather than naming the host, and nothing in this file — not `cdp_endpoint`, not
+Playwright dials it verbatim. So the container forwards its own `127.0.0.1:<port>` to
+the host rather than naming the host, and nothing in this file — not `cdp_endpoint`, not
 `browser_command`, not the `.mcp.json` emitter — has a deployment branch in it.
+
+## Trust boundary
+
+The CDP port has no authentication of its own. What protects it:
+
+- **Loopback only.** The port binds `127.0.0.1`; nothing on the network can reach it.
+- **A dedicated `0700` profile**, holding marketplace sessions and nothing else — never
+  the seller's everyday browser.
+- **Chrome's own defences stop web pages**: `/json` refuses DNS-name `Host` headers,
+  responses carry no CORS headers, and Origin-bearing WebSocket upgrades are refused
+  (we never pass `--remote-allow-origins`, which would relax that).
+- **A same-user process is already inside the boundary** — it can read the profile and
+  secrets directly, so CDP gives it nothing new. The Chrome-chosen port defends against
+  what is outside: squatting the port before Chrome starts, and other local users
+  finding it.
+- **A pinned port keeps the weaker posture, knowingly** — it is guessable and gives the
+  probe less to verify; the cost of a port two processes must agree on without sharing
+  a filesystem.
 
 ## The client
 
@@ -457,7 +485,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 
 | key | default | what it does |
 | --- | --- | --- |
-| `chrome_cdp_port` | `9222` | the warm Chrome's CDP port on loopback — in a container, the port the forwarder listens on *and* forwards to |
+| `chrome_cdp_port` | `null` | the warm Chrome's CDP port on loopback. `null` lets Chrome pick one. Set a number only where another process has to know the port in advance: the container's forwarder, or a Chrome you start by hand |
 | `chrome_bin` | `null` | the Chrome executable to start; `null` means the OS default install path |
 | `playwright_mcp_cmd` | `null` | override the server command; `null` means `npx --yes @playwright/mcp@<pinned version>` against the CDP endpoint. The pin lives in `browser/client.py` (`MCP_VERSION`) — bump it there |
 | `inbox_read_interval_sec` | `300.0` | how often the read lane ticks |

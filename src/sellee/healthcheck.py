@@ -240,7 +240,11 @@ def _chrome_blocked_fix(cfg, blocked: str) -> str:
     """
     if not blocked or not deployment.is_container():
         return ""
-    return "" if chrome.is_ready(cfg.chrome_cdp_port) else chrome.CONTAINER_CHROME_FIX
+    return (
+        ""
+        if chrome.is_ready(chrome.resolve_port(cfg.chrome_cdp_port))
+        else chrome.CONTAINER_CHROME_FIX
+    )
 
 
 def _browser_unknown(reason: str) -> checks.Check:
@@ -257,7 +261,7 @@ def _browser_server_probe(cfg) -> checks.Check:
     installed into the image, so the image's own PATH is both the worker's PATH and the answer.
     """
     command = cfg.playwright_mcp_cmd or browser_client.default_command(
-        browser_client.cdp_endpoint(cfg.chrome_cdp_port)
+        browser_client.cdp_endpoint(chrome.resolve_port(cfg.chrome_cdp_port))
     )
     binary = str(command[0])
     container = deployment.is_container()

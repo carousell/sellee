@@ -29,7 +29,7 @@ import sys
 import time
 
 from sellee import channel, config, control, deployment, qr
-from sellee.browser import foreground
+from sellee.browser import chrome, foreground
 
 _POLL_INTERVAL_SEC = 1.0
 # Getting the deep link onto a phone can take a while for a desktop operator, so the interactive
@@ -175,7 +175,7 @@ def _surface_window(body: dict) -> None:
             "Chrome window; /sellee changes this."
         )
         return
-    if not foreground.raise_window(config.load().chrome_cdp_port):
+    if not foreground.raise_window(chrome.resolve_port(config.load().chrome_cdp_port)):
         print(
             "  Can't spot it? Look for a separate Chrome window (mine, not your usual "
             "one) — check the Dock if you minimized it."

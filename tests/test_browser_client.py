@@ -23,6 +23,20 @@ from sellee.browser.client import (
     sections,
 )
 
+# The real probe, bound at import so the conftest guard's stub cannot reach it. These are the
+# probe's own tests, so they are the ones that must call the real thing.
+_real_is_ready = chrome.is_ready
+
+
+@pytest.fixture(autouse=True)
+def _throwaway_profile(xdg_tmp):
+    """Every path to ensure_running reaches clear_stale_locks, which deletes the Singleton locks
+    and the announced-port file out of the resolved profile directory. Unredirected, that is the
+    developer's real agent profile — running this suite beside a live agent Chrome would delete
+    its announcement and trick the daemon into a second launch on a live profile."""
+    return xdg_tmp
+
+
 FAKE = Path(__file__).parent / "fake_playwright_mcp.py"
 
 
@@ -422,11 +436,8 @@ def test_same_page_ignores_only_what_a_navigation_may_change(left, right, same) 
 
 
 def test_the_readiness_probe_is_false_with_nothing_listening() -> None:
-    # port 1 is privileged and never our Chrome, so this exercises the unreachable path — via the
-    # real probe, which the conftest guard stubs out for every other test
-    from tests.conftest import real_is_ready
-
-    assert real_is_ready(1, timeout_sec=0.2) is False
+    # port 1 is privileged and never our Chrome, so this exercises the unreachable path
+    assert _real_is_ready(1, timeout_sec=0.2) is False
 
 
 def test_the_launch_command_uses_the_agents_own_profile(xdg_tmp) -> None:
@@ -436,6 +447,18 @@ def test_the_launch_command_uses_the_agents_own_profile(xdg_tmp) -> None:
     assert f"--user-data-dir={paths.browser_profile_dir()}" in argv
     assert "--remote-debugging-port=9222" in argv
     assert str(paths.browser_profile_dir()) != str(Path.home() / "Library")
+
+
+def test_an_unpinned_launch_lets_chrome_choose_the_port(xdg_tmp) -> None:
+    """A fixed port is one a local process can bind before Chrome does, and one another local user
+    can guess. Chrome picking it means neither: nothing binds a port that does not exist yet, and
+    the choice is announced only inside a 0700 profile."""
+    assert "--remote-debugging-port=0" in chrome.launch_command(None, chrome_bin="/bin/chrome")
+
+
+def test_a_pinned_launch_still_asks_for_that_exact_port(xdg_tmp) -> None:
+    """A seller who pinned a port meant it — the container's forwarder is agreed on a number."""
+    assert "--remote-debugging-port=9333" in chrome.launch_command(9333, chrome_bin="/bin/chrome")
 
 
 def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_tmp) -> None:
@@ -455,13 +478,154 @@ def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     assert chrome.clear_stale_locks() == []  # idempotent
 
 
+def test_a_stale_announced_port_is_cleared_rather_than_trusted(xdg_tmp) -> None:
+    """A killed Chrome leaves its port behind. Believing it aims the probe at a port this Chrome no
+    longer holds — and which anything else on the machine may have taken since."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    assert chrome.active_port() == 45123
+    assert chrome.ACTIVE_PORT_FILE in chrome.clear_stale_locks()
+    assert chrome.active_port() is None
+
+
+# --- the announced port --------------------------------------------------------------------------
+
+
+def _write_active_port(port, ws_path: str = "/devtools/browser/abc-123") -> None:
+    from sellee import paths
+
+    (paths.browser_profile_dir() / chrome.ACTIVE_PORT_FILE).write_text(f"{port}\n{ws_path}\n")
+
+
+def test_the_announced_port_is_read_from_the_profile(xdg_tmp) -> None:
+    """Chrome writes the port it bound on line 1 and its browser WebSocket path on line 2."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    assert chrome.active_port() == 45123
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["", "\n", "not-a-port\n/devtools/browser/x", "0\n/devtools/browser/x", "99999\n"],
+)
+def test_an_unreadable_announcement_reads_as_no_chrome(xdg_tmp, text) -> None:
+    """A file we did not write or cannot parse must not become a port we then dial."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    (paths.browser_profile_dir() / chrome.ACTIVE_PORT_FILE).write_text(text)
+    assert chrome.active_port() is None
+
+
+def test_a_missing_announcement_reads_as_no_chrome(xdg_tmp) -> None:
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    assert chrome.active_port() is None
+
+
+def test_a_pinned_port_wins_over_the_announced_one(xdg_tmp) -> None:
+    """The pin is an agreement with something that cannot read this file — a container's forwarder,
+    or a Chrome someone started by hand — so it is not the file's to override."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    assert chrome.resolve_port(9333) == 9333
+    assert chrome.resolve_port(None) == 45123
+
+
+def test_with_no_pin_and_no_chrome_the_endpoint_falls_back_to_the_documented_port(xdg_tmp) -> None:
+    """The callers that only build an endpoint need a number. It is the same number the by-hand
+    instruction names, so a Chrome started that way is the one they then reach."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    assert chrome.resolve_port(None) == chrome.DEFAULT_CDP_PORT
+
+
+# --- whose Chrome is answering -------------------------------------------------------------------
+
+
+class _Answer:
+    """A loopback responder standing in for whatever bound the port first."""
+
+    def __init__(self, payload) -> None:
+        self._body = json.dumps(payload).encode()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc) -> None:
+        return None
+
+    def read(self):
+        return self._body
+
+
+def _answering(monkeypatch, payload) -> None:
+    monkeypatch.setattr(chrome.urllib.request, "urlopen", lambda url, **kw: _Answer(payload))
+
+
+_CHROME_VERSION = {
+    "Browser": "Chrome/140.0.7339.16",
+    "webSocketDebuggerUrl": "ws://127.0.0.1:45123/devtools/browser/abc-123",
+}
+
+
+def test_the_probe_accepts_the_chrome_that_announced_this_port(xdg_tmp, monkeypatch) -> None:
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    _answering(monkeypatch, _CHROME_VERSION)
+    assert _real_is_ready(45123) is True
+
+
+def test_the_probe_rejects_a_responder_that_is_not_chrome(xdg_tmp, monkeypatch) -> None:
+    """Parseable JSON on the port used to mean "our Chrome is up". Anything running as this user
+    can bind a loopback port and serve some; taken for Chrome, it is handed the agent's browser
+    session — free to feed the agent fabricated pages and read back whatever it types into them."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    for payload in (
+        {"ok": True},
+        [],
+        {"Browser": "MyLittleProxy/1.0"},
+        {"Browser": 9},
+        # Right shape, wrong instance: it never saw the path Chrome announced for this port.
+        {"Browser": "Chrome/140.0.7339.16", "webSocketDebuggerUrl": "ws://127.0.0.1:45123/x"},
+        {"Browser": "Chrome/140.0.7339.16"},
+    ):
+        _answering(monkeypatch, payload)
+        assert _real_is_ready(45123) is False, payload
+
+
+def test_the_probe_still_answers_where_chrome_announced_nothing_here(xdg_tmp, monkeypatch) -> None:
+    """In a container the announcement is on the seller's own machine, so there is no path to
+    cross-check — the Browser field is the whole check, and it has to keep working."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _answering(monkeypatch, {"Browser": "Chrome/140.0.7339.16"})
+    assert _real_is_ready(9222) is True
+    _answering(monkeypatch, {"Browser": "MyLittleProxy/1.0"})
+    assert _real_is_ready(9222) is False
+
+
 def test_ensure_running_launches_nothing_when_chrome_already_answers(monkeypatch) -> None:
     """Two Chromes cannot share the profile, so a live port is the end of it."""
     launches = []
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
     monkeypatch.setattr(chrome.subprocess, "Popen", lambda *a, **kw: launches.append(a))
 
-    assert chrome.ensure_running(9222) == chrome.READY
+    assert chrome.ensure_running(9222) == (chrome.READY, 9222)
     assert launches == []
 
 
@@ -479,7 +643,7 @@ def test_ensure_running_starts_chrome_and_waits_for_the_port(xdg_tmp, monkeypatc
         chrome.subprocess, "Popen", lambda argv, **kw: launched.update(argv=argv, kw=kw)
     )
 
-    assert chrome.ensure_running(9222, chrome_bin="/bin/chrome") == chrome.LAUNCHED
+    assert chrome.ensure_running(9222, chrome_bin="/bin/chrome") == (chrome.LAUNCHED, 9222)
     assert launched["argv"][0] == "/bin/chrome"
     # Its own session: the daemon exiting, or a pass group being killed, must not take the seller's
     # browser with it.
@@ -494,7 +658,8 @@ def test_ensure_running_reports_unavailable_when_chrome_never_answers(monkeypatc
     monkeypatch.setattr(chrome.subprocess, "Popen", lambda argv, **kw: None)
 
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
 
 
@@ -505,7 +670,65 @@ def test_ensure_running_reports_unavailable_when_the_binary_is_missing(monkeypat
         raise FileNotFoundError(argv[0])
 
     monkeypatch.setattr(chrome.subprocess, "Popen", _boom)
-    assert chrome.ensure_running(9222, chrome_bin="/nope/chrome") == chrome.UNAVAILABLE
+    assert chrome.ensure_running(9222, chrome_bin="/nope/chrome") == (chrome.UNAVAILABLE, None)
+
+
+def test_an_unpinned_launch_reports_the_port_chrome_chose(xdg_tmp, monkeypatch) -> None:
+    """The port comes out of the call, not into it — every consumer builds its CDP endpoint from
+    what this returns."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+
+    def _launch(argv, **kw):
+        _write_active_port(45123)
+
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
+    monkeypatch.setattr(chrome, "_LAUNCH_POLL_SEC", 0.0)
+    monkeypatch.setattr(chrome.subprocess, "Popen", _launch)
+
+    assert chrome.ensure_running(None, chrome_bin="/bin/chrome") == (chrome.LAUNCHED, 45123)
+
+
+def test_an_unpinned_chrome_that_announces_nothing_is_unavailable(xdg_tmp, monkeypatch) -> None:
+    """With no announcement there is no port to probe, so the wait ends in UNAVAILABLE rather than
+    in a guess. Nothing is dialled at all — a port we only guessed is a port something else may be
+    sitting on."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    probed = []
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: probed.append(port) or True)
+    monkeypatch.setattr(chrome, "_LAUNCH_POLL_SEC", 0.0)
+    monkeypatch.setattr(chrome.subprocess, "Popen", lambda argv, **kw: None)
+
+    assert chrome.ensure_running(None, chrome_bin="/bin/chrome", wait_sec=0.01) == (
+        chrome.UNAVAILABLE,
+        None,
+    )
+    assert probed == []
+
+
+def test_an_unpinned_launch_does_not_trust_a_dead_chromes_port(xdg_tmp, monkeypatch) -> None:
+    """A killed Chrome's announcement outlives it, naming a port nothing holds any more. The
+    bring-up clears it rather than carrying it forward, and reports the port the new Chrome
+    chose."""
+    from sellee import paths
+
+    paths.ensure_data_dirs()
+    _write_active_port(45123)
+    cleared = []
+
+    def _launch(argv, **kw):
+        cleared.append(chrome.active_port())
+        _write_active_port(46001)
+
+    monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: port == 46001)
+    monkeypatch.setattr(chrome, "_LAUNCH_POLL_SEC", 0.0)
+    monkeypatch.setattr(chrome.subprocess, "Popen", _launch)
+
+    assert chrome.ensure_running(None, chrome_bin="/bin/chrome") == (chrome.LAUNCHED, 46001)
+    assert cleared == [None]  # the dead Chrome's port went before the new one started
 
 
 def test_two_concurrent_callers_launch_one_chrome(xdg_tmp, monkeypatch) -> None:
@@ -539,7 +762,7 @@ def test_two_concurrent_callers_launch_one_chrome(xdg_tmp, monkeypatch) -> None:
         t.join()
 
     assert len(launches) == 1
-    assert sorted(results) == [chrome.LAUNCHED, chrome.READY]
+    assert sorted(results) == [(chrome.LAUNCHED, 9222), (chrome.READY, 9222)]
 
 
 def test_a_live_port_clears_the_failed_launch_backoff(monkeypatch) -> None:
@@ -552,15 +775,17 @@ def test_a_live_port_clears_the_failed_launch_backoff(monkeypatch) -> None:
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: False)
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
-    assert chrome.ensure_running(9222) == chrome.READY
+    assert chrome.ensure_running(9222) == (chrome.READY, 9222)
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: False)
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
     assert len(launches) == 2  # cleared, so this launched instead of sitting out the window
 
@@ -576,22 +801,25 @@ def test_a_failed_launch_quiets_further_attempts_for_the_backoff_window(monkeypa
     monkeypatch.setattr(chrome.subprocess, "Popen", lambda argv, **kw: launches.append(argv))
 
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
     assert len(launches) == 1  # the second attempt was quieted, not retried
 
     # A port that answers is READY regardless — the backoff only quiets launches.
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
-    assert chrome.ensure_running(9222) == chrome.READY
+    assert chrome.ensure_running(9222) == (chrome.READY, 9222)
 
     # Past the window, launching is tried again.
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: False)
     chrome._last_failed_launch_ts = _time.monotonic() - chrome.FAILED_LAUNCH_BACKOFF_SEC - 1
     assert chrome.ensure_running(9222, chrome_bin="/bin/chrome", wait_sec=0.01) == (
-        chrome.UNAVAILABLE
+        chrome.UNAVAILABLE,
+        None,
     )
     assert len(launches) == 2
 

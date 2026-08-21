@@ -71,9 +71,12 @@ class Config:
     # The Discord REST API base. Overridable so the channel tests point the real transport at a
     # local fake server; production uses the default.
     discord_api_base: str = "https://discord.com/api/v10"
-    # The warm Chrome's CDP port. The daemon attaches to the Chrome listening here, and starts one
-    # on this port if none is — always after probing, since two Chromes cannot share the profile.
-    chrome_cdp_port: int = 9222
+    # The warm Chrome's CDP port. Null — the default — lets Chrome choose a free one and announce
+    # it inside the profile directory: nothing can bind a port before it is chosen, and a port only
+    # readable out of a 0700 directory is not one another local user can find. Pin an integer where
+    # the port is an agreement with a process that cannot read that file: a container's forwarder,
+    # or a Chrome someone starts by hand.
+    chrome_cdp_port: int | None = None
     # The Chrome executable to start when none is running. Null resolves to the OS default install
     # path, which is what a normal install has.
     chrome_bin: str | None = None
@@ -231,8 +234,10 @@ def _validate(raw: dict) -> Config:
 
     if "chrome_cdp_port" in raw:
         port = raw["chrome_cdp_port"]
-        if not _is_real_int(port) or not (1024 <= port <= 65535):
-            raise ConfigError(f"chrome_cdp_port must be an integer in 1024..65535, got {port!r}")
+        if port is not None and (not _is_real_int(port) or not (1024 <= port <= 65535)):
+            raise ConfigError(
+                f"chrome_cdp_port must be an integer in 1024..65535 or null, got {port!r}"
+            )
         values["chrome_cdp_port"] = port
 
     if "chrome_bin" in raw:

@@ -37,7 +37,9 @@ def _spec(market=None, **kwargs):
 
 
 def _browser_command():
-    return passes.browser_command(Config())
+    # Pinned so the specs these tests assert on stay a fixed string; unpinned the port is whatever
+    # the live Chrome announced.
+    return passes.browser_command(Config(chrome_cdp_port=9222))
 
 
 # --- which recipe the pass carries ---------------------------------------------------------------
@@ -118,6 +120,18 @@ def test_the_browser_command_is_the_configured_one_when_set() -> None:
 def test_the_default_browser_command_points_at_the_configured_chrome_port() -> None:
     argv = passes.browser_command(Config(chrome_cdp_port=9333))
     assert "http://127.0.0.1:9333" in argv
+
+
+def test_an_unpinned_browser_command_resolves_the_port_at_spawn_time(xdg_tmp) -> None:
+    """The pass is built when it is spawned, which may be long after the port was last known — and
+    an unpinned Chrome that restarted in between came back on a different one. Reading the port
+    Chrome announced, here, is what keeps a pass off a dead endpoint."""
+    from sellee import paths
+    from sellee.browser import chrome
+
+    paths.ensure_data_dirs()
+    (paths.browser_profile_dir() / chrome.ACTIVE_PORT_FILE).write_text("45123\n/devtools/browser/a")
+    assert "http://127.0.0.1:45123" in passes.browser_command(Config())
 
 
 # --- the enqueue path ---------------------------------------------------------------------------

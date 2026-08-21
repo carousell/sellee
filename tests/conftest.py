@@ -16,10 +16,6 @@ from sellee.config import Config
 from sellee.db import Database
 from sellee.events import EventBus, EventStore
 
-# The real probe, for the one test that exercises it — the guard below stubs the module
-# attribute for everyone else.
-real_is_ready = chrome.is_ready
-
 
 @pytest.fixture(autouse=True)
 def _close_databases(monkeypatch):
