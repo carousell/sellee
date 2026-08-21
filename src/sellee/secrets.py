@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 import secrets as _stdlib_secrets
+import tempfile
 from pathlib import Path
 
 from sellee import paths
@@ -31,11 +32,15 @@ def _validate(value: str) -> str:
 
 
 def write_secret(path: Path, value: str) -> None:
-    """Atomically write a secret file with 0600 permissions from creation (no chmod window)."""
+    """Atomically write a secret file with 0600 permissions from creation (no chmod window).
+
+    The temp file comes from mkstemp — created exclusively, 0600, at an unpredictable
+    name — so a symlink planted at a guessable temp path cannot redirect the write.
+    """
     _validate(value)
     paths.ensure_config_dir()
-    tmp = path.with_name(path.name + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=path.name + ".")
+    tmp = Path(tmp_name)
     try:
         with os.fdopen(fd, "w") as handle:
             handle.write(value + "\n")

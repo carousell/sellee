@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 import stat
+import sys
 
 import pytest
 
 from sellee import paths, secrets
+
+# Windows does not honor POSIX modes, so every mode assertion is meaningless there.
+posix_only = pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="POSIX file modes")
 
 
 def _mode(path) -> int:
@@ -45,6 +49,27 @@ def test_ensure_mcp_token_generates_once_then_stays_stable(xdg_tmp) -> None:
     assert token
     assert _mode(paths.mcp_token_path()) == 0o600
     assert secrets.ensure_mcp_token() == token
+
+
+@posix_only
+def test_a_symlink_at_the_temp_path_is_not_followed(xdg_tmp) -> None:
+    paths.ensure_config_dir()
+    path = paths.mcp_token_path()
+    victim = path.parent / "victim"
+    victim.write_text("untouched\n")
+    path.with_name(path.name + ".tmp").symlink_to(victim)
+    secrets.write_secret(path, "abc123")
+    assert victim.read_text() == "untouched\n"
+    assert secrets.read_secret(path) == "abc123"
+    assert _mode(path) == 0o600
+
+
+def test_a_leftover_temp_file_does_not_wedge_the_write(xdg_tmp) -> None:
+    paths.ensure_config_dir()
+    path = paths.mcp_token_path()
+    path.with_name(path.name + ".tmp").write_text("stale\n")
+    secrets.write_secret(path, "abc123")
+    assert secrets.read_secret(path) == "abc123"
 
 
 def test_carousell_ai_key_helpers(xdg_tmp) -> None:
