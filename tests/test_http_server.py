@@ -3,14 +3,17 @@
 from __future__ import annotations
 
 import json
+import socket
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
+import sellee.http_server as http_server
 import sellee.tools  # noqa: F401  registration
 from sellee.config import Config
-from sellee.http_server import _PAGE_EVENTS, HttpServer, _Handler, _Server
+from sellee.http_server import _MAX_BODY_BYTES, _PAGE_EVENTS, HttpServer, _Handler, _Server
 from sellee.paths import PACKAGE_DATA_DIR
 from sellee.tools.registry import ToolContext
 
@@ -74,6 +77,52 @@ def _rpc(server, method, params=None, *, token="attended-secret", msg_id=1):
     return _request(server, "POST", "/mcp", token=token, body=body)
 
 
+def _raw_request(*, token=None, content_length=None, body=b""):
+    """A raw POST /mcp for what urllib refuses to send: a Content-Length that lies."""
+    declared = str(len(body)) if content_length is None else str(content_length)
+    head = [
+        "POST /mcp HTTP/1.1",
+        "Host: 127.0.0.1",
+        "Content-Type: application/json",
+        f"Content-Length: {declared}",
+    ]
+    if token is not None:
+        head.append(f"Authorization: Bearer {token}")
+    return ("\r\n".join(head) + "\r\n\r\n").encode() + body
+
+
+def _read_raw_response(reader):
+    """(status, headers) for one response off a raw connection, or None once it closed."""
+    status_line = reader.readline()
+    if not status_line:
+        return None
+    status = int(status_line.split()[1])
+    headers = {}
+    while True:
+        line = reader.readline()
+        if line in (b"\r\n", b"\n", b""):
+            break
+        name, _, value = line.decode().partition(":")
+        headers[name.strip().lower()] = value.strip()
+    reader.read(int(headers.get("content-length", "0")))
+    return status, headers
+
+
+def _raw_exchange(server, payload, *, timeout=5):
+    """One raw request, one response — or a failure rather than a wait. The timeout is the
+    assertion: a handler that reads a body it was lied to about never answers at all, and this
+    has to fail the case instead of hanging the suite."""
+    conn = socket.create_connection(("127.0.0.1", server.port), timeout=timeout)
+    try:
+        conn.sendall(payload)
+        try:
+            return _read_raw_response(conn.makefile("rb"))
+        except TimeoutError as exc:
+            raise AssertionError("no response: the request pinned the handler thread") from exc
+    finally:
+        conn.close()
+
+
 # --- hardening --------------------------------------------------------------------------------
 
 
@@ -122,6 +171,94 @@ def test_wrong_token_is_unauthorized(server) -> None:
 def test_get_mcp_is_405(server) -> None:
     status, _ = _request(server, "GET", "/mcp", token="attended-secret")
     assert status == 405
+
+
+def test_an_oversized_content_length_is_refused_before_any_body_is_read(server) -> None:
+    """The declaration alone is enough to refuse — note the request below sends no body at all,
+    so a 413 can only come from a check that ran ahead of the read."""
+    status, headers = _raw_exchange(
+        server, _raw_request(token="attended-secret", content_length=_MAX_BODY_BYTES + 1)
+    )
+    assert status == 413
+    assert headers.get("connection") == "close"  # the undrained bytes leave nothing reusable
+
+
+def test_a_negative_content_length_is_a_clean_400_and_does_not_hang(server) -> None:
+    """int("-1") is truthy and read(-1) reads until the peer closes, so this declaration used to
+    hold a handler thread for as long as the client cared to keep the socket open."""
+    status, headers = _raw_exchange(
+        server, _raw_request(token="attended-secret", content_length=-1)
+    )
+    assert status == 400
+    assert headers.get("connection") == "close"
+
+
+def test_a_non_numeric_content_length_is_a_clean_400(server) -> None:
+    """It used to come back as a JSON-RPC parse error: the ValueError from int() fell into the
+    except that was there for json.loads."""
+    status, _ = _raw_exchange(
+        server, _raw_request(token="attended-secret", content_length="banana")
+    )
+    assert status == 400
+
+
+def test_a_body_that_never_arrives_does_not_hold_the_thread_forever(server, monkeypatch) -> None:
+    """The cap bounds how *much* a connection may send, not how *long* it may take over it. A
+    declared length that is never delivered pins a thread exactly like the negative one did, so
+    the handler carries a deadline. Shortened here so the test does not wait out the real one."""
+    assert _Handler.timeout is not None  # the shipped value is what bounds this in production
+    monkeypatch.setattr(_Handler, "timeout", 0.3)
+    conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    try:
+        # a legal declaration, then silence: one byte of a body that claims to be a hundred
+        conn.sendall(_raw_request(token="attended-secret", content_length=100, body=b"{"))
+        # the read gives up and the connection goes away, rather than waiting for a body forever
+        assert conn.recv(4096) == b""
+    finally:
+        conn.close()
+
+
+def test_a_trickled_body_runs_out_of_deadline_not_patience(server, monkeypatch) -> None:
+    """The idle timeout resets on every byte, so a client feeding one byte per interval could
+    hold a thread for length × interval. The body carries one deadline for its whole read;
+    trickling inside the idle window still ends at that deadline with a closed connection."""
+    monkeypatch.setattr(http_server, "_BODY_DEADLINE_SEC", 0.4)
+    conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    try:
+        conn.sendall(_raw_request(token="attended-secret", content_length=1000, body=b"{"))
+        for _ in range(10):  # ~1s of drip-feed, each send well inside the idle timeout
+            try:
+                conn.sendall(b"x")
+            except OSError:
+                break  # the server already hung up — the deadline worked
+            time.sleep(0.1)
+        conn.settimeout(2)
+        assert conn.recv(4096) == b""  # closed by the deadline, not still waiting on the body
+    finally:
+        conn.close()
+
+
+def test_a_bad_content_length_pre_auth_is_still_unauthorized(server) -> None:
+    """The body checks sit behind the bearer, not in front of it: no token is still a 401,
+    whatever the request claims about its size."""
+    for declared in (_MAX_BODY_BYTES + 1, -1, "banana"):
+        status, _ = _raw_exchange(server, _raw_request(content_length=declared))
+        assert status == 401, declared
+
+
+def test_a_401_drains_the_body_so_the_connection_stays_usable(server) -> None:
+    """Bytes left unread on a keep-alive connection get parsed as the next request line, so a
+    client whose token expired mid-session got a broken connection instead of a clean 401."""
+    ping = json.dumps({"jsonrpc": "2.0", "id": 1, "method": "ping"}).encode()
+    conn = socket.create_connection(("127.0.0.1", server.port), timeout=5)
+    try:
+        conn.sendall(_raw_request(body=b"HELLO"))
+        conn.sendall(_raw_request(token="attended-secret", body=ping))
+        reader = conn.makefile("rb")
+        assert _read_raw_response(reader)[0] == 401
+        assert _read_raw_response(reader)[0] == 200  # not 501 on a "HELLOPOST" request line
+    finally:
+        conn.close()
 
 
 # --- MCP protocol -----------------------------------------------------------------------------

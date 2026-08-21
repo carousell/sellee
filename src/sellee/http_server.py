@@ -53,9 +53,14 @@ _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 _TAIL_TICKET_TTL_SEC = 300
 
 # The largest request body any route here has a use for. Control bodies are a handful of fields
-# and the largest MCP argument is a message the model composed, so this is orders of magnitude
-# above real traffic and exists only so an announced length cannot be believed on faith.
+# and the largest MCP argument is a message the model composed; nothing ships bytes inline, since
+# photo arguments are paths. So this is orders of magnitude above real traffic and exists only so
+# an announced length cannot be believed on faith.
 _MAX_BODY_BYTES = 1 << 20
+_BODY_CHUNK_BYTES = 64 * 1024
+# One deadline for the whole body. The handler's idle timeout resets on every byte, so without
+# this a client trickling one byte per interval holds a thread for length × interval.
+_BODY_DEADLINE_SEC = 30.0
 
 # How often the accept loop wakes to notice a shutdown request. stop() cannot return until it does,
 # so this is the floor on shutdown latency — the stdlib default of 0.5s is half a second of idling
@@ -245,6 +250,9 @@ class _Server(ThreadingHTTPServer):
 
 class _Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
+    # The cap below bounds how much a body may be, not how long it may take: a legal length that
+    # is never delivered would hold a thread indefinitely. Safe because nothing here long-polls.
+    timeout = 30
 
     def log_message(self, *args) -> None:  # route through logging, not stderr prints
         log.debug("http %s", args)
@@ -263,29 +271,57 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _read_body(self):
-        """The request body, or None once a refusal has already been answered.
-
-        Content-Length is a number a caller chose, and the ticket exchange reads a body before it
-        has any credential to check — so it is validated before it is trusted. A negative length
-        reaches `rfile.read(-1)`, which blocks until the peer closes and pins one thread of an
-        uncapped pool; an enormous one has us allocate whatever was asked for. Neither needs a
-        token. The connection closes on a refusal because the body it announced is still unread,
-        and on a keep-alive connection those bytes would be parsed as the next request.
-        """
+    def _declared_length(self) -> int:
+        """The declared Content-Length, or -1 when the header is non-numeric."""
         try:
-            length = int(self.headers.get("Content-Length", 0) or 0)
+            return int(self.headers.get("Content-Length", "0") or "0")
         except ValueError:
-            length = -1
+            return -1
+
+    def _read_body(self) -> bytes | None:
+        """The request body, or None once this has already replied (400/413).
+
+        The caller chooses Content-Length, and the ticket exchange reads a body with no credential
+        to check first, so it is validated before a byte is read. A negative length must never
+        reach read(), where -1 means "until the peer closes". Both refusals close the connection:
+        the bytes behind a bad declaration cannot be drained, and left unread on a keep-alive
+        connection they would be parsed as the next request.
+        """
+        length = self._declared_length()
         if length < 0:
-            self.close_connection = True
-            self._send_json(400, {"error": "invalid Content-Length"})
+            self._send_json(400, {"error": "invalid content-length"}, close=True)
             return None
         if length > _MAX_BODY_BYTES:
-            self.close_connection = True
-            self._send_json(413, {"error": "request body too large"})
+            self._send_json(413, {"error": "request body too large"}, close=True)
             return None
-        return self.rfile.read(length) if length else b""
+        return self._read_exact(length)
+
+    def _read_exact(self, length: int, *, discard: bool = False) -> bytes:
+        """Read exactly `length` bytes, under one deadline for the whole body.
+
+        The socket timeout only bounds the gap between bytes, so it is re-armed each chunk with
+        whatever is left of the body's own budget; a trickled body runs out of deadline instead
+        of resetting the clock per byte. TimeoutError lands in handle_one_request, which closes
+        the connection — the same exit as an idle client.
+        """
+        deadline = time.monotonic() + _BODY_DEADLINE_SEC
+        chunks = []
+        remaining = length
+        try:
+            while remaining > 0:
+                budget = deadline - time.monotonic()
+                if budget <= 0:
+                    raise TimeoutError("request body exceeded its deadline")
+                self.connection.settimeout(min(self.timeout, budget))
+                chunk = self.rfile.read(min(remaining, _BODY_CHUNK_BYTES))
+                if not chunk:
+                    break
+                if not discard:
+                    chunks.append(chunk)
+                remaining -= len(chunk)
+        finally:
+            self.connection.settimeout(self.timeout)
+        return b"".join(chunks)
 
     def _bearer(self) -> str | None:
         header = self.headers.get("Authorization", "")
@@ -293,13 +329,27 @@ class _Handler(BaseHTTPRequestHandler):
             return header[len("Bearer ") :].strip()
         return None
 
-    def _send_json(self, status: int, obj) -> None:
+    def _send_json(self, status: int, obj, *, close: bool = False) -> None:
         payload = json.dumps(obj).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
+        if close:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(payload)
+
+    def _send_unauthorized(self) -> None:
+        """401 with the unread request body dealt with: bytes left on a keep-alive
+        connection get parsed as the next request line, so a drainable body is drained
+        (and discarded, never buffered) first, and an undrainable one takes the
+        connection down with the refusal."""
+        length = self._declared_length()
+        if 0 <= length <= _MAX_BODY_BYTES:
+            self._read_exact(length, discard=True)
+            self._send_json(401, {"error": "unauthorized"})
+        else:
+            self._send_json(401, {"error": "unauthorized"}, close=True)
 
     def _send_empty(self, status: int) -> None:
         self.send_response(status)
@@ -317,7 +367,7 @@ class _Handler(BaseHTTPRequestHandler):
         """
         session = self._app.auth.resolve(self._bearer())
         if session is None or session.tier != "attended":
-            self._send_json(401, {"error": "unauthorized"})
+            self._send_unauthorized()
             return None
         raw = self._read_body()
         if raw is None:
@@ -408,7 +458,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_mcp(self) -> None:
         session = self._app.auth.resolve(self._bearer())
         if session is None:
-            self._send_json(401, {"error": "unauthorized"})
+            self._send_unauthorized()
             return
         raw = self._read_body()
         if raw is None:
