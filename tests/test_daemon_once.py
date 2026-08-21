@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from pathlib import Path
 
 from sellee import config, daemon, heartbeat, lock, paths
 from sellee.browser import client as browser_client
@@ -129,3 +130,49 @@ def test_no_warm_under_an_override_or_in_a_single_tick_run(monkeypatch) -> None:
     override = config.Config(playwright_mcp_cmd=["node", "/opt/mcp/cli.js"])
     assert daemon.warm_browser_server(override, once=False) is None
     assert calls == []
+
+
+# --- the bind address -------------------------------------------------------------------------
+
+
+def test_only_a_loopback_bind_reads_as_staying_on_this_machine() -> None:
+    """The Host header is the client's to choose, so it cannot decide who reaches this port — the
+    bind address is the only thing that does. Parsed rather than spelling-matched: the wildcards
+    and any interface address have to read as exposure, and so does anything unparseable."""
+    assert daemon._is_loopback_bind("127.0.0.1")
+    assert daemon._is_loopback_bind("127.0.0.53")  # all of 127/8, not just the one spelling
+    assert daemon._is_loopback_bind("::1")
+    assert daemon._is_loopback_bind("localhost")
+    assert not daemon._is_loopback_bind("0.0.0.0")  # noqa: S104 — the point of the assertion
+    assert not daemon._is_loopback_bind("::")
+    assert not daemon._is_loopback_bind("192.168.1.5")
+    assert not daemon._is_loopback_bind("*")
+    assert not daemon._is_loopback_bind("")
+
+
+def test_no_comment_claims_the_host_guard_makes_a_wide_bind_safe() -> None:
+    """It said so in two places, and it was not true. A reader who believes it concludes the
+    wildcard the image sets is harmless anywhere, which is how `docker run --network host`
+    becomes a supported-looking way to publish the control surface."""
+    root = Path(__file__).resolve().parents[1]
+    for path in ("src/sellee/daemon.py", "src/sellee/http_server.py"):
+        text = (root / path).read_text()
+        assert "SELLEE_BIND_HOST" in text  # reading the file we think we are
+        assert "Host guard still only answers to localhost" not in text
+        assert "have to arrive addressed to localhost" not in text
+
+
+def test_a_non_loopback_bind_says_what_it_exposed(caplog) -> None:
+    """Silence here is the whole problem: the seller sets a documented variable, or runs the image
+    with host networking, and nothing tells them the control surface left the machine."""
+    with caplog.at_level("WARNING"):
+        daemon._warn_if_exposed("0.0.0.0")  # noqa: S104 — the case under test
+    assert "not loopback" in caplog.text
+    assert "0.0.0.0" in caplog.text
+    assert "security risk" in caplog.text
+
+
+def test_a_loopback_bind_says_nothing(caplog) -> None:
+    with caplog.at_level("WARNING"):
+        daemon._warn_if_exposed("127.0.0.1")
+    assert caplog.text == ""

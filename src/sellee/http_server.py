@@ -1,9 +1,11 @@
 """The daemon's one localhost HTTP server: MCP endpoint, web tail, and the pass-control route.
 
 Bound to 127.0.0.1 unless SELLEE_BIND_HOST says otherwise — a container binds the wildcard so a
-browser on the host reaches the tail through a published port. The Host guard below does not move
-with it: however this binds, requests still have to arrive addressed to localhost. Three surfaces
-share it:
+browser on the host reaches the tail through a published port. The Host guard below is not what
+makes a wider bind safe: the client chooses that header, so a request from anywhere can present
+`Host: 127.0.0.1`. The guard stops a web page reaching this port by rebinding DNS to it, which a
+browser can attempt and a script cannot. Only the bind address decides who can open the socket, and
+the daemon warns when it is not loopback. Three surfaces share it:
 
   * POST /mcp   — stateless MCP over streamable HTTP (plain-JSON responses, no SSE). JSON-RPC 2.0
                   with initialize / notifications/initialized / tools/list / tools/call / ping.

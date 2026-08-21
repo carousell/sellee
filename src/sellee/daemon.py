@@ -10,6 +10,7 @@ body, and exits 0.
 
 from __future__ import annotations
 
+import ipaddress
 import logging
 import os
 import signal
@@ -196,6 +197,26 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     return browser_factory
 
 
+def _is_loopback_bind(host: str) -> bool:
+    """Whether binding to `host` keeps the socket on this machine."""
+    if host == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _warn_if_exposed(host: str) -> None:
+    if _is_loopback_bind(host):
+        return
+    log.warning(
+        "The control server is bound to %s, not loopback. The daemon is accessible remotely. "
+        "This can be a security risk.",
+        host,
+    )
+
+
 def _setup_logging(level_name: str) -> None:
     level = getattr(logging, level_name, logging.INFO)
     logging.basicConfig(
@@ -341,9 +362,11 @@ def run_daemon(*, once: bool) -> int:
         )
     )
 
-    # Loopback everywhere except a container, whose image sets the wildcard so a published port
-    # has something to reach. The Host guard still only answers to localhost, so a bind address
-    # clients address directly rather than through a port mapping will refuse them.
+    # Loopback everywhere except a container, whose image sets the wildcard so a published port has
+    # something to reach; compose keeps the host exposure on loopback either way. Note the Host
+    # guard does not make a wider bind safe — the client chooses that header, so
+    # `curl -H 'Host: 127.0.0.1'` satisfies it from anywhere. It defends against DNS rebinding, not
+    # against who can open the socket, which is why a non-loopback bind warns below.
     bind_host = os.environ.get("SELLEE_BIND_HOST", "").strip() or "127.0.0.1"
     try:
         http = HttpServer(
@@ -366,6 +389,7 @@ def run_daemon(*, once: bool) -> int:
         events_db.close()
         return 3
     http.start()
+    _warn_if_exposed(bind_host)
 
     pass_deps = passes.PassDeps(
         bus=bus,
