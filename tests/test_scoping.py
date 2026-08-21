@@ -107,3 +107,88 @@ def test_scope_enforced_through_dispatch(store, bus) -> None:
     # hides the row, not the tool (a ToolError, never an UnknownTool).
     with pytest.raises(ToolError, match=i2["id"]):
         dispatch("get_item", {"item_id": i2["id"]}, ctx)
+
+
+# --- the accessors that used to fail open ------------------------------------------------------
+
+
+def test_an_unassigned_item_cannot_be_modified_or_priced(store) -> None:
+    """SEC-2813's own scenario, as a direct-API regression: ScopedStore passed anything it did not
+    recognise straight through, so these five reached another seller's item unscoped."""
+    i1, i2, _, w2 = _two_of_everything(store)
+    scoped = ScopedStore(store, Scope.of(threads={"fb:1"}, items={i1["id"]}))
+    store.set_floor(i2["id"], 50.0, "seller")
+
+    for call in (
+        lambda: scoped.update_item(i2["id"], {"title": "owned by me now"}),
+        lambda: scoped.record_listing_url(i2["id"], "fb", "https://fb.test/l/2"),
+        lambda: scoped.set_floor(i2["id"], 1.0, "agent"),
+        lambda: scoped.record_checkout(
+            sale_id="s1",
+            item_id=i2["id"],
+            thread_id="fb:1",
+            checkout_url="https://c.test/1",
+            price=1.0,
+            currency="SGD",
+        ),
+    ):
+        with pytest.raises(ItemNotFound, match=i2["id"]):
+            call()
+
+    # the confidential rows read as absent, never as a value
+    assert scoped.get_floor(i2["id"]) is None
+    assert scoped.get_budget(w2["want_id"]) is None
+    # and none of it landed
+    assert store.get_item(i2["id"])["title"] == "B"
+    assert store.get_floor(i2["id"])["floor"] == 50.0
+    assert store.get_checkout("s1") is None
+
+
+def test_the_in_scope_half_of_those_accessors_still_works(store) -> None:
+    """The guard must not cost the pass its own item — a scope check that denies everything would
+    pass every negative test above."""
+    i1, _, w1, _ = _two_of_everything(store)
+    scope = Scope.of(threads={"fb:1"}, items={i1["id"]}, wants={w1["want_id"]})
+    scoped = ScopedStore(store, scope)
+
+    assert scoped.update_item(i1["id"], {"title": "A2"})["title"] == "A2"
+    scoped.record_listing_url(i1["id"], "fb", "https://fb.test/l/1")
+    assert scoped.set_floor(i1["id"], 40.0, "seller")["status"] == "written"
+    assert scoped.get_floor(i1["id"])["floor"] == 40.0
+    assert (
+        scoped.record_checkout(
+            sale_id="s2",
+            item_id=i1["id"],
+            thread_id="fb:1",
+            checkout_url="https://c.test/2",
+            price=40.0,
+            currency="SGD",
+        )["sale_id"]
+        == "s2"
+    )
+
+
+def test_a_scoped_pass_cannot_retract_another_threads_scam_detections(store) -> None:
+    i1, i2, _, _ = _two_of_everything(store)
+    store.add_scam_signature(
+        kind="phone", value="+6591234567", marketplace="fb", thread_id="fb:2", detected_by="detect"
+    )
+    scoped = ScopedStore(store, Scope.of(threads={"fb:1"}, items={i1["id"]}))
+    # 0 removed, exactly as for a thread with no detections — the count never leaks existence
+    assert scoped.retract_detect_scam("fb:2") == 0
+    assert scoped.retract_detect_scam("fb:absent") == 0
+    assert store.retract_detect_scam("fb:2") == 1  # unscoped, it was really there
+
+
+def test_a_scoped_pass_cannot_attach_a_thread_to_another_sellers_item(store) -> None:
+    i1, i2, _, _ = _two_of_everything(store)
+    scoped = ScopedStore(store, Scope.of(threads={"fb:1"}, items={i1["id"]}))
+    with pytest.raises(ItemNotFound, match=i2["id"]):
+        scoped.create_thread(
+            thread_id="fb:9", side="sell", market="fb", counterpart_handle="x", item_id=i2["id"]
+        )
+    # its own item is fine, and the new thread's own id is not itself scope-checked
+    made = scoped.create_thread(
+        thread_id="fb:8", side="sell", market="fb", counterpart_handle="x", item_id=i1["id"]
+    )
+    assert made["thread_id"] == "fb:8"

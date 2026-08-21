@@ -3616,8 +3616,10 @@ class Scope:
         return cls(frozenset(threads), frozenset(items), frozenset(wants))
 
     def allows(self, kind: str, value) -> bool:
-        # An absent optional id (None) is not an out-of-scope reference — it is simply not set.
-        if value is None:
+        # An unset optional id is not an out-of-scope reference — it is simply not set. Empty
+        # counts as unset alongside None: it is how a keyword-only id defaults, and it matches
+        # no row anywhere, so it can neither leak nor reach another entity.
+        if value is None or value == "":
             return True
         return (
             value
@@ -3648,8 +3650,22 @@ class Scope:
 # scope, or the call answers exactly as it would for a row that does not exist — an out-of-scope
 # id must be indistinguishable from an absent one, so scope never leaks existence. Each entry is
 # (name -> ((param, kind), ...)); later plans extend it as engine/mutation accessors land.
+#
+# ScopedStore.__getattr__ passes an unlisted method straight through, so an accessor that takes
+# an id and is missing from here is unguarded. tests/guard/test_scope_guard.py reflects over
+# Store to catch that, with an explicit opt-out set for the accessors that need no check.
 _SCOPE_GUARDED = {
     "get_item": (("item_id", "item"),),
+    "update_item": (("item_id", "item"),),
+    "record_listing_url": (("item_id", "item"),),
+    "get_floor": (("item_id", "item"),),
+    "set_floor": (("item_id", "item"),),
+    "get_budget": (("want_id", "want"),),
+    "record_checkout": (("item_id", "item"), ("thread_id", "thread")),
+    "retract_detect_scam": (("thread_id", "thread"),),
+    # Not thread_id: that is the new row's own natural key, not a reference to an existing
+    # thread (a duplicate is refused by the insert, and the prefix rule validates its shape).
+    "create_thread": (("item_id", "item"), ("want_id", "want")),
     "set_photo_uploads": (("item_id", "item"),),
     "archive_listing_url": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
@@ -3684,11 +3700,18 @@ _SCOPE_GUARDED = {
 
 # What a guarded accessor does when an id is out of scope: mirror the accessor's own
 # missing-row behavior so the two are indistinguishable. Reads that return None on a missing
-# row return None; the transcript read returns []; row-required writers raise the same NotFound.
-_SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want"})
+# row return None; the transcript read returns []; a counting delete returns 0; row-required
+# writers raise the same NotFound.
+_SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want", "get_floor", "get_budget"})
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
+_SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),
+    "update_item": ("item", ItemNotFound),
+    "record_listing_url": ("item", ItemNotFound),
+    "set_floor": ("item", ItemNotFound),
+    "record_checkout": ("item", ItemNotFound),
+    "create_thread": ("item", ItemNotFound),
     "archive_listing_url": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
     "record_inbound": ("thread", ThreadNotFound),
@@ -3717,11 +3740,23 @@ _SCOPE_MISS_NOTFOUND = {
 }
 
 
+_NOT_FOUND_BY_KIND = {
+    "item": ItemNotFound,
+    "thread": ThreadNotFound,
+    "want": WantNotFound,
+}
+
+
 class ScopedStore:
     """A scope-aware view over a Store. Unscoped (scope=None) it is a transparent pass-through —
-    attended sessions hold full scope. Scoped, it enforces the entity scope at every guarded
-    accessor, answering an out-of-scope id exactly as a missing row. List accessors are filtered
-    to the scope rather than rejected."""
+    attended sessions hold full scope.
+
+    Scoped, it enforces the entity scope at the accessors named in `_SCOPE_GUARDED`, answering an
+    out-of-scope id exactly as a missing row, and filters list accessors to the scope rather than
+    rejecting them. **Enforcement is opt-in, not the default**: an accessor absent from that dict
+    is passed through unguarded, so adding one that takes an item, thread or want id means adding
+    it there too — `tests/guard/test_scope_guard.py` reflects over `Store` to enforce exactly that,
+    with an explicit opt-out set for the accessors that legitimately need no check."""
 
     def __init__(self, store: Store, scope: Scope | None = None):
         self._store = store
@@ -3761,16 +3796,19 @@ class ScopedStore:
             bound.apply_defaults()
             for param, kind in spec:
                 if not scope.allows(kind, bound.arguments.get(param)):
-                    return self._deny(name, bound.arguments)
+                    return self._deny(name, bound.arguments, param, kind)
             return target(*args, **kwargs)
 
         return guarded
 
-    def _deny(self, name: str, arguments: dict):
+    def _deny(self, name: str, arguments: dict, param: str, kind: str):
         if name in _SCOPE_MISS_NONE:
             return None
         if name in _SCOPE_MISS_EMPTY:
             return []
-        kind, exc = _SCOPE_MISS_NOTFOUND[name]
-        param = _SCOPE_GUARDED[name][0][0]
-        raise exc(f"no {kind} with id {arguments.get(param)!r}")
+        if name in _SCOPE_MISS_ZERO:
+            return 0
+        # The id that actually failed, not the accessor's first — an accessor taking two ids
+        # would otherwise name a parameter the caller never set.
+        _default_kind, exc = _SCOPE_MISS_NOTFOUND[name]
+        raise _NOT_FOUND_BY_KIND.get(kind, exc)(f"no {kind} with id {arguments.get(param)!r}")
