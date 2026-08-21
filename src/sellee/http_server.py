@@ -48,6 +48,10 @@ _LOCALHOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 _BROWSER_PASS_TYPES = ("reply", "publish")
 _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 
+# How long a minted web-tail ticket stays redeemable. Long enough to copy the printed URL into a
+# browser by hand; short enough that a URL lifted from a terminal scrollback later is dead.
+_TAIL_TICKET_TTL_SEC = 300
+
 # How often the accept loop wakes to notice a shutdown request. stop() cannot return until it does,
 # so this is the floor on shutdown latency — the stdlib default of 0.5s is half a second of idling
 # on every daemon stop.
@@ -65,6 +69,20 @@ _METHOD_NOT_FOUND = -32601
 _INVALID_PARAMS = -32602
 
 
+def _secret_equal(presented: str, known: str) -> bool:
+    """Constant-time compare for a secret that arrived over the network.
+
+    `hmac.compare_digest` raises TypeError on a non-ASCII str rather than answering False, and
+    both sides of every comparison here come from a request — a header, decoded latin-1, or a
+    JSON string. Everything we mint is urlsafe-base64, so a value that will not encode is a
+    mismatch by construction; saying so beats letting the handler die on it.
+    """
+    try:
+        return hmac.compare_digest(presented.encode("ascii"), known.encode("ascii"))
+    except UnicodeEncodeError:
+        return False
+
+
 class Auth:
     """Maps bearer tokens to sessions: one persistent attended token plus per-pass ephemeral
     tokens minted at spawn and revoked at pass end. Comparison is constant-time; a hidden or
@@ -73,6 +91,7 @@ class Auth:
     def __init__(self, attended_token: str):
         self._attended = attended_token
         self._pass_tokens: dict = {}  # token -> (Session, expiry_ts)
+        self._tail_tickets: dict = {}  # ticket -> expiry_ts
         self._lock = threading.Lock()
 
     def mint_pass_token(self, tier: str, pass_id: str, expiry_ts: float, scope=None) -> str:
@@ -88,16 +107,52 @@ class Auth:
         with self._lock:
             self._pass_tokens.pop(token, None)
 
+    def rotate_attended(self, new_token: str) -> None:
+        """Swap the attended token in place — the rotate route writes the new secret file and
+        the live server must honor it without a restart."""
+        with self._lock:
+            self._attended = new_token
+
+    def mint_tail_ticket(self, now: float | None = None) -> str:
+        """A one-shot, short-lived ticket the web tail's URL carries instead of the attended
+        token: the address bar and browser history keep whatever rides in a URL, so the real
+        token must never be there."""
+        ticket = _stdlib_secrets.token_urlsafe(32)
+        now = time.time() if now is None else now
+        with self._lock:
+            self._tail_tickets[ticket] = now + _TAIL_TICKET_TTL_SEC
+        return ticket
+
+    def redeem_tail_ticket(self, presented: str | None, now: float | None = None) -> str | None:
+        """The attended token in exchange for a live ticket — which this consumes. A second
+        redemption, an expired ticket, or an unknown one all answer None."""
+        if not presented:
+            return None
+        now = time.time() if now is None else now
+        with self._lock:
+            match = None
+            for ticket, expiry in self._tail_tickets.items():
+                if now <= expiry and _secret_equal(presented, ticket):
+                    match = ticket
+            for ticket in [t for t, expiry in self._tail_tickets.items() if now > expiry]:
+                del self._tail_tickets[ticket]
+            if match is None:
+                return None
+            self._tail_tickets.pop(match, None)
+            return self._attended
+
     def resolve(self, presented: str | None, now: float | None = None) -> Session | None:
         if not presented:
             return None
-        if hmac.compare_digest(presented, self._attended):
+        with self._lock:
+            attended = self._attended
+        if _secret_equal(presented, attended):
             return Session(tier="attended", pass_id=None)
         now = time.time() if now is None else now
         with self._lock:
             items = list(self._pass_tokens.items())
         for token, (session, expiry) in items:
-            if now <= expiry and hmac.compare_digest(presented, token):
+            if now <= expiry and _secret_equal(presented, token):
                 return session
         return None
 
@@ -284,6 +339,16 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_seller_basics()
         elif route == "/control/connect-market":
             self._handle_connect_market()
+        elif route == "/control/market-login":
+            self._handle_market_login()
+        elif route == "/control/market-logins":
+            self._handle_market_logins()
+        elif route == "/control/tail-ticket":
+            self._handle_tail_ticket()
+        elif route == "/control/tail-exchange":
+            self._handle_tail_exchange()
+        elif route == "/control/rotate-token":
+            self._handle_rotate_token()
         else:
             self._send_json(404, {"error": "not found"})
 
@@ -299,10 +364,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_channel_status(parsed)
         elif parsed.path == "/control/settings-list":
             self._handle_settings_list(parsed)
-        elif parsed.path == "/control/market-login":
-            self._handle_market_login(parsed)
-        elif parsed.path == "/control/market-logins":
-            self._handle_market_logins(parsed)
+        elif parsed.path in ("/control/market-login", "/control/market-logins"):
+            # POST-only: they navigate the shared browser tab, and a side effect must never be
+            # reachable by a URL alone — a top-level navigation sends no bearer and no Origin.
+            self._send_json(405, {"error": "method not allowed"})
         elif parsed.path == "/control/seller-basics":
             self._handle_seller_basics_read(parsed)
         elif parsed.path == "/tail":
@@ -556,14 +621,16 @@ class _Handler(BaseHTTPRequestHandler):
             {"market": adapter.market, "url": url, "state": state, "raise_window": raise_window},
         )
 
-    def _handle_market_login(self, parsed) -> None:
-        # A read, so it never opens a window and never elbows a pass off the shared tab. The
-        # connect route above is the one that may start Chrome, because being asked to open a
-        # marketplace is being asked for a window.
-        qs = self._attended_query(parsed)
-        if qs is None:
+    def _handle_market_login(self) -> None:
+        # A read in intent, but it navigates the shared tab, so it takes the same POST +
+        # Bearer gate as every other route that touches the browser (its only caller is the
+        # CLI). It never opens a window and never elbows a pass off the tab; the connect route
+        # above is the one that may start Chrome, because being asked to open a marketplace is
+        # being asked for a window.
+        body = self._attended_body()
+        if body is None:
             return
-        adapter = self._market_adapter(qs.get("market", [None])[0])
+        adapter = self._market_adapter(body.get("market"))
         if adapter is None:
             return
         blocked = self._probe_blocked()
@@ -594,18 +661,19 @@ class _Handler(BaseHTTPRequestHandler):
             return "a pass is using the browser"
         return ""
 
-    def _handle_market_logins(self, parsed) -> None:
+    def _handle_market_logins(self) -> None:
         """Every marketplace the seller enabled, and — only if Chrome is already up — whether
         they are still signed in to each.
 
         Both halves are answered here because both depend on state this side owns: the enabled
         list comes from the store crossed with the seller's region, and whether probing is
         allowed at all comes from Chrome's port and the pass queue (see `_probe_blocked`).
+        POST for the same reason as market-login: the probe navigates the shared tab.
         """
         from sellee import settings
         from sellee.browser import markets as market_adapters
 
-        if self._attended_query(parsed) is None:
+        if self._attended_body() is None:
             return
         enabled = settings.crosslist_markets(self._app.store)
         # The *reason* travels with the answer: "Chrome isn't running" and "a pass is using the
@@ -708,6 +776,39 @@ class _Handler(BaseHTTPRequestHandler):
         adapter = self._app.store.get_channel()["adapter"]
         bind_module = discord_bind if adapter == "discord" else telegram_bind
         self._send_json(200, bind_module.channel_status(self._app.store))
+
+    def _handle_tail_ticket(self) -> None:
+        # The CLI trades its bearer for a one-shot ticket to put in the tail URL it opens.
+        if self._attended_body() is None:
+            return
+        self._send_json(200, {"ticket": self._app.auth.mint_tail_ticket()})
+
+    def _handle_tail_exchange(self) -> None:
+        # The tail page trades the ticket back for the attended token it polls with. No bearer
+        # gate — the page has no token yet, that is the point — but the localhost Host/Origin
+        # guard already ran, and the ticket is single-use and minutes-lived.
+        try:
+            body = json.loads(self._read_body() or b"{}")
+        except ValueError:
+            self._send_json(400, {"error": "invalid json"})
+            return
+        ticket = body.get("ticket") if isinstance(body, dict) else None
+        token = self._app.auth.redeem_tail_ticket(ticket if isinstance(ticket, str) else None)
+        if token is None:
+            self._send_json(401, {"error": "unauthorized"})
+            return
+        self._send_json(200, {"token": token})
+
+    def _handle_rotate_token(self) -> None:
+        # Mint, persist, and swap in a fresh attended token. The old token dies here — every
+        # place it was ever pasted or printed stops working.
+        from sellee import secrets
+
+        if self._attended_body() is None:
+            return
+        new_token = secrets.rotate_mcp_token()
+        self._app.auth.rotate_attended(new_token)
+        self._send_json(200, {"status": "rotated"})
 
     # --- web tail -------------------------------------------------------------------------
 

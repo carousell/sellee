@@ -357,6 +357,108 @@ def test_tail_serves_the_packaged_page(server) -> None:
     assert served == (PACKAGE_DATA_DIR / "tail.html").read_bytes()
 
 
+# --- the tail ticket exchange and token rotation ------------------------------------------------
+
+
+def test_the_tail_ticket_mint_requires_the_attended_token(server) -> None:
+    status, _ = _request(server, "POST", "/control/tail-ticket", body={})
+    assert status == 401
+
+
+def test_a_tail_ticket_redeems_exactly_once(server) -> None:
+    status, body = _request(
+        server, "POST", "/control/tail-ticket", token="attended-secret", body={}
+    )
+    assert status == 200
+    ticket = body["ticket"]
+    assert ticket != "attended-secret"
+
+    status, body = _request(server, "POST", "/control/tail-exchange", body={"ticket": ticket})
+    assert status == 200
+    assert body["token"] == "attended-secret"
+
+    # A second redemption — a URL lifted from history or scrollback — is dead.
+    status, _ = _request(server, "POST", "/control/tail-exchange", body={"ticket": ticket})
+    assert status == 401
+
+
+def test_an_expired_or_unknown_tail_ticket_is_unauthorized(server) -> None:
+    from sellee.http_server import _TAIL_TICKET_TTL_SEC
+
+    status, _ = _request(server, "POST", "/control/tail-exchange", body={"ticket": "nope"})
+    assert status == 401
+
+    ticket = server.auth.mint_tail_ticket(now=1000.0)
+    assert server.auth.redeem_tail_ticket(ticket, now=1000.0 + _TAIL_TICKET_TTL_SEC + 1) is None
+    # and expiry consumed it — it does not come back to life
+    assert server.auth.redeem_tail_ticket(ticket, now=1000.0) is None
+
+
+def test_rotating_the_token_kills_the_old_one_live(server) -> None:
+    status, _ = _request(server, "POST", "/control/rotate-token", token="attended-secret", body={})
+    assert status == 200
+
+    from sellee import secrets
+
+    new_token = secrets.read_mcp_token()
+    assert new_token and new_token != "attended-secret"
+    # the old token is dead on the running server, the new one works — no restart
+    assert _rpc(server, "ping", token="attended-secret")[0] == 401
+    assert _rpc(server, "ping", token=new_token)[0] == 200
+
+
+def test_query_string_tokens_stay_off_browser_navigable_surfaces() -> None:
+    """A token in a URL lands in the address bar and history, so _attended_query is only for
+    CLI reads and the tail page's own fetch (not a navigation). Anything a browser navigates
+    to gets the ticket exchange instead. Growing this set is a deliberate act."""
+    import inspect
+
+    from sellee import http_server
+
+    callers = {
+        name
+        for name, fn in inspect.getmembers(http_server._Handler, inspect.isfunction)
+        if name != "_attended_query" and "_attended_query(" in inspect.getsource(fn)
+    }
+    assert callers == {
+        "_handle_events_json",  # the tail page's own fetch
+        "_handle_channel_status",  # CLI-only
+        "_handle_settings_list",  # CLI-only
+        "_handle_seller_basics_read",  # CLI-only
+    }
+
+
+def test_a_non_ascii_ticket_is_a_mismatch_not_a_crash(server) -> None:
+    """compare_digest raises on a non-ASCII str instead of answering False, and the ticket comes
+    straight out of a JSON body — so this used to kill the handler with no credential at all,
+    once any ticket was outstanding to compare against."""
+    server.auth.mint_tail_ticket()
+    status, _ = _request(server, "POST", "/control/tail-exchange", body={"ticket": "café"})
+    assert status == 401
+
+
+def test_a_non_ascii_bearer_is_a_mismatch_not_a_crash(server) -> None:
+    """The same edge on the header path: headers decode as latin-1, so a high byte arrives as a
+    non-ASCII str here too."""
+    status, _ = _request(server, "POST", "/control/tail-ticket", token="café", body={})
+    assert status == 401
+
+
+def test_the_market_routes_reject_get(server) -> None:
+    """They navigate the shared tab: a side effect must not be reachable by a URL alone, and a
+    top-level navigation sends no bearer and no Origin."""
+    for path in ("/control/market-login", "/control/market-logins"):
+        status, _ = _request(server, "GET", f"{path}?market=carousell&token=attended-secret")
+        assert status == 405, path
+
+
+def test_a_request_with_no_origin_cannot_reach_a_side_effecting_route(server) -> None:
+    """Origin-absent requests pass the localhost guard (a CLI sends none) — the bearer is what
+    stands between a navigation and the browser-driving routes."""
+    status, _ = _request(server, "POST", "/control/market-login", body={"market": "carousell"})
+    assert status == 401
+
+
 # --- binding -------------------------------------------------------------------------------------
 
 

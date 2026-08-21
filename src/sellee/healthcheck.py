@@ -218,7 +218,7 @@ def _browser_probe(cfg) -> checks.Check:
     if not token:
         return _browser_unknown("the daemon has never run here")
     try:
-        status, answer = control.get(cfg.http_port, token, "/control/market-logins")
+        status, answer = control.post(cfg.http_port, token, "/control/market-logins", {})
     except control.DaemonUnreachable:
         return _browser_unknown("the daemon isn't answering")
     if status != 200:

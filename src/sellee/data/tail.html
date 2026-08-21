@@ -89,6 +89,7 @@ details.raw>pre{margin:.2rem 0 .4rem;white-space:pre-wrap;overflow-wrap:anywhere
 .row>details.raw{flex:1 0 100%}
 .row>details.raw>summary{position:absolute;top:.1rem;right:.75rem}
 .jsonline{padding:0 .75rem;white-space:pre-wrap;overflow-wrap:anywhere}
+.stalled{padding:.5rem .75rem;margin:.3rem 0;color:var(--warn);background:var(--warn-bg)}
 </style>
 </head>
 <body>
@@ -106,8 +107,76 @@ details.raw>pre{margin:.2rem 0 .4rem;white-space:pre-wrap;overflow-wrap:anywhere
 "use strict";
 
 const params = new URLSearchParams(location.search);
-const token = params.get("token") || "";
+// The URL carries a one-shot ticket in the fragment, never the token itself: the address bar and
+// the history entry keep whatever rides in a URL, and this token grants the whole product. The
+// ticket is read here, traded for the token below, and scrubbed from the address bar before
+// anything else runs.
+const ticket = new URLSearchParams(location.hash.replace(/^#/, "")).get("ticket") || "";
+let token = "";
 const jsonMode = params.get("json") === "true";
+
+// Where the traded token lives so a refresh survives. Reloading is a reflex on a log page, and
+// the ticket cannot serve it: it is single-use and the fragment carrying it is gone by then.
+// sessionStorage is scoped to this origin and this tab and is cleared when the tab closes, so it
+// keeps the token out of the address bar and out of history — which is the property that matters —
+// without costing a reader their stream.
+const TOKEN_KEY = "sellee.tail.token";
+
+function rememberToken(value) {
+  token = value;
+  try {
+    sessionStorage.setItem(TOKEN_KEY, value);
+  } catch (err) {
+    // Storage can be refused outright (private windows, a locked-down profile). The token still
+    // works for this page's lifetime; only surviving a refresh is lost.
+  }
+}
+
+function recallToken() {
+  try {
+    return sessionStorage.getItem(TOKEN_KEY) || "";
+  } catch (err) {
+    return "";
+  }
+}
+
+function forgetToken() {
+  token = "";
+  try {
+    sessionStorage.removeItem(TOKEN_KEY);
+  } catch (err) {
+    /* nothing stored to clear */
+  }
+}
+
+// Why this page has no credential, when it doesn't: "spent" means it arrived with a ticket that
+// no longer works, "unlinked" means it arrived without one at all — someone typed the address, or
+// opened a bookmark. Telling the second reader that their link expired would be a lie about a
+// link they never had, and it hides the thing they actually need to know.
+async function establishToken() {
+  history.replaceState(null, "", location.pathname + location.search);
+  if (ticket) {
+    try {
+      const response = await fetch("control/tail-exchange", {
+        method: "POST",
+        headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ticket: ticket}),
+      });
+      if (response.ok) {
+        const traded = (await response.json()).token || "";
+        if (traded) {
+          rememberToken(traded);
+          return "ok";
+        }
+      }
+    } catch (err) {
+      // Fall through: a stored token from this tab is still worth trying.
+    }
+  }
+  token = recallToken();
+  if (token) return "ok";
+  return ticket ? "spent" : "unlinked";
+}
 
 // The page URL takes the CLI's --since grammar (30s / 15m / 2h / 1d). A casual reader starts
 // near now, not at the beginning of the retention window.
@@ -556,6 +625,16 @@ function append(event) {
 // the newest page rather than for everything from the beginning.
 let after = null;
 
+// Shown instead of retrying forever when the credential itself is the problem. A page polling a
+// 401 once a second looks identical to an agent that has gone quiet, which is the worse failure:
+// whoever left it open would read "nothing is happening" off a tail that stopped following.
+function stall(message) {
+  forgetToken();
+  const notice = el("div", "stalled", message);
+  log.appendChild(notice);
+  pinIfFollowing();
+}
+
 async function poll() {
   try {
     const query = new URLSearchParams({token: token});
@@ -565,6 +644,12 @@ async function poll() {
       query.set("after_seq", String(after));
     }
     const response = await fetch("events.json?" + query);
+    if (response.status === 401) {
+      // The token was accepted once and is not any more: it was rotated (`sellee daemon
+      // rotate-token`) or the daemon was reinstalled. Retrying cannot recover it.
+      stall("this tail's access was revoked — run `sellee logs --web` again");
+      return;
+    }
     if (response.ok) {
       const data = await response.json();
       for (const event of data.events) append(event);
@@ -574,12 +659,23 @@ async function poll() {
       }
     }
   } catch (err) {
-    // a poll that fails (daemon restarting, token rotated) just retries on the next tick
+    // A transport failure is usually the daemon restarting, which resolves itself — keep polling.
   }
   setTimeout(poll, 1000);
 }
 
-poll();
+const STALL_REASONS = {
+  spent: "this tail link has already been used, or it expired — run `sellee logs --web` for a fresh one",
+  unlinked: "open the tail with `sellee logs --web` — it mints the one-time link this page needs",
+};
+
+establishToken().then((outcome) => {
+  if (outcome !== "ok") {
+    stall(STALL_REASONS[outcome]);
+    return;
+  }
+  poll();
+});
 </script>
 </body>
 </html>

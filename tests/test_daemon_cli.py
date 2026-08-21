@@ -53,3 +53,51 @@ def test_the_host_verbs_are_untouched(monkeypatch, capsys) -> None:
     monkeypatch.setattr(supervisor, "start", lambda **kwargs: called.append("start") or 0)
     assert daemon_cli.dispatch(_args("start")) == 0
     assert called == ["start"]
+
+
+# --- rotate-token --------------------------------------------------------------------------------
+
+
+def test_rotate_token_goes_through_a_running_daemon(xdg_tmp, monkeypatch, capsys) -> None:
+    """The daemon holds an in-memory copy, so rotation must go through it when it is up."""
+    from sellee import control, paths, secrets
+
+    paths.ensure_config_dir()
+    secrets.write_secret(paths.mcp_token_path(), "OLDTOKEN")
+    posts = []
+
+    def fake_post(port, token, route, body, **kw):
+        posts.append((route, token))
+        return 200, {"status": "rotated"}
+
+    monkeypatch.setattr(control, "post", fake_post)
+
+    assert daemon_cli.dispatch(_args("rotate-token")) == 0
+    assert posts == [("/control/rotate-token", "OLDTOKEN")]
+    out = capsys.readouterr().out
+    assert "rotated" in out
+    # the CLI never rewrites the file itself on this path — that is the daemon's job
+    assert secrets.read_mcp_token() == "OLDTOKEN"
+
+
+def test_rotate_token_falls_back_to_the_file_when_no_daemon_answers(
+    xdg_tmp, monkeypatch, capsys
+) -> None:
+    from sellee import control, paths, secrets
+
+    paths.ensure_config_dir()
+    secrets.write_secret(paths.mcp_token_path(), "OLDTOKEN")
+
+    def unreachable(*a, **k):
+        raise control.DaemonUnreachable("connection refused")
+
+    monkeypatch.setattr(control, "post", unreachable)
+
+    assert daemon_cli.dispatch(_args("rotate-token")) == 0
+    assert secrets.read_mcp_token() != "OLDTOKEN"
+    assert "next start" in capsys.readouterr().out
+
+
+def test_rotate_token_without_a_token_explains_and_fails(xdg_tmp, capsys) -> None:
+    assert daemon_cli.dispatch(_args("rotate-token")) == 1
+    assert "no MCP token found" in capsys.readouterr().err

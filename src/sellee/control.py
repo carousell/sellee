@@ -38,16 +38,17 @@ def base_url(port: int) -> str:
     return f"http://127.0.0.1:{port}"
 
 
-def tail_url(port: int, token: str, since: str | None = None) -> str:
-    """The web tail's address, token and all.
+def tail_url(port: int, ticket: str, since: str | None = None) -> str:
+    """The web tail's address, carrying a one-shot ticket — never the attended token, which
+    would otherwise sit in the address bar and the browser's history for good. The ticket rides
+    in the fragment (the browser never sends a fragment over the wire), is minutes-lived, and
+    dies the moment the page trades it in.
 
     Composed here rather than by the caller because query encoding is this module's business —
     it is the one place allowed to reach for urllib at all.
     """
-    query = {"token": token}
-    if since:
-        query["since"] = since
-    return f"{base_url(port)}/tail?{urllib.parse.urlencode(query)}"
+    query = f"?{urllib.parse.urlencode({'since': since})}" if since else ""
+    return f"{base_url(port)}/tail{query}#ticket={ticket}"
 
 
 def require_token():

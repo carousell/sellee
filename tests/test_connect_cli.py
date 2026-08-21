@@ -449,7 +449,7 @@ def stub_market_daemon(monkeypatch):
     the deployment check, and the config read are stubbed too, so a test drives them by hand."""
     calls = {
         "posts": [],
-        "gets": [],
+        "probes": [],
         "state": "logged_in",
         "post_status": 200,
         "raised": [],
@@ -457,22 +457,22 @@ def stub_market_daemon(monkeypatch):
     }
 
     def fake_post(port, token, route, body, **kwargs):
+        # The login probe is a POST too (it navigates the shared tab), recorded separately so
+        # tests can tell "asked to connect" from "asked whether we are in".
+        if route == "/control/market-login":
+            calls["probes"].append((route, body))
+            return calls.get("probe_status", 200), {"state": calls["state"]}
         calls["posts"].append((route, body))
         return calls["post_status"], calls.get(
             "post_body",
             {"market": body["market"], "url": "https://www.carousell.sg/", "state": calls["state"]},
         )
 
-    def fake_get(port, token, route, params=None, **kwargs):
-        calls["gets"].append((route, params))
-        return calls.get("get_status", 200), {"state": calls["state"]}
-
     def fake_raise(port):
         calls["raised"].append(port)
         return calls["raise_result"]
 
     monkeypatch.setattr(control, "post", fake_post)
-    monkeypatch.setattr(control, "get", fake_get)
     monkeypatch.setattr(connect_cli.foreground, "raise_window", fake_raise)
     # Faked rather than read, so these tests are about the flow on a machine that can raise a
     # window whichever machine runs the suite.
@@ -487,7 +487,7 @@ def test_an_already_signed_in_market_exits_0_without_asking(
 ) -> None:
     rc = connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=True)
     assert rc == 0
-    assert stub_market_daemon["gets"] == []  # no second probe, nothing to wait for
+    assert stub_market_daemon["probes"] == []  # no second probe, nothing to wait for
     assert "Signed in to Carousell" in capsys.readouterr().out
 
 
@@ -499,7 +499,7 @@ def test_a_signed_out_market_waits_then_re_probes(monkeypatch, stub_market_daemo
     rc = connect_cli.market_flow(9999, "mcp-tok", "carousell", interactive=True)
 
     assert rc == 1
-    assert len(stub_market_daemon["gets"]) == 1
+    assert len(stub_market_daemon["probes"]) == 1
     assert "sign in there. I never sign in for you" in capsys.readouterr().out
     assert prompts  # it did wait for the person
 

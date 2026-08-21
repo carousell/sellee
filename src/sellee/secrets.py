@@ -64,6 +64,14 @@ def ensure_mcp_token() -> str:
     return token
 
 
+def rotate_mcp_token() -> str:
+    """A fresh attended token, replacing the old one on disk. The caller that holds a live
+    server must swap its in-memory copy too (the rotate control route does both)."""
+    token = _stdlib_secrets.token_urlsafe(_TOKEN_BYTES)
+    write_secret(paths.mcp_token_path(), token)
+    return token
+
+
 def read_mcp_token() -> str | None:
     return read_secret(paths.mcp_token_path())
 

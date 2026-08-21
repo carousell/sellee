@@ -95,7 +95,12 @@ def _open_web(args: argparse.Namespace) -> int:
         print(f"sellee: {body.get('error', f'HTTP {status}')}", file=sys.stderr)
         return 1
 
-    url = control.tail_url(port, token, args.since)
+    status, body = control.post(port, token, "/control/tail-ticket", {})
+    if status != 200:
+        print(f"sellee: {body.get('error', f'HTTP {status}')}", file=sys.stderr)
+        return 1
+
+    url = control.tail_url(port, body["ticket"], args.since)
     # Printed before opening, and regardless of whether opening works: over SSH, or with no
     # browser to hand off to, the URL itself is the useful output.
     print(url)

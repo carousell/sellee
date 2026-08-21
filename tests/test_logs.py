@@ -214,13 +214,18 @@ def daemon_up(xdg_tmp, monkeypatch):
     paths.ensure_config_dir()
     secrets.write_secret(paths.mcp_token_path(), "ATTENDEDTOKEN")
     monkeypatch.setattr(control, "get", lambda *a, **k: (200, {"bound": False}))
+    monkeypatch.setattr(control, "post", lambda *a, **k: (200, {"ticket": "ONESHOTTICKET"}))
 
 
 def test_web_prints_the_url_and_opens_it(daemon_up, opened, capsys) -> None:
     assert logs_cli.run(_args(web=True)) == 0
     printed = capsys.readouterr().out.strip()
-    assert "token=ATTENDEDTOKEN" in printed
-    assert "/tail?" in printed
+    # A one-shot ticket rides in the URL — never the attended token, which would otherwise
+    # sit in the address bar and browser history for good.
+    assert "ATTENDEDTOKEN" not in printed
+    assert "token=" not in printed
+    assert "#ticket=ONESHOTTICKET" in printed
+    assert "/tail" in printed
     # printed first, opened second — the URL is the output even when opening does nothing
     assert opened == [printed]
 
@@ -228,6 +233,16 @@ def test_web_prints_the_url_and_opens_it(daemon_up, opened, capsys) -> None:
 def test_web_passes_since_through_in_the_pages_own_grammar(daemon_up, opened) -> None:
     assert logs_cli.run(_args(web=True, since="15m")) == 0
     assert "since=15m" in opened[0]
+
+
+def test_tail_url_carries_the_ticket_in_the_fragment(daemon_up) -> None:
+    """The fragment never travels over the wire, so the ticket stays out of any server log;
+    the browser's own history is covered by the ticket being one-shot."""
+    from sellee import control
+
+    url = control.tail_url(7355, "TICKET123", "15m")
+    assert url == "http://127.0.0.1:7355/tail?since=15m#ticket=TICKET123"
+    assert control.tail_url(7355, "TICKET123") == "http://127.0.0.1:7355/tail#ticket=TICKET123"
 
 
 def test_web_rejects_a_malformed_since_before_reaching_the_daemon(

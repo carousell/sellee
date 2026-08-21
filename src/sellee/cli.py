@@ -128,6 +128,11 @@ def _build_parser() -> argparse.ArgumentParser:
         p = dsub.add_parser(name, help=helptext)
         p.add_argument("--label", default=None, help="override the supervisor job label")
 
+    dsub.add_parser(
+        "rotate-token",
+        help="replace the attended token (anything the old one was pasted into stops working)",
+    )
+
     logs = sub.add_parser("logs", help="tail the event store")
     logs.add_argument("--follow", action="store_true", help="poll for new events (~1s)")
     logs.add_argument("--pass", dest="pass_id", default=None, help="filter by pass id")

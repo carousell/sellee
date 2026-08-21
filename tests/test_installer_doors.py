@@ -349,8 +349,8 @@ def test_login_probes_never_touch_the_tab_order(server, store, browser, chrome_u
 
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "crosslist_markets", ["carousell"])
-    _call(server, "GET", "/control/market-login?market=carousell")
-    _call(server, "GET", "/control/market-logins")
+    _call(server, "POST", "/control/market-login", body={"market": "carousell"})
+    _call(server, "POST", "/control/market-logins", body={})
     assert browser.fronted == []
 
 
@@ -358,7 +358,7 @@ def test_the_three_login_states_come_back_verbatim(server, store, browser, chrom
     store.set_seller_config_section("basics", {"region": "SG"})
     for state in ("logged_in", "logged_out", "unknown"):
         browser.state = state
-        _status, body = _call(server, "GET", "/control/market-login?market=carousell")
+        _status, body = _call(server, "POST", "/control/market-login", body={"market": "carousell"})
         assert body["state"] == state
 
 
@@ -368,7 +368,7 @@ def test_an_unreadable_probe_answers_unknown_never_logged_out(
     # A false logged_out tells a signed-in seller to re-authenticate and stops their market.
     store.set_seller_config_section("basics", {"region": "SG"})
     browser.state = None
-    _status, body = _call(server, "GET", "/control/market-login?market=carousell")
+    _status, body = _call(server, "POST", "/control/market-login", body={"market": "carousell"})
     assert body["state"] == "unknown"
 
 
@@ -419,7 +419,9 @@ def test_a_browser_that_will_not_start_is_a_503_with_the_hint(bus, store, xdg_tm
 
 
 def test_market_login_needs_the_attended_token(server) -> None:
-    status, _ = _call(server, "GET", "/control/market-login?market=carousell", token=None)
+    status, _ = _call(
+        server, "POST", "/control/market-login", body={"market": "carousell"}, token=None
+    )
     assert status == 401
 
 
@@ -437,7 +439,7 @@ def test_market_logins_reports_the_enabled_set_and_probes_when_chrome_is_up(
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "crosslist_markets", ["carousell"])
 
-    _status, body = _call(server, "GET", "/control/market-logins")
+    _status, body = _call(server, "POST", "/control/market-logins", body={})
 
     assert body["enabled"] == ["carousell"]
     assert body["blocked"] == ""
@@ -457,7 +459,7 @@ def test_market_logins_never_opens_a_window_just_to_answer(
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "crosslist_markets", ["carousell"])
 
-    _status, body = _call(server, "GET", "/control/market-logins")
+    _status, body = _call(server, "POST", "/control/market-logins", body={})
 
     assert body["enabled"] == ["carousell"]
     assert "Chrome isn't running" in body["blocked"]
@@ -476,7 +478,7 @@ def test_market_logins_names_the_pass_as_the_reason_not_a_closed_chrome(
     seed_setting(store, "crosslist_markets", ["carousell"])
     store.enqueue_pass("publish", {"item_id": "itm_1", "market": "carousell"})
 
-    _status, body = _call(server, "GET", "/control/market-logins")
+    _status, body = _call(server, "POST", "/control/market-logins", body={})
 
     assert "a pass is using the browser" in body["blocked"]
     assert body["markets"] == []
@@ -495,7 +497,7 @@ def test_market_logins_filters_to_what_is_still_publishable(
     store.set_seller_config_section("basics", {"region": "US"})
     seed_setting(store, "crosslist_markets", ["carousell"])
 
-    _status, body = _call(server, "GET", "/control/market-logins")
+    _status, body = _call(server, "POST", "/control/market-logins", body={})
 
     assert body["enabled"] == []
 
@@ -510,7 +512,7 @@ def test_a_login_read_never_opens_a_window_when_chrome_is_closed(
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: False)
     store.set_seller_config_section("basics", {"region": "SG"})
-    _status, body = _call(server, "GET", "/control/market-login?market=carousell")
+    _status, body = _call(server, "POST", "/control/market-login", body={"market": "carousell"})
     assert body["state"] == "unknown"
     assert "Chrome isn't running" in body["detail"]
     assert browser.visited == []
@@ -523,7 +525,7 @@ def test_a_login_read_yields_to_a_pass_already_driving_the_browser(
     store.set_seller_config_section("basics", {"region": "SG"})
     store.enqueue_pass("publish", {"item_id": "itm_1", "market": "carousell"})
 
-    _status, body = _call(server, "GET", "/control/market-login?market=carousell")
+    _status, body = _call(server, "POST", "/control/market-login", body={"market": "carousell"})
 
     assert body["state"] == "unknown"
     assert "a pass is using the browser" in body["detail"]

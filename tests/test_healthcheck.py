@@ -230,7 +230,7 @@ def test_the_browser_check_says_unknown_rather_than_none_when_the_daemon_is_down
     def refuse(*a, **k):
         raise control.DaemonUnreachable("connection refused")
 
-    monkeypatch.setattr(control, "get", refuse)
+    monkeypatch.setattr(control, "post", refuse)
     result = healthcheck._browser_probe(Config())
     assert result.status == checks.WARN
     assert "isn't answering" in result.detail
@@ -276,7 +276,7 @@ def test_a_block_that_is_not_chrome_keeps_the_standing_answer(container, xdg_tmp
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kw: True)
     monkeypatch.setattr(
         control,
-        "get",
+        "post",
         lambda *a, **k: (
             200,
             {"enabled": ["carousell"], "blocked": "a pass is using the browser", "markets": []},

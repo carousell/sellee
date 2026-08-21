@@ -184,7 +184,7 @@ def _surface_window(body: dict) -> None:
 
 def _probe_market(port: int, mcp_token: str, market: str):
     try:
-        status, answer = control.get(port, mcp_token, "/control/market-login", {"market": market})
+        status, answer = control.post(port, mcp_token, "/control/market-login", {"market": market})
     except control.DaemonUnreachable:
         return "unknown"
     # A refusal (the browser went away, a pass took the tab) is not an answer about the login,
