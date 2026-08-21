@@ -456,6 +456,24 @@ def test_an_unreachable_release_host_is_not_an_error_the_seller_hears(installed)
     assert recorder.notices == []
 
 
+def test_the_probe_refuses_a_cleartext_release_channel(installed, monkeypatch) -> None:
+    # The background check reaches the network like `sellee update` does, so it goes through the
+    # same channel guard — and refuses before any request leaves the machine.
+    def fail(base):
+        raise AssertionError(f"discover() should not have been reached for {base!r}")
+
+    monkeypatch.setattr(update_mod, "discover", fail)
+    recorder = _Recorder()
+    update_mod.update_probe(
+        store=recorder,
+        bus=recorder,
+        config_obj=Config(update_base_url="http://releases.example.test"),
+        seen=set(),
+    )
+    assert recorder.notices == []
+    assert recorder.events == []
+
+
 def test_a_failure_mid_swap_puts_the_running_version_back(installed, served, monkeypatch) -> None:
     # Between stopping the daemon and starting it again there is a window where a failure would
     # otherwise leave the machine with no agent running at all.

@@ -46,6 +46,14 @@ NETWORK_MODULES = {
     "telnetlib",
     "websockets",
 }
+
+# Submodules of a gated top-level that cannot open a socket, named by exact dotted path. These are
+# exempt rather than allowlisted per file, because the allowlist below grants socket access and
+# these grant none. `urllib.parse` is string manipulation only, and it is what a scheme/host check
+# has to use — gating it would push that check toward hand-rolled URL parsing, which is how a host
+# check ends up prefix-matching. A bare `import urllib`, or any other urllib submodule, is gated.
+NETWORK_SAFE_SUBMODULES = {"urllib.parse"}
+
 NETWORK_ALLOWLIST: set[str] = {
     "sellee/http_server.py",  # the daemon's localhost HTTP server (MCP + tail + control)
     "sellee/mcp_proxy.py",  # stdio shim forwarding JSON-RPC to the daemon over HTTP
@@ -107,6 +115,24 @@ def _imported_top_levels(tree: ast.AST) -> set[str]:
     return names
 
 
+def _imported_network_modules(tree: ast.AST) -> set[str]:
+    """The gated network top-levels a module imports, ignoring socket-free submodules."""
+    found: set[str] = set()
+    for node in ast.walk(tree):
+        modules: list[str] = []
+        if isinstance(node, ast.Import):
+            modules = [alias.name for alias in node.names]
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            modules = [node.module]
+        for module in modules:
+            if module in NETWORK_SAFE_SUBMODULES:
+                continue
+            top = module.split(".")[0]
+            if top in NETWORK_MODULES:
+                found.add(top)
+    return found
+
+
 def _src_files() -> list[Path]:
     return sorted(SRC.rglob("*.py"))
 
@@ -155,7 +181,17 @@ def test_no_network_imports_outside_allowlist() -> None:
         if rel in NETWORK_ALLOWLIST:
             continue
         tree = ast.parse(path.read_text(), filename=str(path))
-        for top in _imported_top_levels(tree):
-            if top in NETWORK_MODULES:
-                offenders.append(f"{rel}: {top}")
+        for top in sorted(_imported_network_modules(tree)):
+            offenders.append(f"{rel}: {top}")
     assert not offenders, "network imports outside the allowlist:\n" + "\n".join(offenders)
+
+
+def test_the_network_guard_exempts_only_socket_free_submodules() -> None:
+    assert _imported_network_modules(ast.parse("from urllib.parse import urlsplit\n")) == set()
+    assert _imported_network_modules(ast.parse("import urllib.parse\n")) == set()
+    assert _imported_network_modules(ast.parse("import urllib\n")) == {"urllib"}
+    assert _imported_network_modules(ast.parse("import urllib.request\n")) == {"urllib"}
+    assert _imported_network_modules(ast.parse("from urllib.request import urlopen\n")) == {
+        "urllib"
+    }
+    assert _imported_network_modules(ast.parse("import socket\n")) == {"socket"}

@@ -106,6 +106,48 @@ def test_invalid_values_are_rejected_not_sanitized(xdg_tmp, obj) -> None:
         load()
 
 
+@pytest.mark.parametrize(
+    "key",
+    [
+        "carousell_ai_api_base",
+        "carousell_ai_web_base_url",
+        "telegram_api_base",
+        "discord_api_base",
+        "update_base_url",
+    ],
+)
+def test_a_cleartext_base_to_a_real_host_is_refused(xdg_tmp, key) -> None:
+    # The Telegram and Discord bases carry the bot token in the URL path and the update base
+    # serves code this machine executes, so cleartext off-box is refused for every URL knob.
+    _write_config({key: "http://bases.example.test"})
+    with pytest.raises(ConfigError):
+        load()
+
+
+def test_http_to_loopback_is_allowed_but_the_host_is_parsed_not_prefix_matched(xdg_tmp) -> None:
+    _write_config(
+        {
+            "carousell_ai_api_base": "http://127.0.0.1:9999",
+            "carousell_ai_web_base_url": "http://localhost:9998",
+            "telegram_api_base": "http://127.0.0.1:9997",
+            "discord_api_base": "http://[::1]:9996",
+            "update_base_url": "http://127.0.0.1:9995",
+        }
+    )
+    cfg = load()
+    assert cfg.carousell_ai_api_base == "http://127.0.0.1:9999"
+    assert cfg.carousell_ai_web_base_url == "http://localhost:9998"
+    assert cfg.telegram_api_base == "http://127.0.0.1:9997"
+    assert cfg.discord_api_base == "http://[::1]:9996"
+    assert cfg.update_base_url == "http://127.0.0.1:9995"
+
+    # A host an attacker owns that merely starts with the loopback literal: a prefix test on
+    # "http://127.0.0.1" would let this through, parsing the hostname does not.
+    _write_config({"telegram_api_base": "http://127.0.0.1.evil.test/bot"})
+    with pytest.raises(ConfigError):
+        load()
+
+
 def test_pacing_and_negotiation_defaults(xdg_tmp) -> None:
     cfg = load()
     assert cfg.max_actions_per_hour == 12

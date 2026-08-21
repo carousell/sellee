@@ -24,7 +24,6 @@ import shutil
 import tarfile
 import time
 import urllib.error
-import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
@@ -41,12 +40,6 @@ _ASSET_RE = re.compile(r"^sellee-(?P<version>.+)\.tar\.gz$")
 # A version is a dotted run of numbers, optionally followed by a pre-release marker.
 _VERSION_RE = re.compile(r"^v?(?P<release>\d+(?:\.\d+)*)(?P<pre>.*)$")
 _VERSION_PARTS = 4
-
-# Hosts allowed to serve a release over plain HTTP. The digest check is self-consistent — the
-# checksums come from the same origin as the archive — so an unencrypted channel means whoever
-# controls it chooses what code runs here. Loopback is exempt because there is no network to
-# intercept, and that is what the staged-release tests serve from.
-_PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 _FETCH_TIMEOUT_SEC = 300.0
 _DOWNLOAD_CHUNK = 1 << 16
@@ -280,9 +273,10 @@ def update_probe(*, store, bus, config_obj, seen: set) -> None:
     """
     if materialize.is_dev_install():
         return
-    base = config_obj.update_base_url or DEFAULT_BASE_URL
     try:
-        release = discover(base)
+        # Through the same channel guard as `sellee update` — the probe fetches from the network
+        # too, so a cleartext base must not produce a request here either.
+        release = discover(_base_url(None, config_obj))
     except UpdateError as exc:
         log.debug("update check failed: %s", exc)
         return
@@ -305,15 +299,14 @@ def _base_url(args, cfg) -> str:
     makes transport security the actual integrity guarantee, not the digest.
     """
     base = getattr(args, "url", None) or cfg.update_base_url or DEFAULT_BASE_URL
-    parsed = urllib.parse.urlparse(base)
-    if parsed.scheme == "https":
-        return base
-    if parsed.scheme == "http" and (parsed.hostname or "") in _PLAINTEXT_HOSTS:
-        return base
-    raise UpdateError(
-        f"refusing to fetch a release over {parsed.scheme or 'an unknown scheme'} from {base!r} — "
-        "releases must come over https"
-    )
+    # A `--url` on the command line never went through config validation, so the check has to
+    # happen here too — sharing the one host-parsing rule with config rather than restating it.
+    if not config.is_secure_url(base):
+        raise UpdateError(
+            f"refusing to fetch a release over an unencrypted channel from {base!r} — releases "
+            "must come over https"
+        )
+    return base
 
 
 def _guard_updatable() -> None:

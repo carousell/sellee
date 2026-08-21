@@ -13,6 +13,7 @@ import json
 import logging
 from dataclasses import dataclass, fields
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from sellee import paths
 
@@ -21,6 +22,12 @@ log = logging.getLogger(__name__)
 _VALID_LOG_LEVELS = {"CRITICAL", "ERROR", "WARNING", "INFO", "DEBUG", "NOTSET"}
 _VALID_DAEMON_MODES = {"login-start", "manual"}
 _VALID_PACING_MODES = {"normal", "fast"}
+
+# Hosts a URL-typed config value may reach over plain http. Cleartext to a real network host is
+# refused: the Telegram and Discord bases put the bot token in the URL path, and the release base
+# serves code this machine then executes. Loopback is exempt — there is no network to intercept,
+# and it is what the fake API servers and the staged-release tests listen on.
+_PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
 # Account-safety ceilings, in code. Pacing config is validated in two directions: a malformed
 # value is rejected (fail loud, like every other knob), but a well-formed value that is *looser*
@@ -121,6 +128,31 @@ def _is_real_number(value: object) -> bool:
 
 def _is_real_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool)
+
+
+def is_secure_url(base: object) -> bool:
+    """Whether `base` can be fetched without handing its contents to whoever is on the path.
+
+    The one place that decision is made, so config-time and fetch-time validation cannot drift
+    apart. The host is parsed rather than prefix-matched: a `startswith("http://127.0.0.1")`
+    test also accepts `http://127.0.0.1.evil.test`, a host an attacker registers.
+    """
+    if not isinstance(base, str):
+        return False
+    try:
+        parsed = urlsplit(base)
+        hostname = parsed.hostname
+    except ValueError:
+        # An unparseable authority (a stray bracket, a non-numeric port) is not a URL we trust.
+        return False
+    if parsed.scheme == "https":
+        return True
+    return parsed.scheme == "http" and (hostname or "") in _PLAINTEXT_HOSTS
+
+
+def _require_secure_url(key: str, base: str) -> None:
+    if not is_secure_url(base):
+        raise ConfigError(f"{key} must be an https URL (plain http only to loopback), got {base!r}")
 
 
 def _validate(raw: dict) -> Config:
@@ -224,12 +256,11 @@ def _validate(raw: dict) -> Config:
     ):
         if key in raw:
             base = raw[key]
-            if (
-                not isinstance(base, str)
-                or not base.startswith(("http://", "https://"))
-                or base != base.strip()
-            ):
-                raise ConfigError(f"{key} must be an http(s) URL, got {base!r}")
+            if not isinstance(base, str) or base != base.strip():
+                raise ConfigError(
+                    f"{key} must be a URL with no surrounding whitespace, got {base!r}"
+                )
+            _require_secure_url(key, base)
             values[key] = base.rstrip("/")
 
     if "chrome_cdp_port" in raw:
@@ -313,10 +344,13 @@ def _validate(raw: dict) -> Config:
 
     if "update_base_url" in raw:
         base = raw["update_base_url"]
-        if base is not None and (
-            not isinstance(base, str) or not base.startswith(("http://", "https://"))
-        ):
-            raise ConfigError(f"update_base_url must be an http(s) URL or null, got {base!r}")
+        if base is not None:
+            if not isinstance(base, str) or base != base.strip():
+                raise ConfigError(
+                    f"update_base_url must be a URL with no surrounding whitespace or null, "
+                    f"got {base!r}"
+                )
+            _require_secure_url("update_base_url", base)
         values["update_base_url"] = base.rstrip("/") if base else None
 
     if "negotiation_max_counters" in raw:
