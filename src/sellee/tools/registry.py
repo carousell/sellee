@@ -23,7 +23,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee.tools.schema import ValidationError, validate
+from sellee.tools.schema import ValidationError, unsupported_keywords, validate
 
 log = logging.getLogger(__name__)
 
@@ -93,6 +93,16 @@ _REGISTRY: dict = {}
 def register(spec: ToolSpec) -> ToolSpec:
     if spec.name in _REGISTRY:
         raise ValueError(f"duplicate tool registration: {spec.name}")
+    # The validator enforces a closed subset and ignores the rest, so a keyword it does not know
+    # would read as a constraint on the tool's inputs while letting everything through. Registration
+    # happens at import, which makes that a startup failure rather than a silent gap at call time.
+    unsupported = unsupported_keywords(spec.input_schema)
+    if unsupported:
+        raise ValueError(
+            f"tool {spec.name}: input schema uses keywords that are neither enforced nor "
+            f"documentation: "
+            f"{', '.join(sorted(unsupported))}"
+        )
     _REGISTRY[spec.name] = spec
     return spec
 

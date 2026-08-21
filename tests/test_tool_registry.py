@@ -11,11 +11,14 @@ from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_PUBLISH,
     ToolError,
+    ToolSpec,
     UnknownTool,
+    all_specs,
     dispatch,
+    register,
     tools_for_tier,
 )
-from sellee.tools.schema import ValidationError, validate
+from sellee.tools.schema import ValidationError, unsupported_keywords, validate
 
 # --- the JSON-Schema subset -------------------------------------------------------------------
 
@@ -48,6 +51,124 @@ def test_validate_rejects(value, match) -> None:
     }
     with pytest.raises(ValidationError, match=match):
         validate(schema, value)
+
+
+_LENGTH_SCHEMA = {
+    "type": "object",
+    "properties": {"s": {"type": "string", "maxLength": 5, "minLength": 2}},
+}
+
+
+@pytest.mark.parametrize("value", ["ab", "abcde", "abc"])
+def test_validate_accepts_string_within_length_bounds(value) -> None:
+    validate(_LENGTH_SCHEMA, {"s": value})
+
+
+@pytest.mark.parametrize(
+    "value, match",
+    [
+        ("abcdef", "at most 5"),
+        ("a" * 5000, "at most 5"),
+        ("a", "at least 2"),
+        ("", "at least 2"),
+    ],
+)
+def test_validate_rejects_string_outside_length_bounds(value, match) -> None:
+    with pytest.raises(ValidationError, match=match):
+        validate(_LENGTH_SCHEMA, {"s": value})
+
+
+def test_length_bounds_defer_to_the_type_check() -> None:
+    # The bounds are gated on the declared type, not the value's, so a non-string fails on its
+    # type and len() never runs on something that has no length.
+    with pytest.raises(ValidationError, match="expected string"):
+        validate(_LENGTH_SCHEMA, {"s": 12345})
+
+
+def test_length_bounds_apply_inside_arrays() -> None:
+    schema = {
+        "type": "object",
+        "properties": {"tags": {"type": "array", "items": {"type": "string", "maxLength": 3}}},
+    }
+    validate(schema, {"tags": ["ab", "cde"]})
+    with pytest.raises(ValidationError, match=r"tags\[1\]: must be at most 3"):
+        validate(schema, {"tags": ["ab", "cdef"]})
+
+
+# --- the subset is closed: unenforced keywords are rejected where they are declared -----------
+
+
+def test_every_registered_schema_uses_only_enforced_keywords() -> None:
+    # register() enforces this at import, so a failure here means the frozenset drifted behind
+    # what the tools actually declare (and importing sellee.tools would already have blown up).
+    for spec in all_specs():
+        assert unsupported_keywords(spec.input_schema) == []
+
+
+@pytest.mark.parametrize(
+    "schema, expected",
+    [
+        ({"type": "object", "pattern": "^x$"}, ["pattern"]),
+        (
+            {"type": "object", "properties": {"n": {"type": "integer", "minimum": 0}}},
+            ["n.minimum"],
+        ),
+        (
+            {"type": "array", "items": {"type": "string", "format": "uri"}},
+            ["[].format"],
+        ),
+        (
+            # The schema-valued form reads as "extra keys validate against this" while the
+            # validator only honours the boolean form — every extra key would pass unchecked.
+            {"type": "object", "additionalProperties": {"type": "string"}},
+            ["additionalProperties"],
+        ),
+        (
+            {
+                "type": "object",
+                "properties": {"opts": {"type": "object", "additionalProperties": {}}},
+            },
+            ["opts.additionalProperties"],
+        ),
+    ],
+)
+def test_unsupported_keywords_names_what_the_validator_would_ignore(schema, expected) -> None:
+    assert unsupported_keywords(schema) == expected
+
+
+def test_boolean_additional_properties_stays_in_the_enforced_subset() -> None:
+    assert unsupported_keywords({"type": "object", "additionalProperties": True}) == []
+    assert unsupported_keywords({"type": "object", "additionalProperties": False}) == []
+
+
+def test_documentation_keywords_are_not_mistaken_for_dead_constraints() -> None:
+    """The point of the check is a constraint that silently does nothing. A description constrains
+    nothing to begin with — it is served to the model as documentation — so rejecting it would
+    turn a normal schema addition into a startup failure and teach the next author to distrust
+    the check."""
+    schema = {
+        "type": "object",
+        "description": "does a thing",
+        "properties": {"q": {"type": "string", "description": "the question", "default": ""}},
+    }
+    assert unsupported_keywords(schema) == []
+
+
+def test_register_rejects_a_schema_with_an_unenforced_keyword() -> None:
+    spec = ToolSpec(
+        name="unregisterable_probe",
+        description="never registers",
+        # maxItems is plausible and silently ignored by validate() — exactly the footgun.
+        input_schema={
+            "type": "object",
+            "properties": {"paths": {"type": "array", "maxItems": 3}},
+        },
+        handler=lambda ctx, params: {},
+    )
+    with pytest.raises(ValueError, match="paths.maxItems"):
+        register(spec)
+    # a rejected spec must not be half-registered
+    assert "unregisterable_probe" not in {s.name for s in all_specs()}
 
 
 def test_validate_enum() -> None:
