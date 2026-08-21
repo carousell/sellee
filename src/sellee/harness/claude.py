@@ -6,6 +6,10 @@ mcp__<server>__* names, the web tools when granted, a path-scoped Read rule per 
 (last, because the flag greedily consumes what follows). stream-json output requires --verbose when
 used with -p (verified against the installed CLI). Each renderer has a parse-back round-trip
 validator so a malformed artifact is caught before a pass ever spawns.
+
+Neither the prompt nor the MCP credential appears in argv: -p is bare so the CLI reads the prompt
+from stdin, and --mcp-config names a workspace file. Only --append-system-prompt carries text, and
+that text is static skill material with no seller or buyer data in it.
 """
 
 from __future__ import annotations
@@ -117,8 +121,14 @@ def render_workspace(spec: PassSpec) -> dict:
 
 
 def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
-    """The full `claude -p` argv. --allowedTools is last (it greedily consumes following args)."""
-    argv = [claude_bin, "-p", spec.prompt]
+    """The full `claude -p` argv. --allowedTools is last (it greedily consumes following args).
+
+    The prompt is not here. `-p` with no positional argument makes the CLI read the prompt from
+    stdin, which is where the runner delivers it — argv is readable by every process on the machine
+    (`ps -e`) and a reply prompt is the verbatim buyer conversation. Only `--input-format
+    stream-json` would conflict with stream-json output; the default text input does not.
+    """
+    argv = [claude_bin, "-p"]
     if spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
     argv += ["--strict-mcp-config", "--mcp-config", MCP_CONFIG_FILE]
@@ -197,8 +207,16 @@ def _validate_workspace_round_trip(spec: PassSpec, files: dict) -> None:
 
 
 def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
-    if argv[1] != "-p" or argv[2] != spec.prompt:
-        raise ValueError("argv does not lead with -p <prompt>")
+    if argv[1] != "-p":
+        raise ValueError("argv does not lead with -p")
+    # The prompt is delivered on stdin, so the round-trip assertion is the inverse of what it used
+    # to be: argv must both be shaped to read stdin and be free of the prompt itself. A positional
+    # after -p is the regression that matters — the CLI would take that as the prompt and stop
+    # reading stdin, putting the buyer conversation back in `ps` output with nothing else changing.
+    if len(argv) > 2 and not argv[2].startswith("-"):
+        raise ValueError("argv must not carry a positional prompt after -p")
+    if spec.prompt in " ".join(argv):
+        raise ValueError("the prompt must never appear in argv")
     if "--strict-mcp-config" not in argv:
         raise ValueError("argv is missing --strict-mcp-config")
     # argv must point at the workspace file, whose content must match the spec — together with

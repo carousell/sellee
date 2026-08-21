@@ -512,6 +512,34 @@ def _cleanup_workspace(workspace: Path) -> None:
     shutil.rmtree(workspace, ignore_errors=True)
 
 
+def _write_prompt(proc, prompt: str) -> None:
+    """Hand the pass its prompt on stdin and close, so the harness sees EOF and starts its turn.
+
+    On its own thread, because the write can block: a coalesced reply prompt holds every waiting
+    buyer's conversation and can exceed a pipe buffer, so a harness that is not reading yet leaves
+    it parked mid-prompt. Inline, that would strand the spawn before the babysitter exists to time
+    it out; from a thread, the kill at the deadline closes the read end and unblocks it.
+
+    A harness that died before reading gives EPIPE, which is not worth raising — the exit code it
+    already has classifies the pass.
+    """
+    if proc.stdin is None:
+        return
+
+    def _pump() -> None:
+        try:
+            proc.stdin.write(prompt)
+        except OSError:
+            pass
+        finally:
+            try:
+                proc.stdin.close()
+            except OSError:
+                pass
+
+    threading.Thread(target=_pump, daemon=True).start()
+
+
 def _reader(proc, bus, pass_id: str, holder: dict) -> None:
     try:
         for raw in proc.stdout:
@@ -638,13 +666,17 @@ def run_pass(deps: PassDeps, claimed) -> str:
             proc = subprocess.Popen(  # noqa: S603 — argv is composed by our emitter, not a shell
                 argv,
                 cwd=str(workspace),
-                stdin=subprocess.DEVNULL,
+                stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=errf,
                 text=True,
                 bufsize=1,
                 start_new_session=True,
             )
+            # The prompt goes here rather than in argv: it is the seller's item data and, for a
+            # reply, the verbatim buyer conversation, and argv is world-readable via `ps`.
+            _write_prompt(proc, spec.prompt)
+
             try:
                 pgid = os.getpgid(proc.pid)
                 deps.tracked_pgids.add(pgid)

@@ -1,7 +1,6 @@
 [
   "claude",
   "-p",
-  "publish item item_123 using only your tools",
   "--strict-mcp-config",
   "--mcp-config",
   ".mcp.json",

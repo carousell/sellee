@@ -103,9 +103,12 @@ sanitize):
   (our server, plus the Playwright server for a browser-driving pass — see
   *Multiple servers* below), and `--allowedTools` listing exactly the pass's rules
   (last, since the flag greedily consumes what follows). Stream-json output requires `--verbose` with `-p` (a hard CLI
-  requirement). The spec's composed system prompt rides
-  `--append-system-prompt`. `readable_paths` renders as one `Read(//abs/path)`
-  rule per file; the bare `Read` deny is emitted only when nothing is granted,
+  requirement). `-p` is bare and the runner writes the prompt to the process's
+  stdin, so a buyer conversation never lands in `ps` output. The composed system
+  prompt does ride `--append-system-prompt`, since it is static skill text with
+  no seller or buyer data in it.
+  `readable_paths` renders as one `Read(//abs/path)` rule per file; the bare
+  `Read` deny is emitted only when nothing is granted,
   because a deny overrides any allow. Unmatched reads still fail — a headless
   session rejects unmatched tools by default.
 

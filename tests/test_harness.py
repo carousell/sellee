@@ -196,15 +196,15 @@ def test_a_pass_with_no_browser_renders_only_our_server() -> None:
 # --- the bearer token stays out of argv -------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    "golden",
-    [
-        "claude_pass_argv.json",
-        "claude_pass_argv_browser.json",
-        "claude_pass_argv_media.json",
-        "claude_pass_argv_web.json",
-    ],
-)
+_ARGV_GOLDENS = [
+    "claude_pass_argv.json",
+    "claude_pass_argv_browser.json",
+    "claude_pass_argv_media.json",
+    "claude_pass_argv_web.json",
+]
+
+
+@pytest.mark.parametrize("golden", _ARGV_GOLDENS)
 def test_no_golden_argv_carries_the_token(golden) -> None:
     """argv is world-readable (`ps -e`); the workspace file it points at is not."""
     argv = json.loads((GOLDEN / golden).read_text())
@@ -264,6 +264,55 @@ def test_argv_is_refused_if_the_token_leaks_into_it() -> None:
     argv = [*claude.pass_argv(spec), "--append-system-prompt", "Bearer TESTTOKEN"]
     with pytest.raises(ValueError):
         claude._validate_argv_round_trip(spec, argv)
+
+
+# --- the prompt stays out of argv too (it travels on stdin) -------------------------------------
+
+
+@pytest.mark.parametrize("golden", _ARGV_GOLDENS)
+def test_no_golden_argv_carries_the_prompt(golden) -> None:
+    """A reply prompt is the verbatim buyer conversation, and `ps -e` shows argv to every local
+    user. Unlike the bearer token there is no file it already sits in, so this is the whole leak."""
+    prompt = _spec().prompt
+    argv = json.loads((GOLDEN / golden).read_text())
+    assert not any(prompt in arg for arg in argv)
+    assert prompt not in " ".join(argv)  # nor split across adjacent elements
+    # -p with no positional argument is what makes the CLI read the prompt from stdin instead.
+    assert argv[1] == "-p" and argv[2].startswith("-")
+
+
+def test_the_only_argv_text_left_is_the_static_system_prompt() -> None:
+    """--append-system-prompt stays in argv deliberately: composed skill text, no seller or buyer
+    data and no credentials. It is the one long argument that is safe to be world-readable."""
+    spec = _spec(append_system_prompt="RULEBOOK")
+    argv = claude.pass_argv(spec)
+    assert argv[argv.index("--append-system-prompt") + 1] == "RULEBOOK"
+    assert spec.prompt not in " ".join(argv)
+
+
+def test_argv_is_refused_if_the_prompt_is_put_back_at_the_front() -> None:
+    """The pre-stdin shape. A positional after -p makes the CLI stop reading stdin, so this would
+    regress silently — the pass would still run, with the conversation back in `ps`."""
+    spec = _spec()
+    argv = claude.pass_argv(spec)
+    with pytest.raises(ValueError):
+        claude._validate_argv_round_trip(spec, [argv[0], "-p", spec.prompt, *argv[2:]])
+
+
+def test_argv_is_refused_if_the_prompt_leaks_into_a_later_element() -> None:
+    spec = _spec()
+    argv = [*claude.pass_argv(spec), "--append-system-prompt", f"context: {spec.prompt}"]
+    with pytest.raises(ValueError):
+        claude._validate_argv_round_trip(spec, argv)
+
+
+def test_argv_is_refused_if_it_carries_any_positional_after_p() -> None:
+    """Not just the prompt: any positional there is read as the prompt, so it disagrees with what
+    the runner is about to deliver on stdin."""
+    spec = _spec()
+    argv = claude.pass_argv(spec)
+    with pytest.raises(ValueError):
+        claude._validate_argv_round_trip(spec, [argv[0], "-p", "something else", *argv[2:]])
 
 
 def test_the_browser_server_is_stdio_not_a_port() -> None:
