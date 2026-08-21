@@ -193,6 +193,79 @@ def test_a_pass_with_no_browser_renders_only_our_server() -> None:
     assert set(servers) == {"sellee"}
 
 
+# --- the bearer token stays out of argv -------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "golden",
+    [
+        "claude_pass_argv.json",
+        "claude_pass_argv_browser.json",
+        "claude_pass_argv_media.json",
+        "claude_pass_argv_web.json",
+    ],
+)
+def test_no_golden_argv_carries_the_token(golden) -> None:
+    """argv is world-readable (`ps -e`); the workspace file it points at is not."""
+    argv = json.loads((GOLDEN / golden).read_text())
+    assert not any("TESTTOKEN" in arg for arg in argv)
+    assert argv[argv.index("--mcp-config") + 1] == ".mcp.json"
+
+
+def test_argv_points_at_the_file_the_workspace_renders() -> None:
+    spec = _spec()
+    files = claude.render_workspace(spec)
+    named = claude.pass_argv(spec)[claude.pass_argv(spec).index("--mcp-config") + 1]
+    # The runner spawns with cwd=workspace, so the argv path has to be a key of what it wrote.
+    assert named in files
+    assert json.loads(files[named])["mcpServers"]["sellee"]["headers"]["Authorization"] == (
+        "Bearer TESTTOKEN"
+    )
+
+
+@pytest.mark.parametrize(
+    "rendered",
+    [
+        # an endpoint the spec did not ask for
+        {"mcpServers": {"sellee": {"type": "http", "url": "http://evil.test/mcp", "headers": {}}}},
+        # a server the spec did not ask for — with --strict-mcp-config that is an authority grant
+        {
+            "mcpServers": {
+                "sellee": {
+                    "type": "http",
+                    "url": "http://127.0.0.1:7355/mcp",
+                    "headers": {"Authorization": "Bearer TESTTOKEN"},
+                },
+                "smuggled": {"type": "stdio", "command": "sh"},
+            }
+        },
+    ],
+)
+def test_the_round_trip_validator_still_catches_a_config_that_disagrees(
+    monkeypatch, rendered
+) -> None:
+    """The guarantee --strict-mcp-config rests on is that the rendered set IS the pass's tool
+    set. Pointing argv at a path must not cost us the check that the content matches the spec."""
+    monkeypatch.setattr(claude, "mcp_config", lambda spec: rendered)
+    with pytest.raises(ValueError):
+        claude.pass_argv(_spec())
+
+
+def test_argv_is_refused_if_it_names_the_wrong_config_path() -> None:
+    spec = _spec()
+    argv = claude.pass_argv(spec)
+    argv[argv.index("--mcp-config") + 1] = "/tmp/somewhere-else.json"
+    with pytest.raises(ValueError):
+        claude._validate_argv_round_trip(spec, argv)
+
+
+def test_argv_is_refused_if_the_token_leaks_into_it() -> None:
+    spec = _spec()
+    argv = [*claude.pass_argv(spec), "--append-system-prompt", "Bearer TESTTOKEN"]
+    with pytest.raises(ValueError):
+        claude._validate_argv_round_trip(spec, argv)
+
+
 def test_the_browser_server_is_stdio_not_a_port() -> None:
     """A localhost browser-control port would be an unauthenticated way to drive the seller's
     Chrome; a stdio subprocess is reachable only by its parent."""

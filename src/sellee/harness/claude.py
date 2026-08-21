@@ -14,6 +14,12 @@ import json
 
 from sellee.harness.model import PassSpec
 
+# The workspace file argv points --mcp-config at. A path, not inline JSON: the config carries the
+# MCP bearer header, and argv is readable by every process on the machine (`ps -e`), while the
+# workspace file sits in a 0700 directory. Resolved relative to the pass's cwd, which the runner
+# sets to the workspace (verified against CLI 2.1.222).
+MCP_CONFIG_FILE = ".mcp.json"
+
 
 def mcp_config(spec: PassSpec) -> dict:
     """Every MCP server the pass may reach: our daemon over HTTP, and — for a pass that drives the
@@ -103,7 +109,7 @@ def render_workspace(spec: PassSpec) -> dict:
     """The workspace files as a {relative_path: text} map. The runner writes these into an empty
     per-pass directory whose only contents are these files (nothing to escape to)."""
     files = {
-        ".mcp.json": json.dumps(mcp_config(spec), indent=2, sort_keys=True) + "\n",
+        MCP_CONFIG_FILE: json.dumps(mcp_config(spec), indent=2, sort_keys=True) + "\n",
         ".claude/settings.json": json.dumps(settings_json(spec), indent=2, sort_keys=True) + "\n",
     }
     _validate_workspace_round_trip(spec, files)
@@ -115,7 +121,7 @@ def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
     argv = [claude_bin, "-p", spec.prompt]
     if spec.append_system_prompt:
         argv += ["--append-system-prompt", spec.append_system_prompt]
-    argv += ["--strict-mcp-config", "--mcp-config", json.dumps(mcp_config(spec), sort_keys=True)]
+    argv += ["--strict-mcp-config", "--mcp-config", MCP_CONFIG_FILE]
     if spec.model:
         argv += ["--model", spec.model]
     if spec.max_turns is not None:
@@ -195,7 +201,13 @@ def _validate_argv_round_trip(spec: PassSpec, argv: list) -> None:
         raise ValueError("argv does not lead with -p <prompt>")
     if "--strict-mcp-config" not in argv:
         raise ValueError("argv is missing --strict-mcp-config")
-    _validate_servers(spec, json.loads(argv[argv.index("--mcp-config") + 1]))
+    # argv must point at the workspace file, whose content must match the spec — together with
+    # --strict-mcp-config that keeps "the rendered set IS the pass's reachable surface" true.
+    if argv[argv.index("--mcp-config") + 1] != MCP_CONFIG_FILE:
+        raise ValueError("argv must point --mcp-config at the workspace's .mcp.json")
+    _validate_servers(spec, mcp_config(spec))
+    if any(spec.mcp_token in arg for arg in argv):
+        raise ValueError("the MCP bearer token must never appear in argv")
     if spec.output_format == "stream-json" and "--verbose" not in argv:
         raise ValueError("stream-json output requires --verbose")
     allowed = allowed_tools(spec)
