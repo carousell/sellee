@@ -3,8 +3,9 @@
 Keeping a second real emitter honest forces the internal PassSpec to stay genuinely common. Codex
 reaches our MCP server through the stdio proxy (it has no first-class HTTP MCP transport), so the
 config points at `sellee mcp-proxy` rather than carrying the endpoint or token — the proxy
-resolves those from config/secrets, keeping the token out of this file. A hand-rolled TOML writer
-plus a matching minimal parser give the INV-35 round-trip without a 3.11+ tomllib dependency.
+resolves those from config/secrets, keeping the token out of this file. The TOML writer is
+hand-rolled because the stdlib has no writer at any version (tomllib reads only), and it is paired
+with a minimal parser so the INV-35 round-trip validates what was actually emitted.
 
 Codex runtime quirks (no --allowedTools, no hooks in exec mode) are the reason there is no spawn
 path here; that parity work is gated to the cutover plan.

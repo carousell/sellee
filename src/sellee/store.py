@@ -343,9 +343,10 @@ class CheckoutRecord(TypedDict):
     issued_ts: float
 
 
-# `class` is a reserved word, so PassRecord needs the functional syntax. Its annotations are
-# strings (forward refs) so the `X | None` unions are never evaluated at runtime on the 3.9 floor;
-# the checker still resolves them.
+# `class` is a reserved word, so PassRecord needs the functional syntax — where `from __future__
+# import annotations` does not apply, because the annotations are values in a call rather than
+# annotations the compiler sees. They are written as strings for that reason; the checker still
+# resolves them.
 PassRecord = TypedDict(
     "PassRecord",
     {

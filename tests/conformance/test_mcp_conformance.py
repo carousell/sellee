@@ -1,9 +1,8 @@
 """Drive our hand-rolled MCP server with the official MCP SDK as client — the interop proof.
 
 stdlib-only constrains the user *runtime*, not dev/CI deps: the `mcp` SDK is a dev-only
-dependency used here purely as a conformance client. The SDK needs Python 3.10+, so this whole
-module skips on the 3.9 runtime floor with an honest message — `make test-3.9` stays green and
-truthful about the skip, and the interop is still proven on the dev/CI interpreter.
+dependency used here purely as a conformance client. It skips with an honest message where the
+SDK is absent rather than failing, so a tree without the dev group installed still runs green.
 """
 
 from __future__ import annotations

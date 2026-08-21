@@ -194,9 +194,10 @@ def unpack(archive: Path, into: Path) -> Path:
     if into.exists():
         shutil.rmtree(into)
     into.mkdir(parents=True)
-    # `filter="data"` is the interpreter's own hardening, and the default from 3.14. Passed only
-    # where it exists — the 3.9 floor predates it, which is why safe_members does the same job
-    # by hand rather than relying on it.
+    # `filter="data"` is the interpreter's own hardening, and the default from 3.14 — which is what
+    # .python-version pins, so it is always present in practice. Passed conditionally anyway, and
+    # safe_members still does the same job by hand: this code also ships inside a release archive
+    # that a future interpreter change should not be able to silently un-harden.
     hardening = {"filter": "data"} if hasattr(tarfile, "data_filter") else {}
     with tarfile.open(archive, "r:gz") as tar:
         tar.extractall(into, members=safe_members(tar, into), **hardening)

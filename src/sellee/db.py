@@ -1,10 +1,11 @@
 """SQLite access — WAL, one write connection per DB behind a lock, read-only readers.
 
 Zero-pip is load-bearing for the install story, so this is stdlib sqlite3: no ORM. WAL gives
-concurrent readers (the logs tail / web tail) by construction. The write connection runs in
-autocommit mode (isolation_level=None) with explicit BEGIN IMMEDIATE / COMMIT, because 3.9's
-sqlite3 has no autocommit parameter and implicit transactions muddy DDL. All writes go through
-the one connection serialized by a lock; readers open independent read-only URI connections.
+concurrent readers (the logs tail / web tail) by construction. The write connection runs with
+`isolation_level=None` and explicit BEGIN IMMEDIATE / COMMIT: every money and safety decision has
+to be one transaction it either owns or fails, and sqlite3's implicit transactions muddy DDL. All
+writes go through the one connection serialized by a lock; readers open independent read-only URI
+connections.
 """
 
 from __future__ import annotations
