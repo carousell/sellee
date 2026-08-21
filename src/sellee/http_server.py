@@ -52,6 +52,11 @@ _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 # browser by hand; short enough that a URL lifted from a terminal scrollback later is dead.
 _TAIL_TICKET_TTL_SEC = 300
 
+# The largest request body any route here has a use for. Control bodies are a handful of fields
+# and the largest MCP argument is a message the model composed, so this is orders of magnitude
+# above real traffic and exists only so an announced length cannot be believed on faith.
+_MAX_BODY_BYTES = 1 << 20
+
 # How often the accept loop wakes to notice a shutdown request. stop() cannot return until it does,
 # so this is the floor on shutdown latency — the stdlib default of 0.5s is half a second of idling
 # on every daemon stop.
@@ -258,8 +263,28 @@ class _Handler(BaseHTTPRequestHandler):
             return False
         return True
 
-    def _read_body(self) -> bytes:
-        length = int(self.headers.get("Content-Length", 0) or 0)
+    def _read_body(self):
+        """The request body, or None once a refusal has already been answered.
+
+        Content-Length is a number a caller chose, and the ticket exchange reads a body before it
+        has any credential to check — so it is validated before it is trusted. A negative length
+        reaches `rfile.read(-1)`, which blocks until the peer closes and pins one thread of an
+        uncapped pool; an enormous one has us allocate whatever was asked for. Neither needs a
+        token. The connection closes on a refusal because the body it announced is still unread,
+        and on a keep-alive connection those bytes would be parsed as the next request.
+        """
+        try:
+            length = int(self.headers.get("Content-Length", 0) or 0)
+        except ValueError:
+            length = -1
+        if length < 0:
+            self.close_connection = True
+            self._send_json(400, {"error": "invalid Content-Length"})
+            return None
+        if length > _MAX_BODY_BYTES:
+            self.close_connection = True
+            self._send_json(413, {"error": "request body too large"})
+            return None
         return self.rfile.read(length) if length else b""
 
     def _bearer(self) -> str | None:
@@ -294,8 +319,11 @@ class _Handler(BaseHTTPRequestHandler):
         if session is None or session.tier != "attended":
             self._send_json(401, {"error": "unauthorized"})
             return None
+        raw = self._read_body()
+        if raw is None:
+            return None
         try:
-            body = json.loads(self._read_body() or b"{}")
+            body = json.loads(raw or b"{}")
         except ValueError:
             self._send_json(400, {"error": "invalid json"})
             return None
@@ -382,8 +410,11 @@ class _Handler(BaseHTTPRequestHandler):
         if session is None:
             self._send_json(401, {"error": "unauthorized"})
             return
+        raw = self._read_body()
+        if raw is None:
+            return
         try:
-            message = json.loads(self._read_body() or b"{}")
+            message = json.loads(raw or b"{}")
         except ValueError:
             self._send_json(200, _rpc_error(None, _PARSE_ERROR, "parse error"))
             return
@@ -786,9 +817,14 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_tail_exchange(self) -> None:
         # The tail page trades the ticket back for the attended token it polls with. No bearer
         # gate — the page has no token yet, that is the point — but the localhost Host/Origin
-        # guard already ran, and the ticket is single-use and minutes-lived.
+        # guard already ran, and the ticket is single-use and minutes-lived. This is the one route
+        # that reads a body with no credential behind it, which is why _read_body validates the
+        # announced length rather than trusting it.
+        raw = self._read_body()
+        if raw is None:
+            return
         try:
-            body = json.loads(self._read_body() or b"{}")
+            body = json.loads(raw or b"{}")
         except ValueError:
             self._send_json(400, {"error": "invalid json"})
             return

@@ -444,6 +444,72 @@ def test_a_non_ascii_bearer_is_a_mismatch_not_a_crash(server) -> None:
     assert status == 401
 
 
+def _raw_post(server, path, *, headers, timeout=2.0):
+    """A POST whose Content-Length is ours to choose — urllib always computes an honest one.
+
+    Returns the first response bytes, or None if the daemon never answered (which is the failure
+    this exists to catch: a handler blocked in rfile.read, holding its thread).
+    """
+    import socket
+
+    sock = socket.create_connection(("127.0.0.1", server.port), timeout=timeout)
+    try:
+        sock.sendall(f"POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\n{headers}\r\n".encode())
+        try:
+            return sock.recv(200)
+        except (TimeoutError, socket.timeout):
+            return None
+    finally:
+        sock.close()
+
+
+def test_a_negative_content_length_cannot_hang_a_thread_without_a_token(server) -> None:
+    """The ticket exchange reads a body before it has any credential to check, so `read(-1)` —
+    which blocks until the peer closes — was reachable with nothing at all. One wedged thread
+    per connection, on an uncapped pool."""
+    server.auth.mint_tail_ticket()
+    answer = _raw_post(server, "/control/tail-exchange", headers="Content-Length: -1\r\n")
+    assert answer is not None, "the handler never answered — it is blocked reading the body"
+    assert b"400" in answer
+
+
+def test_a_garbled_content_length_is_refused_rather_than_raising(server) -> None:
+    answer = _raw_post(server, "/control/tail-exchange", headers="Content-Length: 12x\r\n")
+    assert answer is not None
+    assert b"400" in answer
+
+
+def test_an_oversized_body_is_refused_before_it_is_read(server) -> None:
+    from sellee.http_server import _MAX_BODY_BYTES
+
+    answer = _raw_post(
+        server, "/control/tail-exchange", headers=f"Content-Length: {_MAX_BODY_BYTES + 1}\r\n"
+    )
+    assert answer is not None
+    assert b"413" in answer
+
+
+def test_the_authenticated_routes_get_the_same_guard(server) -> None:
+    """The guard belongs to the body read, not to one route: /mcp and the attended control
+    routes announce a length too, and neither should be believed on faith either."""
+    for path in ("/mcp", "/control/tail-ticket"):
+        answer = _raw_post(
+            server,
+            path,
+            headers="Authorization: Bearer attended-secret\r\nContent-Length: -1\r\n",
+        )
+        assert answer is not None, path
+        assert b"400" in answer, path
+
+
+def test_a_body_within_the_cap_still_works(server) -> None:
+    """The cap must not clip real traffic: a genuine attended POST is unaffected."""
+    status, body = _request(
+        server, "POST", "/control/tail-ticket", token="attended-secret", body={}
+    )
+    assert status == 200 and body["ticket"]
+
+
 def test_the_market_routes_reject_get(server) -> None:
     """They navigate the shared tab: a side effect must not be reachable by a URL alone, and a
     top-level navigation sends no bearer and no Origin."""
