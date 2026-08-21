@@ -10,10 +10,12 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import shutil
 import stat
 import subprocess
 import tarfile
+import tempfile
 import threading
 from functools import partial
 from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
@@ -92,22 +94,41 @@ def release(tmp_path):
         httpd.server_close()
 
 
-def run_install(*args, base_url=None, path=None):
-    env = dict(os.environ)
-    if base_url is not None:
-        env["SELLEE_INSTALL_BASE_URL"] = base_url
-    else:
-        env.pop("SELLEE_INSTALL_BASE_URL", None)
-    if path:
-        env["PATH"] = path
+_RELEASE_URL_LINE = re.compile(r"^RELEASE_URL=.*$", re.M)
+
+
+def _sh(script, args, env):
     return subprocess.run(
-        ["sh", str(INSTALL_SH), *args],
+        ["sh", str(script), *args],
         capture_output=True,
         text=True,
         env=env,
         timeout=120,
         check=False,
     )
+
+
+def run_install(*args, base_url=None, path=None):
+    """Run install.sh, optionally against a locally served release.
+
+    The script takes no base-URL override, so pointing it somewhere else means editing it — done
+    here in a copy. Nothing below asserts anything about where it fetched from; the rewrite only
+    gets the script past its own hardcoded URL so the checksum gate and the archive-name guard can
+    be exercised for real.
+    """
+    env = dict(os.environ)
+    if path:
+        env["PATH"] = path
+    if base_url is None:
+        return _sh(INSTALL_SH, args, env)
+    source, count = _RELEASE_URL_LINE.subn(
+        f'RELEASE_URL="{base_url}"', INSTALL_SH.read_text(), count=1
+    )
+    assert count == 1, "install.sh no longer has exactly one RELEASE_URL assignment to rewrite"
+    with tempfile.TemporaryDirectory() as tmp:
+        script = Path(tmp) / "install-under-test.sh"
+        script.write_text(source)
+        return _sh(script, args, env)
 
 
 def test_without_release_hosting_it_says_so_and_installs_nothing() -> None:
@@ -205,4 +226,23 @@ def test_an_ambiguous_checksum_file_is_refused_rather_than_guessed(host_shims, r
 
     assert result.returncode == 1
     assert "more than one archive" in result.stderr
+    assert not receipt.exists()
+
+
+# --- the archive name (SEC-2822) ----------------------------------------------------------------
+
+
+def test_an_archive_name_carrying_a_path_is_refused_before_the_download(
+    host_shims, release
+) -> None:
+    """The name comes out of a file the network handed us and is used as a `curl -o` path, and the
+    awk filter's `.*` matches a slash — so a traversing name would write outside the temp dir
+    before the digest gate ran at all."""
+    served, base, receipt = release
+    (served / "SHA256SUMS").write_text(f"{'a' * 64}  sellee-../../../pwned.tar.gz\n")
+
+    result = run_install(base_url=base, path=host_shims)
+
+    assert result.returncode == 1
+    assert "an archive with a path in it" in result.stderr
     assert not receipt.exists()

@@ -11,9 +11,7 @@
 
 set -eu
 
-REPO_URL="https://github.com/carousell/sellee"
-DEFAULT_BASE_URL="$REPO_URL/releases/latest/download"
-BASE_URL="${SELLEE_INSTALL_BASE_URL:-}"
+RELEASE_URL="https://github.com/carousell/sellee/releases/latest/download"
 
 say() {
 	echo "$1"
@@ -25,15 +23,16 @@ die() {
 }
 
 # --- not yet ---------------------------------------------------------------------------------
-# Release hosting is not public yet, so the honest answer is that this path does not work rather
-# than a 404 halfway through. Setting a base URL is how the end-to-end test exercises the real
-# code path. REMOVE THIS BLOCK at cutover, when releases are published.
-if [ -z "$BASE_URL" ]; then
+# Release hosting is not public yet, so say so rather than 404 halfway through.
+# REMOVE THIS BLOCK at cutover, when releases are published.
+case "$RELEASE_URL" in
+https://github.com/*)
 	echo "SELLEE: installing with this script isn't supported yet." >&2
 	echo "SELLEE:   Clone the repo and run ./setup instead:" >&2
-	echo "SELLEE:     git clone $REPO_URL && cd sellee && ./setup" >&2
+	echo "SELLEE:     git clone https://github.com/carousell/sellee && cd sellee && ./setup" >&2
 	exit 1
-fi
+	;;
+esac
 
 # --dev points the install at the tree it was run from, and this one is a temp directory that is
 # deleted the moment setup returns — the install would be dead on arrival, with no error.
@@ -44,7 +43,7 @@ done
 # --- what is about to happen ---------------------------------------------------------------
 
 say "Here's what this does, before it does any of it:"
-say "  1. Download $BASE_URL/SHA256SUMS"
+say "  1. Download $RELEASE_URL/SHA256SUMS"
 say "  2. Download the sellee archive it names, and check it against that checksum"
 say "  3. Unpack it into a temporary directory, deleted when this finishes"
 say "  4. Run the unpacked ./setup, which fetches the Python it runs on and then lists"
@@ -81,8 +80,8 @@ trap 'rm -rf "$work"' EXIT INT TERM
 cd "$work"
 
 say "Fetching the checksum file…"
-curl -fsSL "$BASE_URL/SHA256SUMS" -o SHA256SUMS ||
-	die "couldn't download $BASE_URL/SHA256SUMS"
+curl -fsSL "$RELEASE_URL/SHA256SUMS" -o SHA256SUMS ||
+	die "couldn't download $RELEASE_URL/SHA256SUMS"
 
 # The archive's name is read out of the checksum file, so there is no second source to disagree
 # with it, no API call, and nothing to parse JSON with.
@@ -95,8 +94,14 @@ if [ "$(echo "$archives" | wc -l)" -gt 1 ]; then
 fi
 archive="$archives"
 
+# The name comes from the network and becomes a `curl -o` path below, and the awk filter's `.*`
+# matches a slash — so a traversing name would write outside this temp dir before the digest gate.
+case "$archive" in
+*/* | ..*) die "SHA256SUMS names an archive with a path in it ('$archive') — refusing." ;;
+esac
+
 say "Downloading $archive"
-curl -fsSL "$BASE_URL/$archive" -o "$archive" || die "couldn't download $BASE_URL/$archive"
+curl -fsSL "$RELEASE_URL/$archive" -o "$archive" || die "couldn't download $RELEASE_URL/$archive"
 
 say "Checking it against the published checksum…"
 grep " \*\{0,1\}$archive\$" SHA256SUMS >expected.sums
