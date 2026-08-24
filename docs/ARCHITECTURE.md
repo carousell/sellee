@@ -64,8 +64,9 @@ Makefile                  local entry points (test, lint, fmt, dist)
 - **`data/sellee.db`** is business data (migrated, snapshotted).
   **`state/events.db`** is the event/transcript store (prunable; recreated from
   migrations if deleted). The two are never joined.
-- **`store.py`** — typed accessors over `sellee.db`, the one writer for all business
-  state.
+- **`store/`** — typed accessors over `sellee.db`, the one writer for all business
+  state. One `Store` class over one write connection; the accessors are split by
+  domain across `store/*.py` as mixins, which is an organizational split only.
     - Every money/safety decision runs as one `BEGIN IMMEDIATE` transaction
       (load → decide → write), the single-writer serialization that gives FCFS
       single-inventory and atomic pacing.
