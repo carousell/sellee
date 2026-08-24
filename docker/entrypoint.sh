@@ -45,9 +45,4 @@ if [ "${SELLEE_CDP_FORWARD:-1}" = "1" ]; then
 	socat "TCP-LISTEN:${port},bind=127.0.0.1,fork,reuseaddr" "TCP:${host}:${port}" &
 fi
 
-# Where the seller drops photos. World-writable because on a Linux host this process is root, and
-# a root-owned directory inside the bind mount would leave them unable to put anything in it.
-mkdir -p /data/inbox
-chmod 0777 /data/inbox
-
 exec "$@"

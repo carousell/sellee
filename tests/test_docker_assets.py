@@ -99,6 +99,20 @@ def test_the_secrets_file_never_enters_the_build_context() -> None:
     assert "\n.env\n" in (ROOT / ".gitignore").read_text()
 
 
+@pytest.mark.parametrize(
+    "script", [ENTRYPOINT, START_SH, START_PS1], ids=["entrypoint", "sh", "ps1"]
+)
+def test_no_shipped_script_creates_a_world_writable_path(script) -> None:
+    """The entrypoint once chmod'd a directory 0777 inside the seller's bind mount — no sticky
+    bit, so any other local account could replace files another user put there, and the fix was
+    lost in a rebase once without anything noticing. These scripts run outside paths.py's
+    authority, so the mode discipline has to be asserted at the text level."""
+    for mode in re.findall(r"(?:chmod|mkdir\s+-m)\s+([0-7]{3,4})", script):
+        assert int(mode[-1]) & 0o2 == 0, f"world-writable mode {mode}"
+    assert "a+w" not in script
+    assert "o+w" not in script
+
+
 def test_shell_scripts_are_pinned_to_lf() -> None:
     """A CRLF entrypoint dies inside the image as `/bin/sh^M: bad interpreter`."""
     attributes = (ROOT / ".gitattributes").read_text()
