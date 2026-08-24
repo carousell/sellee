@@ -137,8 +137,7 @@ def test_no_warm_under_an_override_or_in_a_single_tick_run(monkeypatch) -> None:
 
 def test_only_a_loopback_bind_reads_as_staying_on_this_machine() -> None:
     """The Host header is the client's to choose, so it cannot decide who reaches this port — the
-    bind address is the only thing that does. Parsed rather than spelling-matched: the wildcards
-    and any interface address have to read as exposure, and so does anything unparseable."""
+    bind address is the only thing that does."""
     assert daemon._is_loopback_bind("127.0.0.1")
     assert daemon._is_loopback_bind("127.0.0.53")  # all of 127/8, not just the one spelling
     assert daemon._is_loopback_bind("::1")

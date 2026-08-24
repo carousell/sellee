@@ -156,8 +156,7 @@ def test_every_acquisition_re_ensures_chrome_and_reuses_the_client(store, bus, m
 
 def test_a_chrome_that_came_back_on_a_new_port_gets_a_new_client(store, bus, monkeypatch) -> None:
     """An unpinned Chrome that was closed and restarted is on a different port, and the cached
-    client still dials the old one — every call on it would fail. So the command is compared, and a
-    client holding a stale endpoint is closed and replaced."""
+    client still dials the old one — every call on it would fail."""
     ports = iter([45123, 46001])
     closed = []
     monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)

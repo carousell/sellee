@@ -674,8 +674,6 @@ def test_ensure_running_reports_unavailable_when_the_binary_is_missing(monkeypat
 
 
 def test_an_unpinned_launch_reports_the_port_chrome_chose(xdg_tmp, monkeypatch) -> None:
-    """The port comes out of the call, not into it — every consumer builds its CDP endpoint from
-    what this returns."""
     from sellee import paths
 
     paths.ensure_data_dirs()
