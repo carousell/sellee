@@ -14,6 +14,8 @@ import time
 import urllib.error
 import urllib.request
 
+from tests.conftest import patch_store_attr
+
 from fake_discord_api import BOT as DISCORD_BOT
 from fake_discord_api import FAKE_TOKEN as DISCORD_FAKE_TOKEN
 from fake_discord_api import FakeDiscordAPI
@@ -174,10 +176,10 @@ def test_expired_nonce_drops_the_channel_to_off(store, bus, xdg_tmp) -> None:
 
 def test_nonce_within_ttl_still_binds(store, bus, xdg_tmp, monkeypatch) -> None:
     frozen = 1_700_000_000.0
-    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    patch_store_attr(monkeypatch, "_now", lambda: frozen)
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind(BOT["username"], _NONCE)  # the standard TTL, off the frozen clock
-    monkeypatch.setattr(store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC - 1)
+    patch_store_attr(monkeypatch, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC - 1)
     with FakeTelegramAPI() as api:
         api.inject_command("/start " + _NONCE)
         _poller(store, bus, api).tick()
@@ -189,13 +191,13 @@ def test_advance_offset_does_not_extend_the_nonce_ttl(store, bus, xdg_tmp, monke
     path bumps on every batch of unattributable traffic: otherwise a stranger spamming the bot
     would keep the nonce alive for as long as they cared to keep typing."""
     frozen = 1_700_000_000.0
-    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    patch_store_attr(monkeypatch, "_now", lambda: frozen)
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind(BOT["username"], _NONCE)
     expires_ts = store.get_channel()["bind_nonce_expires_ts"]
 
     late = frozen + store_mod.BIND_NONCE_TTL_SEC - 1
-    monkeypatch.setattr(store_mod, "_now", lambda: late)
+    patch_store_attr(monkeypatch, "_now", lambda: late)
     with FakeTelegramAPI() as api:
         api.inject_text("hi bot", chat_id=CHAT_ID + 99)  # pre-bind spam: acked and discarded
         _poller(store, bus, api).tick()
@@ -203,7 +205,7 @@ def test_advance_offset_does_not_extend_the_nonce_ttl(store, bus, xdg_tmp, monke
     assert ch["updated_ts"] == late  # the spam did move updated_ts...
     assert ch["bind_nonce_expires_ts"] == expires_ts  # ...and bought the nonce nothing
 
-    monkeypatch.setattr(store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1)
+    patch_store_attr(monkeypatch, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1)
     with FakeTelegramAPI() as api:
         api.inject_command("/start " + _NONCE)
         _poller(store, bus, api).tick()
@@ -215,16 +217,14 @@ def test_a_nonce_that_lapses_mid_poll_never_binds(store, bus, xdg_tmp, monkeypat
     """A long poll can straddle the deadline, so the tick re-reads it before binding: the /start is
     acked and discarded rather than adopting a chat on a nonce that died while the poll was open."""
     frozen = 1_700_000_000.0
-    monkeypatch.setattr(store_mod, "_now", lambda: frozen)
+    patch_store_attr(monkeypatch, "_now", lambda: frozen)
     secrets.write_telegram_bot_token(FAKE_TOKEN)
     store.arm_bind(BOT["username"], _NONCE)
 
     class _LapsingClient(TelegramClient):
         def get_updates(self, offset, timeout, allowed_updates) -> list:
             updates = super().get_updates(offset, timeout, allowed_updates)
-            monkeypatch.setattr(
-                store_mod, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1
-            )
+            patch_store_attr(monkeypatch, "_now", lambda: frozen + store_mod.BIND_NONCE_TTL_SEC + 1)
             return updates
 
     with FakeTelegramAPI() as api:

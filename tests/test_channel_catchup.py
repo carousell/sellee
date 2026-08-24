@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import time
 
+from tests.conftest import patch_store_attr
+
 from sellee.tools import TIER_ATTENDED
 from sellee.tools.registry import dispatch
 
@@ -43,12 +45,11 @@ def test_catchup_lists_and_stamps_notices_but_not_escalations(make_ctx, store) -
 
 def test_connect_hint_only_when_unbound_and_escalation_aged(make_ctx, store, monkeypatch) -> None:
     _sell_thread(store)
-    import sellee.store as store_mod
 
     # stamp the escalation 25h in the past (older than the 24h connect-hint threshold)
-    monkeypatch.setattr(store_mod, "_now", lambda: time.time() - 25 * 3600)
+    patch_store_attr(monkeypatch, "_now", lambda: time.time() - 25 * 3600)
     store.escalate("carousell:t1", open_question="old question")
-    monkeypatch.setattr(store_mod, "_now", time.time)
+    patch_store_attr(monkeypatch, "_now", time.time)
 
     ctx = make_ctx(TIER_ATTENDED)
     assert dispatch("get_catchup", {}, ctx)["connect_hint"] is True  # unbound + aged

@@ -104,6 +104,6 @@ ban-relative-imports = "all"
 # store surface — the JSON-boundary tool handlers (params: dict), the engines, and
 # everything else stay unchecked and green. Scoped tight so the first run is not
 # drowned by the rest of the still-untyped tree; widening is a separate decision.
-include = ["src/sellee/store.py"]
+include = ["src/sellee/store"]
 typeCheckingMode = "basic"
 pythonVersion = "3.14"

@@ -10,6 +10,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from tests.conftest import patch_store_attr
 
 from sellee.store import BIND_NONCE_TTL_SEC, StoreError, bind_nonce_live
 
@@ -100,9 +101,7 @@ def test_complete_bind_refuses_a_nonce_a_re_arm_retired(store) -> None:
 
 def test_complete_bind_refuses_a_nonce_past_its_deadline(store, monkeypatch) -> None:
     store.arm_bind("sellee_bot", "nonce-1")
-    from sellee import store as store_mod
-
-    monkeypatch.setattr(store_mod, "_now", lambda: time.time() + BIND_NONCE_TTL_SEC + 1)
+    patch_store_attr(monkeypatch, "_now", lambda: time.time() + BIND_NONCE_TTL_SEC + 1)
     assert store.complete_bind(555, update_offset=1, nonce="nonce-1") is False
     assert store.get_channel()["chat_id"] is None
 
@@ -248,11 +247,9 @@ def test_fold_inbox_rejects_bad_status(store) -> None:
 
 
 def test_recent_transcript_interleaves_by_local_clock(store, monkeypatch) -> None:
-    import sellee.store as store_mod
-
     # Stamp each write at a distinct, increasing local time so the interleave is deterministic.
     ticks = iter([100.0, 200.0, 300.0])
-    monkeypatch.setattr(store_mod, "_now", lambda: next(ticks))
+    patch_store_attr(monkeypatch, "_now", lambda: next(ticks))
     store.ingest_updates([_ev(1, text="buyer asks")], update_offset=2)  # in @100
     store.queue_notice("agent replies")  # out @200
     store.ingest_updates([_ev(2, text="yes do that")], update_offset=3)  # in @300
@@ -285,10 +282,8 @@ def test_recent_transcript_carries_media_paths(store) -> None:
 def test_recent_transcript_caps_to_limit(store, monkeypatch) -> None:
     import itertools
 
-    import sellee.store as store_mod
-
     clock = itertools.count(1.0, 1.0)  # a distinct, increasing local time per write
-    monkeypatch.setattr(store_mod, "_now", lambda: next(clock))
+    patch_store_attr(monkeypatch, "_now", lambda: next(clock))
     for i in range(1, 11):
         store.ingest_updates([_ev(i, text=f"m{i}")], update_offset=i + 1)
     window = store.recent_transcript(limit=3)
@@ -378,10 +373,8 @@ def test_pause_and_resume(store) -> None:
 
 
 def test_redundant_pause_keeps_since(store, monkeypatch) -> None:
-    import sellee.store as store_mod
-
     ticks = iter([111.0, 222.0])
-    monkeypatch.setattr(store_mod, "_now", lambda: next(ticks))
+    patch_store_attr(monkeypatch, "_now", lambda: next(ticks))
     store.set_paused(True, source="a")
     store.set_paused(True, source="b")  # a redundant pause keeps the original since_ts
     since = store._db.query("SELECT since_ts FROM control WHERE id = 1")[0]["since_ts"]

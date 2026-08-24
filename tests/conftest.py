@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import importlib
 import json
+import pkgutil
 import re
 import subprocess
 import time
@@ -97,6 +99,26 @@ def _sentinel_pattern(sentinel) -> re.Pattern:
         return re.compile(re.escape(sentinel))
     digits = re.escape(f"{sentinel:g}")  # 61.0 -> "61"
     return re.compile(rf"(?<![0-9A-Za-z_]){digits}(\.0+)?(?![0-9A-Za-z_])")
+
+
+def patch_store_attr(monkeypatch, name, value) -> None:
+    """Patch a module-level store helper (`_now`, `_insert_notice`, …) everywhere it is bound.
+
+    `sellee.store` is a package whose mixins import these helpers by name, so each binding is a
+    separate module attribute. Patching only `sellee.store` would leave every mixin on the real
+    helper — a half-frozen clock rather than a failure — so this patches the package and every
+    submodule that carries the name, and refuses a name nothing binds.
+    """
+    import sellee.store
+
+    targets = [sellee.store]
+    for info in pkgutil.iter_modules(sellee.store.__path__):
+        targets.append(importlib.import_module(f"sellee.store.{info.name}"))
+    bound = [m for m in targets if hasattr(m, name)]
+    if not bound:
+        raise AttributeError(f"no module under sellee.store binds {name!r}")
+    for module in bound:
+        monkeypatch.setattr(module, name, value)
 
 
 def seed_setting(store, key, value) -> None:

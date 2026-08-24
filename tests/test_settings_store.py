@@ -6,9 +6,9 @@ from __future__ import annotations
 import time
 
 import pytest
+from tests.conftest import patch_store_attr
 
 from sellee import settings as settings_mod
-from sellee import store as store_mod
 
 
 def _propose(store, key="quiet_hours", value=None, prior=None):
@@ -163,7 +163,7 @@ def test_apply_is_all_or_nothing(fresh_store, monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise RuntimeError("insert blew up")
 
-    monkeypatch.setattr(store_mod, "_insert_notice", boom)
+    patch_store_attr(monkeypatch, "_insert_notice", boom)
     with pytest.raises(RuntimeError):
         fresh_store.approve_setting_change(cid, decided_via="button", notice_text="done")
     # nothing changed: setting still unset, proposal still pending
