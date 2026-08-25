@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
-from sellee.store import ThreadNotFound, _new_id, _now
+from sellee.store.helpers import ThreadNotFound, _new_id, _now
 
 
 class SendMixin:

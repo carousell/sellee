@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 from sellee.db import Database
 from sellee.engines import buyer_negotiate as buyer_engine
 from sellee.engines import negotiate as negotiate_engine
-from sellee.store import (
+from sellee.store.helpers import (
     BudgetRecord,
     CheckoutRecord,
     ItemNotFound,

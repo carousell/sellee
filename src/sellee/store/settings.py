@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from sellee.db import Database
-from sellee.store import (
+from sellee.store.helpers import (
     PendingChangeRecord,
     _decide_pending_in_txn,
     _insert_notice,

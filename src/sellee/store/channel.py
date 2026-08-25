@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from sellee.db import Database
-from sellee.store import (
+from sellee.store.helpers import (
     _DEFAULT_CHANNEL,
     _PASS_TERMINAL,
     BIND_NONCE_TTL_SEC,

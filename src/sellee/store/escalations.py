@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sellee.db import Database
-from sellee.store import (
+from sellee.store.helpers import (
     EscalationRecord,
     StoreError,
     ThreadNotFound,

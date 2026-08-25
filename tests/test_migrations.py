@@ -9,6 +9,7 @@ import pytest
 
 from sellee import migrations, store
 from sellee.db import Database
+from sellee.store.helpers import _channel_from_row
 
 
 def _table_exists(db: Database, name: str) -> bool:
@@ -194,7 +195,7 @@ def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeyp
     row = data_db.query("SELECT * FROM channel WHERE id = 1")[0]
     assert row["bind_nonce"] == "armed-long-ago"  # the row survives the ALTER
     assert row["bind_nonce_expires_ts"] is None
-    assert store.bind_nonce_live(store._channel_from_row(row)) is False
+    assert store.bind_nonce_live(_channel_from_row(row)) is False
 
 
 # --- against synthetic migration sets ------------------------------------------------------

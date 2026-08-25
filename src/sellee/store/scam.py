@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from sellee.db import Database
 from sellee.engines import scam as scam_engine
-from sellee.store import StoreError, _load_scam_registry, _now
+from sellee.store.helpers import StoreError, _load_scam_registry, _now
 
 
 class ScamMixin:

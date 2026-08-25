@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 
 from sellee.db import Database
-from sellee.store import (
+from sellee.store.helpers import (
     _PASS_TERMINAL,
     _REPLY_THREAD_STATUSES,
     _UNHANDLED_INBOUND_SQL,
