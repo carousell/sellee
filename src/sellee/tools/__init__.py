@@ -24,6 +24,7 @@ from sellee.tools import (  # noqa: F401  imported for registration
     scam,
     seller,
     settings,
+    survey,
     threads,
     verify,
     wants,
