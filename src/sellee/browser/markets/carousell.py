@@ -16,6 +16,8 @@ scroll container, by geometry, and by the shape of a message bubble.
 
 from __future__ import annotations
 
+import json
+
 # Conversations with Carousell itself — the platform assistant and its promotional accounts — rather
 # than with a buyer. Never conversations to answer. (`is_bot_offer` looks like it should say this
 # and does not: it is false for the campaign accounts.)
@@ -192,6 +194,183 @@ LOGIN_JS = """() => {
   } catch (e) {
     return { state: 'unknown' };
   }
+}"""
+
+# What the seller already has listed, read off their own manage-listings page.
+#
+# The DOM, not an API, and unusually this is the *stable* choice: the page renders a real
+# `<table>` with a `<thead>`, so the columns are named by the page itself and located by their
+# heading rather than by position or by one of Carousell's hashed classes. (The endpoint the page
+# fetches this from refuses a plain GET, and the one that answers is an insights feed carrying no
+# listing at all — so the table is also the only thing that actually holds the answer.)
+#
+# Two facts make this safe to adopt from, and both are checked rather than assumed:
+#
+#   1. **These are live listings.** The page keeps sold and expired listings behind other tabs, and
+#      those tabs are buttons carrying no selected state — so instead of trusting which tab is
+#      showing, this reads the "N Active" count and compares it with the rows it found. A view that
+#      is not the active one has a different number of rows, and answers `{error}` rather than a
+#      list. Rows carrying a status badge are dropped as a second, independent guard.
+#   2. **A price we can read.** A listing with no parseable price is dropped and counted, never
+#      returned: carousell.ai refuses an item without one, so asking the seller about it would only
+#      promise something that could never be kept.
+#
+# Returns `{listings: [...], active_count, dropped, truncated}` or `{error: …}`. The distinction
+# matters here more than anywhere: an empty list means "you have nothing listed", which is the one
+# answer that stops us ever asking.
+_MY_LISTINGS_TEMPLATE = """async () => {
+  const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
+  // Text a row shows when it is anything other than live. Matched against the row's own badge
+  // text, not searched for inside it, so a listing called "Sold Out Records Tee" is not dropped.
+  const BADGES = ['sold', 'reserved', 'expired', 'deleted', 'under review', 'rejected', 'inactive'];
+  const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
+  // The title cell also carries the row's own notes under the title ("Bumped 16 days ago"), which
+  // are separate blocks — so the title is its first line, not all of its text.
+  const firstLine = (el) =>
+    (((el && el.innerText) || '').split('\\n').map((s) => s.trim()).filter(Boolean)[0] || '');
+
+  const readRows = (table, priceIndex) => {
+    const rows = [];
+    let dropped = 0;
+    table.querySelectorAll('tbody tr').forEach((tr) => {
+      const link = tr.querySelector('a[href*="/p/"]');
+      if (!link) return;
+      const href = link.getAttribute('href') || '';
+      const match = LISTING_HREF.exec(href.split('?')[0]);
+      if (!match) return;
+      const cells = Array.from(tr.children);
+      const badge = cells.some((td) =>
+        Array.from(td.querySelectorAll('*'))
+          .filter((el) => el.children.length === 0)
+          .some((el) => BADGES.includes(clean(el).toLowerCase()))
+      );
+      if (badge) { dropped++; return; }
+      // The title cell is the one holding the listing link, so it never has to be counted to.
+      let titleCell = link;
+      while (titleCell && titleCell.tagName !== 'TD') titleCell = titleCell.parentElement;
+      const title = firstLine(titleCell);
+      const priceText = priceIndex >= 0 && cells[priceIndex] ? clean(cells[priceIndex]) : '';
+      const digits = priceText.replace(/[^0-9.]/g, '');
+      const price = digits ? Number(digits) : NaN;
+      if (!title || !isFinite(price) || price <= 0) { dropped++; return; }
+      rows.push({
+        listing_id: match[1],
+        url: new URL(href, location.origin).href,
+        title: title.slice(0, 200),
+        price: price,
+        price_text: priceText.slice(0, 40),
+      });
+    });
+    return { rows: rows, dropped: dropped };
+  };
+
+  try {
+    const table = document.querySelector('table');
+    if (!table) return { error: 'no listings table on the page' };
+    const headings = Array.from(table.querySelectorAll('th'));
+    const priceIndex = headings.findIndex((th) => /^price$/i.test(clean(th)));
+    if (priceIndex < 0) return { error: 'no price column in the listings table' };
+
+    let activeCount = null;
+    Array.from(document.querySelectorAll('button, a, [role="tab"]')).forEach((el) => {
+      const hit = /^(\\d+)\\s+active$/i.exec(clean(el));
+      if (hit && activeCount === null) activeCount = Number(hit[1]);
+    });
+    if (activeCount === null) return { error: 'could not read the active listing count' };
+
+    // Load what is not rendered yet. An account with more listings than one screen holds must not
+    // be read as having fewer, so this keeps going until the count reaches the page's own tally —
+    // and gives up only after several rounds add nothing, because a fetch in flight looks exactly
+    // like a list that has ended. A read that still falls short says so with `truncated`, and the
+    // caller treats that as a look it could not complete rather than as the whole answer.
+    let seen = readRows(table, priceIndex);
+    let quiet = 0;
+    for (let round = 0; round < 20 && seen.rows.length + seen.dropped < activeCount; round++) {
+      window.scrollTo(0, document.body.scrollHeight);
+      await new Promise((r) => setTimeout(r, 700));
+      const again = readRows(table, priceIndex);
+      quiet = again.rows.length + again.dropped === seen.rows.length + seen.dropped ? quiet + 1 : 0;
+      seen = again;
+      if (quiet >= 3) break;
+    }
+
+    const total = seen.rows.length + seen.dropped;
+    if (total > activeCount) {
+      // More rows than there are active listings: this is not the active view, so every row is
+      // suspect. Saying so is the whole point — adopting from here would take in sold listings.
+      return { error: 'showing ' + total + ' rows for ' + activeCount + ' active listings' };
+    }
+    return {
+      listings: seen.rows,
+      active_count: activeCount,
+      dropped: seen.dropped,
+      truncated: total < activeCount,
+    };
+  } catch (e) {
+    return { error: String(e).slice(0, 200) };
+  }
+}"""
+
+# The id pattern is injected rather than written twice: this and `listing_id_pattern` must agree
+# about what a listing id is, and json.dumps gives a JS string literal whose escapes survive.
+MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace("__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN))
+
+# One listing's own page, read at adoption time — the fields, the photographs, and whether it is
+# still for sale.
+#
+# This one is schema.org JSON-LD rather than DOM: Carousell publishes a `Product` block for search
+# engines, which makes it a contract with somebody other than us, and it carries every field an
+# adopted item needs already typed — including the currency as a code, so no symbol ever has to be
+# mapped to one, and the full-size photograph URLs rather than the index page's thumbnails.
+#
+# `availability` is the field that matters most. A sold listing reports `schema.org/SoldOut` where a
+# live one reports `InStock`, and it is the *only* reliable signal: the rendered page shows no
+# "sold" text anywhere a reader could find it. Without this check, a seller who taps yes on a list
+# that has aged would have sold items relisted for them.
+#
+# `itemCondition` is deliberately ignored — Carousell reports `NewCondition` for every listing,
+# including one whose own page says "Lightly used" — so the condition is read from the visible
+# details instead, and is simply absent when it cannot be found.
+#
+# Returns null when the page carries no Product block, which the caller must treat as "could not
+# read", never as "not for sale".
+LISTING_DETAIL_JS = """() => {
+  const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
+  const product = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+    .map((s) => { try { return JSON.parse(s.textContent); } catch (e) { return null; } })
+    .find((o) => o && o['@type'] === 'Product');
+  if (!product) return null;
+
+  const offers = product.offers || {};
+  const availability = String(offers.availability || '');
+  const price = Number(offers.price);
+  const images = (Array.isArray(product.image) ? product.image : [product.image])
+    .filter((u) => typeof u === 'string' && u.startsWith('https://'));
+
+  // The visible "Condition" row, as a label followed by its value. Best-effort by design: a missing
+  // condition costs the relisted copy a detail, where a wrong one describes the seller's goods
+  // incorrectly to a buyer.
+  let condition = null;
+  const leaves = Array.from(document.querySelectorAll('div, span, p, dt, dd, li'))
+    .filter((el) => el.children.length === 0);
+  for (let i = 0; i < leaves.length - 1; i++) {
+    if (/^condition$/i.test(clean(leaves[i]))) {
+      const value = clean(leaves[i + 1]);
+      if (value && value.length <= 40 && !/^condition$/i.test(value)) condition = value;
+      break;
+    }
+  }
+
+  return {
+    active: /InStock$/i.test(availability),
+    availability: availability,
+    title: String(product.name || '').slice(0, 200),
+    description: String(product.description || '').slice(0, 4000),
+    price: isFinite(price) && price > 0 ? price : null,
+    currency: String(offers.priceCurrency || '') || null,
+    condition: condition,
+    photo_urls: images.slice(0, 20),
+  };
 }"""
 
 # The reply composer, as shipped defaults under the heal cache. A chat page has exactly one message
