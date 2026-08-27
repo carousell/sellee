@@ -32,8 +32,21 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# The answer to "I found these things you're already selling — want me to manage them?". Same
+# ref:token shape, carrying the market, so a tap months later still says which list it meant.
+CB_SURVEY_YES = "adoptyes"
+CB_SURVEY_NO = "adoptno"
 _FAST_PATH_CALLBACKS = frozenset(
-    {CB_PAUSE, CB_RESUME, CB_NEEDS_ME, CB_SKIP_CTA, CB_CONNECT_MARKET, CB_CONNECT_PROBE}
+    {
+        CB_PAUSE,
+        CB_RESUME,
+        CB_NEEDS_ME,
+        CB_SKIP_CTA,
+        CB_CONNECT_MARKET,
+        CB_CONNECT_PROBE,
+        CB_SURVEY_YES,
+        CB_SURVEY_NO,
+    }
 )
 
 _CONNECT_MODE_FOR_CALLBACK = {
@@ -47,11 +60,26 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
 CHECK_AGAIN_LABEL = "Check again"
+# The two answers to the take-these-over ask. One yes, because the two halves of it are not really
+# separable for a seller: an agent that answers buyers about a listing it cannot relist has to
+# explain that distinction in every conversation. The tools carry the finer answers.
+SURVEY_YES_LABEL = "Yes, manage them"
+SURVEY_NO_LABEL = "No thanks"
 
 
 def signin_controls(market: str) -> list:
     """The one-button control spec that opens `market` for sign-in."""
     return [(SIGN_IN_LABEL, f"{market}:{CB_CONNECT_MARKET}")]
+
+
+def survey_controls(market: str) -> list:
+    """The two-button spec the take-these-over ask carries. Here rather than beside the copy in
+    `browser/survey.py` so the tokens live with every other button token, and so the lane that
+    queues the notice imports this module rather than the other way round."""
+    return [
+        (SURVEY_YES_LABEL, f"{market}:{CB_SURVEY_YES}"),
+        (SURVEY_NO_LABEL, f"{market}:{CB_SURVEY_NO}"),
+    ]
 
 
 def check_again_controls(market: str) -> list:
@@ -71,6 +99,7 @@ CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
 )
 CONNECT_UNKNOWN = "I don't sell on {market}, so there's nothing for me to open."
+SURVEY_UNKNOWN = "I don't have a list of listings for that marketplace any more."
 
 # The one meta row this surface writes: when the seller tapped Skip on the first-listing CTA. An
 # explicit seller answer is genuine, underivable state; the nudge lane reads it to stay quiet.
@@ -151,6 +180,8 @@ def handle_fast_path(store, event: dict) -> tuple:
     control flag here (the enforcement — gating passes and killing a running one — lives in the
     pause wiring); the reads render from the store. Assumes is_fast_path(event) is True."""
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
+    if token in (CB_SURVEY_YES, CB_SURVEY_NO):
+        return _survey_button(store, event["payload"].get("ref"), token)
     if token in _CONNECT_MODE_FOR_CALLBACK:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
@@ -197,6 +228,58 @@ def _connect_button(store, market, mode: str) -> tuple:
         # A stale button, for a market whose adapter has since been withdrawn.
         return CONNECT_UNKNOWN.format(market=market or "that marketplace"), None
     return _request(store, market, mode)
+
+
+def _survey_button(store, market, token: str) -> tuple:
+    """A tap on Yes, manage them / No thanks.
+
+    The buttons stay on the message forever, so every one of these is really a question about *when*
+    it was tapped, and the count of rows that moved is only half the answer. Zero moved can mean two
+    opposite things — the ask went stale and its listings have moved on, or the seller already
+    answered and the work is under way — and the difference matters enormously: treating the second
+    as the first threw away an acceptance the seller had already given.
+
+    So a zero is disambiguated by what the market still holds, and only a market holding nothing at
+    all is treated as stale. That case asks the marketplace again, which is the one deliberate way
+    back through the ask-once guard.
+    """
+    # Imported here rather than at module scope: the survey lane reaches this module for its button
+    # tokens, so importing it back at the top would close the loop.
+    from sellee.browser import markets as market_adapters
+    from sellee.browser import survey
+    from sellee.store.survey import LISTING_ACCEPTED, LISTING_ADOPTED
+
+    if not market:
+        return SURVEY_UNKNOWN, None
+    decision = "decline" if token == CB_SURVEY_NO else "manage"
+    moved = store.decide_discovered_listings(
+        market, decision=decision, manage=None if decision == "decline" else "relist"
+    )
+    if moved:
+        if decision == "decline":
+            return survey.declined_text(market), None
+        return survey.accepted_text(store, market, moved), None
+
+    # Nothing moved. What is already here says which kind of nothing this is.
+    rows = store.list_discovered_listings(market)
+    in_flight = sum(1 for row in rows if row["status"] == LISTING_ACCEPTED)
+    adopted = sum(1 for row in rows if row["status"] == LISTING_ADOPTED)
+    if decision == "decline":
+        # A decline reaches an acceptance that has not been adopted yet, so a zero here means there
+        # was nothing left to stop. Saying so plainly beats claiming to have left alone listings
+        # that are already taken over.
+        if adopted and not in_flight:
+            return survey.already_managing_text(market, adopted), None
+        return survey.declined_text(market), None
+    if in_flight or adopted:
+        # They have already said yes. Re-acking is the honest answer, and — this is the whole point
+        # — it must not reopen the survey: that would delete the accepted rows their first tap
+        # created, silently undoing the thing they are tapping to confirm.
+        return survey.accepted_text(store, market, in_flight or adopted), None
+    if not market_adapters.can_survey(market, store.seller_region()):
+        return SURVEY_UNKNOWN, None
+    store.reopen_market_survey(market)
+    return survey.stale_text(market), None
 
 
 def _connect_command(store) -> tuple:
@@ -284,6 +367,15 @@ def render_catchup(store) -> str:
         lines.extend(
             f"• {p['label']}: {p['current']} → {p['proposed']} (approve {p['change_id']})"
             for p in pending
+        )
+    # An ask that scrolled out of the chat is otherwise unreachable — the buttons are on a message
+    # nobody can find, and the rows just sit there. Surfaced for the same reason pending settings
+    # changes are.
+    found = store.count_pending_discovered()
+    if found:
+        lines.append(
+            f"Listings you already had: {found} waiting on whether I should manage them "
+            "(just tell me yes or no)."
         )
     if not lines:
         return "You're all caught up — nothing waiting."
