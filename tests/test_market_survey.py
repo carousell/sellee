@@ -187,6 +187,21 @@ def test_an_unreadable_page_is_never_mistaken_for_an_empty_one(store, bus) -> No
     assert store.list_queued_notices() == []  # the read lane owns that conversation
 
 
+def test_a_page_we_could_not_price_is_not_a_seller_with_nothing_listed(store, bus) -> None:
+    """The failure mode this guards is silent and permanent: recording an empty survey closes the
+    ask-once guard, so a regional site whose prices we cannot parse would mean a seller who is never
+    asked and can never be asked again."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    listings = {"listings": [], "active_count": 2, "dropped": 2, "unreadable": 2}
+
+    survey.discover_phase(_deps(store, bus, StubClient(listings=listings)))
+
+    assert store.get_market_survey(_MARKET)["state"] == "due"
+    assert store.get_market_survey(_MARKET)["attempts"] == 1
+    assert not store.list_queued_notices()
+
+
 def test_signed_out_costs_an_attempt_and_says_nothing(store, bus) -> None:
     _ready(store)
     store.request_market_survey(_MARKET)

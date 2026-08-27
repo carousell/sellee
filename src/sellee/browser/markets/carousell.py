@@ -215,9 +215,36 @@ LOGIN_JS = """() => {
 #      returned: carousell.ai refuses an item without one, so asking the seller about it would only
 #      promise something that could never be kept.
 #
-# Returns `{listings: [...], active_count, dropped, truncated}` or `{error: …}`. The distinction
-# matters here more than anywhere: an empty list means "you have nothing listed", which is the one
-# answer that stops us ever asking.
+# Returns `{listings: [...], active_count, dropped, unreadable, truncated}` or `{error: …}`. The
+# distinction matters here more than anywhere: an empty list means "you have nothing listed", which
+# is the one answer that stops us ever asking. `unreadable` is what keeps a page we could not parse
+# from arriving as that answer — see the caller.
+#
+# A price is read from the text the page renders, and the thousands separator is not the same on
+# every regional site, so neither `,` nor `.` can be assumed to be the decimal point. Kept as its
+# own function because it is the one piece here that is worth testing directly.
+PARSE_PRICE_JS = """(text) => {
+  const trimmed = String(text || '').replace(/[^0-9.,]/g, '');
+  if (!trimmed) return NaN;
+  const lastDot = trimmed.lastIndexOf('.');
+  const lastComma = trimmed.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    // Both appear, so the later one is the decimal point and the other groups thousands:
+    // "S$1,299.00" one way, "Rp1.299,00" the other.
+    const decimal = lastDot > lastComma ? '.' : ',';
+    const grouping = decimal === '.' ? ',' : '.';
+    return Number(trimmed.split(grouping).join('').replace(decimal, '.'));
+  }
+  const sep = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
+  if (!sep) return Number(trimmed);
+  // Only one kind of separator, so its job has to be inferred: more than one of them, or exactly
+  // three digits after the last one, means it groups thousands ("1.500.000", "1,299"). Anything
+  // else is a decimal point ("40.00", "1,5").
+  const parts = trimmed.split(sep);
+  const groups = parts.length > 2 || parts[parts.length - 1].length === 3;
+  return Number(groups ? parts.join('') : parts.join('.'));
+}"""
+
 _MY_LISTINGS_TEMPLATE = """async () => {
   const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
   // Text a row shows when it is anything other than live. Matched against the row's own badge
@@ -228,10 +255,16 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   // are separate blocks — so the title is its first line, not all of its text.
   const firstLine = (el) =>
     (((el && el.innerText) || '').split('\\n').map((s) => s.trim()).filter(Boolean)[0] || '');
+  const parsePrice = __PARSE_PRICE__;
 
   const readRows = (table, priceIndex) => {
     const rows = [];
-    let dropped = 0;
+    // Counted apart because they mean opposite things. A row behind a badge is not for sale, so
+    // dropping it is the answer; a row whose price will not parse is a row we failed to read, and
+    // if that is every row the page has, reporting an empty list would tell the seller they have
+    // nothing listed.
+    let inactive = 0;
+    let unreadable = 0;
     table.querySelectorAll('tbody tr').forEach((tr) => {
       const link = tr.querySelector('a[href*="/p/"]');
       if (!link) return;
@@ -244,15 +277,14 @@ _MY_LISTINGS_TEMPLATE = """async () => {
           .filter((el) => el.children.length === 0)
           .some((el) => BADGES.includes(clean(el).toLowerCase()))
       );
-      if (badge) { dropped++; return; }
+      if (badge) { inactive++; return; }
       // The title cell is the one holding the listing link, so it never has to be counted to.
       let titleCell = link;
       while (titleCell && titleCell.tagName !== 'TD') titleCell = titleCell.parentElement;
       const title = firstLine(titleCell);
       const priceText = priceIndex >= 0 && cells[priceIndex] ? clean(cells[priceIndex]) : '';
-      const digits = priceText.replace(/[^0-9.]/g, '');
-      const price = digits ? Number(digits) : NaN;
-      if (!title || !isFinite(price) || price <= 0) { dropped++; return; }
+      const price = parsePrice(priceText);
+      if (!title || !isFinite(price) || price <= 0) { unreadable++; return; }
       rows.push({
         listing_id: match[1],
         url: new URL(href, location.origin).href,
@@ -261,7 +293,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
         price_text: priceText.slice(0, 40),
       });
     });
-    return { rows: rows, dropped: dropped };
+    return { rows: rows, dropped: inactive + unreadable, unreadable: unreadable };
   };
 
   try {
@@ -304,6 +336,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
       listings: seen.rows,
       active_count: activeCount,
       dropped: seen.dropped,
+      unreadable: seen.unreadable,
       truncated: total < activeCount,
     };
   } catch (e) {
@@ -312,8 +345,11 @@ _MY_LISTINGS_TEMPLATE = """async () => {
 }"""
 
 # The id pattern is injected rather than written twice: this and `listing_id_pattern` must agree
-# about what a listing id is, and json.dumps gives a JS string literal whose escapes survive.
-MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace("__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN))
+# about what a listing id is, and json.dumps gives a JS string literal whose escapes survive. The
+# price parser is injected for the same reason in reverse — so it can be exercised on its own.
+MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
+    "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
+).replace("__PARSE_PRICE__", PARSE_PRICE_JS)
 
 # One listing's own page, read at adoption time — the fields, the photographs, and whether it is
 # still for sale.

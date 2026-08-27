@@ -156,9 +156,16 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
             "fresh": len(fresh),
             "active_count": answer.get("active_count"),
             "dropped": answer.get("dropped", 0),
+            "unreadable": answer.get("unreadable", 0),
             "truncated": bool(answer.get("truncated")),
         },
     )
+    if not answer["listings"] and answer.get("unreadable"):
+        # The page had rows and not one of them yielded a listing we could use. That is a read we
+        # failed, not a seller with nothing listed — and the difference is permanent, because
+        # recording it as an empty survey closes the ask-once guard and no later tick reopens it.
+        _unserved(deps, market, f"no usable price on any of {answer['unreadable']} rows")
+        return
     if answer.get("truncated"):
         # The reader could not get to the end of the list — rows still loading, or more than one
         # page of them. Asking now would close the ask-once survey on a partial list, so the seller
