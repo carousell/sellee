@@ -690,6 +690,54 @@ def _insert_notice(
     return notice_id
 
 
+def _insert_item_in_txn(
+    conn,
+    *,
+    title: str,
+    list_price: float | None,
+    currency: str | None,
+    description: str,
+    condition: str | None,
+    photos: list,
+    now: float,
+    status: str = "draft",
+    listing_urls: dict | None = None,
+) -> str:
+    """Insert one item within an existing transaction, returning its new id.
+
+    Two callers, and the second is the reason this is a helper rather than a method body:
+    `create_item` opens with an empty `listing_urls` and a draft status, while adopting a listing
+    the seller already had must write the item **and** the marketplace URL it was read from in one
+    statement. Split across two calls there is a window where the item exists with no URL, and a
+    retry after a crash inside it creates a second item for the same listing.
+
+    Validation belongs to the caller, before the transaction opens: `Database.transaction` is not
+    reentrant, so raising in here would have to unwind a held write lock, and a caller that has
+    already checked can turn a bad row into a recorded reason instead of an exception.
+    """
+    item_id = _new_id("item")
+    conn.execute(
+        "INSERT INTO items "
+        "(id, title, description, condition, list_price, currency, status, "
+        " listing_urls, photos, created_ts, updated_ts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            item_id,
+            title.strip(),
+            description or "",
+            condition,
+            list_price,
+            currency,
+            status,
+            json.dumps(listing_urls or {}, sort_keys=True),
+            json.dumps(photos),
+            now,
+            now,
+        ),
+    )
+    return item_id
+
+
 def _stamp_welcomed_in_txn(conn) -> None:
     now = _now()
     conn.execute("UPDATE channel SET welcomed_at = ?, updated_ts = ? WHERE id = 1", (now, now))

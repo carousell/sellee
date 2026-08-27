@@ -18,9 +18,9 @@ from sellee.store.helpers import (
     ItemNotFound,
     ItemRecord,
     StoreError,
+    _insert_item_in_txn,
     _item_from_row,
     _like_escape,
-    _new_id,
     _now,
     _ui_cache_from_row,
     validate_photos,
@@ -61,25 +61,17 @@ class ItemsMixin:
         if not title or not title.strip():
             raise StoreError("title must be non-empty")
         stored_photos = validate_photos(photos or [])
-        item_id = _new_id("item")
         ts = _now()
         with self._db.transaction() as conn:
-            conn.execute(
-                "INSERT INTO items "
-                "(id, title, description, condition, list_price, currency, status, "
-                " listing_urls, photos, created_ts, updated_ts) "
-                "VALUES (?, ?, ?, ?, ?, ?, 'draft', '{}', ?, ?, ?)",
-                (
-                    item_id,
-                    title.strip(),
-                    description or "",
-                    condition,
-                    list_price,
-                    currency,
-                    json.dumps(stored_photos),
-                    ts,
-                    ts,
-                ),
+            item_id = _insert_item_in_txn(
+                conn,
+                title=title,
+                list_price=list_price,
+                currency=currency,
+                description=description,
+                condition=condition,
+                photos=stored_photos,
+                now=ts,
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
@@ -142,8 +134,14 @@ class ItemsMixin:
         return self.get_item(item_id)  # type: ignore[return-value]
 
     def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
-        """Merge one verified listing URL into the item's listing_urls map. The one writer of
-        that field — a live verify has already passed before this is called."""
+        """Merge one verified listing URL into the item's listing_urls map — a live verify has
+        already passed before this is called.
+
+        One of three writers of that field, and the only one that adds a URL to an item that already
+        exists. The others are `archive_listing_url` below, and `adopt_discovered_listing`, which
+        writes the URL in the same INSERT as the item because the listing was read off the
+        marketplace's own page and the two must not be separable by a crash.
+        """
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
             if not row:
@@ -318,7 +316,7 @@ class ItemsMixin:
     def archive_listing_url(self, item_id: str, market: str) -> ItemRecord:
         """Drop one market's URL from the item's listing_urls — the listing is no longer live there.
 
-        The counterpart of record_listing_url, and the only other writer of that field.
+        The counterpart of record_listing_url — the only writer that takes a URL away.
         """
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
