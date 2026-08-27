@@ -180,6 +180,34 @@ def test_a_market_with_its_own_commit_never_takes_the_sellers_foreground(
     assert "submit" in names
 
 
+def test_a_send_lets_a_watching_seller_see_it_before_it_navigates(store, bus, thread) -> None:
+    """Answering a buyer is the thing a seller who turned watch mode on wants to catch, and the
+    window has to be up before the page changes rather than after it has finished."""
+    client = StubClient()
+    seen: list = []
+    sink.BrowserReplySink(
+        client=client,
+        store=store,
+        bus=bus,
+        region="SG",
+        on_drive=lambda: seen.append(len(client.calls)),
+    ).send(thread, "yes, still available!", "reply", _reserve(store))
+    assert seen == [0]  # once, before the first browser call
+
+
+def test_a_window_that_will_not_come_forward_never_costs_the_reply(store, bus, thread) -> None:
+    """The window is a view onto the send, never part of it."""
+    client = StubClient()
+
+    def _boom():
+        raise RuntimeError("no window here")
+
+    sink.BrowserReplySink(client=client, store=store, bus=bus, region="SG", on_drive=_boom).send(
+        thread, "yes, still available!", "reply", _reserve(store)
+    )
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
 def test_the_commit_is_dispatched_onto_the_located_composer(store, bus, thread) -> None:
     client = StubClient()
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))

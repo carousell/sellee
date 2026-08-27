@@ -25,6 +25,7 @@ from sellee import reply_prompt as reply_prompt_mod
 from sellee.browser import chrome
 from sellee.browser import client as browser_client
 from sellee.browser import markets as market_adapters
+from sellee.browser import window as browser_window
 from sellee.channel import prompt as channel_prompt_mod
 from sellee.harness import claude
 from sellee.harness.model import PassSpec, StdioServer
@@ -659,6 +660,12 @@ def run_pass(deps: PassDeps, claimed) -> str:
                 pass_id=pass_id,
             )
             return "spawn_error"
+
+        if browser_tools:
+            # A pass about to drive Chrome is the thing a seller who turned watch mode on most
+            # wants to see — a listing being filled in, minutes of it. Best-effort and gated on
+            # the setting; nothing about the spawn depends on it.
+            browser_window.raise_if_watching(deps.config, deps.store)
 
         # Owner-only: harness stderr can quote prompt content, i.e. buyer conversations.
         stderr_path = paths.ensure_private_file(paths.pass_stderr_log(pass_id))

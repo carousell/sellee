@@ -13,11 +13,14 @@ import time
 
 from sellee import marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
+from sellee.browser import window
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
-_FAST_PATH_COMMANDS = frozenset({"/pause", "/resume", "/status", "/catchup", "/sellee", "/connect"})
+_FAST_PATH_COMMANDS = frozenset(
+    {"/pause", "/resume", "/status", "/catchup", "/sellee", "/connect", "/watch"}
+)
 
 # Callback tokens the control row emits. Provider-neutral: a provider carries them in whatever its
 # interactive widget uses (Telegram callback_data, Slack action_id). The settings surface reuses the
@@ -32,8 +35,19 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
+# button that carried the value would apply a stale one when tapped from the scrollback.
+CB_WATCH = "watch"
 _FAST_PATH_CALLBACKS = frozenset(
-    {CB_PAUSE, CB_RESUME, CB_NEEDS_ME, CB_SKIP_CTA, CB_CONNECT_MARKET, CB_CONNECT_PROBE}
+    {
+        CB_PAUSE,
+        CB_RESUME,
+        CB_NEEDS_ME,
+        CB_SKIP_CTA,
+        CB_CONNECT_MARKET,
+        CB_CONNECT_PROBE,
+        CB_WATCH,
+    }
 )
 
 _CONNECT_MODE_FOR_CALLBACK = {
@@ -47,6 +61,10 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
 CHECK_AGAIN_LABEL = "Check again"
+# The watch-mode toggle. Each label names what tapping *does*, not what is currently set — the card
+# line right above it carries the state, and a button that named the state would read as a claim.
+WATCH_ON_LABEL = "👀 Watch me work"
+WATCH_OFF_LABEL = "🌙 Work in background"
 
 
 def signin_controls(market: str) -> list:
@@ -71,6 +89,17 @@ CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
 )
 CONNECT_UNKNOWN = "I don't sell on {market}, so there's nothing for me to open."
+
+# Watch mode, both ways. The on side says where the window is for the same reason every other
+# window notice does: this is read on a phone and the window is on a desktop. It promises the tab
+# will follow rather than promising the window will jump, because following works everywhere and
+# raising does not — and it names the exception (a read tick) so a quiet five minutes doesn't read
+# as the toggle not having worked.
+WATCH_ON_NOTICE = (
+    "Watch mode on — my Chrome window{where} will come forward when I start something, and its tab "
+    "follows whatever page I'm on. Reading your inboxes stays quiet in the background."
+)
+WATCH_OFF_NOTICE = "Watch mode off — I'll keep out of your way and work in the background."
 
 # The one meta row this surface writes: when the seller tapped Skip on the first-listing CTA. An
 # explicit seller answer is genuine, underivable state; the nudge lane reads it to stay quiet.
@@ -146,11 +175,17 @@ def handle_settings_door(store, bus, event: dict) -> tuple:
     return result["message"], result.get("controls")
 
 
-def handle_fast_path(store, event: dict) -> tuple:
+def handle_fast_path(store, bus, event: dict) -> tuple:
     """Apply a fast path and return (reply_text, controls_spec | None). Pause/resume flip the
     control flag here (the enforcement — gating passes and killing a running one — lives in the
-    pause wiring); the reads render from the store. Assumes is_fast_path(event) is True."""
+    pause wiring); the reads render from the store. Assumes is_fast_path(event) is True.
+
+    The bus is here for the one fast path that changes a *setting* rather than a control flag: the
+    settings ledger publishes what it applied, and the window raise rides on that event.
+    """
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
+    if token in ("/watch", CB_WATCH):
+        return _watch_toggle(store, bus)
     if token in _CONNECT_MODE_FOR_CALLBACK:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
@@ -226,11 +261,35 @@ def _request(store, market: str, mode: str) -> tuple:
     return template.format(name=marketplaces.display_name(market)), None
 
 
+def _watch_toggle(store, bus) -> tuple:
+    """Flip watch mode: work in front of the seller, or out of their way.
+
+    The tap *is* the consent — an authenticated surface, a deterministic parse, a deterministic
+    apply — so this applies immediately rather than proposing, exactly as the shell door does. It
+    goes through the settings ledger rather than writing a row of its own, which is what gives it
+    one home with the card line, the CLI, and the model's vocabulary.
+
+    The button carries no value: the flip is read off what is set right now, so one tapped from
+    months-old scrollback flips whatever is true when it lands rather than restoring a state that
+    was true when the message was sent. The reply carries the refreshed row, whose label is now the
+    way back — which is why this door renders no separate Undo.
+    """
+    turning_on = not settings.get(store, window.WATCH_SETTING)
+    settings.set_now(
+        store, bus, key=window.WATCH_SETTING, raw_value=turning_on, decided_via="button"
+    )
+    text = WATCH_ON_NOTICE.format(where=window.where()) if turning_on else WATCH_OFF_NOTICE
+    return text, _control_spec(store)
+
+
 def _control_spec(store) -> list:
     """The one control row as provider-neutral (label, token) buttons: a pause/resume toggle
-    reflecting current state, plus a what-needs-me shortcut. The provider renders it."""
+    reflecting current state, a what-needs-me shortcut, and the watch-mode toggle. The provider
+    renders it."""
     toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
-    return [toggle, ("What needs me", CB_NEEDS_ME)]
+    watching = settings.get(store, window.WATCH_SETTING)
+    watch = (WATCH_OFF_LABEL, CB_WATCH) if watching else (WATCH_ON_LABEL, CB_WATCH)
+    return [toggle, ("What needs me", CB_NEEDS_ME), watch]
 
 
 def _needs_me_counts(store) -> tuple:

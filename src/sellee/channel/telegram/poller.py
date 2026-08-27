@@ -232,7 +232,7 @@ class Poller:
                 # carry its own controls (an Undo button on an applied change).
                 text, controls = fastpaths.handle_settings_door(self.store, self.bus, event)
             else:
-                text, controls = fastpaths.handle_fast_path(self.store, event)
+                text, controls = fastpaths.handle_fast_path(self.store, self.bus, event)
             cq_id = row["payload"].get("callback_query_id")
             if cq_id:
                 try:

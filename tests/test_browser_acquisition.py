@@ -176,6 +176,22 @@ def test_a_chrome_that_came_back_on_a_new_port_gets_a_new_client(store, bus, mon
     assert "http://127.0.0.1:46001" in holder["command"]
 
 
+def test_every_acquisition_re_reads_watch_mode(store, bus, monkeypatch) -> None:
+    """The seller flips watch mode in chat; the lanes hold a cached client. Reading it here is what
+    makes a tap reach the read lane, the send and the attended tools from their next call on."""
+    from sellee import settings
+
+    monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)
+    monkeypatch.setattr(daemon.chrome, "ensure_running", lambda port, **kw: (chrome.READY, 9222))
+
+    holder: dict = {}
+    factory = daemon.make_browser_factory(Config(), store, bus, holder)
+    assert factory()._follow is False  # noqa: SLF001 — the flag is the wiring under test
+
+    settings.set_now(store, bus, key="watch_browser", raw_value=True)
+    assert factory()._follow is True  # noqa: SLF001 — same cached client, re-read setting
+
+
 # --- finding the binary --------------------------------------------------------------------------
 
 

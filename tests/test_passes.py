@@ -108,6 +108,41 @@ def test_run_pass_ok_ledgers_and_cleans_up(bus, store, fake_harness, xdg_tmp) ->
     assert not paths.pass_workspace_dir(pid).exists()
 
 
+def test_a_browser_pass_shows_itself_to_a_watching_seller(
+    bus, store, fake_harness, xdg_tmp, monkeypatch
+) -> None:
+    """A publish in Chrome is minutes of visible work on the seller's own account — the thing watch
+    mode exists for. Gated on the setting, and best-effort: the spawn does not depend on it."""
+    raised: list = []
+    monkeypatch.setattr(
+        passes.browser_window, "raise_if_watching", lambda cfg, st: raised.append(True)
+    )
+    paths.ensure_state_dirs()
+    store.set_seller_config_section("basics", {"region": "SG"})  # carousell has a site there
+    item_id = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")["id"]
+    store.enqueue_pass("publish", {"item_id": item_id, "market": "carousell"})
+    claimed = store.claim_queued_pass()
+
+    passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+    assert raised == [True]
+
+
+def test_a_rail_publish_never_touches_the_window(
+    bus, store, fake_harness, xdg_tmp, monkeypatch
+) -> None:
+    """No browser, nothing to watch — window authority follows the browser grant, not the type."""
+    raised: list = []
+    monkeypatch.setattr(
+        passes.browser_window, "raise_if_watching", lambda cfg, st: raised.append(True)
+    )
+    paths.ensure_state_dirs()
+    store.enqueue_pass("publish", {"item_id": "item_1"})
+    claimed = store.claim_queued_pass()
+
+    passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+    assert raised == []
+
+
 def test_run_pass_error_exit_classifies_error(bus, store, fake_harness, xdg_tmp) -> None:
     paths.ensure_state_dirs()
     pid = store.enqueue_pass("publish", {"item_id": "item_1"})

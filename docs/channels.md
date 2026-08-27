@@ -16,8 +16,11 @@ a guard test enforces that the core imports no provider.
 
 - **Core** (`channel/`):
   - `fastpaths` — the deterministic commands (`/pause` `/resume` `/status`
-    `/catchup` `/sellee`): decide, render reply text, and emit a provider-neutral
-    **control spec** (a list of `(label, token)` buttons).
+    `/catchup` `/sellee` `/connect` `/watch`): decide, render reply text, and emit a
+    provider-neutral **control spec** (a list of `(label, token)` buttons). `/watch`
+    and its control-row button flip the `watch_browser` setting through the settings
+    ledger — the tap is the consent, so it applies rather than proposing, and the
+    refreshed row (whose label now offers the opposite) is the way back.
   - `routing` — after a batch is ingested: the `channel.in` event and coalesced
     routing of pending free text to a channel pass.
   - `outbound` — the delivery *policy* (notice drain, typing pulse), the

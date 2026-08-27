@@ -416,6 +416,80 @@ def test_a_server_that_names_no_current_tab_is_an_error_not_a_guess(make_client)
         client.ensure_frontmost(_URL)
 
 
+# --- watch mode: the tab follows the work ---------------------------------------------------------
+
+
+def test_a_navigation_leaves_the_tab_where_it_is_by_default(make_client) -> None:
+    """The seller is not watching, so a read costs one navigate and takes nobody's foreground."""
+    client = make_client(
+        {"tools": {"browser_tabs": {"text": "ok"}, "browser_navigate": {"text": "ok"}}}
+    )
+    client.navigate(_URL)
+    assert [call["tool"] for call in tool_calls(client)] == ["browser_tabs", "browser_navigate"]
+
+
+def test_watching_brings_our_tab_forward_after_a_navigation(make_client) -> None:
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": [{"text": "ok"}, _TAB_LIST, {"text": "ok"}],
+                "browser_navigate": {"text": "ok"},
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": _URL}},
+                    {"result": {"visible": True, "url": _URL}},
+                ],
+            }
+        }
+    )
+    client.set_follow(True)
+    client.navigate(_URL)
+    tabs = [call["arguments"] for call in tool_calls(client) if call["tool"] == "browser_tabs"]
+    assert {"action": "select", "index": 1} in tabs
+
+
+def test_watching_costs_one_look_when_the_tab_is_already_in_front(make_client) -> None:
+    """The steady state once the seller has the window up: no select, no window shuffling."""
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": {"text": "ok"},
+                "browser_navigate": {"text": "ok"},
+                "browser_evaluate": {"result": {"visible": True, "url": _URL}},
+            }
+        }
+    )
+    client.set_follow(True)
+    client.navigate(_URL)
+    assert [call["tool"] for call in tool_calls(client)] == [
+        "browser_tabs",
+        "browser_navigate",
+        "browser_evaluate",
+    ]
+
+
+def test_a_tab_that_will_not_come_forward_never_fails_the_navigation(make_client) -> None:
+    """Watch mode is a view onto the work, not part of it. And the recovery is load-bearing: a
+    select that landed elsewhere repoints every later call, so the caller's next read would be
+    against a stranger's page unless our own tab is put back on the page it asked for."""
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": [{"text": "ok"}, _TAB_LIST, {"text": "ok"}, {"text": "ok"}],
+                "browser_navigate": {"text": "ok"},
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": _URL}},
+                    {"result": {"visible": True, "url": "https://www.carousell.sg/sell/"}},
+                ],
+            }
+        }
+    )
+    client.set_follow(True)
+    client.navigate(_URL)  # no raise
+    calls = [call["tool"] for call in tool_calls(client)]
+    assert calls[-2:] == ["browser_tabs", "browser_navigate"]  # a fresh tab, back on our page
+    assert client._tab_opened is True  # noqa: SLF001 — the replacement handle is the thing at issue
+
+
 @pytest.mark.parametrize(
     ("left", "right", "same"),
     [
