@@ -124,6 +124,29 @@ def test_concurrent_reservers_never_exceed_cap(store) -> None:
     assert len(gos) == 3  # exactly the cap, never more — the transaction serializes reservers
 
 
+def test_peek_answers_the_verdict_without_taking_the_slot(store) -> None:
+    """For a caller deciding whether to start work a refusal would waste. Two peeks in a row must
+    answer the same way — a peek that recorded would be a reservation with the wrong name."""
+    cfg = pacing.resolve(Config(max_actions_per_hour=1, reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    now = _noon_on()
+
+    first = store.peek_action(marketplace="fb", kind="publish", cfg=cfg, now=now)
+    assert (first["verdict"], first["record"]) == ("go", False)
+    assert store.peek_action(marketplace="fb", kind="publish", cfg=cfg, now=now)["verdict"] == "go"
+    assert not store._db.query("SELECT ts FROM pacing_actions WHERE marketplace='fb'")
+
+    store.reserve_action(marketplace="fb", kind="publish", cfg=cfg, now=now)
+    assert (
+        store.peek_action(marketplace="fb", kind="publish", cfg=cfg, now=now)["verdict"] == "wait"
+    )
+
+
+def test_peek_reports_quiet_hours(store) -> None:
+    cfg = pacing.resolve(Config(reply_delay_sec=[0, 0]), quiet_hours=[2300, 800])
+    peeked = store.peek_action(marketplace="fb", kind="publish", cfg=cfg, now=_midnight_ish())
+    assert peeked["verdict"] == "quiet"
+
+
 # --- publish reservation -----------------------------------------------------------------------
 
 

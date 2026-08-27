@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import logging
 
-from sellee import crosslist, marketplaces, paths
+from sellee import crosslist, marketplaces, paths, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import photo_fetch, reconcile
 from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.engines import pacing as pacing_engine
 from sellee.store import MAX_PHOTOS, StoreError
 from sellee.store.survey import (
     LISTING_ACCEPTED,
@@ -270,7 +271,30 @@ def _summarise_if_drained(deps, market: str) -> None:
 def rail_publish_phase(deps) -> None:
     """Settle the publishes in flight, then start at most one more."""
     _settle_queued(deps)
+    if not _publish_would_be_allowed(deps):
+        return
     _enqueue_owed(deps)
+
+
+def _publish_would_be_allowed(deps) -> bool:
+    """Whether a carousell.ai publish could actually get through right now.
+
+    Asked before queueing rather than left to the pass, for the same reason the fan-out checks the
+    browser before it spends a pair's one attempt: quiet hours and the hourly cap both refuse a
+    publish, both fix themselves with time, and neither is the listing's fault. A pass queued into
+    one comes back having done nothing and looks exactly like a publish that failed — so the
+    attempt is spent, and three of those in a row report an adopted listing as failed when nothing
+    was ever wrong with it. Overnight, with the default quiet window, that is every listing the
+    seller just said yes to.
+
+    Held silently. There is nothing for the seller to do about the clock, and the row keeps the
+    work: it stays owed, and a later tick queues it.
+    """
+    cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
+    verdict = deps.store.peek_action(
+        marketplace=marketplaces.RAIL, kind="publish", cfg=cfg, now=deps.now()
+    )
+    return verdict["verdict"] == "go"
 
 
 def _settle_queued(deps) -> None:

@@ -13,14 +13,19 @@ The shape under test is what makes the feature safe rather than merely working:
 
 from __future__ import annotations
 
+import time
+from datetime import datetime
+
 import pytest
 from tests.conftest import seed_setting
 
+from sellee import settings
 from sellee.browser import adopt, survey
 from sellee.browser.client import BrowserToolError, BrowserUnavailable
 from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
 from sellee.config import Config
+from sellee.engines import pacing
 from sellee.store.survey import RAIL_DONE, RAIL_FAILED, RAIL_OWED
 
 _MARKET = "carousell"
@@ -260,10 +265,10 @@ def test_an_unanswered_ask_expires(store, bus) -> None:
     store.request_market_survey(_MARKET)
     survey.discover_phase(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
 
-    later = [0.0]
-    deps = _deps(store, bus, StubClient(), now=lambda: later[0])
-    later[0] = 1e12  # far past the TTL
-    survey.survey_lane(deps)
+    # A real clock, moved on. The lane's `now` also reaches the pacing engine, which reads it as a
+    # wall-clock date — so a synthetic epoch would be testing an hour that cannot happen.
+    later = time.time() + survey.DECISION_TTL_SEC + 60
+    survey.survey_lane(_deps(store, bus, StubClient(), now=lambda: later))
 
     assert store.list_discovered_listings(_MARKET)[0]["status"] == "expired"
 
@@ -466,10 +471,20 @@ def test_the_batch_summary_accounts_for_what_was_skipped(store, bus, monkeypatch
 # --- the carousell.ai publish ---------------------------------------------------------------------
 
 
+def _at_local_hour(hour: int) -> float:
+    """A timestamp whose *local* hour is `hour`. The pacing engine reads the clock in local time, so
+    a test about quiet hours has to name an hour rather than an epoch."""
+    return datetime(2026, 3, 1, hour, 30).timestamp()
+
+
 def _adopted(store, bus, monkeypatch):
     _accepted(store, bus)
     _fetches(monkeypatch, [_media_photo()])
     adopt.adopt_phase(_deps(store, bus, StubClient(detail=_detail())))
+    # Quiet hours are on by default (23:00–08:00), and the publish phase now holds inside them —
+    # so without this every test below would pass or fail on the hour the suite happened to run.
+    # The tests that are *about* the window turn it back on and pass a fixed clock.
+    seed_setting(store, "quiet_hours", [0, 0])
     return store.list_discovered_listings(_MARKET)[0]
 
 
@@ -551,6 +566,45 @@ def test_a_vanished_publish_pass_is_re_owed_not_stranded(store, bus, monkeypatch
     assert row["rail_state"] == "queued"
     assert row["rail_pass_id"] not in (None, "pass_gone"), "the lost publish was never re-queued"
     assert store.get_pass(row["rail_pass_id"])["status"] == "queued"
+
+
+def test_quiet_hours_hold_a_publish_instead_of_failing_it(store, bus, monkeypatch, xdg_tmp) -> None:
+    """The publish tool refuses inside quiet hours, and a refused pass records no URL — which reads
+    as a failed publish. Unheld, an adoption at 11pm burns all three attempts before morning and
+    reports every listing as failed with nothing wrong with any of them."""
+    _adopted(store, bus, monkeypatch)
+    seed_setting(store, "quiet_hours", [2300, 800])
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), now=lambda: _at_local_hour(3)))
+
+    held = store.list_discovered_listings(_MARKET)[0]
+    assert held["rail_state"] == RAIL_OWED
+    assert held["rail_attempts"] == 0, "a held publish spent an attempt on the clock"
+    assert not [p for p in store.publish_pass_index() if p["origin"] == adopt.ORIGIN]
+    assert not [n for n in store.list_queued_notices() if "couldn't get" in n["text"]]
+
+    # And the morning tick takes it, with every attempt still intact.
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), now=lambda: _at_local_hour(10)))
+    assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
+
+
+def test_the_hourly_cap_holds_a_publish_instead_of_failing_it(
+    store, bus, monkeypatch, xdg_tmp
+) -> None:
+    """The same shape as quiet hours, and the one that bites a seller with more listings than the
+    cap: a publish past it is refused, and spending an attempt on that reports listings as failed
+    for no reason other than their place in the queue."""
+    _adopted(store, bus, monkeypatch)
+    cfg = pacing.resolve(Config(), settings.quiet_window_minutes(store))
+    for _ in range(cfg.cap):
+        store.reserve_action(marketplace="carousell-ai", kind="publish", cfg=cfg)
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient()))
+
+    held = store.list_discovered_listings(_MARKET)[0]
+    assert held["rail_state"] == RAIL_OWED
+    assert held["rail_attempts"] == 0
+    assert not [p for p in store.publish_pass_index() if p["origin"] == adopt.ORIGIN]
 
 
 def test_an_item_already_on_the_rail_owes_nothing(store, bus, monkeypatch, xdg_tmp) -> None:

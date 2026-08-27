@@ -285,3 +285,22 @@ class SendMixin:
                 )
         result["marketplace"] = marketplace
         return result
+
+    def peek_action(self, *, marketplace: str, kind: str, cfg, now: float | None = None) -> dict:
+        """The verdict `reserve_action` would give right now, without taking the slot.
+
+        For a caller that has to decide *before* it spends something a refusal would waste — a
+        queued pass, a counted attempt — instead of discovering the refusal from inside the work.
+        `record` is forced False so this can never be mistaken for a reservation; the slot is still
+        taken by the reserve that follows, and a caller that reads `go` here is promised nothing
+        more than that the cap and the window were open when it asked.
+        """
+        now = now if now is not None else _now()
+        rows = self._db.query(
+            "SELECT ts FROM pacing_actions WHERE marketplace = ? AND ts > ?",
+            (marketplace, now - pacing_engine.WINDOW_SECONDS),
+        )
+        result = pacing_engine.evaluate([row["ts"] for row in rows], now=now, cfg=cfg, kind=kind)
+        result["record"] = False
+        result["marketplace"] = marketplace
+        return result
