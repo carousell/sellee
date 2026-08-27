@@ -198,48 +198,36 @@ LOGIN_JS = """() => {
 
 # What the seller already has listed, read off their own manage-listings page.
 #
-# The DOM, not an API, and unusually this is the *stable* choice: the page renders a real
-# `<table>` with a `<thead>`, so the columns are named by the page itself and located by their
-# heading rather than by position or by one of Carousell's hashed classes. (The endpoint the page
-# fetches this from refuses a plain GET, and the one that answers is an insights feed carrying no
-# listing at all — so the table is also the only thing that actually holds the answer.)
+# The DOM, not an API, and unusually the *stable* choice: the page renders a real `<table>` with a
+# `<thead>`, so columns are located by their heading, not by position or a hashed class.
 #
-# Two facts make this safe to adopt from, and both are checked rather than assumed:
+# Two facts make this safe to adopt from, and both are checked rather than assumed: the row count is
+# compared against the page's own "N Active" tally (sold listings hide behind tabs with no selected
+# state), and a listing with no parseable price is dropped and counted rather than offered —
+# carousell.ai refuses an item without one.
 #
-#   1. **These are live listings.** The page keeps sold and expired listings behind other tabs, and
-#      those tabs are buttons carrying no selected state — so instead of trusting which tab is
-#      showing, this reads the "N Active" count and compares it with the rows it found. A view that
-#      is not the active one has a different number of rows, and answers `{error}` rather than a
-#      list. Rows carrying a status badge are dropped as a second, independent guard.
-#   2. **A price we can read.** A listing with no parseable price is dropped and counted, never
-#      returned: carousell.ai refuses an item without one, so asking the seller about it would only
-#      promise something that could never be kept.
+# Returns `{listings: [...], active_count, dropped, unreadable, truncated}` or `{error: …}`. An
+# empty list means "you have nothing listed" — the answer that stops the asking — so a page that
+# would not parse must never arrive as that answer.
 #
-# Returns `{listings: [...], active_count, dropped, unreadable, truncated}` or `{error: …}`. The
-# distinction matters here more than anywhere: an empty list means "you have nothing listed", which
-# is the one answer that stops us ever asking. `unreadable` is what keeps a page we could not parse
-# from arriving as that answer — see the caller.
-#
-# A price is read from the text the page renders, and the thousands separator is not the same on
-# every regional site, so neither `,` nor `.` can be assumed to be the decimal point. Kept as its
-# own function because it is the one piece here that is worth testing directly.
+# A price is read from rendered text, and the thousands separator is not the same on every regional
+# site, so neither `,` nor `.` can be assumed to be the decimal point. Kept as its own function
+# because it is the one piece here worth testing directly.
 PARSE_PRICE_JS = """(text) => {
   const trimmed = String(text || '').replace(/[^0-9.,]/g, '');
   if (!trimmed) return NaN;
   const lastDot = trimmed.lastIndexOf('.');
   const lastComma = trimmed.lastIndexOf(',');
   if (lastDot >= 0 && lastComma >= 0) {
-    // Both appear, so the later one is the decimal point and the other groups thousands:
-    // "S$1,299.00" one way, "Rp1.299,00" the other.
+    // Both appear: the later is the decimal point, the other groups thousands.
     const decimal = lastDot > lastComma ? '.' : ',';
     const grouping = decimal === '.' ? ',' : '.';
     return Number(trimmed.split(grouping).join('').replace(decimal, '.'));
   }
   const sep = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
   if (!sep) return Number(trimmed);
-  // Only one kind of separator, so its job has to be inferred: more than one of them, or exactly
-  // three digits after the last one, means it groups thousands ("1.500.000", "1,299"). Anything
-  // else is a decimal point ("40.00", "1,5").
+  // One separator, so its job is inferred: repeated, or three digits after the last one, groups
+  // thousands ("1.500.000", "1,299"); anything else is a decimal point ("40.00", "1,5").
   const parts = trimmed.split(sep);
   const groups = parts.length > 2 || parts[parts.length - 1].length === 3;
   return Number(groups ? parts.join('') : parts.join('.'));
@@ -247,22 +235,20 @@ PARSE_PRICE_JS = """(text) => {
 
 _MY_LISTINGS_TEMPLATE = """async () => {
   const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
-  // Text a row shows when it is anything other than live. Matched against the row's own badge
-  // text, not searched for inside it, so a listing called "Sold Out Records Tee" is not dropped.
+  // Badge text of a non-live row. Matched whole, so a listing titled "Sold Out Records Tee" is not
+  // dropped.
   const BADGES = ['sold', 'reserved', 'expired', 'deleted', 'under review', 'rejected', 'inactive'];
   const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
-  // The title cell also carries the row's own notes under the title ("Bumped 16 days ago"), which
-  // are separate blocks — so the title is its first line, not all of its text.
+  // The title cell also holds row notes under the title ("Bumped 16 days ago") — the title is its
+  // first line.
   const firstLine = (el) =>
     (((el && el.innerText) || '').split('\\n').map((s) => s.trim()).filter(Boolean)[0] || '');
   const parsePrice = __PARSE_PRICE__;
 
   const readRows = (table, priceIndex) => {
     const rows = [];
-    // Counted apart because they mean opposite things. A row behind a badge is not for sale, so
-    // dropping it is the answer; a row whose price will not parse is a row we failed to read, and
-    // if that is every row the page has, reporting an empty list would tell the seller they have
-    // nothing listed.
+    // Counted apart: a badge means not for sale; an unparseable price means we failed to read. An
+    // all-unreadable page must not report an empty list.
     let inactive = 0;
     let unreadable = 0;
     table.querySelectorAll('tbody tr').forEach((tr) => {
@@ -278,7 +264,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
           .some((el) => BADGES.includes(clean(el).toLowerCase()))
       );
       if (badge) { inactive++; return; }
-      // The title cell is the one holding the listing link, so it never has to be counted to.
+      // Walk up from the link — the title cell holds it, so no column counting.
       let titleCell = link;
       while (titleCell && titleCell.tagName !== 'TD') titleCell = titleCell.parentElement;
       const title = firstLine(titleCell);
@@ -310,11 +296,9 @@ _MY_LISTINGS_TEMPLATE = """async () => {
     });
     if (activeCount === null) return { error: 'could not read the active listing count' };
 
-    // Load what is not rendered yet. An account with more listings than one screen holds must not
-    // be read as having fewer, so this keeps going until the count reaches the page's own tally —
-    // and gives up only after several rounds add nothing, because a fetch in flight looks exactly
-    // like a list that has ended. A read that still falls short says so with `truncated`, and the
-    // caller treats that as a look it could not complete rather than as the whole answer.
+    // Keep loading until the row count reaches the page's own active tally, or a few rounds add
+    // nothing (a fetch in flight looks like a list that has ended). A short read answers
+    // `truncated`, which the caller treats as a failed look.
     let seen = readRows(table, priceIndex);
     let quiet = 0;
     for (let round = 0; round < 20 && seen.rows.length + seen.dropped < activeCount; round++) {
@@ -328,8 +312,8 @@ _MY_LISTINGS_TEMPLATE = """async () => {
 
     const total = seen.rows.length + seen.dropped;
     if (total > activeCount) {
-      // More rows than there are active listings: this is not the active view, so every row is
-      // suspect. Saying so is the whole point — adopting from here would take in sold listings.
+      // More rows than active listings: not the active view, so every row is suspect. Adopting
+      // from here would take in sold listings.
       return { error: 'showing ' + total + ' rows for ' + activeCount + ' active listings' };
     }
     return {
@@ -344,9 +328,8 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   }
 }"""
 
-# The id pattern is injected rather than written twice: this and `listing_id_pattern` must agree
-# about what a listing id is, and json.dumps gives a JS string literal whose escapes survive. The
-# price parser is injected for the same reason in reverse — so it can be exercised on its own.
+# Both injected rather than written twice: the id pattern must agree with `listing_id_pattern`
+# (json.dumps gives a JS literal whose escapes survive), and the price parser is tested on its own.
 MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
     "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
 ).replace("__PARSE_PRICE__", PARSE_PRICE_JS)
@@ -354,22 +337,17 @@ MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
 # One listing's own page, read at adoption time — the fields, the photographs, and whether it is
 # still for sale.
 #
-# This one is schema.org JSON-LD rather than DOM: Carousell publishes a `Product` block for search
-# engines, which makes it a contract with somebody other than us, and it carries every field an
-# adopted item needs already typed — including the currency as a code, so no symbol ever has to be
-# mapped to one, and the full-size photograph URLs rather than the index page's thumbnails.
+# schema.org JSON-LD rather than DOM: Carousell publishes a `Product` block for search engines, so
+# it is a contract with somebody other than us, and it carries every field an adopted item needs
+# already typed — including the currency as a code and the full-size photograph URLs.
 #
-# `availability` is the field that matters most. A sold listing reports `schema.org/SoldOut` where a
-# live one reports `InStock`, and it is the *only* reliable signal: the rendered page shows no
-# "sold" text anywhere a reader could find it. Without this check, a seller who taps yes on a list
-# that has aged would have sold items relisted for them.
+# `availability` is the field that matters most: sold reports `schema.org/SoldOut`, live reports
+# `InStock`, and the rendered page shows no "sold" text anywhere — so this is the only reliable
+# signal between a late yes and relisting sold goods. `itemCondition` is ignored (Carousell reports
+# `NewCondition` for everything); the condition is read from the visible page instead.
 #
-# `itemCondition` is deliberately ignored — Carousell reports `NewCondition` for every listing,
-# including one whose own page says "Lightly used" — so the condition is read from the visible
-# details instead, and is simply absent when it cannot be found.
-#
-# Returns null when the page carries no Product block, which the caller must treat as "could not
-# read", never as "not for sale".
+# Returns null when the page carries no Product block — the caller treats that as "could not read",
+# never as "not for sale".
 LISTING_DETAIL_JS = """() => {
   const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
   const product = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
@@ -383,9 +361,8 @@ LISTING_DETAIL_JS = """() => {
   const images = (Array.isArray(product.image) ? product.image : [product.image])
     .filter((u) => typeof u === 'string' && u.startsWith('https://'));
 
-  // The visible "Condition" row, as a label followed by its value. Best-effort by design: a missing
-  // condition costs the relisted copy a detail, where a wrong one describes the seller's goods
-  // incorrectly to a buyer.
+  // The visible "Condition" row, label followed by value. Best-effort: a missing condition costs
+  // a detail, a wrong one misdescribes the goods.
   let condition = null;
   const leaves = Array.from(document.querySelectorAll('div, span, p, dt, dd, li'))
     .filter((el) => el.children.length === 0);

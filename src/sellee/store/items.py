@@ -137,10 +137,9 @@ class ItemsMixin:
         """Merge one verified listing URL into the item's listing_urls map — a live verify has
         already passed before this is called.
 
-        One of three writers of that field, and the only one that adds a URL to an item that already
-        exists. The others are `archive_listing_url` below, and `adopt_discovered_listing`, which
-        writes the URL in the same INSERT as the item because the listing was read off the
-        marketplace's own page and the two must not be separable by a crash.
+        The only writer that adds a URL to an item that already exists. The others are
+        `archive_listing_url` below, and `adopt_discovered_listing`, which writes the URL in the
+        same INSERT as the item so the two cannot be separated by a crash.
         """
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()

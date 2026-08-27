@@ -51,15 +51,14 @@ class MarketAdapter:
     # keystroke dispatched from the page, carrying `isTrusted: false` — a signal on the seller's own
     # account, so it belongs to a market someone has decided that for.
     chat_message_submit_js: str = ""
-    # What the seller already has listed on this marketplace, read off their own listings page:
+    # What the seller already has listed, read off their own listings page:
     # `{listings: [{listing_id, url, title, price, price_text}], active_count, dropped, truncated}`
-    # or `{error: …}`. Live listings only — a reader that cannot prove the rows it found are live
-    # must answer with the error, because everything downstream treats these as adoptable.
+    # or `{error: …}`. Live listings only — a reader that cannot prove the rows are live must
+    # answer with the error, since everything downstream treats these as adoptable.
     my_listings_js: str = ""
     # One listing's own page: `{active, title, description, price, currency, condition, photo_urls}`
-    # or null to abstain. Read when the seller has said yes, so it does three jobs at once — the
-    # fields an item needs, the photographs to bring across, and `active`, which is what stops a yes
-    # tapped against an aged list from relisting something that has since sold.
+    # or null to abstain. Read after a yes: the fields an item needs, the photographs, and `active`
+    # — what stops a late yes relisting something that has since sold.
     listing_detail_js: str = ""
     # Where the listing id sits in a permalink, as a regex with one group — what joins a
     # conversation to one of our items.
@@ -118,15 +117,12 @@ def supported_markets() -> list:
 
 
 def surveyable_markets(region: str | None = None) -> list:
-    """The markets whose existing listings we can read for *this seller*: an adapter carrying both
-    survey artifacts, and a recorded listings page on the regional site they are actually on.
+    """The markets whose existing listings we can read for *this seller*.
 
-    Derived from the code that implements it and the registry that locates it, exactly as
-    `supported_markets` and `publishable_markets` are — there is no separate switch to remember, so
-    a marketplace becomes surveyable the day its adapter grows the two artifacts.
-
-    Deliberately not filtered by what the seller has enabled: reading what they already have is how
-    we find out whether they want anything managed at all, and the ask itself is what turns it on.
+    Derived from code and registry exactly as `supported_markets` is — a marketplace becomes
+    surveyable the day its adapter grows the two artifacts. Deliberately not filtered by what the
+    seller has enabled: reading what they already have is how we find out whether they want anything
+    managed at all.
     """
     return [market for market in marketplaces.browser_markets() if can_survey(market, region)]
 

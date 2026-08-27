@@ -1,12 +1,11 @@
 """What a file's first bytes say it is.
 
-Extensions are a claim, not evidence, and neither is a Content-Type header on a download. The sniff
-is what decides, so a mislabelled, truncated, or entirely-not-an-image file is caught at intake
-rather than by a marketplace after a publish.
+Extensions are a claim, not evidence, and neither is a Content-Type header. The sniff decides, so a
+mislabelled, truncated, or not-an-image file is caught at intake rather than by a marketplace after
+a publish.
 
-Its own module because two layers need it and neither should have to import the other: the photo
-intake tool, and the browser layer's fetch of a listing's photographs. Pure and stdlib — it reads
-bytes and answers, and raises nothing a caller has to translate except `UnsupportedImage`.
+Its own module because two layers need it and neither should import the other: the photo intake
+tool, and the browser layer's photo fetch. Pure and stdlib.
 """
 
 from __future__ import annotations
@@ -32,8 +31,8 @@ class UnsupportedImage(Exception):
 
 
 def sniff_bytes(head: bytes) -> tuple | None:
-    """(kind, suffix, content_type) for a supported image, or None. The non-raising form, for a
-    caller deciding whether to keep a download rather than reporting a bad file to a person."""
+    """(kind, suffix, content_type) for a supported image, or None — the non-raising form, for a
+    caller deciding whether to keep a download rather than reporting a bad file."""
     for magic, kind, suffix, content_type in _MAGIC:
         if head.startswith(magic):
             return kind, suffix, content_type

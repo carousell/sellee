@@ -67,11 +67,9 @@ def urls(market: str) -> dict:
 def media_hosts(market: str) -> list:
     """The hosts a market serves its listing photographs from.
 
-    Data, for the same reason the regional sites are: where a marketplace keeps its images is a fact
-    about them, not about our code. It is also a capability bound — the photo fetch refuses a URL
-    whose host is not in here, so a listing page that hands back a link somewhere else is not
-    something the daemon will go and download. An entry with none listed can have no photos brought
-    across, which is a market that cannot be relisted from rather than one that fetches freely.
+    A capability bound: the photo fetch refuses a URL whose host is not in here, so a listing page
+    that hands back a link somewhere else is not downloaded. A market with none listed cannot have
+    photos brought across.
     """
     return list((get_marketplace(market) or {}).get("media_hosts") or [])
 

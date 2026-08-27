@@ -75,9 +75,8 @@ _CROSSLIST_LANE_INTERVAL_SEC = 30.0
 # watching the chat when they tap, so it is short.
 _CONNECT_LANE_INTERVAL_SEC = 2.0
 # The survey lane reads indexed rows and does nothing the rest of the time. A minute is about how
-# long a seller who has just signed in should wait to be asked about what they already have listed,
-# and it also paces the adoption behind it — one listing per tick, each a page read and a set of
-# photographs.
+# long a seller waits to be asked after signing in, and it also paces adoption — one listing per
+# tick, each a page read and a set of photographs.
 _SURVEY_LANE_INTERVAL_SEC = 60.0
 # A cold `npx` fetch of the browser server and its dependencies is a download, so minutes. This is
 # off the hot path entirely, so it only has to be longer than a slow connection needs.
@@ -487,8 +486,7 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: browser_connect.connect_lane(connect_deps),
         )
     )
-    # Take over what the seller was already selling on a marketplace they have signed in to: read
-    # their listings once, ask, and turn a yes into items the rest of the agent already understands.
+    # Read the seller's existing listings once, ask, and turn a yes into items.
     survey_deps = browser_survey.SurveyDeps(
         store=store,
         bus=bus,

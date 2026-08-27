@@ -705,15 +705,13 @@ def _insert_item_in_txn(
 ) -> str:
     """Insert one item within an existing transaction, returning its new id.
 
-    Two callers, and the second is the reason this is a helper rather than a method body:
-    `create_item` opens with an empty `listing_urls` and a draft status, while adopting a listing
-    the seller already had must write the item **and** the marketplace URL it was read from in one
-    statement. Split across two calls there is a window where the item exists with no URL, and a
-    retry after a crash inside it creates a second item for the same listing.
+    Two callers, and the second is why this is a helper: `create_item` opens with an empty
+    `listing_urls` and a draft status, while adoption must write the item **and** the marketplace
+    URL it was read from in one statement — split in two, a crash leaves an item with no URL and a
+    retry creates a second for the same listing.
 
     Validation belongs to the caller, before the transaction opens: `Database.transaction` is not
-    reentrant, so raising in here would have to unwind a held write lock, and a caller that has
-    already checked can turn a bad row into a recorded reason instead of an exception.
+    reentrant, so raising in here would unwind a held write lock.
     """
     item_id = _new_id("item")
     conn.execute(

@@ -1,24 +1,18 @@
 """Turning a yes into items, and getting those items onto carousell.ai.
 
-The second and third phases of the survey lane (`browser/survey.py` holds the first and the copy).
-One listing per tick each: a listing page read plus a set of photographs is real I/O, and the tick
-comes back in a minute.
+Phases two and three of the survey lane (`browser/survey.py` holds the first and the copy). One
+listing per tick: a page read plus a set of photographs.
 
-Three things here are load-bearing and none of them are obvious:
+Three things here are load-bearing:
 
-  * **The listing page is read again at adoption time, and `active` is checked.** Not for
-    freshness — for safety. A yes can be tapped against a list assembled days ago, and by then
-    something on it may have sold. The marketplace says so in its own structured data and nowhere
-    a person would see, so this is the only thing standing between a stale tap and relisting
-    somebody's sold goods.
-  * **The item and its marketplace URL are written together**, by one store call. Apart, a crash
-    between them leaves an item no buyer conversation can be matched to, and the retry makes a
-    second one for the same listing.
-  * **The carousell.ai publish is owed durably.** It is skipped whenever another publish holds the
-    one slot, and nothing else in the system could ever pick it back up: the fan-out needs the rail
-    listing as its precondition, and `queue_marketplace_publish` refuses a market the seller has not
-    enabled. So the row remembers, and this phase is what settles it — including telling the seller
-    how it went, in words that fit a listing that has no carousell.ai listing yet.
+  * The listing page is read again at adoption time, and `active` is checked — not for freshness
+    but for safety. A yes can be tapped against a list days old, and by then something on it may
+    have sold; the marketplace says so only in its structured data.
+  * The item and its marketplace URL are written together by one store call. Apart, a crash between
+    them leaves an item no conversation can match, and a retry makes a second.
+  * The carousell.ai publish is owed durably: it is skipped when another publish holds the one
+    slot, and nothing else could pick it back up. The row remembers; this phase settles it and
+    tells the seller.
 """
 
 from __future__ import annotations
@@ -42,17 +36,14 @@ from sellee.store.survey import (
 
 log = logging.getLogger(__name__)
 
-# How many times one listing is tried before it is given up on. Every attempt is a page read, and a
-# page that has not read three times is not going to.
+# Attempts per listing before it is retired. Every attempt is a page read.
 ADOPT_MAX_ATTEMPTS = 3
-# How many carousell.ai publishes one adopted listing gets. A publish is minutes of work and a real
-# token bill, so this is deliberately small — and a seller who asks gets another go regardless.
+# carousell.ai publish attempts per listing — a publish is minutes of work and a real token bill.
 RAIL_MAX_ATTEMPTS = 3
 
-# What marks a publish this lane queued. Deliberately *not* the fan-out's origin: that sweep reports
-# an outcome in words which assume the item already has a carousell.ai listing ("everything else
-# about it is fine, including its carousell.ai listing"), which is precisely what this one does not.
-# Carrying our own origin means that sweep closes the row as owing nothing, and this phase reports.
+# Not the fan-out's origin: its failure copy assumes the item already has a carousell.ai listing,
+# which this one does not. Our own origin means that sweep closes the row as owing nothing, and
+# this phase reports.
 ORIGIN = "adopt"
 
 RELISTED_NOTICE = "{title} is now on {market}: {url}"
@@ -77,11 +68,9 @@ def adopt_phase(deps) -> None:
         return
     market, listing_id = row["market"], row["listing_id"]
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
-        # Out of attempts, and still sitting in a status nothing else transitions. Retiring it here
-        # rather than filtering it out of the query is what makes the count and the retirement
-        # survive being interrupted between the two — a row whose capping attempt committed and
-        # whose retirement did not would otherwise be unreachable forever, and would hold up the
-        # batch summary behind it. The ordering puts it last, so it never delays a live one.
+        # Retired here rather than filtered out of the query: a row whose last attempt committed
+        # but whose retirement did not would be unreachable forever, holding up the batch summary.
+        # Ordering puts it last, so it never delays a live one.
         _fail(deps, row, row["last_error"] or "gave up after repeated failures")
         _summarise_if_drained(deps, market)
         return
@@ -92,22 +81,18 @@ def adopt_phase(deps) -> None:
     try:
         _adopt_one(deps, row, adapter)
     except ListingGone as exc:
-        # The seller declined it, or asked for a fresh look, while we were reading its page. Their
-        # answer wins and nothing is recorded against the listing — there is no row left to record
-        # it on.
+        # Declined or re-asked while we were reading the page. Their answer wins.
         deps.bus.publish(
             "survey.adopt_dropped",
             {"market": market, "listing_id": listing_id, "reason": str(exc)[:200]},
         )
     except BrowserUnavailable as exc:
-        # The whole layer is down; this listing is no more at fault than any other. Left accepted,
-        # with no attempt spent, for a tick where the browser is there.
+        # The whole layer is down, not this listing. Left accepted, no attempt spent.
         deps.bus.publish("browser.unavailable", {"reason": str(exc)})
     except BrowserError as exc:
         _retry_or_fail(deps, row, f"browser error: {exc}")
     except StoreError as exc:
-        # The row cannot become a valid item — a title or price the marketplace no longer shows.
-        # Terminal: retrying would ask the same page the same question.
+        # The row cannot become a valid item — a title or price the page no longer shows. Terminal.
         _fail(deps, row, str(exc))
     finally:
         _summarise_if_drained(deps, market)
@@ -117,9 +102,8 @@ def _adopt_one(deps, row: dict, adapter) -> None:
     market, listing_id = row["market"], row["listing_id"]
     relist = row["manage"] == MANAGE_RELIST
 
-    # Idempotent re-entry: a crash after the item was written leaves a row still accepted, and the
-    # item already records this listing. Linking rather than creating is what keeps a retry from
-    # making a second item for one listing.
+    # Idempotent re-entry: a crash after the item write leaves the row accepted and the item
+    # already recording this listing. Linking, not creating, keeps a retry from making a second.
     existing = reconcile.matching_items(
         listing_id, deps.store.list_items(), market, adapter.listing_id_pattern
     )
@@ -133,9 +117,8 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         )
         return
     if existing:
-        # Two of our items already claim this one listing. That is a data problem, and the read lane
-        # refuses to act on the same ambiguity for the same reason — attaching to the wrong item
-        # would negotiate against the wrong floor. Adopting here would make a *third*, so it stops.
+        # Two items already claim this listing. Adopting would make a third; the read lane refuses
+        # the same ambiguity — attaching to the wrong item negotiates against the wrong floor.
         _fail(deps, row, f"{len(existing)} items already claim this listing")
         return
 
@@ -145,18 +128,16 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         detail = client.evaluate(adapter.listing_detail_js)
 
     if not isinstance(detail, dict):
-        # The page would not read. Not "not for sale" — that is a different answer, and confusing
-        # the two would either strand a live listing or adopt a sold one.
+        # The page would not read — a different answer from "not for sale".
         _retry_or_fail(deps, row, "the listing page would not read")
         return
     if not detail.get("active"):
-        # It has sold, or been taken down, since the seller was asked. This is the check that makes
-        # a yes safe to tap late.
+        # Sold or taken down since the ask. This check is what makes a late yes safe.
         _fail(deps, row, f"no longer for sale ({detail.get('availability') or 'unknown'})")
         return
     price, currency = detail.get("price"), detail.get("currency")
     if not price or not currency:
-        # carousell.ai refuses an item without both, so an item made from this could only ever fail.
+        # carousell.ai refuses an item without both.
         _fail(deps, row, "the listing page shows no usable price")
         return
 
@@ -171,8 +152,8 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         condition=detail.get("condition"),
         photos=photos,
         url=row["url"],
-        # A relist with no photographs is not a relist. The item is still worth having — buyers
-        # write to it, and we answer — so it is adopted and the seller is told what is missing.
+        # No photos, no relist. The item is still adopted — buyers write to it and we answer — and
+        # the seller is told what is missing.
         rail_owed=bool(relist and photos),
     )
     deps.bus.publish(
@@ -209,9 +190,8 @@ def _photos(deps, row: dict, detail: dict) -> list:
 def _retry_or_fail(deps, row: dict, reason: str) -> None:
     """Count this listing's attempt, and retire it once it has had its share.
 
-    Counting matters as much as retrying: `next_adoptable_listing` orders by attempts, so a listing
-    that keeps failing moves behind every listing that has not been tried — which is what stops one
-    bad page holding up everything the seller said yes to.
+    The count orders the queue: `next_adoptable_listing` puts failing listings behind untried ones,
+    so one bad page never holds up everything the seller said yes to.
     """
     attempts = deps.store.bump_listing_attempt(row["market"], row["listing_id"], reason)
     deps.bus.publish(
@@ -238,9 +218,7 @@ def _fail(deps, row: dict, reason: str) -> None:
 def _summarise_if_drained(deps, market: str) -> None:
     """Once a market's accepted listings are all settled, say how the batch went — once.
 
-    One message per batch rather than one per listing: a seller who taps yes on twelve listings
-    wants to know it happened, not to be told twelve times. It is also the only place the ones that
-    had quietly sold get accounted for, which is the half they would otherwise never hear about.
+    One message per batch, not per listing; the only place the quietly-sold ones get accounted for.
     """
     if any(
         row["status"] == LISTING_ACCEPTED for row in deps.store.list_discovered_listings(market)
@@ -279,16 +257,9 @@ def rail_publish_phase(deps) -> None:
 def _publish_would_be_allowed(deps) -> bool:
     """Whether a carousell.ai publish could actually get through right now.
 
-    Asked before queueing rather than left to the pass, for the same reason the fan-out checks the
-    browser before it spends a pair's one attempt: quiet hours and the hourly cap both refuse a
-    publish, both fix themselves with time, and neither is the listing's fault. A pass queued into
-    one comes back having done nothing and looks exactly like a publish that failed — so the
-    attempt is spent, and three of those in a row report an adopted listing as failed when nothing
-    was ever wrong with it. Overnight, with the default quiet window, that is every listing the
-    seller just said yes to.
-
-    Held silently. There is nothing for the seller to do about the clock, and the row keeps the
-    work: it stays owed, and a later tick queues it.
+    Checked before queueing: quiet hours and the hourly cap refuse a publish without it being the
+    listing's fault, and a pass queued into one spends its attempt and looks exactly like a failure.
+    Held silently — the row stays owed, and a later tick queues it.
     """
     cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
     verdict = deps.store.peek_action(
@@ -298,11 +269,8 @@ def _publish_would_be_allowed(deps) -> bool:
 
 
 def _settle_queued(deps) -> None:
-    """Read each in-flight publish's outcome off the rows it wrote, never off its exit code.
-
-    A pass that ended cleanly without recording a URL has left no listing anyone can find, which is
-    a failure whatever it said about itself — the same rule the fan-out settles on.
-    """
+    """Settle each in-flight publish off the rows it wrote, never off its exit code: a clean pass
+    that recorded no URL failed, whatever it said about itself."""
     for row in deps.store.listings_awaiting_rail_publish():
         pass_row = deps.store.get_pass(row["rail_pass_id"]) if row["rail_pass_id"] else None
         if pass_row is not None and pass_row["status"] in ("queued", "running"):
@@ -356,8 +324,7 @@ def _enqueue_owed(deps) -> None:
     """Start one owed carousell.ai publish, if the single publish slot is free.
 
     Held rather than dropped when it is not: passes run one at a time, and queueing a second only
-    lengthens the wait ahead of the buyer conversations the seller is having. The row stays owed,
-    which is the entire reason it is a column.
+    lengthens the wait. The row stays owed — the entire reason it is a column.
     """
     owed = deps.store.listings_owed_rail_publish()
     if not owed:

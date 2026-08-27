@@ -172,8 +172,8 @@ _SCOPE_GUARDED = {
     "create_thread": (("item_id", "item"), ("want_id", "want")),
     "set_photo_uploads": (("item_id", "item"),),
     "archive_listing_url": (("item_id", "item"),),
-    # Only the link path takes an item id — creating one passes None, which `allows` treats as
-    # unset rather than out of scope, so an adoption that mints its own item is never refused.
+    # Creating an item passes None, which `allows` treats as unset rather than out of scope — so an
+    # adoption that mints its own item is never refused.
     "adopt_discovered_listing": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),

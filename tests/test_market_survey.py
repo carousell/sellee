@@ -280,8 +280,8 @@ def test_an_unanswered_ask_expires(store, bus) -> None:
     store.request_market_survey(_MARKET)
     survey.discover_phase(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
 
-    # A real clock, moved on. The lane's `now` also reaches the pacing engine, which reads it as a
-    # wall-clock date — so a synthetic epoch would be testing an hour that cannot happen.
+    # A real clock, moved on. The pacing engine reads the lane's `now` as a wall-clock date — a
+    # synthetic epoch would test an hour that cannot happen.
     later = time.time() + survey.DECISION_TTL_SEC + 60
     survey.survey_lane(_deps(store, bus, StubClient(), now=lambda: later))
 
@@ -496,9 +496,9 @@ def _adopted(store, bus, monkeypatch):
     _accepted(store, bus)
     _fetches(monkeypatch, [_media_photo()])
     adopt.adopt_phase(_deps(store, bus, StubClient(detail=_detail())))
-    # Quiet hours are on by default (23:00–08:00), and the publish phase now holds inside them —
-    # so without this every test below would pass or fail on the hour the suite happened to run.
-    # The tests that are *about* the window turn it back on and pass a fixed clock.
+    # Quiet hours default on (23:00–08:00) and the publish phase holds inside them — without this
+    # every test below would pass or fail on the hour the suite happened to run. Tests about the
+    # window turn it back on and pass a fixed clock.
     seed_setting(store, "quiet_hours", [0, 0])
     return store.list_discovered_listings(_MARKET)[0]
 

@@ -1,26 +1,19 @@
 """Bringing a listing's photographs across, so a listing the seller already had can be relisted.
 
-The one part of the survey that opens a socket, which is why it is its own module: the network
-allowlist in `tests/guard/test_stdlib_only.py` grants socket access per file, and a grant should be
-as narrow as the job it exists for. This one fetches images from a marketplace's own media hosts and
-does nothing else.
+The one part of the survey that opens a socket, which is why it is its own module — the network
+allowlist grants socket access per file, and a grant should be as narrow as its job.
 
 Everything here is a bound, because the URLs come off a page rather than from us:
 
-  * **https, and a host the registry names.** `marketplaces.media_hosts` says where a marketplace
-    serves its photographs from; anything else is refused unread. A listing page that hands back a
-    link somewhere else is not something this goes and downloads.
-  * **No redirects.** Refused rather than checked afterwards, so a 302 cannot walk the fetch off an
-    allowlisted host into somewhere that was never allowed.
-  * **Byte caps, applied to the body and not to its Content-Length.** Each file is read one byte
-    past its cap and refused if there is more, and the set has its own ceiling — a header nobody
-    verified is not a bound.
-  * **Sniffed, not trusted.** A file that is not an image is dropped, because the store's
-    containment gate accepts a path, not a claim about what is in it.
+  * https, and a host the registry names (`marketplaces.media_hosts`) — anything else is refused.
+  * No redirects — refused rather than checked afterwards, so a 302 cannot walk the fetch off an
+    allowlisted host.
+  * Byte caps applied to the body, not its Content-Length: each file is read one byte past its cap,
+    and the set has its own ceiling.
+  * Sniffed, not trusted: a body that is not an image is dropped.
 
-A photo that fails any of these is dropped and the rest are kept: a listing that comes across with
-three of its four pictures is still worth having, while one that comes across with a stranger's file
-in it is not.
+A photo that fails any of these is dropped and the rest are kept: a listing with three of its four
+pictures is still worth having; one with a stranger's file in it is not.
 """
 
 from __future__ import annotations
@@ -39,19 +32,17 @@ log = logging.getLogger(__name__)
 # Long enough for a large photograph on a slow connection, short enough that a hung CDN cannot hold
 # the lane's tick open.
 FETCH_TIMEOUT_SEC = 20.0
-# A marketplace photograph is a phone picture; anything larger is not one, and the rail downsizes
-# past 4MB anyway.
+# A marketplace photograph is a phone picture; the rail downsizes past 4MB anyway.
 MAX_PHOTO_BYTES = 12 * 1024 * 1024
-# The ceiling for one listing's whole set, so a dozen large files cannot add up to something silly.
+# The ceiling for one listing's whole set.
 MAX_TOTAL_BYTES = 60 * 1024 * 1024
-# A browser sends one, and a CDN may require it. Ours names the listing the photo belongs to, which
-# is exactly what it is for.
+# A CDN may require one; ours names the listing the photo belongs to.
 _USER_AGENT = "Mozilla/5.0 (compatible; sellee/1.0)"
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
-    """Refuse every redirect. Returning None makes urllib raise the response as an HTTPError rather
-    than following it, which keeps the host check the fetch actually made from being undone."""
+    """Refuse every redirect: returning None makes urllib raise the response as an HTTPError instead
+    of following it, so a 302 cannot undo the host check."""
 
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
@@ -60,8 +51,7 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
 def allowed_url(url: str, hosts) -> bool:
     """Whether `url` is an https URL on one of `hosts` — exact host match, never a suffix one.
 
-    A suffix match is how a host check ends up accepting `media.karousell.com.evil.test`, so the
-    comparison is on the parsed host and nothing else.
+    A suffix match is how a host check ends up accepting `media.karousell.com.evil.test`.
     """
     if not url or not hosts:
         return False
@@ -77,9 +67,8 @@ def allowed_url(url: str, hosts) -> bool:
 def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> list:
     """Download a listing's photographs into `dest_dir`, and answer with the stored paths.
 
-    Returns fewer paths than it was given URLs whenever something was refused or failed, and an
-    empty list when nothing could be brought across at all — which the caller reports rather than
-    treating as an item with no pictures.
+    Fewer paths than URLs whenever something was refused or failed; empty when nothing could be
+    brought across — which the caller reports rather than treating as an item with no pictures.
     """
     hosts = marketplaces.media_hosts(market)
     if not hosts:
@@ -128,16 +117,16 @@ def _fetch_one(opener, url: str, *, referer: str, cap: int) -> bytes | None:
     request = urllib.request.Request(url, headers=headers)  # noqa: S310 — https-and-host checked
     try:
         with opener.open(request, timeout=FETCH_TIMEOUT_SEC) as response:
-            # One byte past the cap, so "too big" is decided by what arrived rather than by a
-            # Content-Length nobody verified.
+            # One byte past the cap: the bound is what arrived, not a Content-Length nobody
+            # verified.
             data = response.read(cap + 1)
             # What the response still owes: 0 on a complete body, None when it declared no length.
             # Read here, before the response is closed.
             owed = getattr(response, "length", None)
     except (
         urllib.error.URLError,
-        # Not an OSError: a truncated chunked body or a malformed status line raises from here, and
-        # left uncaught it would abort the whole lane tick without counting the attempt.
+        # Not an OSError: a truncated chunked body or bad status line raises here, and would abort
+        # the lane tick uncaught.
         http.client.HTTPException,
         TimeoutError,
         OSError,
@@ -149,8 +138,8 @@ def _fetch_one(opener, url: str, *, referer: str, cap: int) -> bytes | None:
         log.warning("listing photo is over the size ceiling — dropped")
         return None
     if owed:
-        # The connection ended mid-body. The first bytes still sniff as an image, so this would
-        # otherwise be stored and published as the listing's photograph — half a picture.
+        # The connection ended mid-body. The first bytes still sniff as an image, so this would be
+        # stored as half a picture.
         log.warning("listing photo ended %d bytes short — dropped", owed)
         return None
     return data or None

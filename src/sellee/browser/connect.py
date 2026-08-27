@@ -214,9 +214,8 @@ def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:
     """Line up a look at what the seller already has listed here.
 
     Just a row: reading the listings page is another navigation of the one shared tab, and this is
-    the sign-in lane, whose job is to answer the tap it was given. The survey lane picks it up
-    within a tick and does the asking. Writing it before the signed-in notice is deliberate — both
-    are queued, so the seller reads "you're signed in" first and the listings question after.
+    the sign-in lane. The survey lane picks it up within a tick and does the asking. Written before
+    the signed-in notice — both are queued, so the seller reads "you're signed in" first.
     """
     if not market_adapters.can_survey(market, deps.store.seller_region()):
         return

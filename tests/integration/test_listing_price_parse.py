@@ -1,10 +1,9 @@
 """The listings page's price parser, run as JavaScript.
 
-Skipped when there is no node on PATH, because that is the only way to find out what this code
-actually does: it runs in the page, and every other test in the suite stubs the browser. Worth the
-exception because the parse is where a regional site quietly costs a seller the whole feature —
-Carousell renders "Rp1.500.000" on its Indonesian site, and read as a decimal point that is NaN,
-which drops every row and reports a seller with nothing listed.
+Skipped when there is no node on PATH — the only way to find out what this code actually does, since
+it runs in the page and every other test stubs the browser. Worth the exception: the parse is where
+a regional site quietly costs a seller the whole feature — "Rp1.500.000" read as a decimal point is
+NaN, which drops every row and reports a seller with nothing listed.
 """
 
 from __future__ import annotations
@@ -22,8 +21,8 @@ node_binary = shutil.which("node")
 
 pytestmark = pytest.mark.skipif(node_binary is None, reason="needs node on PATH to run the parser")
 
-# (rendered price, what it means). The grouped-thousands cases are the ones that motivated the
-# parser; the decimal cases are what a naive strip-everything-but-digits got right and must keep.
+# (rendered price, what it means). The grouped-thousands cases motivated the parser; the decimal
+# cases are what a naive digit-strip got right and must keep.
 CASES = [
     ("S$80", 80.0),
     ("S$1,299", 1299.0),

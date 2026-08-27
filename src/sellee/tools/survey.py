@@ -1,12 +1,11 @@
 """The listings the seller already had, for the conversation to act on.
 
 The ask itself is two buttons and needs no model — but "only the bike and the camera", "just answer
-buyers on those, don't repost them" and "try that carousell.ai one again" are answers a button
-cannot carry and a seller will give anyway. These two tools are what let the conversation honour
-them, over exactly the same rows the buttons write.
+buyers, don't repost them" and "try that carousell.ai one again" are answers a button cannot carry.
+These two tools honour them, over exactly the same rows the buttons write.
 
 Neither tool adopts anything itself. They record a decision; the survey lane does the work and
-reports it, which is what keeps a listing from being taken over inside a turn that then fails.
+reports it.
 """
 
 from __future__ import annotations
@@ -22,9 +21,8 @@ from sellee.tools.registry import (
     register,
 )
 
-# What the seller may say about a set of listings. `manage` and `decline` answer the ask; `retry`
-# re-arms a carousell.ai publish that ran out of attempts, which is the door the failure notice
-# promises ("ask me and I'll have another go").
+# What the seller may say about a set of listings. `retry` re-arms a carousell.ai publish that ran
+# out of attempts — the door the failure notice promises.
 _DECISIONS = ("manage", "decline", "retry")
 _MANAGE_MODES = ("inbox", "relist")
 
@@ -70,8 +68,7 @@ def _decide_discovered(ctx: ToolContext, params: dict) -> dict:
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
-    # Zero is an answer, not an error: the listings named have already been decided, adopted or
-    # expired. Saying so lets the reply be honest instead of claiming something was taken over.
+    # Zero is an answer, not an error: the named listings were already decided, adopted or expired.
     return {"decided": moved, "market": market, "decision": decision, "manage": manage}
 
 

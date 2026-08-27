@@ -41,9 +41,9 @@ MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 def _sniff(path: Path) -> tuple:
     """(kind, suffix, content_type) for a supported image, or a ToolError naming the file.
 
-    The sniff itself lives in `sellee.images`, because the browser layer's fetch of a listing's
-    photographs needs the same answer and must not import the tool surface to get it. This wrapper
-    is only the translation into the error shape a tool caller sees.
+    The sniff lives in `sellee.images`, because the browser layer's photo fetch needs the same
+    answer and must not import the tool surface. This wrapper only translates into the error shape
+    a tool caller sees.
     """
     try:
         return images.sniff_image(path)
