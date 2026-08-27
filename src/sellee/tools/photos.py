@@ -18,7 +18,7 @@ import shutil
 import uuid
 from pathlib import Path
 
-from sellee import paths
+from sellee import images, paths
 from sellee.platform import get_platform
 from sellee.platform.base import ImageToolUnavailable, UnsupportedPlatform
 from sellee.rail.client import RailUnprovisioned
@@ -37,33 +37,18 @@ from sellee.tools.registry import (
 MAX_UPLOAD_DIM = 1600
 MAX_UPLOAD_BYTES = 4 * 1024 * 1024
 
-# What a file's first bytes must look like for us to treat it as an image. Extensions are a
-# claim, not evidence — the sniff is what decides, so a mislabelled or truncated file is caught
-# at intake rather than by the marketplace after a publish.
-_MAGIC = (
-    (b"\xff\xd8\xff", "jpeg", ".jpg", "image/jpeg"),
-    (b"\x89PNG\r\n\x1a\n", "png", ".png", "image/png"),
-    (b"GIF87a", "gif", ".gif", "image/gif"),
-    (b"GIF89a", "gif", ".gif", "image/gif"),
-)
-_MAGIC_READ_BYTES = 32
-# Formats the rail accepts as-is. HEIC is not among them, so those are always converted.
-_UPLOADABLE = frozenset({"jpeg", "png", "gif"})
-
 
 def _sniff(path: Path) -> tuple:
-    """(kind, suffix, content_type) for a supported image, or a ToolError naming the file."""
+    """(kind, suffix, content_type) for a supported image, or a ToolError naming the file.
+
+    The sniff itself lives in `sellee.images`, because the browser layer's fetch of a listing's
+    photographs needs the same answer and must not import the tool surface to get it. This wrapper
+    is only the translation into the error shape a tool caller sees.
+    """
     try:
-        head = path.open("rb").read(_MAGIC_READ_BYTES)
-    except OSError as exc:
-        raise ToolError(f"cannot read {path.name}: {type(exc).__name__}") from exc
-    for magic, kind, suffix, content_type in _MAGIC:
-        if head.startswith(magic):
-            return kind, suffix, content_type
-    # HEIC/HEIF are ISO-BMFF: "....ftyp<brand>" with an image brand.
-    if len(head) >= 12 and head[4:8] == b"ftyp" and head[8:12] in (b"heic", b"heix", b"mif1"):
-        return "heic", ".heic", "image/heic"
-    raise ToolError(f"{path.name} is not a supported image (jpeg, png, gif, or heic)")
+        return images.sniff_image(path)
+    except images.UnsupportedImage as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def _import_photos(ctx: ToolContext, params: dict) -> dict:
@@ -98,7 +83,7 @@ def _prepared_bytes(path: Path, workdir: Path) -> tuple:
     take, is sent untouched — conversion needs a platform image tool, so the common path must not
     depend on one. Only a rejected format or an oversized file is re-encoded."""
     kind, _, content_type = _sniff(path)
-    if kind in _UPLOADABLE and path.stat().st_size <= MAX_UPLOAD_BYTES:
+    if kind in images.UPLOADABLE and path.stat().st_size <= MAX_UPLOAD_BYTES:
         return path.read_bytes(), content_type
     dest = workdir / (path.stem + ".jpg")
     try:
