@@ -188,6 +188,12 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # signed out for two hours got the same message seven times instead of once.
     if state == "logged_in":
         _clear_notice(deps, f"logged_out:{market}")
+        # The backfill half of the take-these-over ask. The probe has just run, so knowing this
+        # market is signed in costs nothing here — which is what reaches a seller who connected it
+        # before any of this existed, and one who signed in outside the connect lane. The row's
+        # primary key makes it an ask-once: this fires every tick and inserts once, ever.
+        if market_adapters.can_survey(market, region):
+            deps.store.request_market_survey(market)
 
     answer = client.evaluate(adapter.conversations_list_js)
     if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
