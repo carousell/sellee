@@ -17,7 +17,7 @@
       "status": "active",
       "urls": {
         "inbox": "/marketplace/inbox/",
-        "selling": "/marketplace/you/selling"
+        "my_listings": "/marketplace/you/selling"
       }
     },
     {
@@ -41,6 +41,9 @@
         "type": "browser"
       },
       "status": "active",
+      "media_hosts": [
+        "media.karousell.com"
+      ],
       "urls": {
         "inbox": "/inbox/",
         "thread": "/inbox/{thread_id}/",
