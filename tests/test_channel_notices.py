@@ -102,3 +102,58 @@ def test_escalation_open_queues_one_notice(make_ctx, store, bus) -> None:
     queued = store.list_queued_notices()
     assert len(queued) == 1  # one escalation -> one notice, no duplicate
     assert "Accept $70?" in queued[0]["text"] and queued[0]["ref"] == "carousell:t1"
+
+
+def _escalating_thread(store, tid="carousell:t2"):
+    item = store.create_item(title="Fan", list_price=180.0, currency="SGD")
+    store.create_thread(
+        thread_id=tid, side="sell", market="carousell", counterpart_handle="b", item_id=item["id"]
+    )
+
+
+def test_escalation_push_carries_its_options_as_buttons(make_ctx, store, bus) -> None:
+    bus.subscribe(outbound.escalation_notifier(store))
+    _escalating_thread(store)
+    dispatch(
+        "escalate",
+        {
+            "thread_id": "carousell:t2",
+            "open_question": "meet at Orchard, or checkout?",
+            "options": ["🔗 Send checkout link", "🤝 I'll handle it"],
+        },
+        make_ctx(TIER_ATTENDED),
+    )
+
+    notice = store.list_queued_notices()[0]
+    assert notice["controls"] == [
+        ["🔗 Send checkout link", f"n{notice['id']}:a0"],
+        ["🤝 I'll handle it", f"n{notice['id']}:a1"],
+    ]
+
+
+def test_an_escalation_without_options_still_pushes(make_ctx, store, bus) -> None:
+    """A question only the seller can answer has no fixed answers — the ask still has to arrive."""
+    bus.subscribe(outbound.escalation_notifier(store))
+    _escalating_thread(store)
+    dispatch(
+        "escalate",
+        {"thread_id": "carousell:t2", "open_question": "how should I answer this?"},
+        make_ctx(TIER_ATTENDED),
+    )
+
+    notice = store.list_queued_notices()[0]
+    assert "how should I answer this?" in notice["text"]
+    assert notice["controls"] is None
+
+
+def test_delivery_hands_an_asks_buttons_to_the_provider(store, bus, xdg_tmp) -> None:
+    """The drain reads controls off the durable row, so an ask's keyboard survives a restart."""
+    _bind(store)
+    store.queue_notice("How do you want to close?", options=["Checkout", "Myself"])
+    seen: list = []
+
+    outbound.drain_notices(
+        store=store, bus=bus, deliver=lambda chat_id, text, controls=None: seen.append(controls)
+    )
+
+    assert seen == [[["Checkout", "n1:a0"], ["Myself", "n1:a1"]]]

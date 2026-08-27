@@ -9,6 +9,7 @@ update_thread (escalated->active).
 
 from __future__ import annotations
 
+from sellee.channel import asks
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -22,12 +23,19 @@ from sellee.tools.registry import (
 
 
 def _escalate(ctx: ToolContext, params: dict) -> dict:
+    options = params.get("options")
+    if options is not None:
+        try:
+            options = asks.validate_options(options)
+        except ValueError as exc:
+            raise ToolError(str(exc)) from exc
     try:
         result = ctx.store.escalate(
             params["thread_id"],
             open_question=params["open_question"],
             kind=params.get("kind"),
             context_summary=params.get("context_summary"),
+            options=options,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
@@ -57,7 +65,9 @@ register(
     ToolSpec(
         name="escalate",
         description="Open an escalation against a real thread (records the open question, flips "
-        "the thread to escalated). Idempotent: a thread with an open escalation returns it.",
+        "the thread to escalated). Idempotent: a thread with an open escalation returns it. "
+        "Always pass `options` — the concrete answers your question names — so the seller can "
+        "tap instead of type; they can still answer in words.",
         input_schema={
             "type": "object",
             "properties": {
@@ -65,6 +75,14 @@ register(
                 "open_question": {"type": "string"},
                 "kind": {"type": "string"},
                 "context_summary": {"type": "string"},
+                "options": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "The 2-4 concrete answers, in the order the question names "
+                    "them, each short enough for a button on a phone (e.g. "
+                    '["Send checkout link", "I\'ll handle it"]). Never a guessed number — a '
+                    "value-carrying answer is a button plus a follow-up question.",
+                },
             },
             "required": ["thread_id", "open_question"],
             "additionalProperties": False,

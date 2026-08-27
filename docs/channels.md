@@ -18,11 +18,16 @@ a guard test enforces that the core imports no provider.
   - `fastpaths` — the deterministic commands (`/pause` `/resume` `/status`
     `/catchup` `/sellee`): decide, render reply text, and emit a provider-neutral
     **control spec** (a list of `(label, token)` buttons).
+  - `asks` — tappable decisions: what a valid option list is (2–4 labels, checked
+    at the tool boundary), and resolving a tap back to the *words* the seller
+    tapped before ingest, so the durable row — and so the pass prompt, the
+    transcript, and catchup — read as them saying it.
   - `routing` — after a batch is ingested: the `channel.in` event and coalesced
     routing of pending free text to a channel pass.
   - `outbound` — the delivery *policy* (notice drain, typing pulse), the
     settled-pass inbox fold (a scheduler lane off durable rows), and the
-    escalation-push bus subscriber.
+    escalation-push bus subscriber (which renders the escalation's `options` as
+    its buttons).
   - `prompt` — the channel pass's prompt with its capped transcript window.
 - **Provider** (`channel/telegram/`):
   - `transport` — the Bot API client (the one network module; allowlisted) and
@@ -172,10 +177,14 @@ while the gateway holds no WebSocket open at all.
 - Each inbound batch is persisted and the cursor advanced in **one transaction**
   (persist-then-ack), with media downloaded first; re-delivery after a crash is
   deduped by the update id.
-- Fast paths are answered by daemon code immediately (a button tap is acked
-  first, then the reply).
-- Everything else — free text, photos — stays pending and routes to a channel
-  pass.
+- **Every** button tap is acked before dispatch (Telegram spins the button until
+  `answerCallbackQuery` lands; Discord reports an unacknowledged interaction as
+  failed) — including the taps that route rather than being answered here.
+- Fast paths are then answered by daemon code immediately.
+- Everything else — free text, photos, and a tap on a *decision* — stays pending
+  and routes to a channel pass. A decision tap is deliberately not a fast path:
+  answering "checkout or handle it myself" means composing a buyer reply and
+  minting a link, which is the pass's work, not a deterministic one.
 
 ## The needs-me queue
 
@@ -190,6 +199,14 @@ Delivery follows one rule — never pretend to push:
 - **bound** → the drain lane sends notices FIFO and stamps them delivered;
 - **unbound** → `get_catchup` is the delivery path (queue-and-catchup);
 - each new escalation is pushed as a notice, with catchup as the crash backstop.
+
+An ask that needs a decision carries its answers as buttons: `escalate` (and
+`send_message`, for an ask that isn't an escalation) takes `options`, and the
+tokens are minted **against the notice** that carries it — `n<notice_id>:a<index>`.
+The notice is the anchor because it is what the seller taps, it already stores its
+own labels in `controls`, and notices are never pruned, so a tap from months-old
+scrollback still resolves to the words it meant. Buttons never replace free text:
+an ask surfaced at catchup has no buttons, and typing the answer always works.
 
 One proactive lane feeds this queue: the **first-listing nudge** — a seller bound
 for a day who never listed and never tapped Skip gets one nudge, ever (the

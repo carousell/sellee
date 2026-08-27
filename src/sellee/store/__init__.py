@@ -46,6 +46,7 @@ from sellee.store.helpers import (
     ThreadSummary,
     WantNotFound,
     WantRecord,
+    ask_notice_id,
     bind_nonce_live,
     ui_cache_is_stale,
 )
@@ -76,6 +77,7 @@ __all__ = [
     "Store",
     "StoreError",
     "ThreadNotFound",
+    "ask_notice_id",
     "bind_nonce_live",
     "ui_cache_is_stale",
 ]

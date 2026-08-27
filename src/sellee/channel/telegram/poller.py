@@ -24,7 +24,7 @@ from __future__ import annotations
 import logging
 
 from sellee import paths, secrets
-from sellee.channel import fastpaths, outbound, routing
+from sellee.channel import asks, fastpaths, outbound, routing
 from sellee.channel.telegram import commands
 from sellee.channel.telegram.transport import (
     ChannelError,
@@ -210,17 +210,39 @@ class Poller:
                 # can never lose it (getFile is cursor-free — a crash before the txn re-downloads).
                 ev["media_paths"] = self._download_photos(client, ev)
             events.append(ev)
+        # Same pre-ingest slot, same reason: a tap arrives carrying a token, and resolving it to the
+        # words the seller tapped here means the durable row — and so the pass prompt, the
+        # transcript, and catchup — all read as them saying it, with no special path downstream.
+        events = asks.resolve_ask_answers(self.store, events)
         inserted = self.store.ingest_updates(events, max_id + 1)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
+        self._ack_taps(client, inserted)
         self._dispatch_fast_paths(client, ch["chat_id"], inserted)
         routing.route_channel_pass(self.store, self.bus)
+
+    def _ack_taps(self, client, inserted) -> None:
+        """Stop the spinner on every button tap, fast path or not.
+
+        Telegram leaves a button spinning until answerCallbackQuery lands, so this has to cover taps
+        that route to a pass as well — a decision button ("Send checkout link") is answered by the
+        pass seconds later, and an unacked one reads as the tap not having registered. Best-effort:
+        a failed ack is cosmetic, and the reply still goes out.
+        """
+        for row in inserted:
+            cq_id = (row["payload"] or {}).get("callback_query_id")
+            if not cq_id:
+                continue
+            try:
+                client.answer_callback_query(cq_id)
+            except ChannelError as exc:
+                log.warning("answerCallbackQuery failed: %s", exc)
 
     def _dispatch_fast_paths(self, client, chat_id, inserted) -> None:
         """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /sellee and the
         control-row buttons) instantly, before any pass routing — so `/pause` is heard even mid-
-        pass. A button tap is acked first (stop its spinner), then the reply is sent; the row is
-        marked handled so it never routes. Everything else stays pending for the channel pass."""
+        pass. The row is marked handled so it never routes; everything else stays pending for the
+        channel pass. Taps are already acked by `_ack_taps`, which covers the ones that route."""
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
@@ -233,12 +255,6 @@ class Poller:
                 text, controls = fastpaths.handle_settings_door(self.store, self.bus, event)
             else:
                 text, controls = fastpaths.handle_fast_path(self.store, event)
-            cq_id = row["payload"].get("callback_query_id")
-            if cq_id:
-                try:
-                    client.answer_callback_query(cq_id)
-                except ChannelError as exc:
-                    log.warning("answerCallbackQuery failed: %s", exc)
             try:
                 client.send_message(chat_id, text, reply_markup=commands.render_controls(controls))
             except ChannelError as exc:

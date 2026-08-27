@@ -51,6 +51,15 @@ each time." Record the answer with `set_floor`.
 who gives a price and ignores the floor has answered enough: publish, and the floor simply holds at
 the list price. Don't ask twice, and don't withhold the listing over it.
 
+**Give the confirmation buttons:** `options: ["✅ List it", "✏️ Change something"]` on the
+`send_message` that carries it. The floor stays a typed answer — it is a number, and no button can
+hold one — so the buttons are the fast way to say yes when they have nothing to change.
+
+A tapped **✅ List it** is a complete answer: publish, and the floor holds at the list price. Do
+**not** read the tap as them refusing to give a floor, and do **not** re-ask it there — the first
+offer on the item asks for the floor exactly when it starts to matter (the "No floor yet" fallback
+in seller-comms). Say nothing about the floor at publish time beyond what you already said.
+
 A below-list decision implies the floor: if they say "list at 80, I'd take 65", 65 is the floor.
 If `set_floor` rejects a floor above the list price, say so plainly and offer the two ways out —
 a lower floor, or raising the list price to that number.

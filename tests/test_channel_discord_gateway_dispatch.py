@@ -343,3 +343,26 @@ def test_run_throttles_the_off_idle_wait_with_no_stop_event(store, xdg_tmp, monk
     # Two real sleeps must have elapsed before the third call raised — a busy spin would finish
     # in microseconds regardless of OFF_IDLE_SEC.
     assert elapsed >= 0.05 * 2
+
+
+def test_a_decision_tap_is_acknowledged_but_left_for_the_pass(store, bus, xdg_tmp) -> None:
+    """A tappable ask's answer is the channel pass's work (compose the buyer reply, mint the link),
+    so it must not be answered here — but Discord still needs the interaction acknowledged, or the
+    seller's client reports the click as failed."""
+    _bound(store)
+    notice_id = store.queue_notice(
+        "Needs your call: meet at Orchard, or checkout?",
+        options=["🔗 Send checkout link", "🤝 I'll handle it"],
+    )
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_interaction(
+            _interaction(f"n{notice_id}:a0"), client=_client(api)
+        )
+        assert api.acknowledged  # acked even though no fast path ran
+        assert api.outbox == []  # nothing answered deterministically
+
+    rows = store._db.query("SELECT text, status FROM channel_inbox")
+    assert len(rows) == 1
+    assert rows[0]["text"] == "🔗 Send checkout link"  # the words, not the token
+    assert rows[0]["status"] == "claimed"
+    assert store.has_active_channel_pass()

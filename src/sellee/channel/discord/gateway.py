@@ -37,7 +37,7 @@ import random
 import time
 
 from sellee import paths
-from sellee.channel import fastpaths, outbound, routing
+from sellee.channel import asks, fastpaths, outbound, routing
 from sellee.channel.discord import transport as discord_transport
 from sellee.channel.discord.transport import ChannelError, DiscordClient
 from sellee.channel.discord.ws_client import ConnectionClosed, connect
@@ -358,17 +358,35 @@ class DiscordGateway:
         event = discord_transport._normalize({"t": "INTERACTION_CREATE", "d": data})
         if event is None:
             return
-        inserted = self.store.ingest_updates([event], 0)
+        # Before ingest, so the durable row carries the words the seller tapped rather than the
+        # token — every downstream reader then needs no special path. See channel/asks.py.
+        events = asks.resolve_ask_answers(self.store, [event])
+        inserted = self.store.ingest_updates(events, 0)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
+        self._ack_taps(client, inserted)
         self._dispatch_fast_paths(client, ch["chat_id"], inserted)
         routing.route_channel_pass(self.store, self.bus)
 
+    def _ack_taps(self, client: DiscordClient, inserted) -> None:
+        """Acknowledge every button interaction, fast path or not — Discord requires the REST
+        callback even for a Gateway-delivered interaction, and reports an unacknowledged one as
+        failed. A decision button routes to a pass rather than a fast path, so this has to run for
+        those too. Best-effort: a failed ack is cosmetic and the reply still goes out."""
+        for row in inserted:
+            payload = row["payload"] or {}
+            interaction_id = payload.get("interaction_id")
+            if not interaction_id:
+                continue
+            try:
+                client.acknowledge_interaction(interaction_id, payload["interaction_token"])
+            except ChannelError as exc:
+                log.warning("interaction acknowledge failed: %s", exc)
+
     def _dispatch_fast_paths(self, client: DiscordClient, channel_id, inserted) -> None:
         """Answer deterministic fast paths instantly, before any pass routing, so /pause is heard
-        even mid-pass. An interaction is acknowledged first (Discord requires the REST callback
-        even though it arrived over the Gateway); everything else stays pending for the channel
-        pass."""
+        even mid-pass. Everything else stays pending for the channel pass. Interactions are already
+        acknowledged by `_ack_taps`, which covers the ones that route."""
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
@@ -378,14 +396,6 @@ class DiscordGateway:
                 text, controls = fastpaths.handle_settings_door(self.store, self.bus, event)
             else:
                 text, controls = fastpaths.handle_fast_path(self.store, event)
-            interaction_id = row["payload"].get("interaction_id")
-            if interaction_id:
-                try:
-                    client.acknowledge_interaction(
-                        interaction_id, row["payload"]["interaction_token"]
-                    )
-                except ChannelError as exc:
-                    log.warning("interaction acknowledge failed: %s", exc)
             try:
                 client.send_message(channel_id, text, components=controls)
             except ChannelError as exc:

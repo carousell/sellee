@@ -17,6 +17,7 @@ from sellee.store.helpers import (
     TranscriptEntry,
     _channel_from_row,
     _inbox_from_row,
+    _insert_ask,
     _insert_notice,
     _notice_from_row,
     _now,
@@ -315,11 +316,42 @@ class ChannelMixin:
         pass_id: str | None = None,
         holdable: bool = False,
         controls: list | None = None,
+        options: list | None = None,
     ) -> int:
+        """Queue one notice. `controls` attaches a ready-made spec whose tokens route somewhere
+        specific (a settings door, a sign-in); `options` is the seller's answers to *this* ask, and
+        their tokens are minted against the notice so a tap resolves back to the words tapped.
+
+        Mutually exclusive: a notice with two keyboards is a bug at the caller, and silently
+        preferring one would hide it.
+        """
+        if controls is not None and options is not None:
+            raise StoreError("queue_notice takes controls or options, not both")
         with self._db.transaction() as conn:
+            if options is not None:
+                return _insert_ask(
+                    conn, text, options=options, ref=ref, pass_id=pass_id, holdable=holdable
+                )
             return _insert_notice(
                 conn, text, ref=ref, pass_id=pass_id, holdable=holdable, controls=controls
             )
+
+    def notice_option(self, notice_id: int, token: str) -> dict | None:
+        """The label a tapped ask-button carries, plus the text of the ask it answers — or None when
+        the notice is gone or never carried `token`.
+
+        A button lives in the chat history forever, so this is the lookup that lets a tap from
+        months-old scrollback still resolve to the words it meant. A token that is not on the row is
+        a button from a withdrawn release: None, and the caller lets it through as an odd message
+        rather than guessing which option a since-changed keyboard used to mean.
+        """
+        rows = self._db.query("SELECT text, controls FROM notices WHERE id = ?", (notice_id,))
+        if not rows or not rows[0]["controls"]:
+            return None
+        for label, control_token in json.loads(rows[0]["controls"]):
+            if control_token == token:
+                return {"label": label, "text": rows[0]["text"]}
+        return None
 
     def claim_queued_notices(self, limit: int, *, in_quiet: bool = False) -> list[NoticeRecord]:
         """The oldest queued notices, FIFO — the drain lane delivers them in order. During quiet

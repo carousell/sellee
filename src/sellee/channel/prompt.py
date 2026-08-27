@@ -82,7 +82,13 @@ def transcript_media_paths(transcript: list) -> tuple:
 def _format_pending(rows: list) -> str:
     """Each pending row as a line. A photo row carries its stored paths inline — they are already
     in the media store, so they can go straight onto an item; without them the pass can see that
-    photos arrived but not use them."""
+    photos arrived but not use them.
+
+    A tapped option already reads as words (channel/asks.py rewrote the row's text at ingest), and
+    carries the ask it answers alongside it. The ask is named here because a button lives in the
+    chat forever: a tap from scrollback older than the transcript window would otherwise be a bare
+    "I'll handle it" with nothing to attach it to.
+    """
     out = []
     for i, row in enumerate(rows, start=1):
         if row["kind"] == "photo":
@@ -91,8 +97,23 @@ def _format_pending(rows: list) -> str:
             out.append(f"{i}. [{len(media)} photo(s)] {caption}".rstrip())
             for path in media:
                 out.append(f"     {path}")
-        else:
-            out.append(f"{i}. {row.get('text') or ''}")
+            continue
+        text = row.get("text") or ""
+        answered = (row.get("payload") or {}).get("answers_text")
+        if not answered:
+            # The seller's own words, verbatim — they are the principal this agent acts for, and
+            # collapsing a message they deliberately wrote over several lines would degrade the most
+            # quality-sensitive text in the product (the same rule _format_transcript follows).
+            out.append(f"{i}. {text}")
+            continue
+        # A tapped option. The label is the agent's own button text and is newline-free by
+        # validation, so one_line is belt-and-braces against a turn nobody took. The ask it answers
+        # IS fenced: an escalation's question is composed while reading a buyer, so it is
+        # attacker-reachable text that would otherwise wear the agent's own attribution.
+        out.append(
+            f"{i}. {prompt_data.one_line(text)}"
+            f"   (tapped, answering: {prompt_data.as_data(answered)})"
+        )
     return "\n".join(out) if out else "(none)"
 
 

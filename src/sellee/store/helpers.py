@@ -7,6 +7,7 @@ the name, which is what tests/conftest.py's patch_store_attr does.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 import uuid
@@ -410,6 +411,7 @@ class EscalationRecord(TypedDict):
     kind: str | None
     open_question: str
     context_summary: str | None
+    options: list | None
     status: str
     resolution: str | None
     created_ts: float
@@ -690,6 +692,56 @@ def _insert_notice(
     return notice_id
 
 
+# A tappable ask's button token: `n<notice_id>:a<index>`. Providers split a callback datum on the
+# FIRST colon into (ref, choice), so the ref names the notice carrying the ask and the choice names
+# which option was tapped.
+#
+# The notice is the anchor because it is what the seller actually taps, it already stores its own
+# button labels in `controls`, and notices are never pruned — so the words a months-old tap meant
+# stay recoverable from the row that sent them, with no second copy to keep in step. Six-ish bytes,
+# far inside Telegram's 64-byte callback_data cap.
+_ASK_REF_RE = re.compile(r"^n(\d+)$")
+
+
+def ask_controls(notice_id: int, options: list) -> list:
+    """The controls spec for an ask's options: [[label, "n<id>:a<i>"], ...].
+
+    Lists, not tuples, so the spec a provider renders is identical whether it was just built here or
+    round-tripped through the row's JSON.
+    """
+    return [[label, f"n{notice_id}:a{index}"] for index, label in enumerate(options)]
+
+
+def ask_notice_id(ref) -> int | None:
+    """The notice id an ask-answer callback ref names, or None when `ref` is not one — a settings
+    door (`chg_...`), a marketplace token (`carousell`), or a bare control-row tap (no ref)."""
+    match = _ASK_REF_RE.match(str(ref or ""))
+    return int(match.group(1)) if match else None
+
+
+def _insert_ask(
+    conn,
+    text: str,
+    *,
+    options: list,
+    ref: str | None = None,
+    pass_id: str | None = None,
+    holdable: bool = False,
+) -> int:
+    """Insert a notice whose options are tappable, returning its id.
+
+    Two statements rather than one: a token has to name the notice it rides on, and the notice id
+    does not exist until it is inserted. Both land in the caller's transaction, so a crash can never
+    leave an ask whose buttons are missing — the row is either fully tappable or not there.
+    """
+    notice_id = _insert_notice(conn, text, ref=ref, pass_id=pass_id, holdable=holdable)
+    conn.execute(
+        "UPDATE notices SET controls = ? WHERE id = ?",
+        (json.dumps(ask_controls(notice_id, options), sort_keys=True), notice_id),
+    )
+    return notice_id
+
+
 def _insert_item_in_txn(
     conn,
     *,
@@ -825,4 +877,8 @@ _ESCALATION_FIELDS = (
 
 
 def _escalation_from_row(row: sqlite3.Row) -> EscalationRecord:
-    return {name: row[name] for name in _ESCALATION_FIELDS}  # type: ignore[return-value]
+    record = {name: row[name] for name in _ESCALATION_FIELDS}
+    # `options` is stored as a JSON list of labels and decoded here rather than listed above, so
+    # every reader gets a list or None and never raw JSON text — the notifier iterates it directly.
+    record["options"] = json.loads(row["options"]) if row["options"] else None
+    return record  # type: ignore[return-value]

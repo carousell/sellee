@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sellee.db import Database
 from sellee.store.helpers import (
     EscalationRecord,
@@ -26,10 +28,16 @@ class EscalationsMixin:
         open_question: str,
         kind: str | None = None,
         context_summary: str | None = None,
+        options: list | None = None,
     ) -> dict:
         """Open an escalation against a REAL thread (no synthetic ids — the 2026-06-29 incident):
         it records the open question, flips the thread to escalated, and is idempotent — a second
-        escalate on a thread with an open escalation returns the existing id, changing nothing."""
+        escalate on a thread with an open escalation returns the existing id, changing nothing.
+
+        `options` are the concrete answers the question names, which the push renders as buttons.
+        They are covered by that idempotence too: a re-escalate must not swap the buttons under an
+        ask the seller is already looking at, because the message they can see would then offer
+        answers the row no longer holds."""
         with self._db.transaction() as conn:
             if not conn.execute(
                 "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
@@ -41,11 +49,19 @@ class EscalationsMixin:
                 open_question=open_question,
                 kind=kind,
                 context_summary=context_summary,
+                options=options,
             )
             return {"id": esc_id, "idempotent": not new}
 
     def _open_escalation_in_txn(
-        self, conn, thread_id: str, *, open_question: str, kind=None, context_summary=None
+        self,
+        conn,
+        thread_id: str,
+        *,
+        open_question: str,
+        kind=None,
+        context_summary=None,
+        options=None,
     ) -> tuple:
         """Open an escalation for a thread within an existing transaction (shared by escalate and
         the stale-intent sweep). Idempotent: an existing open escalation is returned unchanged.
@@ -62,7 +78,7 @@ class EscalationsMixin:
         conn.execute(
             "INSERT INTO escalations "
             "(id, thread_id, side, item_id, want_id, kind, open_question, context_summary, "
-            " status, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
+            " options, status, created_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', ?)",
             (
                 esc_id,
                 thread_id,
@@ -72,6 +88,7 @@ class EscalationsMixin:
                 kind,
                 open_question,
                 context_summary,
+                json.dumps(options) if options else None,
                 _now(),
             ),
         )

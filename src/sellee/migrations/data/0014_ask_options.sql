@@ -1,0 +1,16 @@
+-- Give an escalation the concrete answers to its own question, so the decision arrives as buttons.
+--
+-- Every escalation already HAS options — the skills prescribe them per decision type (accept /
+-- counter / decline, checkout / handle it myself, sold / fell through, not a scam / keep held) — but
+-- only as prose inside open_question. So the seller had to type an answer the agent already knew the
+-- shape of, and the pass then had to interpret "the second one" or "no meetups pls".
+--
+-- A JSON list of seller-facing labels, in the order the question names them. The tokens are NOT
+-- here: they are minted against the notice that carries the ask (see _insert_ask), because the
+-- notice is what the seller taps and notices are never pruned — so the label a tap means stays
+-- recoverable months later from the row that sent it, without a second copy to keep in step.
+--
+-- Nullable, and the notifier renders no buttons for a NULL. An escalation opened before this
+-- migration, or one whose decision genuinely has no fixed answers, is still answerable in words —
+-- buttons are an accelerator here, never the only door.
+ALTER TABLE escalations ADD COLUMN options TEXT;

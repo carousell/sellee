@@ -41,6 +41,65 @@ def test_escalate_is_idempotent(make_ctx, store, bus) -> None:
     assert len(bus.store.read(kinds=["escalation.open"])) == 1
 
 
+def test_escalate_persists_its_options(make_ctx, store) -> None:
+    _sell_thread(store)
+    ctx = make_ctx("attended")
+    opened = dispatch(
+        "escalate",
+        {
+            "thread_id": "fb:1",
+            "open_question": "meet at Orchard, or checkout?",
+            "options": ["🔗 Send checkout link", "🤝 I'll handle it"],
+        },
+        ctx,
+    )
+    assert store.get_escalation(opened["id"])["options"] == [
+        "🔗 Send checkout link",
+        "🤝 I'll handle it",
+    ]
+
+
+def test_escalate_without_options_reads_back_as_none(make_ctx, store) -> None:
+    _sell_thread(store)
+    opened = dispatch(
+        "escalate",
+        {"thread_id": "fb:1", "open_question": "how should I answer?"},
+        make_ctx("attended"),
+    )
+    assert store.get_escalation(opened["id"])["options"] is None
+
+
+def test_a_re_escalate_never_swaps_the_buttons_underneath(make_ctx, store) -> None:
+    """The seller is looking at a message whose buttons were already sent — changing the row's
+    options would leave those buttons offering answers the row no longer holds."""
+    _sell_thread(store)
+    ctx = make_ctx("attended")
+    first = dispatch(
+        "escalate", {"thread_id": "fb:1", "open_question": "q", "options": ["A", "B"]}, ctx
+    )
+    second = dispatch(
+        "escalate", {"thread_id": "fb:1", "open_question": "q", "options": ["C", "D"]}, ctx
+    )
+    assert second["id"] == first["id"] and second["idempotent"] is True
+    assert store.get_escalation(first["id"])["options"] == ["A", "B"]
+
+
+@pytest.mark.parametrize(
+    "options",
+    [["only one"], ["a", "b", "c", "d", "e"], ["Accept", "x" * 65], ["Accept", "Accept"]],
+)
+def test_escalate_rejects_malformed_options(make_ctx, store, options) -> None:
+    _sell_thread(store)
+    with pytest.raises(ToolError):
+        dispatch(
+            "escalate",
+            {"thread_id": "fb:1", "open_question": "q", "options": options},
+            make_ctx("attended"),
+        )
+    # Nothing was opened — the ask is rejected whole, never half-recorded.
+    assert store.count_open_escalations() == 0
+
+
 def test_escalate_requires_a_real_thread(make_ctx, store) -> None:
     ctx = make_ctx("attended")
     with pytest.raises(ToolError, match="no thread"):

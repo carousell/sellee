@@ -131,7 +131,13 @@ def escalation_notifier(store):
         # any hour (a meetup confirmation shouldn't wait until morning — the seller can mute
         # Telegram themselves if they want silence). holdable defaults to False, so this is just a
         # plain queue_notice — spelled out here because the non-hold is a deliberate policy.
-        store.queue_notice(f"Needs your call: {question}", ref=esc["thread_id"])
+        #
+        # `options` makes the answers tappable. None for an escalation that carries none (one opened
+        # before options existed, or a decision with no fixed answers) — the ask still delivers, and
+        # is still answerable in words, which is the door buttons never replace.
+        store.queue_notice(
+            f"Needs your call: {question}", ref=esc["thread_id"], options=esc["options"]
+        )
 
     return _on
 

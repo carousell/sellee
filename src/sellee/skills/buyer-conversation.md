@@ -115,7 +115,8 @@ brief holding line, then close. Two steps:
 2. **Ask the seller how to close — ALWAYS.** `escalate` the choice between **Send checkout link**
    (payment + delivery handled end to end — escrow, buyer protection, tracked shipping, zero
    seller fees) and **Handle it myself** (hand the chat over; the seller arranges payment +
-   delivery). Never auto-pick, never from a stored default — the seller decides each sale. Until
+   delivery), with `options: ["🔗 Send checkout link", "🤝 I'll handle it"]` so it is one tap.
+   Never auto-pick, never from a stored default — the seller decides each sale. Until
    they pick, the buyer has only the holding line + the locality ask.
 
 On the seller's pick:
@@ -127,9 +128,11 @@ On the seller's pick:
 ## 5. Escalation hygiene
 
 `escalate` carries the **specific open question** plus a **one-line context summary** (buyer,
-item, where the deal stands). Don't dump transcripts, and don't editorialize — the seller answers
-one question. Before escalating an answerable question, post the buyer a brief holding line so
-their side isn't left cold (scam holds are the exception — those send nothing).
+item, where the deal stands) plus **`options`** — the concrete answers, so the seller taps instead
+of typing (see seller-comms for the exact labels per decision type; the one exception is a question
+only they can answer, which stays free text). Don't dump transcripts, and don't editorialize — the
+seller answers one question. Before escalating an answerable question, post the buyer a brief
+holding line so their side isn't left cold (scam holds are the exception — those send nothing).
 
 ## 6. Compose
 

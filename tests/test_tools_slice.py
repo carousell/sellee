@@ -86,3 +86,34 @@ def test_send_message_queues_notice_and_event(make_ctx, bus, store) -> None:
     assert len(queued) == 1 and queued[0]["id"] == ack["notice_id"] and queued[0]["text"] == "hi"
     outs = [e for e in bus.store.read() if e.kind == "message.out"]
     assert outs and outs[0].payload["text"] == "hi" and outs[0].payload["ref"] == "thread-1"
+
+
+def test_send_message_options_become_tappable_buttons(make_ctx, store) -> None:
+    """What puts buttons on the listing confirmation, which is a send_message rather than an
+    escalation."""
+    ack = dispatch(
+        "send_message",
+        {"text": "Fan — $180, like new. List it?", "options": ["✅ List it", "✏️ Change something"]},
+        make_ctx(TIER_ATTENDED),
+    )
+
+    queued = store.list_queued_notices()[0]
+    assert queued["controls"] == [
+        ["✅ List it", f"n{ack['notice_id']}:a0"],
+        ["✏️ Change something", f"n{ack['notice_id']}:a1"],
+    ]
+
+
+def test_send_message_without_options_carries_no_buttons(make_ctx, store) -> None:
+    dispatch("send_message", {"text": "your listing is live"}, make_ctx(TIER_ATTENDED))
+    assert store.list_queued_notices()[0]["controls"] is None
+
+
+def test_send_message_rejects_malformed_options(make_ctx, store) -> None:
+    with pytest.raises(ToolError):
+        dispatch(
+            "send_message",
+            {"text": "pick", "options": ["only one"]},
+            make_ctx(TIER_ATTENDED),
+        )
+    assert store.list_queued_notices() == []  # rejected whole — no half-sent ask
