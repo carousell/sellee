@@ -181,6 +181,50 @@ def test_raise_browser_stays_off_the_default_card() -> None:
     assert "raise_browser" not in settings.CARD_HEADLINE
 
 
+# --- watch_browser -----------------------------------------------------------------------------
+
+
+def test_watch_browser_parse_accepts_booleans_and_words() -> None:
+    spec = settings.get_spec("watch_browser")
+    assert spec.parse(True) is True
+    assert spec.parse("on") is True
+    assert spec.parse(" Off ") is False
+    assert spec.parse("no") is False
+
+
+@pytest.mark.parametrize("bad", ["sometimes", 1, 0, [], {}, None, "watch me"])
+def test_watch_browser_parse_rejects_non_booleans(bad) -> None:
+    spec = settings.get_spec("watch_browser")
+    with pytest.raises(settings.SettingError) as excinfo:
+        spec.parse(bad)
+    assert "true or false" in str(excinfo.value)  # the refusal says what would be accepted
+
+
+def test_watch_browser_render_says_which_way_round() -> None:
+    spec = settings.get_spec("watch_browser")
+    assert "you'll see" in spec.render(True)
+    assert "background" in spec.render(False)
+
+
+def test_watch_browser_defaults_off_and_applies_immediately() -> None:
+    spec = settings.get_spec("watch_browser")
+    assert spec.default is False
+    assert spec.requires_approval is False  # the seller's own UX preference — no approval door
+
+
+def test_watch_browser_is_on_the_default_card() -> None:
+    """Unlike raise_browser, nothing the agent ever says would hint that where it works is a
+    choice — and the card carries the button that flips it, which needs its state legible."""
+    assert "watch_browser" in settings.CARD_HEADLINE
+
+
+def test_watch_browser_description_warns_the_raise_is_a_mac_thing() -> None:
+    # This text is the model's whole vocabulary for the setting (prompt_block), so a promise it
+    # cannot keep on Linux would be made in the seller's chat.
+    spec = settings.get_spec("watch_browser")
+    assert "Mac" in spec.description
+
+
 # --- read helpers + the minutes boundary ------------------------------------------------------
 
 
@@ -223,6 +267,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
         "• Enabled marketplaces: none — carousell.ai only",
+        "• Watch mode: off — I work in the background",
         "3 more settings at defaults — ask me about settings.",
     ]
 

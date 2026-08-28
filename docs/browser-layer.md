@@ -31,9 +31,18 @@ JSON on the port.
 
 **Raising that window is macOS-only.** `browser/foreground.py` finds the agent's Chrome
 by the pid listening on its CDP port — the only thing that tells it apart from the
-seller's own Chrome — and activates that pid. `connect` raises the window (the
-`raise_browser` setting turns it off); everywhere else `is_supported()` is False, so no
-raise is attempted and the CLI says where to look instead.
+seller's own Chrome — and activates that pid. `browser/window.py` is the seam over it:
+where the window is (copy every notice about it shares), whether a raise is possible at
+all here, and the guarded raise itself. Off macOS, or in a container where the window is
+on the seller's own machine, `can_raise()` is False, so nothing is attempted and the copy
+says where to look instead.
+
+Two settings decide when it is raised, and they answer different questions:
+
+- **`raise_browser`** (default on) — a page the *seller* must act on. `connect` raises
+  for a marketplace sign-in; a window they were asked to sign in to and cannot find is
+  the failure it exists to prevent.
+- **`watch_browser`** (default off) — see [Watch mode](#watch-mode).
 
 **Acquiring the browser means ensuring it runs.** Every actor that needs the browser
 — the read lane, the reply send, the selector probe, the fan-out — acquires it through
@@ -63,6 +72,35 @@ exactly that request; the `webSocketDebuggerUrl` it answers with is loopback-sha
 Playwright dials it verbatim. So the container forwards its own `127.0.0.1:<port>` to
 the host rather than naming the host, and nothing in this file — not `cdp_endpoint`, not
 `browser_command`, not the `.mcp.json` emitter — has a deployment branch in it.
+
+## Watch mode
+
+`watch_browser` is the seller's answer to "work behind the scenes, or in front of me".
+It is two mechanisms, deliberately unequal:
+
+| | tab-follow | window raise |
+| --- | --- | --- |
+| what | the agent's tab becomes its window's active tab after every navigation | the agent's Chrome is activated in front of the seller |
+| where | `BrowserClient.navigate`, so every lane, send and attended tool gets it | three moments only: turning it on, a reply going out, a browser pass spawning |
+| works | everywhere, container included (a tab select over CDP) | macOS host only |
+| costs | one extra `browser_evaluate` per navigation, and only while it is on | one `lsof` + `osascript`, off the caller's thread at turn-on |
+
+**A read tick never raises.** The read lane runs every few minutes; a window that jumps
+the seller's focus while they are working is the thing they would turn this off for. The
+tab still follows, so a window parked on a second screen is a live view of the work.
+
+**The follow is best-effort and its recovery is load-bearing.** `ensure_frontmost`
+selects a tab before it can check which one it got, and a select repoints every later
+call — so a failure would otherwise leave the caller's read running against a stranger's
+page. `_follow_page` catches it, takes a fresh tab and re-navigates, and never fails the
+navigation: watch mode is a view onto the work, not part of it.
+
+**Where it is read.** `make_browser_factory` sets it on the client at every acquisition,
+so a toggle in chat reaches the read lane, the send and the attended tools from their
+next call on. The send and the pass spawn read the setting themselves
+(`window.raise_if_watching`), and turning it on raises once through a `setting.changed`
+subscriber — which is what makes every door (the `/sellee` button, `/watch`, the shell,
+an approved proposal) behave the same.
 
 ## Trust boundary
 

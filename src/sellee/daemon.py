@@ -40,6 +40,7 @@ from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
+from sellee.browser import window as browser_window
 from sellee.channel import outbound
 from sellee.channel.discord import provider as discord_provider
 from sellee.channel.manager import ChannelManager
@@ -186,6 +187,11 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     A cached client is only reusable while it dials the right endpoint. An unpinned Chrome that was
     closed and started again comes back on a different port, so the command is compared and a client
     holding the old one is replaced rather than left to fail every call.
+
+    Watch mode is read here for the same reason the preconditions are: it is the seller's, it
+    changes at runtime, and every actor that drives the browser comes through this door — so one
+    read per acquisition is what makes a toggle in chat reach the read lane, the send and the
+    attended tools alike, from their next call on.
     """
 
     def browser_factory():
@@ -202,6 +208,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
             client = browser_client.BrowserClient(command=command)
             holder["client"] = client
             holder["command"] = command
+        client.set_follow(bool(settings.get(store, browser_window.WATCH_SETTING)))
         return client
 
     return browser_factory
@@ -305,6 +312,12 @@ def run_daemon(*, once: bool) -> int:
     # a subscriber — it runs as a scheduler lane off durable rows (registered below).
     bus.subscribe(outbound.escalation_notifier(store))
 
+    # Turning watch mode on brings the agent's window forward once, so the seller knows which
+    # Chrome to look at. Subscribed rather than done at the door because there are four doors — the
+    # card button, /watch, the shell, and an approved proposal — and every one of them publishes
+    # this event.
+    bus.subscribe(browser_window.watch_raiser(cfg))
+
     def rail_factory():
         key = secrets.read_carousell_ai_api_key()
         if not key:
@@ -332,6 +345,7 @@ def run_daemon(*, once: bool) -> int:
             store=store,
             bus=bus,
             region=inbox.seller_region(store),
+            on_drive=lambda: browser_window.raise_if_watching(cfg, store),
         )
 
     def context_factory(session):

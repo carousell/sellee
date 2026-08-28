@@ -49,13 +49,17 @@ class BrowserReplySink:
     failure. The exception never reaches the buyer or the model; the caller turns it into a status
     and this emits its own events."""
 
-    def __init__(self, *, client, store, bus, region: str | None = None):
+    def __init__(self, *, client, store, bus, region: str | None = None, on_drive=None):
         self._client = client
         self._store = store
         self._bus = bus
         self._region = region
+        # Called once as a send starts, for a seller who asked to watch the work — injected rather
+        # than read here, so the sink stays free of settings and window policy.
+        self._on_drive = on_drive
 
     def send(self, thread: dict, text: str, kind: str, intent_id: str) -> None:
+        self._announce()
         market = thread["market"]
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
@@ -105,6 +109,17 @@ class BrowserReplySink:
         self._publish(market, thread, "sent", None)
 
     # --- steps --------------------------------------------------------------------------------
+
+    def _announce(self) -> None:
+        """Let the seller see this one, if they asked to watch. Swallowed whole: a window is a view
+        onto the send and never part of it, so nothing here may turn a deliverable reply into a
+        failed one."""
+        if self._on_drive is None:
+            return
+        try:
+            self._on_drive()
+        except Exception:
+            log.debug("could not bring the window forward for this send", exc_info=True)
 
     def _commit(self, adapter, box) -> bool:
         """Send what the composer holds, the way this market's adapter says to.

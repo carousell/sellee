@@ -395,7 +395,7 @@ class DiscordGateway:
             if fastpaths.is_settings_door(event):
                 text, controls = fastpaths.handle_settings_door(self.store, self.bus, event)
             else:
-                text, controls = fastpaths.handle_fast_path(self.store, event)
+                text, controls = fastpaths.handle_fast_path(self.store, self.bus, event)
             try:
                 client.send_message(channel_id, text, components=controls)
             except ChannelError as exc:

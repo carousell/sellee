@@ -40,7 +40,11 @@ PROPOSAL_TTL_SEC = 24 * 3600
 # crosslist_markets earns a place at its default because its default is "off" and nothing else on
 # the card would ever hint that listing elsewhere is possible; a knob that shapes wording is
 # discoverable from the wording, but a market the seller has never been told about is not.
-CARD_HEADLINE = ("quiet_hours", "crosslist_markets")
+#
+# watch_browser earns its place for the same reason and one more: where the work happens is not
+# something any wording the agent produces could hint at, and the card carries the button that
+# flips it — a toggle whose current state is not legible right above it is a coin toss.
+CARD_HEADLINE = ("quiet_hours", "crosslist_markets", "watch_browser")
 
 # The door tokens. A callback carries the change id and one of these choices (the channel encodes it
 # as "<change_id>:<choice>"); a text fast path is "<verb> <change_id>". Both are LLM-free doors: an
@@ -395,10 +399,15 @@ def set_now(store, bus, *, key: str, raw_value: object, decided_via: str = "cli"
     """Validate and apply a setting immediately, for a door where the request *is* the consent.
 
     The approval gate exists to stop the model changing things on the seller's behalf. Someone
-    typing at their own terminal has already given the signal that gate waits for, so this path
-    skips the round-trip — but skips nothing else: the same registry parser and the same
-    seller-state check run here as on the propose path, and the prior value is recorded, so the
-    change still shows up in the ledger with a working Undo.
+    typing at their own terminal — or tapping a button in their own chat — has already given the
+    signal that gate waits for, so this path skips the round-trip but skips nothing else: the same
+    registry parser and the same seller-state check run here as on the propose path, and the prior
+    value is recorded, so the change still shows up in the ledger with a working Undo.
+
+    A channel door (a button, a text token) replies synchronously and renders its own controls, so
+    queuing the echo notice too would deliver the same confirmation twice to the same chat. A
+    CLI/auto caller has no reply path, so the echo notice is the channel's only way of hearing
+    about it. The same rule, for the same reason, as `decide`.
 
     Raises SettingError for an unknown key or a value the registry refuses; the message is
     caller-facing.
@@ -422,16 +431,21 @@ def set_now(store, bus, *, key: str, raw_value: object, decided_via: str = "cli"
         }
 
     change_id = store.new_change_id()
-    text, controls = echo_notice(spec, change_id, value, current)
-    store.apply_setting_now(
-        key,
-        value,
-        change_id=change_id,
-        prior_value=current,
-        decided_via=decided_via,
-        notice_text=text,
-        notice_controls=controls,
-    )
+    if _is_channel_origin(decided_via):
+        store.apply_setting_now(
+            key, value, change_id=change_id, prior_value=current, decided_via=decided_via
+        )
+    else:
+        text, notice_controls = echo_notice(spec, change_id, value, current)
+        store.apply_setting_now(
+            key,
+            value,
+            change_id=change_id,
+            prior_value=current,
+            decided_via=decided_via,
+            notice_text=text,
+            notice_controls=notice_controls,
+        )
     publish_changed(bus, spec, change_id, value, current)
     return {
         "status": "applied",
@@ -720,21 +734,27 @@ register(
 # was asked to sign in to but cannot find is the failure this knob exists to prevent. Low-stakes
 # and purely the seller's own UX, so a change applies immediately with an Undo.
 
-_RAISE_BROWSER_TRUE = frozenset({"true", "yes", "on"})
-_RAISE_BROWSER_FALSE = frozenset({"false", "no", "off"})
+_BOOL_TRUE = frozenset({"true", "yes", "on"})
+_BOOL_FALSE = frozenset({"false", "no", "off"})
 _RAISE_BROWSER_HELP = "this must be true or false (bring my window to the front, or not)"
 
 
-def _parse_raise_browser(raw: object) -> bool:
+def _parse_bool(raw: object, help_text: str) -> bool:
+    """A yes/no setting's value. The words are accepted alongside the JSON booleans because both
+    doors hand us text: a seller types "on", and a shell argument is always a string."""
     if isinstance(raw, bool):
         return raw
     if isinstance(raw, str):
         word = raw.strip().lower()
-        if word in _RAISE_BROWSER_TRUE:
+        if word in _BOOL_TRUE:
             return True
-        if word in _RAISE_BROWSER_FALSE:
+        if word in _BOOL_FALSE:
             return False
-    raise SettingError(_RAISE_BROWSER_HELP)
+    raise SettingError(help_text)
+
+
+def _parse_raise_browser(raw: object) -> bool:
+    return _parse_bool(raw, _RAISE_BROWSER_HELP)
 
 
 def _render_raise_browser(value: object) -> str:
@@ -754,5 +774,48 @@ register(
         "to act on (like a marketplace sign-in), or stays in the background for you to find. "
         "true or false.",
         take_effect="applies to the next page I open for you.",
+    )
+)
+
+
+# --- watching the work ----------------------------------------------------------------------
+#
+# Whether the seller watches the agent work, or the agent stays out of the way. A sibling of
+# raise_browser rather than part of it, because the two answer different questions: that one is
+# about a page the *seller* must act on, this one is about seeing work the agent does for itself.
+#
+# Two mechanisms, deliberately unequal. The tab-follow (browser/client.py) makes the agent's tab the
+# active tab of its window after every navigation, so a window parked on a second screen is a live
+# view; it costs one extra call per navigation and works everywhere, container included. The window
+# raise (browser/window.py) is macOS-only and happens at three moments only — turning this on, a
+# reply going out, and a browser pass starting. A read tick never raises: the lane runs every few
+# minutes, and a window that jumps the seller's focus while they work is the thing they turn off.
+
+_WATCH_BROWSER_HELP = "this must be true or false (watch me work, or let me work in the background)"
+
+
+def _parse_watch_browser(raw: object) -> bool:
+    return _parse_bool(raw, _WATCH_BROWSER_HELP)
+
+
+def _render_watch_browser(value: object) -> str:
+    if value:
+        return "on — you'll see the page I'm working on"
+    return "off — I work in the background"
+
+
+register(
+    SettingSpec(
+        key="watch_browser",
+        label="Watch mode",
+        parse=_parse_watch_browser,
+        render=_render_watch_browser,
+        default=False,
+        description="Whether you watch me work. On, my Chrome window comes to the front when I "
+        "start something (answering a buyer, putting up a listing) and its tab follows whatever "
+        "page I'm on, so you can see what I'm doing. Off, I work in the background. Reading "
+        "inboxes never takes your focus either way, and bringing the window forward only works on "
+        "a Mac. true or false.",
+        take_effect="applies to the next page I open.",
     )
 )

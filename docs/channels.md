@@ -16,8 +16,11 @@ a guard test enforces that the core imports no provider.
 
 - **Core** (`channel/`):
   - `fastpaths` — the deterministic commands (`/pause` `/resume` `/status`
-    `/catchup` `/sellee`): decide, render reply text, and emit a provider-neutral
-    **control spec** (a list of `(label, token)` buttons).
+    `/catchup` `/sellee` `/connect` `/watch`): decide, render reply text, and emit a
+    provider-neutral **control spec** (a list of `(label, token)` buttons). `/watch`
+    and its control-row button flip the `watch_browser` setting through the settings
+    ledger — the tap is the consent, so it applies rather than proposing, and the
+    refreshed row (whose label now offers the opposite) is the way back.
   - `asks` — tappable decisions: what a valid option list is (2–4 labels, checked
     at the tool boundary), and resolving a tap back to the *words* the seller
     tapped before ingest, so the durable row — and so the pass prompt, the

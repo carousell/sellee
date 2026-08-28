@@ -299,16 +299,16 @@ def _found(store, bus, listings=None):
     )
 
 
-def _tap(store, token):
+def _tap(store, bus, token):
     return fastpaths.handle_fast_path(
-        store, {"kind": "action", "text": "", "payload": {"choice": token, "ref": _MARKET}}
+        store, bus, {"kind": "action", "text": "", "payload": {"choice": token, "ref": _MARKET}}
     )
 
 
 def test_yes_accepts_every_pending_listing_and_never_touches_chrome(store, bus) -> None:
     _found(store, bus, [_listing(), _listing("222")])
 
-    text, controls = _tap(store, fastpaths.CB_SURVEY_YES)
+    text, controls = _tap(store, bus, fastpaths.CB_SURVEY_YES)
 
     assert controls is None
     assert "2 listings" in text
@@ -320,7 +320,7 @@ def test_yes_accepts_every_pending_listing_and_never_touches_chrome(store, bus) 
 def test_no_declines_them(store, bus) -> None:
     _found(store, bus)
 
-    text, _ = _tap(store, fastpaths.CB_SURVEY_NO)
+    text, _ = _tap(store, bus, fastpaths.CB_SURVEY_NO)
 
     assert "leave your Carousell listings alone" in text
     assert store.list_discovered_listings(_MARKET)[0]["status"] == "declined"
@@ -332,7 +332,7 @@ def test_a_stale_yes_asks_again_instead_of_adopting(store, bus) -> None:
     _found(store, bus)
     store.expire_stale_decisions(0.0)
 
-    text, _ = _tap(store, fastpaths.CB_SURVEY_YES)
+    text, _ = _tap(store, bus, fastpaths.CB_SURVEY_YES)
 
     assert "fresh look" in text
     assert store.list_discovered_listings(_MARKET) == []  # the stale list is gone
@@ -783,10 +783,10 @@ def test_tapping_yes_twice_does_not_throw_away_the_first_yes(store, bus) -> None
     taps it again — which used to delete every listing that yes had accepted and tell them the list
     was out of date."""
     _found(store, bus, [_listing(), _listing("222")])
-    first, _ = _tap(store, fastpaths.CB_SURVEY_YES)
+    first, _ = _tap(store, bus, fastpaths.CB_SURVEY_YES)
     assert "2 listings" in first
 
-    second, _ = _tap(store, fastpaths.CB_SURVEY_YES)
+    second, _ = _tap(store, bus, fastpaths.CB_SURVEY_YES)
 
     rows = store.list_discovered_listings(_MARKET)
     assert [r["status"] for r in rows] == ["accepted", "accepted"], "the yes must survive a re-tap"
@@ -798,9 +798,9 @@ def test_no_after_yes_actually_stops_the_work(store, bus) -> None:
     """Changing your mind between the tap and the lane getting there is ordinary. A decline that
     only reached pending rows would report leaving listings alone while taking them over."""
     _found(store, bus, [_listing(), _listing("222")])
-    _tap(store, fastpaths.CB_SURVEY_YES)
+    _tap(store, bus, fastpaths.CB_SURVEY_YES)
 
-    text, _ = _tap(store, fastpaths.CB_SURVEY_NO)
+    text, _ = _tap(store, bus, fastpaths.CB_SURVEY_NO)
 
     assert "leave your Carousell listings alone" in text
     assert {r["status"] for r in store.list_discovered_listings(_MARKET)} == {"declined"}
@@ -811,7 +811,7 @@ def test_no_after_the_work_is_done_says_what_is_true(store, bus, monkeypatch, xd
     _fetches(monkeypatch, [_media_photo()])
     adopt.adopt_phase(_deps(store, bus, StubClient(detail=_detail())))
 
-    text, _ = _tap(store, fastpaths.CB_SURVEY_NO)
+    text, _ = _tap(store, bus, fastpaths.CB_SURVEY_NO)
 
     assert "already taken over" in text
     assert store.list_discovered_listings(_MARKET)[0]["status"] == "adopted"

@@ -8,9 +8,17 @@ from __future__ import annotations
 import threading
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from sellee import secrets
+from sellee import secrets, settings
 from sellee.channel import fastpaths
-from sellee.channel.fastpaths import CB_NEEDS_ME, CB_PAUSE, CB_RESUME, CB_SKIP_CTA
+from sellee.channel.fastpaths import (
+    CB_NEEDS_ME,
+    CB_PAUSE,
+    CB_RESUME,
+    CB_SKIP_CTA,
+    CB_WATCH,
+    WATCH_OFF_LABEL,
+    WATCH_ON_LABEL,
+)
 from sellee.channel.telegram.poller import Poller
 from sellee.channel.telegram.transport import TelegramClient
 from sellee.config import Config
@@ -128,7 +136,8 @@ def test_sellee_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     assert [b["callback_data"] for b in buttons] == [
         CB_PAUSE,
         CB_NEEDS_ME,
-    ]  # active -> Pause toggle
+        CB_WATCH,
+    ]  # active -> Pause toggle; watch off -> the button offers to watch
 
 
 def test_sellee_card_invites_the_first_listing_when_nothing_is_listed(store, bus, xdg_tmp) -> None:
@@ -180,6 +189,70 @@ def test_control_row_toggle_reflects_paused_state(store, bus, xdg_tmp) -> None:
         _poller(store, bus, api).tick()
         buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
     assert buttons[0]["callback_data"] == CB_RESUME  # paused -> the toggle offers Resume
+
+
+# --- watch mode -------------------------------------------------------------------------------
+
+
+def test_watch_command_turns_watching_on_and_says_where_the_window_is(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_command("/watch")
+        _poller(store, bus, api).tick()
+        text = api.outbox[-1]["text"]
+    assert settings.get(store, "watch_browser") is True
+    assert "Watch mode on" in text
+    assert "Chrome window" in text  # where to look, because this is read on a phone
+
+
+def test_watch_command_toggles_back_off(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        p = _poller(store, bus, api)
+        api.inject_command("/watch")
+        p.tick()
+        api.inject_command("/watch")
+        p.tick()
+        assert "background" in api.outbox[-1]["text"]
+    assert settings.get(store, "watch_browser") is False
+
+
+def test_watch_tap_flips_whatever_is_set_when_it_lands(store, bus, xdg_tmp) -> None:
+    # The button carries no value, so a tap from old scrollback flips the live state rather than
+    # restoring the one that was true when the message was sent.
+    _bound(store)
+    settings.set_now(store, bus, key="watch_browser", raw_value=True)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_WATCH)
+        _poller(store, bus, api).tick()
+        assert api.answered == ["cbq1"]  # the spinner was cleared
+    assert settings.get(store, "watch_browser") is False
+
+
+def test_watch_button_confirms_once_and_offers_the_way_back(store, bus, xdg_tmp) -> None:
+    # A channel door replies synchronously, so it must not also queue the settings echo notice —
+    # that would deliver the same confirmation twice to the same chat. The refreshed row is the
+    # undo: its label now offers the opposite.
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_WATCH)
+        _poller(store, bus, api).tick()
+        buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
+    assert store.list_queued_notices() == []
+    assert buttons[-1] == {"text": WATCH_OFF_LABEL, "callback_data": CB_WATCH}
+
+
+def test_control_row_watch_button_reflects_the_setting(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_NEEDS_ME)
+        _poller(store, bus, api).tick()
+        buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
+    assert buttons[-1] == {"text": WATCH_ON_LABEL, "callback_data": CB_WATCH}  # off -> offers on
+
+
+def test_watch_state_is_on_the_sellee_card_at_its_default(store, bus, xdg_tmp) -> None:
+    assert "Watch mode: off" in fastpaths.render_settings_card(store)
 
 
 def test_skip_cta_tap_acks_and_records_the_skip(store, bus, xdg_tmp) -> None:

@@ -96,10 +96,10 @@ def _notices(store):
 # --- the tap ------------------------------------------------------------------------------------
 
 
-def test_the_signin_button_writes_a_request_and_touches_no_browser(store) -> None:
+def test_the_signin_button_writes_a_request_and_touches_no_browser(store, bus) -> None:
     """The whole reason for the row: this runs on the receive loop, and a cold Chrome takes
     seconds to tens of seconds to come up."""
-    text, controls = fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_MARKET))
+    text, controls = fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
 
     assert store.pending_market_connects() == [
         {
@@ -112,35 +112,35 @@ def test_the_signin_button_writes_a_request_and_touches_no_browser(store) -> Non
     assert controls is None
 
 
-def test_the_check_again_button_asks_for_a_probe_not_another_open(store) -> None:
+def test_the_check_again_button_asks_for_a_probe_not_another_open(store, bus) -> None:
     """The seller has already signed in on that tab; re-opening would navigate away from it."""
-    fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_PROBE))
+    fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_PROBE))
 
     assert store.pending_market_connects()[0]["mode"] == CONNECT_MODE_PROBE
 
 
-def test_a_double_tap_is_one_request(store) -> None:
+def test_a_double_tap_is_one_request(store, bus) -> None:
     """Opening a marketplace navigates the daemon's one shared tab, so two requests for the same
     market must never both run."""
-    fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_MARKET))
-    fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_MARKET))
+    fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
+    fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
 
     assert len(store.pending_market_connects()) == 1
 
 
-def test_the_newest_tap_wins_its_mode(store) -> None:
+def test_the_newest_tap_wins_its_mode(store, bus) -> None:
     """A seller who taps Check again while an open is still pending is telling us they are already
     looking at the page — honor what they are looking at now."""
-    fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_MARKET))
-    fastpaths.handle_fast_path(store, _tap(fastpaths.CB_CONNECT_PROBE))
+    fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
+    fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_PROBE))
 
     assert store.pending_market_connects()[0]["mode"] == CONNECT_MODE_PROBE
 
 
-def test_a_stale_button_for_a_withdrawn_market_says_so(store) -> None:
+def test_a_stale_button_for_a_withdrawn_market_says_so(store, bus) -> None:
     """Buttons live forever in a chat history; the registry does not."""
     text, controls = fastpaths.handle_fast_path(
-        store, _tap(fastpaths.CB_CONNECT_MARKET, ref="myspace")
+        store, bus, _tap(fastpaths.CB_CONNECT_MARKET, ref="myspace")
     )
 
     assert store.pending_market_connects() == []
@@ -185,17 +185,17 @@ def test_connect_and_the_buttons_are_answered_without_a_pass(store) -> None:
 # --- /connect resolving the market ---------------------------------------------------------------
 
 
-def test_connect_with_one_market_switched_on_just_opens_it(store) -> None:
+def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
     seed_setting(store, "crosslist_markets", ["carousell"])
 
-    text, controls = fastpaths.handle_fast_path(store, _command("/connect"))
+    text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert store.pending_market_connects()[0]["market"] == "carousell"
     assert controls is None
     assert "Carousell" in text
 
 
-def test_connect_with_several_switched_on_asks_which(store, monkeypatch) -> None:
+def test_connect_with_several_switched_on_asks_which(store, bus, monkeypatch) -> None:
     """The command carries no argument — providers normalize a command to its first word — so an
     ambiguous answer has to be a question, and buttons make it a tap rather than a spelling.
 
@@ -205,7 +205,7 @@ def test_connect_with_several_switched_on_asks_which(store, monkeypatch) -> None
     monkeypatch.setattr(fastpaths.market_adapters, "supported_markets", lambda: ["carousell", "fb"])
     seed_setting(store, "crosslist_markets", ["carousell", "fb"])
 
-    text, controls = fastpaths.handle_fast_path(store, _command("/connect"))
+    text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert store.pending_market_connects() == []
     assert text == fastpaths.CONNECT_PICK
@@ -215,22 +215,22 @@ def test_connect_with_several_switched_on_asks_which(store, monkeypatch) -> None
     ]
 
 
-def test_connect_with_nothing_switched_on_says_so(store) -> None:
+def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
     seed_setting(store, "crosslist_markets", [])
 
-    text, controls = fastpaths.handle_fast_path(store, _command("/connect"))
+    text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert store.pending_market_connects() == []
     assert text == fastpaths.CONNECT_NONE
     assert controls is None
 
 
-def test_connect_never_offers_carousell_ai(store) -> None:
+def test_connect_never_offers_carousell_ai(store, bus) -> None:
     """carousell.ai is reached with an API key, so there is no window to open and nothing for the
     seller to type into."""
     seed_setting(store, "crosslist_markets", ["carousell-ai", "carousell"])
 
-    _text, controls = fastpaths.handle_fast_path(store, _command("/connect"))
+    _text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert controls is None  # resolved to the one browser market, not a two-way picker
     assert store.pending_market_connects()[0]["market"] == "carousell"

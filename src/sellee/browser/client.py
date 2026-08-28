@@ -256,6 +256,9 @@ class BrowserClient:
         # Set while replacing a tab, so the calls that do the replacing cannot themselves trigger
         # another replacement.
         self._reopening = False
+        # Watch mode: bring our tab forward after every navigation, so the seller sees the page we
+        # are on. Off by default and set per acquisition from the seller's setting.
+        self._follow = False
 
     # --- lifecycle ----------------------------------------------------------------------------
 
@@ -466,11 +469,36 @@ class BrowserClient:
             arguments["element"] = element or "element to read"
         return evaluate_result(self.call_tool("browser_evaluate", arguments))
 
+    def set_follow(self, follow: bool) -> None:
+        """Whether the seller is watching: with this on, every navigation brings our tab to the
+        front of its window. Set at acquisition from the `watch_browser` setting, so a seller who
+        flips it is followed (or left alone) from the next lane tick on."""
+        with self._lock:
+            self._follow = bool(follow)
+
     def navigate(self, url: str) -> None:
         with self._lock:
             self.ensure_tab()
             self.call_tool("browser_navigate", {"url": url})
             self._last_url = url
+            if self._follow:
+                self._follow_page(url)
+
+    def _follow_page(self, url: str) -> None:
+        """Bring our tab forward so the seller can watch. Best-effort: it must never fail a
+        navigation, because watch mode is a view onto the work and not part of it.
+
+        The recovery is not optional. Bringing a tab forward selects one before it can check which
+        tab it got, and a select repoints every later call — so a failure can leave the caller's
+        read running against somebody else's page. Navigating again re-opens a tab of ours and puts
+        it back on the page the caller asked for, which is what its next call has to be reading.
+        """
+        try:
+            self.ensure_frontmost(url)
+        except BrowserError:
+            log.debug("could not bring our tab forward for watch mode", exc_info=True)
+            self.ensure_tab()
+            self.call_tool("browser_navigate", {"url": url})
 
     def ensure_tab(self) -> None:
         """Make sure this client is driving its own tab, creating it once.

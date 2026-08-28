@@ -15,6 +15,7 @@ BOT_COMMANDS = [
     {"command": "status", "description": "What's live and anything waiting on you"},
     {"command": "catchup", "description": "Everything queued for you right now"},
     {"command": "connect", "description": "Sign in to a marketplace"},
+    {"command": "watch", "description": "Watch me work, or send me to the background"},
     {"command": "pause", "description": "Pause the agent (it stops acting)"},
     {"command": "resume", "description": "Resume the agent"},
 ]

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sellee import deployment, marketplaces, settings
-from sellee.browser import chrome, foreground, inbox
+from sellee.browser import inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -108,11 +108,8 @@ STALE_NOTICE = (
 )
 NO_ADAPTER_NOTICE = "I don't know how to sign in to {market} — nothing I can open for you."
 
-# Where the agent's Chrome window is. On a host install it is one this machine opened for itself
-# and the seller has to tell it apart from their own; in a container it is theirs, on their own
-# desktop, started by hand.
-WINDOW_HERE = " — a separate window from your usual Chrome; check the Dock if you minimized it"
-WINDOW_IN_CONTAINER = " on your own computer (the Chrome you started with start-chrome.sh)"
+# Where the shell that runs the CLI is. Where the *window* is, is `window.where()` — two callers
+# need that one now, so it lives beside the raise it explains.
 SHELL_IN_CONTAINER = " in the container"
 
 
@@ -123,10 +120,6 @@ class ConnectDeps:
     config: object
     browser_factory: object
     now: Callable[[], float] = time.time
-
-
-def _window_where() -> str:
-    return WINDOW_IN_CONTAINER if deployment.is_container() else WINDOW_HERE
 
 
 def _shell_where() -> str:
@@ -205,7 +198,7 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
         _raise_window(deps)
     template = SIGN_IN_HERE_NOTICE if opening else STILL_OUT_NOTICE
     deps.store.queue_notice(
-        template.format(name=name, where=_window_where()),
+        template.format(name=name, where=window.where()),
         controls=fastpaths.check_again_controls(market),
     )
 
@@ -231,11 +224,6 @@ def _raise_window(deps: ConnectDeps) -> None:
     terminal, where macOS honors activation) this one runs from the daemon, so the activation may
     simply not land. Chrome is opened and navigated either way, which is the part that matters.
     """
-    if deployment.is_container() or not foreground.is_supported():
-        return  # the window is on another machine, or this OS cannot raise it
     if not settings.get(deps.store, "raise_browser"):
         return  # the seller asked for the window to stay in the background
-    try:
-        foreground.raise_window(chrome.resolve_port(deps.config.chrome_cdp_port))
-    except Exception:
-        log.debug("could not raise the agent's Chrome window", exc_info=True)
+    window.raise_now(deps.config.chrome_cdp_port)
