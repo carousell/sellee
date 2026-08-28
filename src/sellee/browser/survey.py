@@ -27,7 +27,7 @@ from typing import Callable
 from sellee import marketplaces, settings
 from sellee.browser import adopt, inbox, reconcile
 from sellee.browser import markets as market_adapters
-from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
 
 log = logging.getLogger(__name__)
@@ -105,9 +105,13 @@ def discover_phase(deps: SurveyDeps) -> None:
             continue
         try:
             _survey(deps, market, region)
-        except BrowserUnavailable as exc:
-            # Whole layer down; the read lane already tells the seller. Row stays owed, no attempt
-            # spent.
+        except (BrowserUnavailable, BrowserDetached) as exc:
+            # The layer cannot be driven at all, or our own server has lost Chrome. Either way this
+            # market is no more at fault than any other, so the row is left owed and costs no
+            # attempt. That matters more here than anywhere: this lane ticks every 60 seconds and
+            # five unserved looks `abandoned` the market for good, silently and unrepeatably — so a
+            # five-minute wedge in the daemon's own subprocess would permanently retire the ask
+            # about listings the seller already has, and nothing would ever raise it again.
             deps.bus.publish("browser.unavailable", {"reason": str(exc)})
             return
         except BrowserError as exc:

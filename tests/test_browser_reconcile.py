@@ -20,6 +20,7 @@ from sellee.browser.reconcile import (
     normalize,
     preview_matches,
     same_text,
+    unreadable_reason,
 )
 
 
@@ -269,3 +270,40 @@ def test_two_items_claiming_one_listing_are_both_returned() -> None:
 def test_an_unrecognised_listing_matches_nothing(product_id, items, reason) -> None:
     """A thread on the wrong item would negotiate against the wrong floor."""
     assert matching_items(product_id, items, "carousell", PATTERN) == [], reason
+
+
+def test_a_list_of_bubbles_is_readable() -> None:
+    """The ordinary answer. Including the empty list: a conversation with nothing in it was read
+    successfully and holds nothing, which is not the same as one we could not see."""
+    assert unreadable_reason([_bubble("hi")]) is None
+    assert unreadable_reason([]) is None
+
+
+def test_an_adapter_that_says_nothing_still_reads_as_unreadable() -> None:
+    """A bare null is the old abstain shape and must keep working — an adapter is free to say only
+    "I could not see it"."""
+    assert unreadable_reason(None) == "the tail reader gave no answer"
+
+
+def test_an_abstention_carries_what_the_reader_measured() -> None:
+    """The whole point of the mapping shape: the reason reaches the event log, and the event log has
+    to answer "why was it blind" without anyone taking a screenshot. These are the live numbers from
+    2026-08-29, when a window sized to half a screen made Carousell render one column."""
+    reason = unreadable_reason(
+        {"error": "no_message_list", "panes": 0, "width": 756, "height": 862, "visible": True}
+    )
+    assert reason.startswith("no_message_list (")
+    for measurement in ("width=756", "panes=0", "visible=True", "height=862"):
+        assert measurement in reason
+
+
+def test_an_abstention_with_no_measurements_is_still_named() -> None:
+    assert unreadable_reason({"error": "no_message_list"}) == "no_message_list"
+    assert unreadable_reason({}) == "unreadable"
+
+
+def test_an_answer_that_is_not_a_list_is_unreadable_not_empty() -> None:
+    """A reader that fell off its own end, or a market artifact returning a string, must never be
+    mistaken for a conversation nobody wrote in."""
+    assert "not a list" in (unreadable_reason("[]") or "")
+    assert "not a list" in (unreadable_reason(0) or "")

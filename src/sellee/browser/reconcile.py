@@ -85,6 +85,30 @@ def message_id(direction: str, text: str, occurrence: int) -> str:
     return f"{direction}|{digest}|{occurrence}"
 
 
+def unreadable_reason(raw) -> str | None:
+    """Why a tail read could not be read, or None when it handed back bubbles.
+
+    An adapter abstains when it cannot identify the message list, and an abstention has to be
+    distinguishable from an empty conversation — an empty list would claim the conversation is over.
+    Both abstention shapes end up here: a bare `null` from an adapter that says nothing about why,
+    and a mapping carrying `error` plus whatever it measured, which is the shape worth having.
+
+    The measurements ride along in the reason string because that string is what reaches the event
+    log, and the event log is what has to answer "why was it blind" next time. A window too narrow
+    for Carousell's two-column inbox and a marketplace that redesigned its chat are the same bare
+    `null`; `no_message_list (height=862, panes=0, visible=True, width=756)` is only one of them.
+    """
+    if raw is None:
+        return "the tail reader gave no answer"
+    if isinstance(raw, dict):
+        reason = str(raw.get("error") or "unreadable")
+        detail = ", ".join(f"{key}={value}" for key, value in sorted(raw.items()) if key != "error")
+        return f"{reason} ({detail})" if detail else reason
+    if not isinstance(raw, list):
+        return f"the tail reader answered {type(raw).__name__}, not a list of bubbles"
+    return None
+
+
 def classify_tail(rows, cap: int = TAIL_BUBBLES) -> list:
     """The trailing message bubbles, in page order: separators dropped, centred rows dropped.
 

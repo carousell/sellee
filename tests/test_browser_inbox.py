@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from sellee.browser import inbox, reconcile
-from sellee.browser.client import BrowserToolError, BrowserUnavailable
+from sellee.browser.client import BrowserDetached, BrowserToolError, BrowserUnavailable
 from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
 from sellee.config import Config
@@ -49,6 +49,8 @@ class StubClient:
     def navigate(self, url):
         if self.fail == "navigate":
             raise BrowserToolError("navigation refused")
+        if self.fail == "detached":
+            raise BrowserDetached("the browser server lost its connection to Chrome")
         self.navigations.append(url)
         self.url = url
 
@@ -64,9 +66,11 @@ class StubClient:
         if function == carousell_market.CONVERSATION_TAIL_JS:
             native = self.url.rstrip("/").rsplit("/", 1)[-1]
             tail = self.tails.get(native, [])
-            # None is the artifact's abstain signal ("I could not find the message list") and has
-            # to reach the lane as None rather than becoming an empty read.
-            return None if tail is None else list(tail)
+            # Two abstain shapes, and both have to reach the lane unchanged rather than becoming an
+            # empty read: a bare None, and the mapping a reader uses to say what it measured.
+            if tail is None or isinstance(tail, dict):
+                return tail
+            return list(tail)
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
 
@@ -593,15 +597,42 @@ def test_the_logged_out_notice_offers_a_button_not_a_shell_command(store, bus, s
     assert notice["controls"] == [[fastpaths.SIGN_IN_LABEL, "carousell:connectmkt"]]
 
 
-def test_the_blind_notice_still_names_the_chrome_the_seller_can_actually_start(
+def test_no_blind_notice_ever_sends_the_seller_to_check_chrome(
     store, bus, seeded, container
 ) -> None:
-    """Being blind is the one case that is still theirs to fix by hand: in a container Chrome runs
-    on their own desktop, and closing it is the most likely reason we cannot see."""
+    """The regression test for the message the seller actually got.
+
+    Reaching the blind counter *proves* Chrome answered its CDP probe on that same tick — the
+    factory runs `ensure_chrome` on every acquisition, and a Chrome that is genuinely down raises
+    `BrowserUnavailable` into a different notice carrying the command to start it. So "check that
+    the agent's Chrome is running and still logged in" is advice for a condition that, when true,
+    never produces this notice. On 2026-08-28 it was sent 126 reads into an outage caused by the
+    daemon's own subprocess, to a seller whose Chrome was signed in the whole time.
+
+    Asserted under the container fixture because that is where the old copy was worst: with
+    `may_launch=False` acquisition is the probe and nothing else, so a closed desktop Chrome is
+    always unavailable and never blind.
+    """
     _thread(store, seeded)
     blind = _deps(store, bus, StubClient(error="boom"), browser_blind_after=1)
     inbox.inbox_lane(blind)
-    assert "start-chrome.sh" in _texts(store)[-1]
+    text = _texts(store)[-1]
+    assert "start-chrome.sh" not in text
+    assert "still logged in" not in text
+    assert "Carousell" in text  # the display name, not the raw market id
+
+
+def test_a_server_that_lost_chrome_is_not_the_marketplace_refusing_us(store, bus, seeded) -> None:
+    """The two causes get different sentences because they are different facts. A detach is our own
+    plumbing and claims nothing about the seller or the marketplace; a refused conversation list is
+    the marketplace, and we know the page loaded because its JS answered."""
+    _thread(store, seeded)
+    detached = _deps(store, bus, StubClient(fail="detached"), browser_blind_after=1)
+    inbox.inbox_lane(detached)
+    ours = _texts(store)[-1]
+    assert "lost my own connection to Chrome" in ours
+    assert "nothing for you to restart" in ours
+    assert [e.payload["cause"] for e in _kinds(bus, "browser.blind")] == ["plumbing"]
 
 
 def test_a_flapping_probe_does_not_re_nag(store, bus, seeded) -> None:
@@ -710,3 +741,141 @@ def test_a_paused_agent_reads_nothing(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()])
     inbox.inbox_lane(_deps(store, bus, client))
     assert client.navigations == []
+
+
+def test_each_way_a_conversation_can_be_unreadable_names_itself(store, bus, seeded) -> None:
+    """`_read_thread` answers None for three different things, and the tick only ever counted them.
+    "3 conversation(s) unreadable" every tick for a day says how many and never which or why — and
+    the three causes want three different fixes, so each publishes its own reason."""
+    _thread(store, seeded)
+    client = StubClient(
+        conversations=[_conv()],
+        tails={"99": {"error": "no_message_list", "panes": 0, "width": 756, "visible": True}},
+    )
+    deps = _deps(store, bus, client, browser_blind_after=1, inbox_full_sweep_every=1)
+    inbox.inbox_lane(deps)
+
+    said = _kinds(bus, "browser.unreadable")
+    assert [e.payload["thread_id"] for e in said] == ["carousell:99"]
+    # The measurements ride along, because they are what makes the next occurrence diagnosable.
+    assert "no_message_list" in said[0].payload["reason"]
+    assert "width=756" in said[0].payload["reason"]
+    # And it is still blind — the reason is additive, it does not soften rule 1.
+    assert deps.blind["carousell"] == 1
+
+
+def test_an_empty_list_for_a_conversation_that_is_not_says_so(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    store.record_inbound("carousell:99", msg_id="m1", text="still available?", ts=10.0)
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client, browser_blind_after=1, inbox_full_sweep_every=1)
+    inbox.inbox_lane(deps)
+    reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
+    assert reasons == ["the message list read as empty for a conversation that is not"]
+
+
+def test_unread_with_nothing_fresh_says_so(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    tail = [_bubble("hi")] * reconcile.TAIL_BUBBLES
+    client = StubClient(conversations=[_conv(unread=1)], tails={"99": tail})
+    deps = _deps(store, bus, client, browser_blind_after=1)
+    inbox.inbox_lane(deps)  # records the tail
+    inbox.inbox_lane(deps)  # the 9th identical "hi" is invisible to the aligner
+    reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
+    assert reasons == ["the list reports unread messages and the tail holds nothing new"]
+
+
+def test_a_readable_conversation_says_nothing_about_being_unreadable(store, bus, seeded) -> None:
+    """The steady state. This event is a diagnosis, not a heartbeat."""
+    _thread(store, seeded)
+    client = StubClient(conversations=[_conv()], tails={"99": [_bubble("still available?")]})
+    deps = _deps(store, bus, client, inbox_full_sweep_every=1)
+    inbox.inbox_lane(deps)
+    assert _kinds(bus, "browser.unreadable") == []
+
+
+def _clock_deps(store, bus, client, clock, **overrides):
+    """Deps whose clock the test drives, so a blind gap can be hours without waiting for them."""
+    return inbox.InboxDeps(
+        store=store,
+        bus=bus,
+        config=Config(**overrides) if overrides else Config(),
+        browser_factory=lambda: client,
+        now=lambda: clock["t"],
+    )
+
+
+def test_a_market_that_comes_back_after_a_long_blind_spell_says_so(store, bus, seeded) -> None:
+    """The 28-hour shape. The seller was told the inbox was unreadable and nothing ever retracted
+    it, so the market looked dead for a day — the retraction is the whole repair, and it carries how
+    far back to scroll in the marketplace's own app."""
+    _thread(store, seeded)
+    clock = {"t": 1000.0}
+    broken = StubClient(fail="detached")
+    deps = _clock_deps(store, bus, broken, clock, browser_blind_after=1, inbox_full_sweep_every=1)
+    inbox.inbox_lane(deps)
+    assert "lost my own connection" in _texts(store)[-1]
+
+    clock["t"] += 28 * 3600.0
+    deps.browser_factory = lambda: StubClient(
+        conversations=[_conv()], tails={"99": [_bubble("still available?")]}
+    )
+    inbox.inbox_lane(deps)
+    back = _texts(store)[-1]
+    assert "reading your Carousell inbox again" in back
+    assert "about 28 hours" in back
+    assert [e.payload["market"] for e in _kinds(bus, "browser.reading_again")] == ["carousell"]
+
+
+def test_a_tick_that_read_no_conversation_is_not_an_all_clear(store, bus, seeded) -> None:
+    """The trap this gate exists for. The conversation list answers fine and every thread we open is
+    unreadable — the live state on 2026-08-29, 22 of 22 on a full sweep. Clearing on "the list
+    answered" would announce "I'm reading that market again" on a tick that recorded nothing from
+    nobody, which is the lane's first rule exactly inverted."""
+    _thread(store, seeded)
+    clock = {"t": 1000.0}
+    client = StubClient(conversations=[_conv()], tails={"99": None})
+    deps = _clock_deps(store, bus, client, clock, browser_blind_after=1, inbox_full_sweep_every=1)
+    inbox.inbox_lane(deps)
+    assert "can't read the conversations in it" in _texts(store)[-1]
+
+    clock["t"] += 28 * 3600.0
+    inbox.inbox_lane(deps)  # still 1 of 1 unreadable
+    assert _kinds(bus, "browser.reading_again") == []
+    assert not any("inbox again" in text for text in _texts(store))
+    assert deps.blind["carousell"] == 2  # still counted, still blind — rule 1 intact
+
+
+def test_a_self_heal_the_seller_was_never_told_about_stays_quiet(store, bus, seeded) -> None:
+    """No warning, no all-clear. Below the notice threshold a blip is the daemon's own business, and
+    the correct number of messages about our subprocess is zero."""
+    _thread(store, seeded)
+    clock = {"t": 1000.0}
+    deps = _clock_deps(store, bus, StubClient(fail="detached"), clock, browser_blind_after=99)
+    inbox.inbox_lane(deps)
+    assert store.count_queued_notices() == 0
+
+    clock["t"] += 28 * 3600.0
+    deps.browser_factory = lambda: StubClient(
+        conversations=[_conv()], tails={"99": [_bubble("hi")]}
+    )
+    inbox.inbox_lane(deps)
+    assert store.count_queued_notices() == 0  # nothing was ever queued, so nothing to retract
+    assert _kinds(bus, "browser.reading_again") == []
+
+
+def test_a_blip_fixed_within_the_half_hour_is_not_worth_a_message(store, bus, seeded) -> None:
+    """Warned, then fixed five minutes later. Chasing that with an all-clear is two messages about
+    something the seller never noticed."""
+    _thread(store, seeded)
+    clock = {"t": 1000.0}
+    deps = _clock_deps(store, bus, StubClient(fail="detached"), clock, browser_blind_after=1)
+    inbox.inbox_lane(deps)
+    _texts(store)  # drain the warning
+
+    clock["t"] += 300.0
+    deps.browser_factory = lambda: StubClient(
+        conversations=[_conv()], tails={"99": [_bubble("hi")]}
+    )
+    inbox.inbox_lane(deps)
+    assert not any("inbox again" in text for text in _texts(store))

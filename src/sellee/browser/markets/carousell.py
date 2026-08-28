@@ -115,15 +115,27 @@ CONVERSATIONS_LIST_JS = """async () => {
 # the right edge and an inbound one hugs the left. Anything roughly centred is reported as "center"
 # so the caller ignores it rather than mistaking it for something said.
 #
-# Returns null when the message list cannot be identified — the caller must treat that as a failed
-# read, because an empty list would claim the conversation is over when we simply could not see it.
+# The message list is located by WHAT IT HOLDS, not by where it sits. It used to be "the one
+# scrollable box starting right of 35% of the viewport", which encoded Carousell's two-column
+# desktop inbox as a fact. It is not one: below roughly 900px the site collapses to a single
+# full-width column, every scrollable box starts at left 0, the filter matches none of them, and
+# the read abstained on every conversation in the inbox. Captured live on 2026-08-29 from a window
+# the seller had sized to half their screen — innerWidth 756, three scrollable divs, all at left 0,
+# zero matches — after which the agent reported itself blind for 22 hours while the page it was
+# looking at rendered perfectly. Scoring the candidates by how many bubbles each contains is
+# layout-independent, and it also retires the "exactly one pane" requirement, which failed whenever
+# the conversation sidebar happened to be scrollable too.
+#
+# Returns a list of bubbles, or `{error, panes, width, height, visible}` when no message list could
+# be identified. The caller must treat the second as a failed read — an empty list would claim the
+# conversation is over when we simply could not see it — and the measurements are there so the next
+# occurrence is diagnosable from the event log rather than from a screenshot.
 #
 # The function is async because the chat messages are fetched after the page load event fires: a
-# synchronous read on a freshly navigated tab finds the pane but no bubbles yet, which the caller
-# cannot distinguish from a genuinely empty thread. Polling closes that gap without changing what
-# null vs [] means to the caller.
+# synchronous read on a freshly navigated tab finds no bubbles yet — and therefore, now, no pane
+# either — which the caller cannot distinguish from a genuinely empty thread. Polling closes that
+# gap without changing what unreadable vs [] means to the caller.
 CONVERSATION_TAIL_JS = """async () => {
-  const cut = window.innerWidth * 0.35;
   const INLINE_TAGS = ['A', 'SPAN', 'EM', 'STRONG', 'B', 'I', 'BR', 'WBR', 'U', 'SMALL'];
   // Whether every element inside this node is text-level markup, so its textContent IS the message.
   // A block or interactive descendant (svg, button, img, div) means a widget, not a message.
@@ -147,22 +159,58 @@ CONVERSATION_TAIL_JS = """async () => {
     }
     return false;
   };
-  const read = () => {
-    const panes = Array.from(document.querySelectorAll('div')).filter((el) => {
+  // Whether this paragraph is something somebody said, rather than a chip, a card or a system
+  // notice. Hoisted out of the read below because locating the pane now depends on it: the pane
+  // IS the scrollable box holding these.
+  const isBubble = (el) => {
+    if (!inlineOnly(el)) return false;
+    if (el.getBoundingClientRect().width === 0) return false;
+    const text = (el.textContent || '').trim();
+    return !!text && !clickable(el) && inBubble(el);
+  };
+  // Every scrollable box big enough to be a message list. Position is deliberately not a filter.
+  const panes = () =>
+    Array.from(document.querySelectorAll('div')).filter((el) => {
       if (!/auto|scroll/.test(getComputedStyle(el).overflowY)) return false;
       const r = el.getBoundingClientRect();
-      return r.width > 200 && r.height > 120 && r.left > cut;
+      return r.width > 200 && r.height > 120;
     });
-    if (panes.length !== 1) return null;
-    const pane = panes[0];
+  // The pane holding the most bubbles, and among ties the smallest — the tightest box that still
+  // holds all of them. Carousell nests scrollers, and the inner one is the message list proper,
+  // whose edges are the ones a bubble hugs.
+  const messageList = () => {
+    let best = null;
+    panes().forEach((el) => {
+      const bubbles = Array.from(el.querySelectorAll('p')).filter(isBubble).length;
+      if (!bubbles) return;
+      const r = el.getBoundingClientRect();
+      const area = r.width * r.height;
+      const better =
+        best === null || bubbles > best.bubbles || (bubbles === best.bubbles && area < best.area);
+      if (better) best = { el: el, bubbles: bubbles, area: area };
+    });
+    return best === null ? null : best.el;
+  };
+  const read = () => {
+    const pane = messageList();
+    if (pane === null) {
+      // Say why, and with what was measured. A bare null told the lane "unreadable" and nothing
+      // else, which is how a window too narrow for Carousell's two-column inbox spent hours
+      // looking exactly like a marketplace that had changed shape.
+      return {
+        error: 'no_message_list',
+        panes: panes().length,
+        width: window.innerWidth,
+        height: window.innerHeight,
+        visible: document.visibilityState === 'visible',
+      };
+    }
     const pr = pane.getBoundingClientRect();
     const out = [];
     pane.querySelectorAll('p').forEach((el) => {
-      if (!inlineOnly(el)) return;
+      if (!isBubble(el)) return;
       const r = el.getBoundingClientRect();
-      if (r.width === 0) return;
       const text = (el.textContent || '').trim();
-      if (!text || clickable(el) || !inBubble(el)) return;
       const fromLeft = r.left - pr.left;
       const fromRight = pr.right - r.right;
       let side = 'center';
@@ -173,9 +221,12 @@ CONVERSATION_TAIL_JS = """async () => {
     out.sort((a, b) => a.y - b.y);
     return out;
   };
+  // The chat arrives after the load event, so the first look at a freshly navigated tab can find
+  // no bubbles — and now therefore no pane either. Both shapes are retried until the deadline, and
+  // only what is still unreadable by then is reported as unreadable.
   const deadline = Date.now() + 5000;
   let result = read();
-  while (result !== null && result.length === 0 && Date.now() < deadline) {
+  while (Date.now() < deadline && (!Array.isArray(result) || result.length === 0)) {
     await new Promise((r) => setTimeout(r, 250));
     result = read();
   }

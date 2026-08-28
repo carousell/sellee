@@ -132,13 +132,17 @@ and **no internal retry** (a lane backs off; a hot retry against a marketplace
 is the anti-automation tell). The single exception is a tab that reports modal
 state, which is recovered from rather than retried — see below.
 
-Errors are three kinds because the responses differ:
+Errors are four kinds because the responses differ:
 
 | error | means | response |
 | --- | --- | --- |
 | `BrowserUnavailable` | the layer cannot run at all — no `node`/`npx`, or the server died at startup | skip the browser lanes, one needs-me notice, daemon runs on |
 | `BrowserTransportError` | the server was there and the exchange failed — exited mid-call, timed out, unparseable frame | counted as a failed read / a send that did not happen |
 | `BrowserToolError` | the tool ran and failed — a selector matched nothing, a navigation was refused | the browser is healthy; the action is not |
+| `BrowserDetached` | the server is answering us and has lost Chrome | the factory replaces it; the lane blames nobody's browser |
+
+That third row is true of one failure and false of a run of them, which is the whole reason for the
+fourth. See [Replacing a server that lost Chrome](#replacing-a-server-that-lost-chrome).
 
 `ensure_available(command)` is a `shutil.which` check the factory runs *before*
 spawning, so absence is reported as absence with an install hint, rather than
@@ -195,6 +199,67 @@ mid-read). Two mechanisms keep that safe:
   browser publish holds the tab for minutes where the lane holds it for seconds.
   Worst case the lane notices a buyer message one tick late.
 
+## Replacing a server that lost Chrome
+
+`BrowserClient._start` respawns a server whose process has *died*. Until 2026-08-29 there was no
+such thing as a dead-enough live one — and that is the gap the seller fell into. A Playwright MCP
+server answered the daemon's JSON-RPC for 28 hours while failing every browser tool with
+`async initializeServer: Timeout ... <ws connecting> ws://127.0.0.1:<port>/devtools/browser/...`:
+its Playwright-to-Chrome connection had gone (a sleeping laptop on a flaky network, which is why
+the errors just before it were `net::ERR_INTERNET_DISCONNECTED` and `Target page, context or
+browser has been closed`) and it could not re-establish one. Every failure arrived as a tool error,
+so the lane counted 126 blind reads and told the seller to check a Chrome that was signed in.
+
+**The diagnosis is two facts the daemon already has, and neither is enough alone.** A run of
+`RECYCLE_AFTER_FAILURES` tool failures with no success between them says the server is answering
+and failing everything; `chrome.is_ready`, which every acquisition runs anyway, says the browser it
+was meant to be driving is fine. Together they mean the server has lost Chrome. Apart, the first is
+also what a marketplace that redesigned its DOM looks like, and respawning node for that would hide
+a broken adapter forever.
+
+**There is deliberately no health probe.** The obvious one — `browser_tabs {"action": "list"}` — is
+not read-only: the server's handler calls `ensureTab()`, so asking would create a page and repoint
+the current tab. On a Chrome whose window the seller has closed, diagnosing the fault would pop a
+new window; on the send path it would run after the commit. A count and a probe we already own cost
+nothing and touch nothing.
+
+**Recycling lives in the daemon's factory, not in a lane or in the client.** Only the factory knows
+the CDP endpoint — it is baked into the argv from the port `ensure_chrome` just returned, and a
+Chrome that came back on a different port is itself one of the ways a server detaches, so
+restarting in place would dial a dead port. And the factory is the one boundary that is always
+*between* operations: every caller resolves it before entering `client.exclusive()`, which is what
+keeps a recycle from ever landing inside a send, past the line where the buyer may already have the
+message. **That ordering is the guarantee, not the client's mutex** — the mutex is re-entrant, so a
+future caller that acquired the browser from inside its own bracket would walk straight through it.
+
+It is bounded three ways, and each bound answers a different failure:
+
+- **A cooldown**, because the connect lane acquires every two seconds while a sign-in row is
+  pending — and a pending row is exactly what a can't-read notice produces. Without it, three of its
+  ticks would spend the hour's allowance in six seconds and starve the read lane.
+- **A cap per rolling hour**, because respawning node forever is how a bug becomes invisible.
+  Exhausted, it raises `BrowserUnavailable` into the notice that already exists for a browser that
+  cannot be driven. The window is what makes that temporary: the daemon tries again by itself.
+- **Never while a browser pass is running.** A publish holds the tab across many calls *without*
+  the client's mutex, so replacing its server mid-flow abandons a half-filled listing form.
+
+A detached client is marked so every later call fails instantly instead of waiting out the server's
+own 30-second timeout — a tick that opens twenty conversations was otherwise minutes of a lane doing
+nothing but time out — and fails as `BrowserDetached`, so the lane can say whose fault it is. It is
+also never asked to close its tab on the way out: that call cannot succeed and cannot fail quickly
+either, and it would wait holding the lock the recycle needs.
+
+**A server is also replaced at `BROWSER_RECYCLE_AGE_SEC` with nothing wrong with it.** That swap is
+graceful — the outgoing client closes its own tab and the incoming one opens one — so it costs the
+seller no window, which is what makes it worth having at all.
+
+Three lifecycle bugs were fixed alongside, each of which would have turned the repair into a new
+permanent wedge: `_start` left a live process behind when the handshake failed (so every later start
+returned early for a server that never completed `initialize`); a replaced process's reader thread
+could put its end-of-pipe sentinel into the *new* process's queue; and a closed client could still
+be made to spawn a fresh server by `ensure_tab`, which calls `_start` directly — one orphan node
+process per recycle, in no holder and reaped by nobody.
+
 ## Market adapters
 
 `browser/markets/` contains market-specific adapters. Adapters implement the `MarketAdapter` interface. A new market is a new module plus a registry entry.
@@ -202,7 +267,7 @@ mid-read). Two mechanisms keep that safe:
 | field | what it carries |
 | --- | --- |
 | `conversations_list_js` | which conversations exist → `{conversations: [...]}` or `{error: …}` |
-| `conversation_tail_js` | the open conversation's trailing bubbles, or `null` to abstain |
+| `conversation_tail_js` | the open conversation's trailing bubbles, or `{error, …}` carrying what it measured when it cannot find the message list |
 | `login_js` | `{state: logged_in \| logged_out \| unknown}` |
 | `chat_message_submit_js` | **how a message is committed** — empty means a real key press |
 | `listing_id_pattern` | where a listing's id sits in a permalink, one regex group |
@@ -263,9 +328,18 @@ Mercari link.
 - **The thread id is `legacy_offer_id`, not `id`.** `id` is a 32-bit integer
   server-side and has wrapped, so a new conversation reports a negative one —
   which in the chat URL is a different conversation.
-- **Message history is DOM work**, because chat lives in a separate service. The
-  reader scopes to the single scrollable pane, then keeps only *inline rounded*
-  containers: the header's "Online 11 days ago", profile cards, system notices,
+- **Message history is DOM work**, because chat lives in a separate service. The reader finds the
+  message list by **what it holds** — the scrollable box containing the most bubbles, and among
+  ties the smallest, which is the inner scroller whose edges a bubble actually hugs. It used to be
+  "the one scrollable box starting right of 35% of the viewport", which encoded Carousell's
+  two-column desktop inbox as a fact. It is not one: below roughly 900px the site collapses to a
+  single full-width column, every scrollable box starts at left 0, and the filter matched none of
+  them. Captured live on 2026-08-29 from a window the seller had sized to half their screen —
+  `innerWidth` 756, three scrollable divs, all at left 0, zero matches — after which the agent
+  called itself blind on every conversation in the inbox for 22 hours while the page rendered
+  perfectly. An abstention now carries its measurements, because a bare `null` made that
+  indistinguishable from a marketplace that had changed shape. Within the pane it keeps only
+  *inline rounded* containers: the header's "Online 11 days ago", profile cards, system notices,
   and Carousell's quick-reply suggestion chips are all block/flex with square
   corners. A chip is indistinguishable from a buyer message by text alone, and
   recording one would have the agent answering itself.
@@ -349,13 +423,33 @@ agent) read like the alarming one (two items claiming the same listing).
 engine as it is written, so the verdict is on the row before any model sees the
 text.
 
-Three notices, each queued at most once per condition and cleared on recovery:
+Four notices, each queued at most once per condition and cleared on recovery. Which one a run of
+failed reads earns is decided by *how far the read got*, and the copy of each claims only that —
+`browser/blindness.py` owns the taxonomy and the wording:
 
 | condition | notice |
 | --- | --- |
-| `browser_blind_after` failed reads on a market | can't read your `<market>` inbox — check Chrome is running and logged in |
-| the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice names `sellee connect <market>` — the daemon opens the market and re-probes |
+| `BrowserDetached` — our own server lost Chrome | I've lost my own connection to Chrome; nothing for you to restart |
+| the conversation list answered `{error}` — page JS ran, so the marketplace refused us | my Chrome is up and the page loads; it's `<market>` that won't hand over your conversations |
+| conversations opened and could not be read | I can see your inbox and can't read the conversations in it |
+| the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice carries a **Sign in on desktop** button |
 | `BrowserUnavailable` | the browser can't be driven at all; browser markets paused, the rail unaffected |
+
+**None of them tells the seller to go and look at Chrome**, and that is load-bearing rather than
+tidy. Reaching the blind counter *proves* Chrome answered its CDP probe on that tick — every
+acquisition runs `ensure_chrome`, and a Chrome that is genuinely down raises `BrowserUnavailable`
+into a different notice carrying the argv or the container's start script. So "check that the
+agent's Chrome is running and still logged in" was advice for a condition that, when true, produces
+a *different* notice. On 2026-08-28 a seller was sent to check a Chrome that was running and signed
+in, 126 reads into a 28-hour outage caused by the daemon's own subprocess. That sentence now lives
+only in `blindness.chrome_hint`, which returns nothing at all when Chrome has just answered.
+
+**And the recovery is said out loud**, once, when it was worth saying: a market that was warned
+about and has been blind longer than half an hour gets one line naming the gap, so the seller knows
+how far back to scroll in the marketplace's own app. Gated on a read that returned *message
+content*, never on the conversation list merely answering — a tick that lists fifty conversations
+and cannot open one of them is not a market we can see, and announcing it as one would invert rule 1
+above.
 
 The reply lane (`reply_lane`, every 10s) is a sibling: it claims every waiting
 thread into **one** coalesced reply pass, refuses to enqueue a second while one is
@@ -696,7 +790,11 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `browser.inbound` | one message folded into a durable row, with its scam verdict |
 | `browser.thread_new` | a buyer's conversation adopted as a thread |
 | `browser.unmatched` | a conversation deliberately not adopted, and which check failed |
-| `browser.blind` | a failed read, with the running count and the reason |
+| `browser.blind` | a failed read, with the running count, the reason, and which `cause` it was |
+| `browser.unreadable` | one conversation that could not be read, named, with which of the three ways it failed |
+| `browser.reading_again` | a market that was warned about is legible again, with how long it was blind |
+| `browser.recycled` | a browser server thrown away, why, and how many times inside the window |
+| `browser.window_reopened` | Chrome was running with no window of its own and we had to open one |
 | `browser.login` | the login probe answered `logged_out` |
 | `browser.unavailable` | the browser cannot be driven at all |
 | `browser.send` | a send's outcome: `sent`, `refused`, `unverified`, `browser_error` |
@@ -715,6 +813,9 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
 | `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
+| `RECYCLE_AFTER_FAILURES` | `3` (code) | consecutive tool failures that, with Chrome answering, mean the server has lost it |
+| `BROWSER_RECYCLE_MAX` / `_WINDOW_SEC` / `_COOLDOWN_SEC` | `3` / `3600` / `120` (code) | how often a server may be replaced before we stop and say so |
+| `BROWSER_RECYCLE_AGE_SEC` | `43200` (code) | a server is swapped at this age even when nothing is wrong with it; the swap is graceful, so it costs no window |
 | `market_survey` interval | `60.0` (code) | how soon a seller who just signed in is asked about what they already have listed; also paces adoption, one listing per tick |
 
 Lane counters (tick count, consecutive failures, which notices are already

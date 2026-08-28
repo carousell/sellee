@@ -13,6 +13,7 @@ from sellee.browser import chrome
 from sellee.browser.client import (
     PINNED_MCP_SPEC,
     BrowserClient,
+    BrowserDetached,
     BrowserToolError,
     BrowserTransportError,
     BrowserUnavailable,
@@ -917,3 +918,108 @@ def test_the_default_command_asks_for_an_exact_version_not_whatever_is_latest() 
     assert PINNED_MCP_SPEC in argv
     assert "@playwright/mcp" not in argv  # the bare name would float
     assert PINNED_MCP_SPEC.startswith("@playwright/mcp@")
+
+
+# --- knowing when the server has stopped being useful --------------------------------------------
+
+
+def test_a_run_of_tool_failures_is_counted_and_a_success_ends_it(make_client) -> None:
+    """The streak is half the diagnosis of a server that has lost Chrome. The other half — that
+    Chrome itself is answering — is not the client's to know, so nothing here decides anything;
+    it only counts, and the daemon's factory pairs it with its own probe."""
+    script = {
+        "tools": {
+            "browser_click": [{"error": "one"}, {"error": "two"}, {"error": "three"}],
+            "browser_evaluate": {"result": 1},
+        }
+    }
+    client = make_client(script)
+    for _ in range(3):
+        with pytest.raises(BrowserToolError):
+            client.call_tool("browser_click", {})
+    assert client.failing_streak() == 3
+
+    client.evaluate("() => 1")
+    assert client.failing_streak() == 0
+
+
+def test_the_streak_is_indifferent_to_what_the_error_says(make_client) -> None:
+    """Deliberately not a text match. The live wedge said `async initializeServer: Timeout` — but
+    `Target page, context or browser has been closed` appeared in the same run as an ordinary
+    transient, so matching on either string would have recycled a healthy server."""
+    client = make_client({"tools": {"browser_click": {"error": "an error nobody has ever seen"}}})
+    with pytest.raises(BrowserToolError):
+        client.call_tool("browser_click", {})
+    assert client.failing_streak() == 1
+
+
+def test_diagnosing_a_wedge_never_asks_the_server_anything(make_client) -> None:
+    """The regression guard for the design that was rejected. Listing tabs looks like the obvious
+    health probe and is not read-only: the server's handler for it opens a tab when there is none,
+    so asking "have you still got Chrome" would pop a window on a Chrome whose window the seller
+    had closed — and on the send path it would run after the commit."""
+    client = make_client({"tools": {"browser_click": {"error": "boom"}}})
+    with pytest.raises(BrowserToolError):
+        client.call_tool("browser_click", {})
+    client.failing_streak()
+    assert [call["tool"] for call in tool_calls(client)] == ["browser_click"]
+
+
+def test_a_client_told_it_lost_chrome_fails_without_dialling(make_client) -> None:
+    """What bounds a doomed tick. Each call to a wedged server otherwise waits out the server's own
+    thirty-second timeout, so a tick that opens twenty conversations is minutes of a lane doing
+    nothing but time out — and a cross-thread close waits behind all of it."""
+    client = make_client({"tools": {"browser_click": {"text": "ok"}}})
+    client.call_tool("browser_click", {})
+    client.mark_detached("the browser server lost its connection to Chrome")
+
+    with pytest.raises(BrowserDetached):
+        client.call_tool("browser_click", {})
+    assert [call["tool"] for call in tool_calls(client)] == ["browser_click"]  # no second call
+
+
+def test_a_detached_client_is_not_asked_to_close_its_tab(make_client) -> None:
+    """A tab close on a server that has lost Chrome cannot succeed and cannot fail quickly either:
+    it waits the full tool timeout, holding the lock the recycle is waiting for."""
+    client = make_client({"tools": {"browser_tabs": {"text": "ok"}}})
+    client.ensure_tab()
+    client.mark_detached("lost it")
+    client.close(graceful=False)
+    assert [call["arguments"] for call in tool_calls(client) if call["tool"] == "browser_tabs"] == [
+        {"action": "new"}
+    ]
+
+
+def test_a_healthy_client_still_tidies_its_tab_away(make_client) -> None:
+    """The age-ceiling swap goes through here, which is why it costs the seller no window: the
+    outgoing client closes its own tab and the incoming one opens one."""
+    client = make_client({"tools": {"browser_tabs": {"text": "ok"}}})
+    client.ensure_tab()
+    client.close()
+    assert [call["arguments"] for call in tool_calls(client) if call["tool"] == "browser_tabs"] == [
+        {"action": "new"},
+        {"action": "close"},
+    ]
+
+
+def test_a_closed_client_never_starts_another_server(make_client) -> None:
+    """`ensure_tab` and `ensure_frontmost` call `_start` directly, and `close` leaves `_proc` as
+    None — so a stale reference still held by an in-flight send would have spawned a whole new
+    server, in no holder and reaped by nobody. One leak per recycle, and the allowance permits
+    three an hour indefinitely."""
+    client = make_client({"tools": {"browser_tabs": {"text": "ok"}}})
+    client.ensure_tab()
+    client.close()
+    with pytest.raises(BrowserUnavailable):
+        client.ensure_tab()
+    assert client._proc is None
+
+
+def test_a_handshake_that_fails_leaves_nothing_behind_to_block_the_next_try(make_client) -> None:
+    """`_start` sets `_proc` before the handshake, and its own guard returns early whenever `_proc`
+    is alive — so a handshake that failed against a live process made every later start a no-op.
+    That is the same immortal wedge this whole change exists to end, rebuilt by the repair path."""
+    client = make_client({"handshake": "silent"}, startup_timeout_sec=0.5)
+    with pytest.raises(BrowserUnavailable):
+        client.call_tool("browser_click", {})
+    assert client._proc is None

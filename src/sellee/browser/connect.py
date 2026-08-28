@@ -26,9 +26,9 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sellee import deployment, marketplaces, settings
-from sellee.browser import inbox, window
+from sellee.browser import blindness, inbox, window
 from sellee.browser import markets as market_adapters
-from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
 from sellee.store.browser import CONNECT_MODE_OPEN
 
@@ -82,6 +82,12 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
                     log.debug("could not bring the connect tab forward", exc_info=True)
                     client.navigate(url)
             answer = client.evaluate(adapter.login_js) or {}
+    except BrowserDetached:
+        # Deliberately not flattened into BrowserDown. Everything below answers the seller's tap,
+        # and the only honest answer to "am I signed in?" while our own server has lost Chrome is
+        # not to answer yet — the caller leaves the request pending for the next tick, by which
+        # time the factory has usually replaced the server.
+        raise
     except BrowserError as exc:
         raise BrowserDown(str(exc)) from exc
     state = answer.get("state")
@@ -128,10 +134,17 @@ def _shell_where() -> str:
     return SHELL_IN_CONTAINER if deployment.is_container() else ""
 
 
-def _chrome_check() -> str:
-    # The same hint the read lane gives, for the same reason: which Chrome to go and look at
-    # depends on which machine it is running on.
-    return inbox.CONTAINER_CHROME_CHECK if deployment.is_container() else inbox.CHROME_CHECK
+def _chrome_check(already_said: bool) -> str:
+    """Which Chrome to go and look at — or nothing, when the reason already says it.
+
+    A `BrowserUnavailable` carries `chrome.bring_up_hint` or the container's start script in its own
+    message, so appending "check that Chrome is running" after it says the same thing twice, the
+    second time more vaguely. Gated on the exception rather than on a probe of Chrome, because this
+    is the one branch where Chrome is genuinely the thing that might be down.
+    """
+    if already_said:
+        return ""
+    return blindness.chrome_hint(chrome_up=False)
 
 
 def connect_lane(deps: ConnectDeps) -> None:
@@ -174,6 +187,12 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
             adapter=adapter,
             bring_tab_forward=opening,
         )
+    except BrowserDetached:
+        # Ours, not theirs, and usually over within a tick or two — the factory replaces the server
+        # on the next acquisition. Leaving the row pending is the same answer a pass holding the tab
+        # gets, and it is what stops the seller being told to check a Chrome that is answering fine.
+        # The staleness sweep above is what stops it waiting forever.
+        return
     except (BrowserDown, BrowserUnavailable) as exc:
         deps.store.clear_market_connect_request(market)
         deps.store.queue_notice(
@@ -181,9 +200,9 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
                 name=name,
                 market=market,
                 reason=exc,
-                chrome_check=_chrome_check(),
+                chrome_check=_chrome_check(isinstance(exc, BrowserUnavailable)),
                 where=_shell_where(),
-            ),
+            ).replace("  ", " "),
             controls=fastpaths.signin_controls(market),
         )
         return

@@ -279,3 +279,213 @@ def test_a_daemon_that_is_not_stopping_still_waits_the_launch_out(
 
     assert (state, port) == (chrome.UNAVAILABLE, None)
     assert time.monotonic() - began >= 1.0
+
+
+# --- replacing a server that lost Chrome ---------------------------------------------------------
+
+
+class FakeClient:
+    """Just the surface the factory reads. The transport is covered in test_browser_client.py."""
+
+    def __init__(self, *, streak=0, age=0.0):
+        self.streak = streak
+        self.age = age
+        self.closed_gracefully: bool | None = None
+        self.detached_as: str | None = None
+        self.follow = False
+
+    def failing_streak(self):
+        return self.streak
+
+    def age_sec(self, *, now=time.monotonic):
+        return self.age
+
+    def mark_detached(self, reason):
+        self.detached_as = reason
+
+    def set_follow(self, follow):
+        self.follow = follow
+
+    def close(self, *, graceful=True):
+        self.closed_gracefully = graceful
+
+
+@pytest.fixture
+def factory_bits(store, bus, monkeypatch):
+    """A factory whose Chrome is always up and whose clock the test drives."""
+    monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)
+    monkeypatch.setattr(daemon.chrome, "ensure_running", lambda port, **kw: (chrome.READY, 9222))
+    monkeypatch.setattr(daemon.chrome, "is_ready", lambda port, **kw: True)
+    monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: 1)
+    monkeypatch.setattr(daemon.browser_client, "BrowserClient", lambda **kw: FakeClient())
+    clock = {"t": 10_000.0}
+    holder: dict = {}
+    factory = daemon.make_browser_factory(Config(), store, bus, holder, now=lambda: clock["t"])
+    return factory, holder, clock
+
+
+def _recycled(bus):
+    return [ev for ev in bus.store.read() if ev.kind == "browser.recycled"]
+
+
+def test_a_healthy_client_is_never_recycled(store, bus, factory_bits) -> None:
+    """The steady state, and the guard against a diagnosis creeping onto the hot path."""
+    factory, holder, _clock = factory_bits
+    first = factory()
+    assert factory() is first
+    assert _recycled(bus) == []
+
+
+def test_a_server_that_lost_chrome_is_replaced(store, bus, factory_bits) -> None:
+    """The 2026-08-27 shape: the process answers us, every tool fails, and Chrome is fine. Until
+    this, `_start` only respawned a *dead* process, so a wedged live one was immortal — 126 blind
+    reads over 28 hours."""
+    factory, holder, _clock = factory_bits
+    stale = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+    holder["client"] = stale
+    holder["command"] = daemon.browser_client.default_command("http://127.0.0.1:9222")
+
+    fresh = factory()
+    assert fresh is not stale
+    assert stale.detached_as == daemon.DETACHED_REASON
+    # Never asked to close its tab: on a server that has lost Chrome that call cannot succeed and
+    # cannot fail quickly either, and it would wait out the full tool timeout holding the lock.
+    assert stale.closed_gracefully is False
+    assert [ev.payload["reason"] for ev in _recycled(bus)] == [daemon.DETACHED_REASON]
+
+
+def test_a_failing_server_is_not_blamed_while_chrome_is_down(store, bus, factory_bits, monkeypatch):
+    """Both halves are needed. A marketplace that redesigned its DOM also fails every call, and
+    respawning node for that would hide a broken adapter forever."""
+    factory, holder, _clock = factory_bits
+    monkeypatch.setattr(daemon.chrome, "is_ready", lambda port, **kw: False)
+    stale = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+    holder["client"] = stale
+    holder["command"] = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    assert factory() is stale
+    assert _recycled(bus) == []
+
+
+def test_an_old_server_is_swapped_gracefully(store, bus, factory_bits) -> None:
+    """The age ceiling. Unlike a detach this one closes its own tab first, so the incoming client
+    opens one and the seller sees no change at all."""
+    factory, holder, _clock = factory_bits
+    old = FakeClient(age=daemon.BROWSER_RECYCLE_AGE_SEC + 1.0)
+    holder["client"] = old
+    holder["command"] = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    assert factory() is not old
+    assert old.closed_gracefully is True
+    assert old.detached_as is None  # nothing is wrong with it; it is only old
+    assert [ev.payload["reason"] for ev in _recycled(bus)] == [daemon.AGE_REASON]
+
+
+def test_a_pass_driving_the_browser_is_never_interrupted(store, bus, factory_bits, monkeypatch):
+    """A publish holds the tab across many calls without the client's own mutex, so replacing its
+    server mid-flow abandons a half-filled listing form and starts again from nothing."""
+    factory, holder, _clock = factory_bits
+    monkeypatch.setattr(daemon.inbox, "browser_pass_running", lambda store: True)
+    stale = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+    holder["client"] = stale
+    holder["command"] = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    assert factory() is stale
+    assert _recycled(bus) == []
+
+
+def test_the_cooldown_stops_a_fast_lane_draining_the_allowance(store, bus, factory_bits) -> None:
+    """The connect lane acquires every two seconds while a sign-in row is pending — and a pending
+    row is exactly what the can't-read notice produces. Without a cooldown three of its ticks would
+    spend the hour's allowance in six seconds and leave the read lane reporting the browser
+    unavailable for the other fifty-nine minutes."""
+    factory, holder, clock = factory_bits
+    command = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    for _ in range(4):
+        holder["client"] = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+        holder["command"] = command
+        factory()
+        clock["t"] += 2.0
+    assert len(_recycled(bus)) == 1  # only the first; the rest were inside the cooldown
+
+
+def test_replacing_it_stops_once_it_has_stopped_helping(store, bus, factory_bits) -> None:
+    """Respawning node forever is how a bug becomes invisible. The fourth try in an hour reports
+    the browser undrivable instead, through the notice that already exists for that."""
+    factory, holder, clock = factory_bits
+    command = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    for _ in range(daemon.BROWSER_RECYCLE_MAX):
+        holder["client"] = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+        holder["command"] = command
+        factory()
+        clock["t"] += daemon.BROWSER_RECYCLE_COOLDOWN_SEC + 1.0
+    assert len(_recycled(bus)) == daemon.BROWSER_RECYCLE_MAX
+
+    holder["client"] = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+    holder["command"] = command
+    with pytest.raises(BrowserUnavailable) as exc:
+        factory()
+    assert daemon.RECYCLE_EXHAUSTED_REASON in str(exc.value)
+
+
+def test_the_window_lets_the_daemon_try_again_by_itself(store, bus, factory_bits) -> None:
+    """Giving up has to be temporary, or a machine that wedged once at 3am is dead until someone
+    restarts the daemon."""
+    factory, holder, clock = factory_bits
+    command = daemon.browser_client.default_command("http://127.0.0.1:9222")
+    for _ in range(daemon.BROWSER_RECYCLE_MAX):
+        holder["client"] = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+        holder["command"] = command
+        factory()
+        clock["t"] += daemon.BROWSER_RECYCLE_COOLDOWN_SEC + 1.0
+
+    clock["t"] += daemon.BROWSER_RECYCLE_WINDOW_SEC
+    holder["client"] = FakeClient(streak=daemon.browser_client.RECYCLE_AFTER_FAILURES)
+    holder["command"] = command
+    factory()  # no raise
+    assert len(_recycled(bus)) == daemon.BROWSER_RECYCLE_MAX + 1
+
+
+def test_a_chrome_that_moved_port_is_not_charged_against_the_allowance(store, bus, factory_bits):
+    """A seller restarting Chrome a few times must not spend the budget for a fault that is not
+    the server's."""
+    factory, holder, _clock = factory_bits
+    holder["client"] = FakeClient()
+    holder["command"] = ["some", "older", "command"]
+    factory()
+    assert holder.get("recycles", ()) == ()
+    assert _recycled(bus) == []
+
+
+# --- the window the seller closed ----------------------------------------------------------------
+
+
+def test_a_windowless_chrome_is_explained_once(store, bus, factory_bits, monkeypatch) -> None:
+    """Closing the window does not quit Chrome on macOS, and the browser server opens a tab for any
+    page tool when it has none — so a window comes back on the next read whatever we do. The only
+    honest thing is to say so, and to ask for a minimise instead."""
+    factory, _holder, _clock = factory_bits
+    monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: 0)
+    factory()
+    factory()
+    assert _notices(store) == [daemon.CHROME_WINDOW_REOPENED_NOTICE]
+
+
+def test_the_window_notice_re_arms_once_a_window_exists_again(
+    store, bus, factory_bits, monkeypatch
+):
+    """Said each time they close it, never twice for the same one."""
+    factory, _holder, _clock = factory_bits
+    pages = {"n": 0}
+    monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: pages["n"])
+    factory()
+    pages["n"] = 1
+    factory()
+    pages["n"] = 0
+    factory()
+    assert _notices(store) == [daemon.CHROME_WINDOW_REOPENED_NOTICE] * 2
+
+
+def test_a_chrome_that_cannot_be_asked_says_nothing(store, bus, factory_bits, monkeypatch) -> None:
+    """ "We could not ask" must never read as "there are no windows"."""
+    factory, _holder, _clock = factory_bits
+    monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: None)
+    factory()
+    assert _notices(store) == []

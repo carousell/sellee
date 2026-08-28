@@ -90,6 +90,43 @@ CHROME_STARTED_NOTICE = (
     "Starting the agent's Chrome window — that's expected, you can leave it running."
 )
 
+# Said when Chrome was already running with no window of its own and we had to open one. It is a
+# different sentence from the one above because it answers a different question: not "why did Chrome
+# start" but "why did a window I closed come back". Closing the window does not quit Chrome on
+# macOS, and the browser server opens a tab for any page tool when it has none — so the window
+# returns on the next read whatever we do, and the only honest thing is to say so and ask for a
+# minimise instead.
+CHROME_WINDOW_REOPENED_NOTICE = (
+    "I reopened my Chrome window — I need it open to read your marketplace inboxes. Minimise it if "
+    "it's in your way, but closing it doesn't stop me: Chrome keeps running without a window, and "
+    "I have to open a new one the next time I look."
+)
+
+# How often the browser server may be thrown away for a lost Chrome connection before we stop and
+# say so, and over what window. One wedge is a fluke — a laptop that slept, a network that dropped
+# mid-navigation, which is exactly what preceded the 28-hour outage on 2026-08-27. Three inside an
+# hour is not something a fourth process is going to fix, and respawning node forever is how a bug
+# becomes invisible. The window is what makes the giving-up temporary: the daemon starts trying
+# again by itself rather than needing a restart.
+BROWSER_RECYCLE_MAX = 3
+BROWSER_RECYCLE_WINDOW_SEC = 3600.0
+# The shortest gap between two recycles. Without it the fastest caller drains the budget for
+# everyone: the connect lane acquires the browser every two seconds while a sign-in row is pending,
+# and a pending row is precisely what the can't-read notice produces — so three of its ticks would
+# spend the hour's allowance in six seconds and leave the read lane, which ticks every five minutes,
+# reporting the browser unavailable for the remaining fifty-nine.
+BROWSER_RECYCLE_COOLDOWN_SEC = 120.0
+# A server is replaced at this age even when nothing has gone wrong with it. Not because age was the
+# defect — the 2026-08-27 wedge was a network event, and the process was idle at 25 file descriptors
+# — but because a long-lived process holding a socket to a browser is a thing that rots, and the
+# cost here is one graceful swap a day: the outgoing client closes its own tab and the incoming one
+# opens one, so the seller sees nothing.
+BROWSER_RECYCLE_AGE_SEC = 12 * 3600.0
+RECYCLE_EXHAUSTED_REASON = (
+    "my connection to Chrome keeps dying — I have replaced the browser server "
+    f"{BROWSER_RECYCLE_MAX} times within the hour and it keeps losing Chrome"
+)
+
 
 def ensure_chrome(cfg, store, bus, should_stop=None) -> int:
     """Make Chrome answer on its CDP port and return that port, or raise `BrowserUnavailable`
@@ -174,11 +211,80 @@ def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
     return thread
 
 
-def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
+# The phrase that distinguishes the diagnosis from the age ceiling, in one place so the two callers
+# that branch on it cannot drift apart from the sentence itself.
+DETACHED_MARKER = "lost its connection to Chrome"
+DETACHED_REASON = f"the browser server {DETACHED_MARKER}"
+AGE_REASON = "the browser server reached its age ceiling"
+
+
+def _recycle_reason(client, chrome_up, *, now) -> str | None:
+    """Why this cached client should be thrown away, or None to keep it.
+
+    Two reasons, and only the first is a diagnosis. A run of tool failures says the server is
+    answering us and failing everything; Chrome answering its own probe says the browser it was
+    meant to be driving is fine. Neither half is enough on its own — a marketplace that redesigned
+    its DOM also fails every call, and respawning node for that would hide a broken adapter forever
+    — so the recycle is what both together mean: the server has lost Chrome.
+
+    The client cannot make this call itself. It has no way to ask about Chrome, and the obvious way
+    to ask its server (listing tabs) is not read-only: that handler opens a tab when there is none,
+    so diagnosing the fault would pop a window on a Chrome whose window the seller had closed.
+
+    `chrome_up` is a callable so the steady state costs an integer compare and nothing else. Asking
+    Chrome is another loopback round trip on a path every send and every lane tick goes through, and
+    the answer is only interesting once the streak says something is already wrong.
+    """
+    if client.failing_streak() >= browser_client.RECYCLE_AFTER_FAILURES and chrome_up():
+        return DETACHED_REASON
+    if client.age_sec(now=now) >= BROWSER_RECYCLE_AGE_SEC:
+        return AGE_REASON
+    return None
+
+
+def recycle_browser_client(bus, holder: dict, reason: str, *, now) -> None:
+    """Throw away a browser server so the next acquisition builds a fresh one.
+
+    Rebuilt by the factory rather than restarted in place, because the CDP endpoint is baked into
+    the argv and a Chrome that came back on a different port is one of the ways a server ends up
+    detached — restarting with the old command would dial a dead port and spend the whole allowance
+    in seconds.
+
+    Raises `BrowserUnavailable` once replacing it has stopped helping, which every caller already
+    handles and which reaches the seller through the notice that already exists for a browser that
+    cannot be driven at all.
+
+    This is not the retry the client forbids. Nothing here repeats an action against a marketplace:
+    no page is navigated, no key is pressed, no request is made that a site could observe. It
+    replaces a subprocess of ours, and the work that failed is re-derived from durable rows by
+    whichever lane comes back next tick.
+    """
+    recycles = tuple(
+        stamp for stamp in holder.get("recycles", ()) if now() - stamp < BROWSER_RECYCLE_WINDOW_SEC
+    )
+    holder["recycles"] = recycles
+    if recycles and now() - recycles[-1] < BROWSER_RECYCLE_COOLDOWN_SEC:
+        return  # too soon to be a different answer; keep using what we have
+    if len(recycles) >= BROWSER_RECYCLE_MAX:
+        raise browser_client.BrowserUnavailable(RECYCLE_EXHAUSTED_REASON)
+    stale = holder.pop("client", None)
+    holder.pop("command", None)
+    holder["recycles"] = (*recycles, now())
+    bus.publish(
+        "browser.recycled",
+        {"reason": reason, "recycles": len(recycles) + 1, "window_sec": BROWSER_RECYCLE_WINDOW_SEC},
+    )
+    if stale is not None:
+        # Published first: closing takes the client's lock, so it waits behind an operation still in
+        # flight, and a detached server is given no chance to be polite about its tab.
+        stale.close(graceful=DETACHED_MARKER not in reason)
+
+
+def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
 
-    Both preconditions are re-checked on every acquisition, not just at construction: the client is
+    Every precondition is re-checked on every acquisition, not just at construction: the client is
     cached (in `holder`, so the daemon's shutdown can close it), but Chrome can be closed at any
     point after — and Node is checked first, so a machine that cannot drive a browser never has one
     opened for it. That check only ever looks at the binary, which is why it can still come first
@@ -187,6 +293,18 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     A cached client is only reusable while it dials the right endpoint. An unpinned Chrome that was
     closed and started again comes back on a different port, so the command is compared and a client
     holding the old one is replaced rather than left to fail every call.
+
+    **And only while it can still reach Chrome.** A server that answers us and fails everything it
+    is asked was, until this, immortal: `BrowserClient._start` respawns a dead process and there is
+    no such thing as a dead-enough live one. That is what let a wedged server report a market blind
+    126 times over 28 hours while Chrome sat there signed in.
+
+    Recycling is deliberately placed here rather than in a lane. The factory is the one boundary
+    that is always *between* operations — every caller resolves it before entering
+    `client.exclusive()` — which is what keeps a recycle from ever landing inside a send, past the
+    line where the buyer may already have the message. That ordering is the guarantee; the client's
+    lock is not, because it is re-entrant and would let a caller that acquired the browser from
+    inside its own bracket walk straight through. Any new caller must keep the order.
 
     Watch mode is read here for the same reason the preconditions are: it is the seller's, it
     changes at runtime, and every actor that drives the browser comes through this door — so one
@@ -197,13 +315,33 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
     def browser_factory():
         browser_client.ensure_available(cfg.playwright_mcp_cmd or [browser_client.SERVER_BINARY])
         port = ensure_chrome(cfg, store, bus, should_stop)
+        _notice_window_reopening(store, bus, holder, port)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
             browser_client.cdp_endpoint(port)
         )
         client = holder.get("client")
         if client is not None and holder.get("command") != command:
+            # A moved port is not a fault of the server's, so it is never charged against the
+            # recycle allowance — otherwise a Chrome the seller restarts a few times would spend it.
             client.close()
+            holder.pop("client", None)
+            holder.pop("command", None)
             client = None
+        if client is not None:
+            reason = _recycle_reason(client, lambda: chrome.is_ready(port), now=now)
+            # Never while a pass is driving: a publish holds the tab across many calls without the
+            # client's own mutex, so replacing its server mid-flow abandons a half-filled listing
+            # form and starts the whole thing again from nothing. Asked only once there is a reason
+            # to act, so the steady state does not pay for a query about passes on every send.
+            if reason is not None and not inbox.browser_pass_running(store):
+                if DETACHED_MARKER in reason:
+                    # Marked before the recycle is attempted, not after. If the cooldown declines to
+                    # replace it we hand the same client back, and it has to fail fast and name the
+                    # right cause — otherwise the lane spends the tick timing out and then blames
+                    # the seller's Chrome for it.
+                    client.mark_detached(reason)
+                recycle_browser_client(bus, holder, reason, now=now)
+                client = holder.get("client")
         if client is None:
             client = browser_client.BrowserClient(command=command)
             holder["client"] = client
@@ -212,6 +350,28 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None):
         return client
 
     return browser_factory
+
+
+def _notice_window_reopening(store, bus, holder: dict, port: int) -> None:
+    """Tell the seller once when Chrome is running with no window and we are about to open one.
+
+    Chrome's own `/json/list`, not a browser tool: this has to be answerable *without* creating the
+    thing it is counting, and asking the browser server to list tabs opens one when there are none.
+
+    Latched, and re-armed as soon as a page exists again, so the seller hears this each time they
+    close the window and never twice for the same one.
+    """
+    pages = chrome.page_targets(port)
+    if pages is None:
+        return  # could not tell; say nothing rather than guess
+    if pages > 0:
+        holder.pop("said_window_reopened", None)
+        return
+    if holder.get("said_window_reopened"):
+        return
+    holder["said_window_reopened"] = True
+    store.queue_notice(CHROME_WINDOW_REOPENED_NOTICE)
+    bus.publish("browser.window_reopened", {"port": port})
 
 
 def _is_loopback_bind(host: str) -> bool:

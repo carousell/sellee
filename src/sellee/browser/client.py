@@ -24,6 +24,7 @@ import re
 import shutil
 import subprocess
 import threading
+import time
 from collections import deque
 from contextlib import contextmanager
 
@@ -77,6 +78,17 @@ _UNDEFINED = "undefined"
 # would is one we must never call on a flow that is not ours.
 _MODAL_STATE_MARKER = "does not handle the modal state"
 
+# How many tool failures in a row make "the browser is healthy; the action is not" stop being a
+# credible reading. One failure is a selector that moved or a page that would not load. Three in a
+# row, with no success between them, is the server itself — and the daemon's factory pairs this with
+# its own proof that Chrome is answering before it acts on it.
+#
+# Deliberately a count and not a probe. The obvious probe is `browser_tabs {"action": "list"}`, and
+# it is unsafe: the server's handler for it calls `ensureTab()`, so asking would create a page and
+# repoint the current tab — on a Chrome whose window the seller has closed, diagnosing the fault
+# would pop a new window, and on the send path it would run after the commit.
+RECYCLE_AFTER_FAILURES = 3
+
 
 class BrowserError(Exception):
     """Base for browser failures. Messages are caller-facing and carry no secret."""
@@ -97,7 +109,26 @@ class BrowserTransportError(BrowserError):
 
 class BrowserToolError(BrowserError):
     """The server ran the tool and the tool itself failed (a selector matched nothing, a navigation
-    was refused). The browser is healthy; the action is not."""
+    was refused). The browser is healthy; the action is not.
+
+    That claim is true of a single failure and false of a run of them — see
+    `RECYCLE_AFTER_FAILURES`.
+    """
+
+
+class BrowserDetached(BrowserError):
+    """The server is answering us and has lost Chrome.
+
+    Its process is alive and its JSON-RPC pipe is fine, so nothing here is `BrowserUnavailable`; but
+    every browser tool it runs fails, so nothing here is a healthy browser either. On 2026-08-27 a
+    server in this state answered the daemon for 28 hours while failing every navigate with
+    `async initializeServer: Timeout 30000ms exceeded` — and because that arrives as a tool error,
+    the lane counted 126 blind reads and told the seller to go and check a Chrome that was running
+    and signed in the whole time.
+
+    Only the daemon's factory raises this: deciding it needs both halves of the diagnosis, and the
+    second half — that Chrome itself is answering — is not the client's to know.
+    """
 
 
 def default_command(cdp_endpoint: str) -> list:
@@ -259,6 +290,17 @@ class BrowserClient:
         # Watch mode: bring our tab forward after every navigation, so the seller sees the page we
         # are on. Off by default and set per acquisition from the seller's setting.
         self._follow = False
+        # Tool failures since the last success. Read by the daemon's factory, which pairs it with
+        # its own probe of Chrome to tell a server that lost the browser from an action that failed.
+        self._failing_streak = 0
+        # Set by `close()`. A closed client is done: without this, a stale reference still held by
+        # an in-flight send would spawn a whole new server on its next call, because `ensure_tab`
+        # and `ensure_frontmost` call `_start()` directly and `close()` leaves `_proc` as None. That
+        # process would be in no holder and reaped by nobody.
+        self._retired = False
+        self._started_ts: float | None = None
+        # Set by the daemon's factory once it has diagnosed this server as having lost Chrome.
+        self._detached: str | None = None
 
     # --- lifecycle ----------------------------------------------------------------------------
 
@@ -269,6 +311,10 @@ class BrowserClient:
             yield self
 
     def _start(self) -> None:
+        if self._retired:
+            # Closed is final. Anything still holding this object is holding a corpse, and the one
+            # thing it must not do is quietly acquire a fresh server nobody owns.
+            raise BrowserUnavailable("this browser client has been closed")
         if self._proc is not None and self._proc.poll() is None:
             return
         try:
@@ -286,28 +332,58 @@ class BrowserClient:
                 "install Node and the Playwright MCP package, or set playwright_mcp_cmd"
             ) from exc
         self._proc = proc
-        self._lines = queue.Queue()
-        self._stderr = deque(maxlen=_STDERR_LINES)
+        lines: queue.Queue = queue.Queue()
+        stderr: deque = deque(maxlen=_STDERR_LINES)
+        self._lines = lines
+        self._stderr = stderr
         self._next_id = 0
         self._tab_opened = False
-        threading.Thread(target=self._read_stdout, args=(proc,), daemon=True).start()
-        threading.Thread(target=self._read_stderr, args=(proc,), daemon=True).start()
-        self._handshake()
+        self._failing_streak = 0
+        self._detached = None
+        self._started_ts = time.monotonic()
+        # The queue and the buffer are handed to the reader rather than resolved through `self`.
+        # A replaced process's reader runs its `finally` asynchronously, and reading `self._lines`
+        # at put time would let that sentinel land in the *new* process's queue — where the very
+        # next handshake would read it as "the server exited". Rare while restarts only followed a
+        # dead process; the recycle below makes restarts routine.
+        threading.Thread(target=self._read_stdout, args=(proc, lines), daemon=True).start()
+        threading.Thread(target=self._read_stderr, args=(proc, stderr), daemon=True).start()
+        try:
+            self._handshake()
+        except BrowserError:
+            # A handshake that failed against a process that is still alive would otherwise be
+            # permanent: `_proc.poll()` says None, so every later `_start()` returns early and the
+            # server it returns early for never completed `initialize`. That is the same immortal
+            # wedge this whole change exists to end, rebuilt by the code meant to cure it.
+            self._kill(proc)
+            self._proc = None
+            raise
 
-    def _read_stdout(self, proc) -> None:
+    def _kill(self, proc) -> None:
+        """End a server process without asking it anything. Used where it cannot answer."""
+        try:
+            proc.terminate()
+            proc.wait(timeout=_SHUTDOWN_JOIN_SEC)
+        except (OSError, subprocess.TimeoutExpired):
+            try:
+                proc.kill()
+            except OSError:
+                pass
+
+    def _read_stdout(self, proc, lines: queue.Queue) -> None:
         try:
             for line in proc.stdout:
                 if line.strip():
-                    self._lines.put(line)
+                    lines.put(line)
         except (OSError, ValueError):
             pass
         finally:
-            self._lines.put(None)  # sentinel: the pipe closed, so no reply is ever coming
+            lines.put(None)  # sentinel: the pipe closed, so no reply is ever coming
 
-    def _read_stderr(self, proc) -> None:
+    def _read_stderr(self, proc, stderr: deque) -> None:
         try:
             for line in proc.stderr:
-                self._stderr.append(line.rstrip("\n"))
+                stderr.append(line.rstrip("\n"))
         except (OSError, ValueError):
             pass
 
@@ -328,25 +404,29 @@ class BrowserClient:
             # failed action — the caller's response is skip-and-notify, never the blind counter.
             raise BrowserUnavailable(f"the browser server did not start: {exc}") from exc
 
-    def close(self) -> None:
+    def close(self, *, graceful: bool = True) -> None:
+        """Retire this client and end its server.
+
+        `graceful=False` skips the courtesy tab close, and is what a recycle passes. On a server
+        that has lost Chrome that call cannot succeed and cannot fail quickly either: it waits the
+        full tool timeout, and it waits holding `_lock`, so the lane that came to replace the client
+        is blocked for 45 seconds on a tidying step whose whole point was to be polite.
+        """
         with self._lock:
             proc = self._proc
-            if proc is None:
-                return
-            if proc.poll() is None and self._tab_opened:
+            if graceful and proc is not None and proc.poll() is None and self._tab_opened:
                 # Leave the warm Chrome as we found it: our tab is ours to clean up. A hard kill
                 # skips this and leaves one tab behind, which is untidy but harmless. Called without
-                # recovery, because nothing on the way out should be opening a tab.
+                # recovery, because nothing on the way out should be opening a tab — and before
+                # the retirement below, which is what would refuse to reach the server at all.
                 try:
                     self._call_once("browser_tabs", {"action": "close"})
                 except BrowserError:
                     pass
+            self._retired = True
             self._proc = None
-            try:
-                proc.terminate()
-                proc.wait(timeout=_SHUTDOWN_JOIN_SEC)
-            except (OSError, subprocess.TimeoutExpired):
-                proc.kill()
+            if proc is not None:
+                self._kill(proc)
 
     # --- JSON-RPC -----------------------------------------------------------------------------
 
@@ -424,15 +504,57 @@ class BrowserClient:
             # reports modal state again surfaces the failure instead of reopening tabs in a loop.
             return self._call_once(name, arguments)
 
+    def mark_detached(self, reason: str) -> None:
+        """Record that this server has lost Chrome, as the daemon's factory has just established.
+
+        Two things follow, and both matter. Every later call fails immediately instead of waiting
+        out the server's own thirty-second timeout — a tick that opens twenty conversations was
+        otherwise minutes of a lane doing nothing but time out — and it fails as `BrowserDetached`,
+        so the lane can say whose fault it is instead of sending the seller to check a Chrome that
+        is answering perfectly well.
+
+        Cleared by `_start`, because a fresh process has a fresh connection.
+        """
+        self._detached = reason
+
+    def is_detached(self) -> bool:
+        return self._detached is not None
+
     def _call_once(self, name: str, arguments: dict) -> str:
+        if self._detached is not None:
+            raise BrowserDetached(self._detached)
         with self._lock:
             self._start()
-            payload = self._rpc("tools/call", {"name": name, "arguments": arguments})
-            text = result_text(payload)
-            if payload.get("isError"):
-                detail = sections(text).get(_ERROR_SECTION) or text
-                raise BrowserToolError(f"{name} failed: {detail.strip()[:300]}")
+            try:
+                payload = self._rpc("tools/call", {"name": name, "arguments": arguments})
+                text = result_text(payload)
+                if payload.get("isError"):
+                    detail = sections(text).get(_ERROR_SECTION) or text
+                    raise BrowserToolError(f"{name} failed: {detail.strip()[:300]}")
+            except BrowserToolError:
+                # Only tool errors are counted. A transport error means the process died, which
+                # `_start` already answers by respawning; a run of *tool* errors is the shape a
+                # server that has lost Chrome makes, because it keeps answering us and keeps
+                # failing everything it is asked to do.
+                self._failing_streak += 1
+                raise
+            self._failing_streak = 0
             return text
+
+    def failing_streak(self) -> int:
+        """Tool failures since the last success.
+
+        Read without the lock, on purpose. The factory asks this on every acquisition and must not
+        block behind a send that is holding the client for its whole bracket; the cost of reading a
+        value one call out of date is that a recycle happens on the next acquisition instead of this
+        one, where the cost of taking the lock would be a lane stalling on an in-flight operation.
+        """
+        return self._failing_streak
+
+    def age_sec(self, *, now=time.monotonic) -> float:
+        """How long this client's server process has been running, or 0.0 if it has not started."""
+        started = self._started_ts
+        return 0.0 if started is None else max(0.0, now() - started)
 
     def _reopen_after_modal_state(self) -> None:
         """Give up the tab we were driving and take a fresh one, back on the page we were reading.

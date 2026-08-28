@@ -22,7 +22,7 @@ import logging
 from sellee import crosslist, marketplaces, paths, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import photo_fetch, reconcile
-from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.store import MAX_PHOTOS, StoreError
 from sellee.store.survey import (
@@ -86,8 +86,10 @@ def adopt_phase(deps) -> None:
             "survey.adopt_dropped",
             {"market": market, "listing_id": listing_id, "reason": str(exc)[:200]},
         )
-    except BrowserUnavailable as exc:
-        # The whole layer is down, not this listing. Left accepted, no attempt spent.
+    except (BrowserUnavailable, BrowserDetached) as exc:
+        # The whole layer is down, or our own server has lost Chrome; this listing is no more at
+        # fault than any other. Left accepted, with no attempt spent, for a tick where the browser
+        # is there.
         deps.bus.publish("browser.unavailable", {"reason": str(exc)})
     except BrowserError as exc:
         _retry_or_fail(deps, row, f"browser error: {exc}")

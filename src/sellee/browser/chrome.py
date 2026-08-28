@@ -203,6 +203,34 @@ def is_ready(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> bool:
     return True
 
 
+def list_url(port: int) -> str:
+    return f"http://127.0.0.1:{port}/json/list"
+
+
+def page_targets(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int | None:
+    """How many pages this Chrome has open, or None when it could not be asked.
+
+    Chrome's own endpoint rather than a browser tool, and that is the whole point: this has to be
+    answerable *without* creating the thing it counts. The browser server's tab listing is not —
+    its handler opens a tab when there is none — so asking it "do you have a window" on a Chrome
+    whose window the seller closed would answer by opening one.
+
+    Zero pages is Chrome running with no window at all, which on macOS is what closing the window
+    leaves behind: the process keeps the profile and the port, and the next page tool the agent runs
+    opens a fresh window. Knowing that in advance is what lets the seller be told why one appeared.
+
+    None, not 0, when the probe fails: "we could not ask" must never read as "there are no windows".
+    """
+    try:
+        with urllib.request.urlopen(list_url(port), timeout=timeout_sec) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if not isinstance(payload, list):
+        return None
+    return sum(1 for target in payload if isinstance(target, dict) and target.get("type") == "page")
+
+
 def clear_stale_locks() -> list:
     """Remove the singleton lock files and the announced port from the profile, returning what went.
 

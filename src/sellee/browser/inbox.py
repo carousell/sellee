@@ -27,10 +27,10 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import deployment, marketplaces
+from sellee import marketplaces
+from sellee.browser import blindness, reconcile
 from sellee.browser import markets as market_adapters
-from sellee.browser import reconcile
-from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
@@ -45,17 +45,6 @@ _ACTIVE_STATUSES = ("active", "liaising", "agreed")
 # Pass types that drive the browser, and so must not overlap the lane's reads.
 _BROWSER_PASS_TYPES = ("reply", "publish")
 
-BLIND_NOTICE = (
-    "I can't read your {market} inbox right now, so I may be missing buyer messages. {chrome_check}"
-)
-# Which Chrome the seller should go and look at. On a host install it is the window the agent
-# opens for itself; in a container it is theirs, on their own desktop, and closing it is the
-# most likely reason we are blind.
-CHROME_CHECK = "Check that the agent's Chrome is running and still logged in."
-CONTAINER_CHROME_CHECK = (
-    "Check that Chrome is running on your own computer (start it with ./start-chrome.sh) and "
-    "still logged in."
-)
 LOGGED_OUT_NOTICE = (
     "Your {name} session is signed out, so I've stopped reading that market. Tap below and I'll "
     "open the sign-in page in my Chrome for you — I never sign in for you."
@@ -82,6 +71,9 @@ class InboxDeps:
     ticks: dict = field(default_factory=dict)
     blind: dict = field(default_factory=dict)
     notified: dict = field(default_factory=dict)
+    # When each market last went blind, so a recovery can say how long it lasted — and, because it
+    # is only set on the first failure of a run, so a market that flaps does not keep resetting it.
+    blind_since: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
 
 
@@ -100,10 +92,6 @@ def _notify_once(deps: InboxDeps, key: str, text: str, controls: list | None = N
 
 def _clear_notice(deps: InboxDeps, key: str) -> None:
     deps.notified.pop(key, None)
-
-
-def _chrome_check() -> str:
-    return CONTAINER_CHROME_CHECK if deployment.is_container() else CHROME_CHECK
 
 
 def _unavailable(deps: InboxDeps, exc: BrowserUnavailable) -> None:
@@ -156,6 +144,11 @@ def inbox_lane(deps: InboxDeps) -> None:
             # to the blind counter.
             _unavailable(deps, exc)
             return
+        except BrowserDetached as exc:
+            # Our own server lost Chrome. The factory has already tried to replace it; what reaches
+            # here is a tick that could not run, and the one thing it must not do is send the seller
+            # to check a browser that answered its probe moments ago.
+            _count_blind(deps, market, str(exc), cause=blindness.CAUSE_PLUMBING)
         except BrowserError as exc:
             _count_blind(deps, market, str(exc))
     # Recovery is a tick that ran into no unavailability, so a condition that persists mid-loop
@@ -198,7 +191,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         # The list came back as a failure rather than as content. Unlike a DOM read that finds
         # nothing, this cannot be mistaken for an empty inbox, so it is reported as what it is.
         reason = (answer or {}).get("error") if isinstance(answer, dict) else "unreadable"
-        _count_blind(deps, market, f"conversation list unavailable: {reason}")
+        _count_blind(
+            deps, market, f"conversation list unavailable: {reason}", cause=blindness.CAUSE_MARKET
+        )
         return
     rows = answer["conversations"]
 
@@ -262,9 +257,18 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # whose message list we could not find is the same class of failure as an unreadable inbox: it
     # would otherwise pass for "this buyer said nothing new", which is how one gets stranded.
     if unreadable:
-        _count_blind(deps, market, f"{unreadable} conversation(s) unreadable")
+        _count_blind(
+            deps,
+            market,
+            f"{unreadable} conversation(s) unreadable",
+            cause=blindness.CAUSE_TAILS,
+            count=unreadable,
+        )
     else:
-        _clear_blind(deps, market)
+        # `recorded` is not the test — a tick can legitimately open threads and find nothing new.
+        # What makes this a market we can see is that every thread we opened was legible, which is
+        # exactly what `unreadable == 0` on a tick that opened something means.
+        _clear_blind(deps, market, read_content=opened > 0)
 
 
 def _thread_key(market: str, native_id) -> str | None:
@@ -291,6 +295,21 @@ def _can_skip(store, thread: dict, row: dict) -> bool:
 def _unmatched(deps: InboxDeps, market: str, thread_id: str, reason: str) -> None:
     deps.bus.publish(
         "browser.unmatched", {"market": market, "thread_id": thread_id, "reason": reason}
+    )
+
+
+def _unreadable(deps: InboxDeps, market: str, thread_id: str, reason: str) -> None:
+    """Say which conversation could not be read, and which of the ways it failed.
+
+    `_read_thread` answers None for three different things — the reader found no message list, the
+    list read as empty for a conversation that is not, and the inbox claims unread content the tail
+    does not hold — and the caller only ever counted them. So a market reporting "3 conversation(s)
+    unreadable" every tick for a day was undiagnosable from the log: the count says how many, never
+    which or why, and the three causes want three different fixes.
+    """
+    deps.bus.publish(
+        "browser.unreadable",
+        {"market": market, "thread_id": thread_id, "reason": reason[:200]},
     )
 
 
@@ -414,9 +433,12 @@ def _read_thread(
         return None
     client.navigate(url)
     raw = client.evaluate(adapter.conversation_tail_js)
-    if raw is None:
+    unreadable = reconcile.unreadable_reason(raw)
+    if unreadable is not None:
         # The reader could not find the message list. An empty tail would claim the conversation is
-        # over; this says we could not see it.
+        # over; this says we could not see it — and now says why, which is the difference between a
+        # marketplace that changed shape and a window too narrow to render the one we know.
+        _unreadable(deps, market, thread["thread_id"], unreadable)
         return None
     tail = reconcile.classify_tail(raw)
     # Settle our own unconfirmed sends first, so anything recognised is stored before the tail is
@@ -429,6 +451,12 @@ def _read_thread(
         # a latest message. Either way the page changed shape under the reader — report that rather
         # than let it pass for "the buyer said nothing new".
         if stored or (row or {}).get("last_message"):
+            _unreadable(
+                deps,
+                market,
+                thread["thread_id"],
+                "the message list read as empty for a conversation that is not",
+            )
             return None
         return 0
     fresh = reconcile.new_rows(tail, stored, now=deps.now())
@@ -448,6 +476,12 @@ def _read_thread(
         # A buyer repeating the same text past TAIL_BUBBLES looks to the aligner like an
         # already-stored tail (every overlap size matches trivially). The list's unread count is
         # the backstop: unread with nothing fresh means we cannot see what we were told is there.
+        _unreadable(
+            deps,
+            market,
+            thread["thread_id"],
+            "the list reports unread messages and the tail holds nothing new",
+        )
         return None
     for entry in fresh:
         verdict = None
@@ -509,21 +543,58 @@ def reply_lane(*, store, bus) -> None:
     )
 
 
-def _count_blind(deps: InboxDeps, market: str, reason: str) -> None:
-    """Count a failed read, and raise one notice once a run of them means we are genuinely blind."""
+def _count_blind(
+    deps: InboxDeps,
+    market: str,
+    reason: str,
+    *,
+    cause: str = blindness.CAUSE_MARKET,
+    count: int = 0,
+) -> None:
+    """Count a failed read, and raise one notice once a run of them means we are genuinely blind.
+
+    `cause` decides which sentence the seller gets, and it is the caller's to supply because only
+    the caller knows how far the read got. The rule the causes encode: never tell the seller to
+    check something we have already established is fine.
+    """
     failures = deps.blind.get(market, 0) + 1
     deps.blind[market] = failures
+    deps.blind_since.setdefault(market, deps.now())
     deps.bus.publish(
-        "browser.blind", {"market": market, "failures": failures, "reason": reason[:200]}
+        "browser.blind",
+        {"market": market, "failures": failures, "cause": cause, "reason": reason[:200]},
     )
     if failures >= int(deps.config.browser_blind_after):
         _notify_once(
             deps,
             f"blind:{market}",
-            BLIND_NOTICE.format(market=market, chrome_check=_chrome_check()),
+            blindness.notice_for(cause, name=marketplaces.display_name(market), count=count),
         )
 
 
-def _clear_blind(deps: InboxDeps, market: str) -> None:
-    deps.blind.pop(market, None)
+def _clear_blind(deps: InboxDeps, market: str, *, read_content: bool = False) -> None:
+    """A market is seen again. Tell the seller only if they were told it was not.
+
+    `read_content` is the difference between "the conversation list answered" and "I read what
+    buyers said", and the recovery notice is gated on the second. A tick that lists fifty
+    conversations and cannot open one of them is not a market we can see — announcing it as one
+    would invert the lane's first rule, and the seller would be told reading had resumed on the very
+    tick that recorded nothing.
+    """
+    was_blind = deps.blind.pop(market, None)
+    since = deps.blind_since.pop(market, None)
+    told = bool(deps.notified.get(f"blind:{market}"))
     _clear_notice(deps, f"blind:{market}")
+    if not (was_blind and told and read_content and since is not None):
+        return
+    gap = deps.now() - since
+    if gap < blindness.GAP_WORTH_MENTIONING_SEC:
+        # Fixed before it could have mattered. The seller was warned, but chasing that with an
+        # all-clear minutes later is two messages about a blip they never noticed.
+        return
+    deps.store.queue_notice(
+        blindness.READING_AGAIN_NOTICE.format(
+            name=marketplaces.display_name(market), how_long=blindness.gap_text(gap)
+        )
+    )
+    deps.bus.publish("browser.reading_again", {"market": market, "blind_sec": round(gap)})

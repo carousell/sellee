@@ -51,6 +51,12 @@ def main(argv) -> int:
         if msg_id is None:
             continue  # a notification (notifications/initialized) gets no reply
         if method == "initialize":
+            if script.get("handshake") == "silent":
+                # Alive, reading its pipe, and never answering — a slow npx fetch, or a server that
+                # starts and never completes startup. The distinction that matters to the client is
+                # that the process does NOT exit, so its own restart guard would otherwise see a
+                # live process and decline to try again for the rest of the daemon's life.
+                continue
             reply = {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {"tools": {}},

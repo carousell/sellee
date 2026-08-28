@@ -14,7 +14,7 @@ import pytest
 
 from sellee.browser import markets as market_adapters
 from sellee.browser import selectors, sink
-from sellee.browser.client import BrowserToolError
+from sellee.browser.client import BrowserDetached, BrowserToolError
 from sellee.browser.markets import carousell as carousell_market
 from sellee.config import Config
 
@@ -32,6 +32,7 @@ class StubClient:
         matches=None,
         sent_bubbles=None,
         fail_on=None,
+        detach_on=None,
         echo_on_send=True,
         page_accepts=True,
     ):
@@ -40,6 +41,7 @@ class StubClient:
             self.matches = matches
         self.bubbles = list(sent_bubbles or [])
         self.fail_on = fail_on
+        self.detach_on = detach_on
         self.echo_on_send = echo_on_send
         # Whether the page's own handler takes the message — what the submit reports back.
         self.page_accepts = page_accepts
@@ -73,6 +75,8 @@ class StubClient:
 
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
+        if self.detach_on == name:
+            raise BrowserDetached("the browser server lost its connection to Chrome")
         if self.fail_on == name:
             raise BrowserToolError(f"{name} refused")
         if name == "browser_type":
@@ -83,6 +87,8 @@ class StubClient:
 
     def evaluate(self, function, **kwargs):
         if function == carousell_market.CONVERSATION_TAIL_JS:
+            if self.detach_on == "tail":
+                raise BrowserDetached("the browser server lost its connection to Chrome")
             return list(self.bubbles)
         if function == carousell_market.CHAT_MESSAGE_SUBMIT_JS:
             self.calls.append(("submit", kwargs.get("target")))
@@ -749,3 +755,31 @@ def test_usable_requires_one_match_on_the_right_page() -> None:
     assert selectors.usable({"matches": 0, "url": "https://x/inbox/9/"}, "/inbox/") is False
     assert selectors.usable({"matches": 2, "url": "https://x/inbox/9/"}, "/inbox/") is False
     assert selectors.usable({"matches": 1, "url": "https://x/p/thing/"}, "/inbox/") is False
+
+
+# --- a server that lost Chrome, on either side of the commit --------------------------------------
+
+
+def test_a_detach_before_the_commit_leaves_the_intent_pending(store, bus, thread) -> None:
+    """`BrowserDetached` is a `BrowserError`, so the sink classifies it with no change at all — and
+    that is the point of subclassing rather than inventing a new hierarchy. Nothing was typed and
+    nothing was sent, so the intent stays retryable."""
+    client = StubClient(detach_on="browser_type")
+    intent_id = _reserve(store)
+    with pytest.raises(sink.SendNotAttempted):
+        _sink(store, bus, client).send(thread, "hello", "reply", intent_id)
+    assert _intent_status(store, intent_id) == "pending"
+    assert [name for name, _ in client.calls if name == "submit"] == []
+
+
+def test_a_detach_after_the_commit_is_unverified_and_never_resent(store, bus, thread) -> None:
+    """Past the commit the buyer may already have the message. A server losing Chrome says nothing
+    about whether it landed, so this is the unverified case exactly as any other failed read-back —
+    never a retry, because the one thing worse than an unconfirmed message is the same message
+    twice."""
+    client = StubClient(detach_on="tail")
+    intent_id = _reserve(store)
+    with pytest.raises(sink.SendUnverified):
+        _sink(store, bus, client).send(thread, "hello", "reply", intent_id)
+    assert _intent_status(store, intent_id) == "sent_unverified"
+    assert len([1 for name, _ in client.calls if name == "submit"]) == 1
