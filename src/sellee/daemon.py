@@ -39,6 +39,7 @@ from sellee.browser import chrome, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
 from sellee.browser import sink as browser_sink
+from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
 from sellee.channel import outbound
 from sellee.channel.discord import provider as discord_provider
@@ -74,6 +75,10 @@ _CROSSLIST_LANE_INTERVAL_SEC = 30.0
 # how long a seller waits after tapping Sign in on desktop before Chrome starts moving. They are
 # watching the chat when they tap, so it is short.
 _CONNECT_LANE_INTERVAL_SEC = 2.0
+# The survey lane reads indexed rows and does nothing the rest of the time. A minute is about how
+# long a seller waits to be asked after signing in, and it also paces adoption — one listing per
+# tick, each a page read and a set of photographs.
+_SURVEY_LANE_INTERVAL_SEC = 60.0
 # A cold `npx` fetch of the browser server and its dependencies is a download, so minutes. This is
 # off the hot path entirely, so it only has to be longer than a slow connection needs.
 _BROWSER_WARM_TIMEOUT_SEC = 600.0
@@ -493,6 +498,20 @@ def run_daemon(*, once: bool) -> int:
             name="market_connect",
             interval_sec=_CONNECT_LANE_INTERVAL_SEC,
             func=lambda: browser_connect.connect_lane(connect_deps),
+        )
+    )
+    # Read the seller's existing listings once, ask, and turn a yes into items.
+    survey_deps = browser_survey.SurveyDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+    )
+    scheduler.register(
+        Task(
+            name="market_survey",
+            interval_sec=_SURVEY_LANE_INTERVAL_SEC,
+            func=lambda: browser_survey.survey_lane(survey_deps),
         )
     )
     # Answer the buyers who are waiting. Driven off durable rows rather than off the read lane, so a

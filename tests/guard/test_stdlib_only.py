@@ -66,6 +66,9 @@ NETWORK_ALLOWLIST: set[str] = {
     "sellee/channel/discord/transport.py",  # the Discord REST API transport (one pipe)
     "sellee/channel/discord/ws_client.py",  # the Gateway's WebSocket connection
     "sellee/browser/chrome.py",  # the warm Chrome's CDP readiness probe (loopback GET)
+    # Fetches a listing's photographs: https only, to a host the registry names, no redirects,
+    # byte-capped per file and per set, every body sniffed as an image.
+    "sellee/browser/photo_fetch.py",
 }
 
 

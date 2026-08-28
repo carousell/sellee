@@ -16,6 +16,8 @@ scroll container, by geometry, and by the shape of a message bubble.
 
 from __future__ import annotations
 
+import json
+
 # Conversations with Carousell itself — the platform assistant and its promotional accounts — rather
 # than with a buyer. Never conversations to answer. (`is_bot_offer` looks like it should say this
 # and does not: it is false for the campaign accounts.)
@@ -192,6 +194,196 @@ LOGIN_JS = """() => {
   } catch (e) {
     return { state: 'unknown' };
   }
+}"""
+
+# What the seller already has listed, read off their own manage-listings page.
+#
+# The DOM, not an API, and unusually the *stable* choice: the page renders a real `<table>` with a
+# `<thead>`, so columns are located by their heading, not by position or a hashed class.
+#
+# Two facts make this safe to adopt from, and both are checked rather than assumed: the row count is
+# compared against the page's own "N Active" tally (sold listings hide behind tabs with no selected
+# state), and a listing with no parseable price is dropped and counted rather than offered —
+# carousell.ai refuses an item without one.
+#
+# Returns `{listings: [...], active_count, dropped, unreadable, truncated}` or `{error: …}`. An
+# empty list means "you have nothing listed" — the answer that stops the asking — so a page that
+# would not parse must never arrive as that answer.
+#
+# A price is read from rendered text, and the thousands separator is not the same on every regional
+# site, so neither `,` nor `.` can be assumed to be the decimal point. Kept as its own function
+# because it is the one piece here worth testing directly.
+PARSE_PRICE_JS = """(text) => {
+  const trimmed = String(text || '').replace(/[^0-9.,]/g, '');
+  if (!trimmed) return NaN;
+  const lastDot = trimmed.lastIndexOf('.');
+  const lastComma = trimmed.lastIndexOf(',');
+  if (lastDot >= 0 && lastComma >= 0) {
+    // Both appear: the later is the decimal point, the other groups thousands.
+    const decimal = lastDot > lastComma ? '.' : ',';
+    const grouping = decimal === '.' ? ',' : '.';
+    return Number(trimmed.split(grouping).join('').replace(decimal, '.'));
+  }
+  const sep = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
+  if (!sep) return Number(trimmed);
+  // One separator, so its job is inferred: repeated, or three digits after the last one, groups
+  // thousands ("1.500.000", "1,299"); anything else is a decimal point ("40.00", "1,5").
+  const parts = trimmed.split(sep);
+  const groups = parts.length > 2 || parts[parts.length - 1].length === 3;
+  return Number(groups ? parts.join('') : parts.join('.'));
+}"""
+
+_MY_LISTINGS_TEMPLATE = """async () => {
+  const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
+  // Badge text of a non-live row. Matched whole, so a listing titled "Sold Out Records Tee" is not
+  // dropped.
+  const BADGES = ['sold', 'reserved', 'expired', 'deleted', 'under review', 'rejected', 'inactive'];
+  const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
+  // The title cell also holds row notes under the title ("Bumped 16 days ago") — the title is its
+  // first line.
+  const firstLine = (el) =>
+    (((el && el.innerText) || '').split('\\n').map((s) => s.trim()).filter(Boolean)[0] || '');
+  const parsePrice = __PARSE_PRICE__;
+
+  const readRows = (table, priceIndex) => {
+    const rows = [];
+    // Counted apart: a badge means not for sale; an unparseable price means we failed to read. An
+    // all-unreadable page must not report an empty list.
+    let inactive = 0;
+    let unreadable = 0;
+    table.querySelectorAll('tbody tr').forEach((tr) => {
+      const link = tr.querySelector('a[href*="/p/"]');
+      if (!link) return;
+      const href = link.getAttribute('href') || '';
+      const match = LISTING_HREF.exec(href.split('?')[0]);
+      if (!match) return;
+      const cells = Array.from(tr.children);
+      const badge = cells.some((td) =>
+        Array.from(td.querySelectorAll('*'))
+          .filter((el) => el.children.length === 0)
+          .some((el) => BADGES.includes(clean(el).toLowerCase()))
+      );
+      if (badge) { inactive++; return; }
+      // Walk up from the link — the title cell holds it, so no column counting.
+      let titleCell = link;
+      while (titleCell && titleCell.tagName !== 'TD') titleCell = titleCell.parentElement;
+      const title = firstLine(titleCell);
+      const priceText = priceIndex >= 0 && cells[priceIndex] ? clean(cells[priceIndex]) : '';
+      const price = parsePrice(priceText);
+      if (!title || !isFinite(price) || price <= 0) { unreadable++; return; }
+      rows.push({
+        listing_id: match[1],
+        url: new URL(href, location.origin).href,
+        title: title.slice(0, 200),
+        price: price,
+        price_text: priceText.slice(0, 40),
+      });
+    });
+    return { rows: rows, dropped: inactive + unreadable, unreadable: unreadable };
+  };
+
+  try {
+    const table = document.querySelector('table');
+    if (!table) return { error: 'no listings table on the page' };
+    const headings = Array.from(table.querySelectorAll('th'));
+    const priceIndex = headings.findIndex((th) => /^price$/i.test(clean(th)));
+    if (priceIndex < 0) return { error: 'no price column in the listings table' };
+
+    let activeCount = null;
+    Array.from(document.querySelectorAll('button, a, [role="tab"]')).forEach((el) => {
+      const hit = /^(\\d+)\\s+active$/i.exec(clean(el));
+      if (hit && activeCount === null) activeCount = Number(hit[1]);
+    });
+    if (activeCount === null) return { error: 'could not read the active listing count' };
+
+    // Keep loading until the row count reaches the page's own active tally, or a few rounds add
+    // nothing (a fetch in flight looks like a list that has ended). A short read answers
+    // `truncated`, which the caller treats as a failed look.
+    let seen = readRows(table, priceIndex);
+    let quiet = 0;
+    for (let round = 0; round < 20 && seen.rows.length + seen.dropped < activeCount; round++) {
+      window.scrollTo(0, document.body.scrollHeight);
+      await new Promise((r) => setTimeout(r, 700));
+      const again = readRows(table, priceIndex);
+      quiet = again.rows.length + again.dropped === seen.rows.length + seen.dropped ? quiet + 1 : 0;
+      seen = again;
+      if (quiet >= 3) break;
+    }
+
+    const total = seen.rows.length + seen.dropped;
+    if (total > activeCount) {
+      // More rows than active listings: not the active view, so every row is suspect. Adopting
+      // from here would take in sold listings.
+      return { error: 'showing ' + total + ' rows for ' + activeCount + ' active listings' };
+    }
+    return {
+      listings: seen.rows,
+      active_count: activeCount,
+      dropped: seen.dropped,
+      unreadable: seen.unreadable,
+      truncated: total < activeCount,
+    };
+  } catch (e) {
+    return { error: String(e).slice(0, 200) };
+  }
+}"""
+
+# Both injected rather than written twice: the id pattern must agree with `listing_id_pattern`
+# (json.dumps gives a JS literal whose escapes survive), and the price parser is tested on its own.
+MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
+    "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
+).replace("__PARSE_PRICE__", PARSE_PRICE_JS)
+
+# One listing's own page, read at adoption time — the fields, the photographs, and whether it is
+# still for sale.
+#
+# schema.org JSON-LD rather than DOM: Carousell publishes a `Product` block for search engines, so
+# it is a contract with somebody other than us, and it carries every field an adopted item needs
+# already typed — including the currency as a code and the full-size photograph URLs.
+#
+# `availability` is the field that matters most: sold reports `schema.org/SoldOut`, live reports
+# `InStock`, and the rendered page shows no "sold" text anywhere — so this is the only reliable
+# signal between a late yes and relisting sold goods. `itemCondition` is ignored (Carousell reports
+# `NewCondition` for everything); the condition is read from the visible page instead.
+#
+# Returns null when the page carries no Product block — the caller treats that as "could not read",
+# never as "not for sale".
+LISTING_DETAIL_JS = """() => {
+  const clean = (el) => ((el && el.innerText) || '').replace(/\\s+/g, ' ').trim();
+  const product = Array.from(document.querySelectorAll('script[type="application/ld+json"]'))
+    .map((s) => { try { return JSON.parse(s.textContent); } catch (e) { return null; } })
+    .find((o) => o && o['@type'] === 'Product');
+  if (!product) return null;
+
+  const offers = product.offers || {};
+  const availability = String(offers.availability || '');
+  const price = Number(offers.price);
+  const images = (Array.isArray(product.image) ? product.image : [product.image])
+    .filter((u) => typeof u === 'string' && u.startsWith('https://'));
+
+  // The visible "Condition" row, label followed by value. Best-effort: a missing condition costs
+  // a detail, a wrong one misdescribes the goods.
+  let condition = null;
+  const leaves = Array.from(document.querySelectorAll('div, span, p, dt, dd, li'))
+    .filter((el) => el.children.length === 0);
+  for (let i = 0; i < leaves.length - 1; i++) {
+    if (/^condition$/i.test(clean(leaves[i]))) {
+      const value = clean(leaves[i + 1]);
+      if (value && value.length <= 40 && !/^condition$/i.test(value)) condition = value;
+      break;
+    }
+  }
+
+  return {
+    active: /InStock$/i.test(availability),
+    availability: availability,
+    title: String(product.name || '').slice(0, 200),
+    description: String(product.description || '').slice(0, 4000),
+    price: isFinite(price) && price > 0 ? price : null,
+    currency: String(offers.priceCurrency || '') || null,
+    condition: condition,
+    photo_urls: images.slice(0, 20),
+  };
 }"""
 
 # The reply composer, as shipped defaults under the heal cache. A chat page has exactly one message

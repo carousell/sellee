@@ -191,6 +191,7 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     deps.store.clear_market_connect_request(market)
     deps.bus.publish("browser.login", {"market": market, "state": state})
     if state == "logged_in":
+        _ask_about_existing_listings(deps, market)
         deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
         return
     if opening:
@@ -200,6 +201,19 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
         template.format(name=name, where=window.where()),
         controls=fastpaths.check_again_controls(market),
     )
+
+
+def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:
+    """Line up a look at what the seller already has listed here.
+
+    Just a row: reading the listings page is another navigation of the one shared tab, and this is
+    the sign-in lane. The survey lane picks it up within a tick and does the asking. Written before
+    the signed-in notice — both are queued, so the seller reads "you're signed in" first.
+    """
+    if not market_adapters.can_survey(market, deps.store.seller_region()):
+        return
+    if deps.store.request_market_survey(market):
+        deps.bus.publish("survey.requested", {"market": market, "via": "connect"})
 
 
 def _raise_window(deps: ConnectDeps) -> None:

@@ -30,6 +30,7 @@ _EXPECTED = {
     "PassesMixin",
     "ChannelMixin",
     "SettingsMixin",
+    "SurveyMixin",
 }
 
 

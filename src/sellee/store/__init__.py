@@ -55,6 +55,7 @@ from sellee.store.passes import PassesMixin
 from sellee.store.scam import ScamMixin
 from sellee.store.send import SendMixin
 from sellee.store.settings import SettingsMixin
+from sellee.store.survey import SurveyMixin
 from sellee.store.threads import ThreadsMixin
 from sellee.store.wants import WantsMixin
 
@@ -92,6 +93,7 @@ class Store(
     PassesMixin,
     ChannelMixin,
     SettingsMixin,
+    SurveyMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
 
@@ -170,6 +172,9 @@ _SCOPE_GUARDED = {
     "create_thread": (("item_id", "item"), ("want_id", "want")),
     "set_photo_uploads": (("item_id", "item"),),
     "archive_listing_url": (("item_id", "item"),),
+    # Creating an item passes None, which `allows` treats as unset rather than out of scope — so an
+    # adoption that mints its own item is never refused.
+    "adopt_discovered_listing": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
@@ -215,6 +220,7 @@ _SCOPE_MISS_NOTFOUND = {
     "record_checkout": ("item", ItemNotFound),
     "create_thread": ("item", ItemNotFound),
     "archive_listing_url": ("item", ItemNotFound),
+    "adopt_discovered_listing": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
     "record_inbound": ("thread", ThreadNotFound),
     "qa_add": ("item", ItemNotFound),

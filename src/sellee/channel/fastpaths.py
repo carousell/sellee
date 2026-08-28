@@ -35,6 +35,10 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# The two answers to the take-these-over ask. The ref carries the market, so a tap months later
+# still says which list it meant.
+CB_SURVEY_YES = "adoptyes"
+CB_SURVEY_NO = "adoptno"
 # Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
 # button that carried the value would apply a stale one when tapped from the scrollback.
 CB_WATCH = "watch"
@@ -46,6 +50,8 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_SKIP_CTA,
         CB_CONNECT_MARKET,
         CB_CONNECT_PROBE,
+        CB_SURVEY_YES,
+        CB_SURVEY_NO,
         CB_WATCH,
     }
 )
@@ -61,6 +67,10 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
 CHECK_AGAIN_LABEL = "Check again"
+# The two answers to the ask. One yes: an agent that answers buyers on a listing it cannot relist
+# has to explain that split in every conversation. The tools carry the finer answers.
+SURVEY_YES_LABEL = "Yes, manage them"
+SURVEY_NO_LABEL = "No thanks"
 # The watch-mode toggle. Each label names what tapping *does*, not what is currently set — the card
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
@@ -70,6 +80,15 @@ WATCH_OFF_LABEL = "🌙 Work in background"
 def signin_controls(market: str) -> list:
     """The one-button control spec that opens `market` for sign-in."""
     return [(SIGN_IN_LABEL, f"{market}:{CB_CONNECT_MARKET}")]
+
+
+def survey_controls(market: str) -> list:
+    """The two-button spec the take-these-over ask carries. Here rather than beside the copy in
+    `browser/survey.py`, so the tokens live with every other button token."""
+    return [
+        (SURVEY_YES_LABEL, f"{market}:{CB_SURVEY_YES}"),
+        (SURVEY_NO_LABEL, f"{market}:{CB_SURVEY_NO}"),
+    ]
 
 
 def check_again_controls(market: str) -> list:
@@ -89,6 +108,7 @@ CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
 )
 CONNECT_UNKNOWN = "I don't sell on {market}, so there's nothing for me to open."
+SURVEY_UNKNOWN = "I don't have a list of listings for that marketplace any more."
 
 # Watch mode, both ways. The on side says where the window is for the same reason every other
 # window notice does: this is read on a phone and the window is on a desktop. It promises the tab
@@ -184,6 +204,8 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
     settings ledger publishes what it applied, and the window raise rides on that event.
     """
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
+    if token in (CB_SURVEY_YES, CB_SURVEY_NO):
+        return _survey_button(store, event["payload"].get("ref"), token)
     if token in ("/watch", CB_WATCH):
         return _watch_toggle(store, bus)
     if token in _CONNECT_MODE_FOR_CALLBACK:
@@ -232,6 +254,51 @@ def _connect_button(store, market, mode: str) -> tuple:
         # A stale button, for a market whose adapter has since been withdrawn.
         return CONNECT_UNKNOWN.format(market=market or "that marketplace"), None
     return _request(store, market, mode)
+
+
+def _survey_button(store, market, token: str) -> tuple:
+    """A tap on Yes, manage them / No thanks.
+
+    The buttons stay on the message forever, so every tap is a question about *when* it was tapped.
+    Zero rows moved can mean the ask went stale, or the seller already answered and the work is
+    under way — a zero is disambiguated by what the market still holds, and only a market holding
+    nothing at all is treated as stale. That case re-asks, which is the one deliberate way back
+    through the ask-once guard.
+    """
+    # Imported here: the survey lane imports this module for its button tokens, so the reverse
+    # would close the loop.
+    from sellee.browser import markets as market_adapters
+    from sellee.browser import survey
+    from sellee.store.survey import LISTING_ACCEPTED, LISTING_ADOPTED
+
+    if not market:
+        return SURVEY_UNKNOWN, None
+    decision = "decline" if token == CB_SURVEY_NO else "manage"
+    moved = store.decide_discovered_listings(
+        market, decision=decision, manage=None if decision == "decline" else "relist"
+    )
+    if moved:
+        if decision == "decline":
+            return survey.declined_text(market), None
+        return survey.accepted_text(store, market, moved), None
+
+    # Nothing moved. What is already here says which kind of nothing this is.
+    rows = store.list_discovered_listings(market)
+    in_flight = sum(1 for row in rows if row["status"] == LISTING_ACCEPTED)
+    adopted = sum(1 for row in rows if row["status"] == LISTING_ADOPTED)
+    if decision == "decline":
+        # Decline reaches acceptances not yet adopted; zero means nothing was left to stop.
+        if adopted and not in_flight:
+            return survey.already_managing_text(market, adopted), None
+        return survey.declined_text(market), None
+    if in_flight or adopted:
+        # Already said yes. Re-ack, but never reopen the survey: that deletes the accepted rows
+        # their first tap created.
+        return survey.accepted_text(store, market, in_flight or adopted), None
+    if not market_adapters.can_survey(market, store.seller_region()):
+        return SURVEY_UNKNOWN, None
+    store.reopen_market_survey(market)
+    return survey.stale_text(market), None
 
 
 def _connect_command(store) -> tuple:
@@ -343,6 +410,14 @@ def render_catchup(store) -> str:
         lines.extend(
             f"• {p['label']}: {p['current']} → {p['proposed']} (approve {p['change_id']})"
             for p in pending
+        )
+    # An ask that scrolled out of the chat is otherwise unreachable. Surfaced for the same reason
+    # pending settings changes are.
+    found = store.count_pending_discovered()
+    if found:
+        lines.append(
+            f"Listings you already had: {found} waiting on whether I should manage them "
+            "(just tell me yes or no)."
         )
     if not lines:
         return "You're all caught up — nothing waiting."
