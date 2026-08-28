@@ -137,6 +137,88 @@ def test_wait_verdict_records_no_second_intent(make_ctx, store) -> None:
     assert len(_pacing_rows(store)) == 1
 
 
+def test_a_capped_reply_says_plainly_that_the_buyer_did_not_get_it(make_ctx, store) -> None:
+    """The 2026-08-27 report bug at its source. A `wait` verdict returns no error, so the only thing
+    standing between it and "All sorted, message queued" is the result saying, in the result itself,
+    that nothing was delivered and nothing was recorded to deliver later."""
+    _sell_thread(store)
+    store.record_inbound("fb:1", msg_id="in|q|1", text="still available?", ts=10.0)
+    capped = Config(max_actions_per_hour=1, reply_delay_sec=(0, 0))
+    # burn the marketplace's only slot elsewhere, so the reply to THIS buyer is the blocked one
+    store.reserve_action(marketplace="fb", kind="reply", cfg=pacing.resolve(capped, (0, 0)))
+    ctx = make_ctx("attended", reply_sink=FakeSink(), config=capped)
+
+    blocked = dispatch("send_reply", {"thread_id": "fb:1", "text": "two"}, ctx)
+    assert blocked["status"] == "wait"
+    assert blocked["delivered"] == "no"
+    assert blocked["retry_after_sec"] > 0
+    assert "delay_sec" not in blocked  # nothing is being held on our behalf
+    assert "intent_id" not in blocked  # and there is no queued thing to point at
+    # the thread is still unanswered, which is the only mechanism that gets the buyer a reply
+    assert [t["thread_id"] for t in store.threads_with_unhandled_inbound()] == ["fb:1"]
+
+
+def test_every_send_result_says_whether_the_buyer_got_it(make_ctx, store) -> None:
+    """`delivered` is the field the seller-facing report must key on, so it is on every return —
+    including the two that look like success from the outside and are not."""
+    _sell_thread(store)
+    paused = make_ctx("attended", reply_sink=FakeSink(), config=_FAST)
+    store.set_paused(True)
+    assert dispatch("send_reply", {"thread_id": "fb:1", "text": "x"}, paused) == {
+        "status": "paused",
+        "delivered": "no",
+        "thread_id": "fb:1",
+    }
+    store.set_paused(False)
+
+    failed = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "x"},
+        make_ctx("attended", reply_sink=FakeSink(fail=True), config=_FAST),
+    )
+    assert (failed["status"], failed["delivered"]) == ("send_failed", "no")
+
+    unverified = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "y"},
+        make_ctx("attended", reply_sink=UnverifiedSink(store), config=_FAST),
+    )
+    assert (unverified["status"], unverified["delivered"]) == ("send_unverified", "unknown")
+
+    blocked = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "z"},
+        make_ctx("attended", reply_sink=UnverifiedSink(store), config=_FAST),
+    )
+    assert (blocked["status"], blocked["delivered"]) == ("unverified_open", "no")
+
+
+def test_a_holding_line_leaves_the_buyers_question_unanswered(make_ctx, store) -> None:
+    """A holding line ("let me check and get right back to you") answers nothing, so it must not
+    advance the cursor over the message it was sent about.
+
+    This is how kenzojr, echen53 and ncwei were stranded on 2026-08-27: their holding line marked
+    their offer handled, the seller's real answer was then dropped by the pacing cap, and
+    `threads_with_unhandled_inbound` could never see them again. A real reply still advances it.
+    """
+    _sell_thread(store)
+    store.record_inbound("fb:1", msg_id="in|offer|1", text="70 can?", ts=10.0)
+    ctx = make_ctx("attended", reply_sink=FakeSink(), config=_FAST)
+
+    holding = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "Let me check and get right back to you!", "kind": "holding"},
+        ctx,
+    )
+    assert holding["delivered"] == "yes"  # the buyer did get the holding line
+    assert store.get_thread("fb:1")["cursor_last_msg_id"] is None
+    assert [t["thread_id"] for t in store.threads_with_unhandled_inbound()] == ["fb:1"]
+
+    dispatch("send_reply", {"thread_id": "fb:1", "text": "best is $105", "kind": "reply"}, ctx)
+    assert store.get_thread("fb:1")["cursor_last_msg_id"] == "in|offer|1"
+    assert store.threads_with_unhandled_inbound() == []
+
+
 def test_quiet_verdict_records_nothing_at_store(store) -> None:
     _sell_thread(store)
     cfg = pacing.resolve(Config(), quiet_hours=(1380, 480))  # default night window
@@ -160,7 +242,12 @@ def test_sink_failure_leaves_pending_then_sweep_folds_unconfirmed(make_ctx, stor
     assert _intents(store)[0]["status"] == "pending"  # left for the sweep, no commit
     assert store.get_thread("fb:1")["messages"] == []  # nothing folded to the transcript
 
-    # the sweep (grace 0) folds it as unconfirmed + opens an escalation — never a re-send
+    # the sweep folds it as unconfirmed + opens an escalation — never a re-send. Only once the lane
+    # has actually looked for it: the ask is the last resort, so effort is the gate, not the clock.
+    intent_id = _intents(store)[0]["intent_id"]
+    assert intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0) == []
+    store.bump_verify_attempt(intent_id)
+    store.bump_verify_attempt(intent_id)
     folded = intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0)
     assert len(folded) == 1 and folded[0]["escalation_new"] is True
     assert _intents(store)[0]["status"] == "unconfirmed"
@@ -207,6 +294,8 @@ def test_the_reserve_guard_hands_over_to_the_escalation_it_bounds(make_ctx, stor
     ctx = make_ctx("attended", reply_sink=UnverifiedSink(store), config=_FAST)
     dispatch("send_reply", {"thread_id": "fb:1", "text": "hi"}, ctx)
 
+    for _ in range(intent_sweep.MIN_VERIFY_ATTEMPTS):  # the lane looked and did not find it
+        store.bump_verify_attempt(_intents(store)[0]["intent_id"])
     intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0)
     assert _intents(store)[0]["status"] == "unconfirmed"  # the reserve guard no longer applies…
     with pytest.raises(ToolError, match="escalated"):  # …the escalated thread is the gate now

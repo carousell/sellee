@@ -108,6 +108,55 @@ def test_a_miss_is_an_empty_result_not_an_error(make_ctx, store) -> None:
     assert found == {"entries": [], "count": 0}
 
 
+def test_a_natural_language_question_finds_the_answer_the_seller_taught(make_ctx, store) -> None:
+    """The exact 2026-08-27 regression. The search filtered on one `LIKE '%<whole query>%'`, so a
+    query phrased as a question matched nothing — the seller had answered "Hillview or One North"
+    four minutes earlier and was asked the very same thing again."""
+    item = _item(store)
+    ctx = make_ctx("attended")
+    dispatch(
+        "add_qa_entry",
+        {
+            "item_id": item["id"],
+            "question": "Where is the pickup location?",
+            "answer": "Hillview or One North",
+            "source": "seller",
+        },
+        ctx,
+    )
+
+    found = dispatch(
+        "search_qa_bank",
+        {"item_id": item["id"], "query": "location pickup area where is item located"},
+        ctx,
+    )
+    assert found["count"] == 1
+    assert found["entries"][0]["answer"] == "Hillview or One North"
+
+
+def test_the_query_ranks_the_bank_and_never_hides_a_row(make_ctx, store) -> None:
+    """A query is a hint about relevance, not a filter. The model does the matching, so a row the
+    query shares no words with must still come back — it may be the one that answers the buyer."""
+    item = _item(store)
+    ctx = make_ctx("attended")
+    for question, answer in (
+        ("Is the receipt included?", "No receipt, so no warranty"),
+        ("Where is the pickup location?", "Hillview or One North"),
+    ):
+        dispatch(
+            "add_qa_entry",
+            {"item_id": item["id"], "question": question, "answer": answer, "source": "seller"},
+            ctx,
+        )
+
+    found = dispatch("search_qa_bank", {"item_id": item["id"], "query": "pickup location"}, ctx)
+    assert found["count"] == 2  # nothing hidden
+    assert found["entries"][0]["answer"] == "Hillview or One North"  # best match first
+
+    unrelated = dispatch("search_qa_bank", {"item_id": item["id"], "query": "colour"}, ctx)
+    assert unrelated["count"] == 2
+
+
 # --- the take-down ------------------------------------------------------------------------------
 
 

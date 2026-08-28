@@ -19,6 +19,7 @@ Two failure modes are deliberately different, because the safe response to each 
 from __future__ import annotations
 
 import logging
+import time
 
 from sellee import marketplaces
 from sellee.browser import markets as market_adapters
@@ -30,6 +31,13 @@ log = logging.getLogger(__name__)
 _MESSAGE_BOX = "message_box"
 
 _SEND_KEY = "Enter"
+
+# How long the read-back keeps looking for its own bubble, and how often. The window is generous
+# against a slow chat round-trip and still short against the pacing delay between two sends, so a
+# poll can never be what makes a thread look stalled. Both are only ever spent on a send that has
+# not confirmed yet — a bubble already on the page returns on the first read.
+_VERIFY_WINDOW_SEC = 6.0
+_VERIFY_POLL_SEC = 1.0
 
 
 class SinkError(Exception):
@@ -49,7 +57,16 @@ class BrowserReplySink:
     failure. The exception never reaches the buyer or the model; the caller turns it into a status
     and this emits its own events."""
 
-    def __init__(self, *, client, store, bus, region: str | None = None, on_drive=None):
+    def __init__(
+        self,
+        *,
+        client,
+        store,
+        bus,
+        region: str | None = None,
+        on_drive=None,
+        verify_window_sec: float = _VERIFY_WINDOW_SEC,
+    ):
         self._client = client
         self._store = store
         self._bus = bus
@@ -57,6 +74,9 @@ class BrowserReplySink:
         # Called once as a send starts, for a seller who asked to watch the work — injected rather
         # than read here, so the sink stays free of settings and window policy.
         self._on_drive = on_drive
+        # How long the read-back may keep looking. A parameter so a test can spend zero real time on
+        # the unverified path, which by definition never finds the bubble; zero means read once.
+        self._verify_window_sec = verify_window_sec
 
     def send(self, thread: dict, text: str, kind: str, intent_id: str) -> None:
         self._announce()
@@ -184,16 +204,31 @@ class BrowserReplySink:
         )
 
     def _verify(self, adapter, text: str) -> bool:
-        """Confirm the message is on the page as one of ours.
+        """Confirm the message is on the page as one of ours, re-reading until it shows up.
 
         "No error from the key press" is not success — a validation the page refused, a composer
         that silently cleared, or a chat that ignored the key because it thought the box was empty
         all look like success from the outside. Only our own words in an outbound bubble count.
+
+        Read more than once, because the chat commits the message to its server and re-renders
+        afterwards: a single read taken the instant after the submit is a read of the page as it was
+        BEFORE the send. The adapter's own polling cannot cover this — it waits for a tail to become
+        non-empty, and after a send the tail is never empty, so it returns the stale one
+        immediately. Costs nothing when the bubble is already there, which is the normal case.
+
+        A failed read is not evidence of a failed send, so a `BrowserError` here propagates
+        unchanged — the caller turns it into the unverified case, never a retry.
         """
-        tail = reconcile.classify_tail(self._client.evaluate(adapter.conversation_tail_js) or [])
-        return any(
-            bubble["side"] == "out" and reconcile.same_text(bubble["text"], text) for bubble in tail
-        )
+        deadline = time.monotonic() + self._verify_window_sec
+        while True:
+            tail = reconcile.classify_tail(
+                self._client.evaluate(adapter.conversation_tail_js) or []
+            )
+            if reconcile.contains_outbound(tail, text):
+                return True
+            if time.monotonic() >= deadline:
+                return False
+            time.sleep(min(_VERIFY_POLL_SEC, self._verify_window_sec))
 
     def _publish(self, market: str, thread: dict, outcome: str, detail: str | None) -> None:
         payload = {"market": market, "thread_id": thread["thread_id"], "outcome": outcome}

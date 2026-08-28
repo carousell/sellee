@@ -105,9 +105,15 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid.uuid4().hex[:12]}"
 
 
-def _like_escape(text: str) -> str:
-    """Neutralize LIKE wildcards so a buyer's literal `%` searches for a `%`, not everything."""
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+# Words worth ranking a Q&A row by. Short tokens ("is", "the", "a") match everything and rank
+# nothing, so they are dropped by the caller's length test rather than by a stop-word list.
+_WORD_RE = re.compile(r"[a-z0-9']+")
+
+
+def _term_overlap(entry: dict, terms: set) -> int:
+    """How many of the query's words appear in this Q&A row — the ranking signal for qa_search."""
+    haystack = f"{entry['question']} {entry['answer']}".lower()
+    return sum(1 for term in terms if term in haystack)
 
 
 # Sell threads whose buyer is still waiting on us. Shared by the read accessor and the enqueue
@@ -241,6 +247,7 @@ class ThreadSummary(TypedDict):
     status: str
     held_reason: str | None
     held_from_status: str | None
+    escalated_from_status: str | None
     buyer_location: str | None
     agent_note: str | None
     listing_url: str | None
@@ -498,6 +505,7 @@ _THREAD_FIELDS = (
     "status",
     "held_reason",
     "held_from_status",
+    "escalated_from_status",
     "buyer_location",
     "agent_note",
     "listing_url",

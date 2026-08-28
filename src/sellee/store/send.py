@@ -10,18 +10,65 @@ from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
 from sellee.store.helpers import ThreadNotFound, _new_id, _now
 
+# How hard the machine tries before the seller is asked anything. An unsettled send is re-read by
+# the inbox lane on its own cadence; two misses at that cadence is roughly the grace window the
+# sweep already waited, so a genuinely unconfirmable send still reaches the seller on the old timing
+# — what changed is that a send nobody has looked at yet no longer does.
+MIN_VERIFY_ATTEMPTS = 2
+# The backstop for the failure no waiting fixes: a lane that cannot run at all leaves the attempt
+# count at zero forever, and an unconfirmed message to a real buyer cannot just sit there.
+HARD_GRACE_SEC = 3600.0
+# And when to stop looking. A message that is really not on the page — the seller deleted it, or
+# the marketplace removed it — will never be found, and without a ceiling the lane would force-open
+# that conversation on every tick for the life of the install. Generous enough to cover a slow sync
+# at the inbox lane's cadence, then the intent is left as the seller's answer settled it.
+MAX_VERIFY_ATTEMPTS = 20
+
+# The one place this ask is worded. It is authored here rather than by a model because it may only
+# ever be raised by a send that survived the whole gate above — a pass that writes it itself is
+# asking the seller to do the machine's job, which is exactly what happened on 2026-08-27.
+UNCONFIRMED_SEND_ASK = (
+    "I sent a reply to this buyer but still can't confirm it arrived, even after re-checking the "
+    "chat. Could you open the conversation in your app — is my message there?"
+)
+UNCONFIRMED_SEND_CONTEXT = (
+    "A send was accepted by the marketplace page but never read back, and re-reading the "
+    "conversation has not found it either. Nothing further goes to this buyer until this is "
+    "settled, and the message is never re-sent without the seller's answer."
+)
+UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
+
+# Every status meaning "we still do not know whether the buyer got this". `pending` never got past
+# the composer, `sent_unverified` was taken by the page and could not be read back, and
+# `unconfirmed` is one the sweep gave up on and asked the seller about. All three are answered by
+# looking at the conversation, so the lane keeps looking at all three — finding the bubble after the
+# ask went out is what lets the ask be withdrawn instead of the seller having to answer it.
+UNSETTLED_STATUSES = ("pending", "sent_unverified", "unconfirmed")
+_UNSETTLED_PLACEHOLDERS = ", ".join("?" for _ in UNSETTLED_STATUSES)
+
 
 class SendMixin:
     # Bound by Store.__init__; declared so a checker resolves it inside each mixin.
     _db: Database
 
     if TYPE_CHECKING:
-        # Owned by EscalationsMixin, called from the stale-intent sweep below. Declared and never
-        # defined: only the composed Store has both mixins, and a checker looking at this class
-        # alone cannot know that. The real body is the one that runs.
+        # Owned by EscalationsMixin, called from the sweep and the settle path below. Declared and
+        # never defined: only the composed Store has both mixins, and a checker looking at this
+        # class alone cannot know that. The real bodies are the ones that run.
         def _open_escalation_in_txn(
-            self, conn, thread_id: str, *, open_question: str, kind=None, context_summary=None
+            self,
+            conn,
+            thread_id: str,
+            *,
+            open_question: str,
+            kind=None,
+            context_summary=None,
+            options=None,
         ) -> tuple: ...
+
+        def _resolve_escalations_in_txn(
+            self, conn, thread_id: str, *, kind: str, resolution: str
+        ) -> list: ...
 
     # --- send bracket -----------------------------------------------------------------------
 
@@ -111,34 +158,53 @@ class SendMixin:
         would mark anything the buyer added mid-compose as handled by a reply that never saw it.
         """
         now = now if now is not None else _now()
-        out_msg_id = f"out|{intent_id}"
         with self._db.transaction() as conn:
-            conn.execute(
-                "INSERT OR IGNORE INTO thread_messages "
-                "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
-                (thread_id, out_msg_id, text, now),
+            return self._commit_reply_in_txn(
+                conn,
+                intent_id=intent_id,
+                thread_id=thread_id,
+                in_msg_id=in_msg_id,
+                text=text,
+                kind=kind,
+                pass_id=pass_id,
+                now=now,
             )
+
+    def _commit_reply_in_txn(
+        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now
+    ) -> dict:
+        """Transaction B's body, callable from inside a larger transaction — shared with the settle
+        path, so "a reply is committed" has exactly one definition wherever the confirmation came
+        from (the send's own read-back, or a later lane finding the bubble on the page)."""
+        out_msg_id = f"out|{intent_id}"
+        conn.execute(
+            "INSERT OR IGNORE INTO thread_messages "
+            "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
+            (thread_id, out_msg_id, text, now),
+        )
+        conn.execute(
+            "UPDATE send_intents SET status = 'committed', sent_ts = COALESCE(sent_ts, ?), "
+            "committed_ts = ? WHERE intent_id = ?",
+            (now, now, intent_id),
+        )
+        handled = self._cursor_target(conn, thread_id, in_msg_id, pass_id, kind)
+        if handled is not None:
             conn.execute(
-                "UPDATE send_intents SET status = 'committed', sent_ts = ?, committed_ts = ? "
-                "WHERE intent_id = ?",
-                (now, now, intent_id),
+                "UPDATE threads SET cursor_last_msg_id = ?, cursor_last_ts = ?, "
+                "updated_ts = ? WHERE thread_id = ?",
+                (handled[0], handled[1], now, thread_id),
             )
-            handled = self._cursor_target(conn, thread_id, in_msg_id, pass_id)
-            if handled is not None:
-                conn.execute(
-                    "UPDATE threads SET cursor_last_msg_id = ?, cursor_last_ts = ?, "
-                    "updated_ts = ? WHERE thread_id = ?",
-                    (handled[0], handled[1], now, thread_id),
-                )
-            if kind == "followup":
-                conn.execute(
-                    "UPDATE threads SET last_followup_ts = ?, followup_disposition = 'sent', "
-                    "updated_ts = ? WHERE thread_id = ?",
-                    (now, now, thread_id),
-                )
+        if kind == "followup":
+            conn.execute(
+                "UPDATE threads SET last_followup_ts = ?, followup_disposition = 'sent', "
+                "updated_ts = ? WHERE thread_id = ?",
+                (now, now, thread_id),
+            )
         return {"msg_id": out_msg_id}
 
-    def _cursor_target(self, conn, thread_id: str, in_msg_id: str | None, pass_id: str | None):
+    def _cursor_target(
+        self, conn, thread_id: str, in_msg_id: str | None, pass_id: str | None, kind: str = "reply"
+    ):
         """How far this reply may advance the thread's cursor, as `(msg_id, ts)` or None.
 
         A pass's claim recorded the newest buyer message it was given, and that is the answer: it is
@@ -149,7 +215,17 @@ class SendMixin:
         their words — names the message it answered, and falls back to the newest one on the thread.
         That fallback is not cosmetic: leaving the cursor where it was would keep the buyer waiting
         in the eligible set and earn them a second answer to the same question.
+
+        A `holding` line advances NOTHING, because it answered nothing: it exists to keep the buyer
+        warm while the seller is asked, and the question it was sent about is still open. Marking it
+        handled is how a buyer gets stranded — on 2026-08-27 three of them were, permanently: their
+        holding line moved the cursor past their offer, the seller's real answer was then dropped by
+        the pacing cap, and `_UNHANDLED_INBOUND_SQL` could never see them again. The escalation that
+        always accompanies a holding line is what keeps the thread out of the reply lane until the
+        seller has actually answered.
         """
+        if kind == "holding":
+            return None
         if pass_id is not None:
             claimed = self._claim_watermark(conn, pass_id, thread_id)
             if claimed is not None:
@@ -190,6 +266,93 @@ class SendMixin:
                 (_now(), intent_id),
             )
 
+    def unsettled_intents(self, max_attempts: int = MAX_VERIFY_ATTEMPTS) -> list[dict]:
+        """Every send whose fate is still unknown and still worth looking for.
+
+        `pending` and `sent_unverified` are the two shapes of "we do not know": the first never
+        got past the composer, the second was taken by the page and could not be read back.
+        `unconfirmed` is a third — one the sweep gave up on and asked the seller about — and it is
+        included on purpose, because finding the message after the ask went out is what lets the ask
+        be withdrawn instead of the seller having to answer it.
+
+        Capped by `verify_attempts`, because a message that is genuinely not on the page is never
+        going to be: the seller deleted it, or the marketplace removed it. Without the cap the lane
+        would force-open that one conversation on every tick forever — paying a navigate and a read
+        each time to re-learn the same answer.
+        """
+        rows = self._db.query(
+            "SELECT intent_id, thread_id, text, in_msg_id, kind, status, verify_attempts, "
+            f"created_ts FROM send_intents WHERE status IN ({_UNSETTLED_PLACEHOLDERS}) "
+            "AND verify_attempts < ? ORDER BY created_ts ASC",
+            (*UNSETTLED_STATUSES, max_attempts),
+        )
+        return [dict(row) for row in rows]
+
+    def bump_verify_attempt(self, intent_id: str) -> int:
+        """Record that a lane looked for this message and did not find it. Returns the new count.
+
+        This is what makes asking the seller a last resort rather than a timeout: the sweep can tell
+        "nobody has checked yet" from "we have checked and it really is not there".
+        """
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE send_intents SET verify_attempts = verify_attempts + 1 "
+                f"WHERE intent_id = ? AND status IN ({_UNSETTLED_PLACEHOLDERS})",
+                (intent_id, *UNSETTLED_STATUSES),
+            )
+            row = conn.execute(
+                "SELECT verify_attempts FROM send_intents WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+        return row["verify_attempts"] if row else 0
+
+    def settle_intent_from_read(self, intent_id: str, now: float | None = None) -> dict | None:
+        """Commit an unsettled intent because its message was just found on the page.
+
+        The whole point of the self-settling loop: the reply is folded exactly as a verified send
+        would have been (same deterministic `out|{intent_id}` msg_id, so a later commit is a UNIQUE
+        no-op), any `unconfirmed_send` escalation it caused is withdrawn, and the thread goes back
+        to the status it held before. One transaction, because a half-settled intent would either
+        strand the thread as escalated or re-open a send path on a message we have not folded.
+
+        Returns None when the intent is already settled — the lane re-reads freely, and a second
+        find must change nothing. An `unconfirmed` intent settles too, and is the case that matters
+        most: the seller has already been asked, so finding the message is what takes the question
+        back off them.
+        """
+        now = now if now is not None else _now()
+        with self._db.transaction() as conn:
+            intent = conn.execute(
+                "SELECT * FROM send_intents WHERE intent_id = ? "
+                f"AND status IN ({_UNSETTLED_PLACEHOLDERS})",
+                (intent_id, *UNSETTLED_STATUSES),
+            ).fetchone()
+            if intent is None:
+                return None
+            commit = self._commit_reply_in_txn(
+                conn,
+                intent_id=intent_id,
+                thread_id=intent["thread_id"],
+                in_msg_id=intent["in_msg_id"],
+                text=intent["text"],
+                kind=intent["kind"],
+                # No claim stands behind a settle: the pass that reserved this intent is long gone,
+                # so the cursor falls back to the message the intent itself named.
+                pass_id=None,
+                now=now,
+            )
+            resolved = self._resolve_escalations_in_txn(
+                conn,
+                intent["thread_id"],
+                kind="unconfirmed_send",
+                resolution="Found our own message on the page — the send did land.",
+            )
+        return {
+            "intent_id": intent_id,
+            "thread_id": intent["thread_id"],
+            "msg_id": commit["msg_id"],
+            "escalations_resolved": resolved,
+        }
+
     def intent_status(self, intent_id: str) -> str | None:
         """The send bracket's durable truth for one intent — what a caller consults after a sink
         failure, because the exception cannot say whether the page took the message."""
@@ -214,18 +377,34 @@ class SendMixin:
             )
             return {"recorded": cur.rowcount > 0, "deduped": cur.rowcount == 0}
 
-    def stale_intent_sweep(self, grace_sec: float, now: float | None = None) -> list[dict]:
-        """Fold intents stuck un-committed past the grace window as `unconfirmed` and open an
-        escalation to verify whether the send fired — never a re-send. The deterministic msg_id
-        means a genuinely-retried commit is still a no-op, so this only ever heals a real stall."""
+    def stale_intent_sweep(
+        self,
+        grace_sec: float,
+        now: float | None = None,
+        min_verify_attempts: int = MIN_VERIFY_ATTEMPTS,
+        hard_grace_sec: float = HARD_GRACE_SEC,
+    ) -> list[dict]:
+        """Fold intents the machine could not settle as `unconfirmed` and ask the seller to look —
+        never a re-send. The deterministic msg_id means a genuinely-retried commit is still a no-op,
+        so this only ever heals a real stall.
+
+        Gated on effort, not just on the clock. The lane re-reads each unsettled thread and counts
+        its attempts, so an intent is only handed to the seller once we have actually looked for it
+        `min_verify_attempts` times — otherwise the ask arrives before the machine has tried, which
+        is the whole complaint this exists to answer. `hard_grace_sec` is the backstop for the case
+        no amount of waiting fixes: a lane that cannot run at all, where the attempt count would
+        stay at zero forever.
+        """
         now = now if now is not None else _now()
         cutoff = now - grace_sec
+        hard_cutoff = now - hard_grace_sec
         folded: list[dict] = []
         with self._db.transaction() as conn:
             stale = conn.execute(
                 "SELECT intent_id, thread_id FROM send_intents "
-                "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ?",
-                (cutoff,),
+                "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ? "
+                "AND (verify_attempts >= ? OR created_ts < ?)",
+                (cutoff, min_verify_attempts, hard_cutoff),
             ).fetchall()
             for row in stale:
                 conn.execute(
@@ -235,8 +414,10 @@ class SendMixin:
                 esc_id, new = self._open_escalation_in_txn(
                     conn,
                     row["thread_id"],
-                    open_question="verify whether this reply was actually sent",
+                    open_question=UNCONFIRMED_SEND_ASK,
                     kind="unconfirmed_send",
+                    context_summary=UNCONFIRMED_SEND_CONTEXT,
+                    options=list(UNCONFIRMED_SEND_OPTIONS),
                 )
                 folded.append(
                     {

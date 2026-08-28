@@ -25,14 +25,20 @@ def test_qa_search_returns_item_and_global_rows(store) -> None:
     assert questions == {"Any chips?", "Do you ship?"}
 
 
-def test_qa_search_filters_on_the_query_and_caps(store) -> None:
+def test_qa_search_ranks_on_the_query_and_caps(store) -> None:
+    """The query orders the bank; it never removes a row. Filtering here can only hide the entry
+    that answers the buyer, and the model — which does the matching — never sees what was
+    dropped."""
     item = store.create_item(title="Lamp", list_price=80.0)
     store.qa_add(item["id"], "Any chips?", "One on the base.", "seller")
     store.qa_add(item["id"], "Bulb included?", "Yes.", "seller")
-    assert [r["question"] for r in store.qa_search(item["id"], "chip")] == ["Any chips?"]
-    # a match on the answer counts too
-    assert [r["question"] for r in store.qa_search(item["id"], "base")] == ["Any chips?"]
-    assert store.qa_search(item["id"], "%") == []  # a literal wildcard matches nothing
+
+    assert [r["question"] for r in store.qa_search(item["id"], "chip")][0] == "Any chips?"
+    # a match on the answer ranks too
+    assert [r["question"] for r in store.qa_search(item["id"], "base")][0] == "Any chips?"
+    # …and the row that did not match is still returned, in both cases
+    assert len(store.qa_search(item["id"], "chip")) == 2
+    assert len(store.qa_search(item["id"], "%")) == 2  # a query with no words ranks nothing
     assert len(store.qa_search(item["id"], limit=1)) == 1
 
 

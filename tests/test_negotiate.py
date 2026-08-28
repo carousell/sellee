@@ -5,6 +5,7 @@ other_best, the needs_floor lazy hold, floorless default-floor writes, and confi
 from __future__ import annotations
 
 import concurrent.futures
+import json
 
 import pytest
 
@@ -85,6 +86,56 @@ def test_stale_lower_offer_never_undercuts_other_best(store: Store) -> None:
             assert res[key] >= 91
 
 
+# --- the same offer, handed to us again ------------------------------------------------------
+
+
+def test_a_repeated_offer_consumes_no_round_and_holds_the_price(store: Store) -> None:
+    """A lane that retries is normal, so the ledger has to be idempotent on its own.
+
+    On 2026-08-27 the reply lane re-ran this on no.202's single "$80?" every tick while the send
+    kept coming back paced — 61 calls for 4 real offers — and the ledger ended up with 55 copies of
+    that one offer, both rounds spent, and the counter walked 105 → 101. Our own retries haggled us
+    down against a buyer who never said anything.
+    """
+    item = _item(store, list_price=115.0, floor=100.0)
+    first = _offer(store, item["id"], "fb:1", 80)
+    assert first["decision"] == "counter"
+    counter = first["counter_price"]
+
+    for _ in range(20):
+        again = _offer(store, item["id"], "fb:1", 80)
+        assert again["decision"] == "repeat_offer"
+        assert again["counter_price"] == counter  # one number, not a new concession each time
+
+    state = store.negotiate_status(item["id"])
+    assert state["buyers"]["fb:1"]["highest_offer"] == 80
+    ledger = store._db.query(
+        "SELECT offers, rounds_used, last_counter FROM negotiation_buyers "
+        "WHERE item_id = ? AND thread_id = 'fb:1'",
+        (item["id"],),
+    )[0]
+    assert json.loads(ledger["offers"]) == [{"amount": 80}]  # one offer, recorded once
+    assert ledger["rounds_used"] == 1
+    assert ledger["last_counter"] == counter
+
+
+def test_a_buyer_who_actually_moves_is_still_a_new_offer(store: Store) -> None:
+    """The idempotence keys on the amount, so improving an offer must still count."""
+    item = _item(store, list_price=115.0, floor=100.0)
+    _offer(store, item["id"], "fb:1", 80)
+    _offer(store, item["id"], "fb:1", 80)  # a repeat, consuming nothing
+    moved = _offer(store, item["id"], "fb:1", 95)
+    assert moved["decision"] != "repeat_offer"
+
+    ledger = store._db.query(
+        "SELECT offers, rounds_used FROM negotiation_buyers "
+        "WHERE item_id = ? AND thread_id = 'fb:1'",
+        (item["id"],),
+    )[0]
+    assert json.loads(ledger["offers"]) == [{"amount": 80}, {"amount": 95}]
+    assert ledger["rounds_used"] == 2
+
+
 # --- needs_floor lazy hold --------------------------------------------------------------------
 
 
@@ -163,3 +214,67 @@ def test_release_fcfs_item_to_open(store: Store) -> None:
     _offer(store, item["id"], "fb:a", 100)  # FCFS reserve
     released = store.negotiate_release(item["id"])
     assert released["item_state"] == "open"
+
+
+# --- the (item, thread) pair is a pair -------------------------------------------------------
+#
+# Both ids reach the tool from the model, and nothing downstream re-derives one from the other, so
+# only this check stands between a mismatch and a real buyer's offer being filed under the wrong
+# item. Guarded at the tool because that is the boundary the untrusted ids cross; every other caller
+# reads both off the same thread row.
+
+
+def _pair_ctx(store, make_ctx):
+    from sellee.tools.registry import TIER_ATTENDED
+
+    return make_ctx(TIER_ATTENDED)
+
+
+def test_an_offer_naming_another_items_thread_is_refused(store: Store, make_ctx) -> None:
+    from sellee.tools import dispatch
+    from sellee.tools.registry import ToolError
+
+    lamp = _item(store, list_price=100.0, floor=50.0)
+    fan = _item(store, list_price=115.0, floor=100.0)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob", item_id=lamp["id"]
+    )
+    ctx = _pair_ctx(store, make_ctx)
+
+    with pytest.raises(ToolError, match="is about item"):
+        dispatch(
+            "negotiate_offer",
+            {"item_id": fan["id"], "thread_id": "fb:1", "buyer": "bob", "offer": 90},
+            ctx,
+        )
+    # nothing was filed anywhere: the fan's ledger has no buyers, so no rival's standing offer
+    # can quietly go missing from the item that actually has this conversation
+    assert store.negotiate_status(fan["id"])["buyers"] == {}
+    assert store.negotiate_status(lamp["id"])["buyers"] == {}
+
+    with pytest.raises(ToolError, match="no thread with id"):
+        dispatch(
+            "negotiate_offer",
+            {"item_id": lamp["id"], "thread_id": "fb:nope", "buyer": "bob", "offer": 90},
+            ctx,
+        )
+
+
+def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make_ctx) -> None:
+    """The most expensive mismatch: the take-down list is built from the NAMED item's listing urls,
+    so this would delist a listing that is still for sale."""
+    from sellee.tools import dispatch
+    from sellee.tools.registry import ToolError
+
+    lamp = _item(store, list_price=100.0, floor=50.0)
+    fan = _item(store, list_price=115.0, floor=100.0)
+    store.record_listing_url(fan["id"], "carousell", "https://www.carousell.sg/p/fan-1")
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="bob", item_id=lamp["id"]
+    )
+    ctx = _pair_ctx(store, make_ctx)
+
+    with pytest.raises(ToolError, match="is about item"):
+        dispatch("negotiate_confirm_sold", {"item_id": fan["id"], "thread_id": "fb:1"}, ctx)
+    assert store.negotiate_status(fan["id"])["item_state"] == "open"  # still for sale
+    assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")

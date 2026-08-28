@@ -67,7 +67,9 @@ class EscalationsMixin:
         the stale-intent sweep). Idempotent: an existing open escalation is returned unchanged.
         Returns (escalation_id, is_new)."""
         thread = conn.execute(
-            "SELECT side, item_id, want_id FROM threads WHERE thread_id = ?", (thread_id,)
+            "SELECT side, item_id, want_id, status, escalated_from_status FROM threads "
+            "WHERE thread_id = ?",
+            (thread_id,),
         ).fetchone()
         existing = conn.execute(
             "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open'", (thread_id,)
@@ -92,11 +94,62 @@ class EscalationsMixin:
                 _now(),
             ),
         )
+        # Remember what to put back, the way hold_thread/release_thread already do: a thread settled
+        # off the page has to return to the status it actually had, and guessing `active` on an
+        # `agreed` thread would re-open a closed deal to nudges and fresh negotiation. A re-escalate
+        # never reaches here (it returns above), so the first escalation's memory is the one kept.
+        escalated_from = (
+            thread["escalated_from_status"] or "active"
+            if thread["status"] == "escalated"
+            else thread["status"] or "active"
+        )
         conn.execute(
-            "UPDATE threads SET status = 'escalated', updated_ts = ? WHERE thread_id = ?",
-            (_now(), thread_id),
+            "UPDATE threads SET status = 'escalated', escalated_from_status = ?, updated_ts = ? "
+            "WHERE thread_id = ?",
+            (escalated_from, _now(), thread_id),
         )
         return esc_id, True
+
+    def _resolve_escalations_in_txn(
+        self, conn, thread_id: str, *, kind: str, resolution: str
+    ) -> list:
+        """Close every open escalation of one kind on a thread and, when that leaves none open,
+        restore the status the thread had before it was escalated. Returns the ids closed.
+
+        For a settle path that is not the seller answering — the escalation is being withdrawn
+        because the machine found the answer itself. Reactivation is conditional on purpose: another
+        open escalation still means the seller owns the next move, so the thread stays escalated
+        even though this one is closed.
+        """
+        rows = conn.execute(
+            "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open' AND kind = ?",
+            (thread_id, kind),
+        ).fetchall()
+        if not rows:
+            return []
+        now = _now()
+        for row in rows:
+            conn.execute(
+                "UPDATE escalations SET status = 'resolved', resolution = ?, resolved_ts = ? "
+                "WHERE id = ?",
+                (resolution, now, row["id"]),
+            )
+        still_open = conn.execute(
+            "SELECT 1 FROM escalations WHERE thread_id = ? AND status = 'open' LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+        if not still_open:
+            thread = conn.execute(
+                "SELECT status, escalated_from_status FROM threads WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            if thread and thread["status"] == "escalated":
+                conn.execute(
+                    "UPDATE threads SET status = ?, escalated_from_status = NULL, updated_ts = ? "
+                    "WHERE thread_id = ?",
+                    (thread["escalated_from_status"] or "active", now, thread_id),
+                )
+        return [row["id"] for row in rows]
 
     def resolve_escalation(self, escalation_id: str, resolution: str) -> dict:
         """Stamp an escalation resolved. Thread reactivation stays the caller's update_thread —

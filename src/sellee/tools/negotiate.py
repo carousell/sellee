@@ -18,9 +18,33 @@ from sellee.tools.registry import (
 )
 
 
+def _require_pair(ctx: ToolContext, params: dict) -> None:
+    """Refuse an (item_id, thread_id) pair that is not actually a pair.
+
+    Both ids come from the model, and nothing downstream re-derives one from the other, so a
+    mismatch files a real buyer's offer under the wrong item — silently, and with two expensive
+    consequences. The correct item's `other_best` loses that buyer, so the engine may then accept
+    BELOW a live rival's standing offer, which is the one guarantee the negotiation engine makes.
+    And `negotiate_confirm_sold` builds its take-down list from the named item's listing urls, so a
+    mismatched thread delists things that are still for sale.
+
+    Checked here rather than in the store because this is the boundary the untrusted ids cross:
+    every other caller reads both ids off the same thread row and cannot disagree with itself.
+    """
+    thread = ctx.store.get_thread(params["thread_id"])
+    if thread is None:
+        raise ToolError(f"no thread with id {params['thread_id']!r}")
+    if thread["item_id"] != params["item_id"]:
+        raise ToolError(
+            f"thread {params['thread_id']!r} is about item {thread['item_id']!r}, not "
+            f"{params['item_id']!r} — a negotiation must name the thread's own item"
+        )
+
+
 def _offer(ctx: ToolContext, params: dict) -> dict:
     if params["offer"] <= 0:
         raise ToolError("offer must be positive")
+    _require_pair(ctx, params)
     try:
         return ctx.store.negotiate_offer(
             params["item_id"],
@@ -44,6 +68,7 @@ def _status(ctx: ToolContext, params: dict) -> dict:
 
 
 def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
+    _require_pair(ctx, params)
     try:
         return ctx.store.negotiate_confirm_bid(params["item_id"], params["thread_id"])
     except StoreError as exc:
@@ -51,6 +76,7 @@ def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
 
 
 def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
+    _require_pair(ctx, params)
     try:
         return ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
     except StoreError as exc:

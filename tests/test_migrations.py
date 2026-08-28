@@ -54,6 +54,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 12),
         ("data", 13),
         ("data", 14),
+        ("data", 15),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -91,6 +92,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         12,
         13,
         14,
+        15,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -205,6 +207,51 @@ def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeyp
     assert row["bind_nonce"] == "armed-long-ago"  # the row survives the ALTER
     assert row["bind_nonce_expires_ts"] is None
     assert store.bind_nonce_live(_channel_from_row(row)) is False
+
+
+def test_0015_starts_existing_rows_unchecked_and_unrestorable(tmp_path, monkeypatch) -> None:
+    """An intent and a thread that predate the self-settling loop must upgrade to the safe reading:
+    verify_attempts 0 means "no lane has looked yet" (so the sweep's ceiling still covers it), and a
+    NULL escalated_from_status means "we do not know what to restore" rather than a guessed
+    `active`, which on an `agreed` thread would re-open a closed deal."""
+    real_data = migrations._MIGRATIONS_ROOT / "data"
+    root = tmp_path / "migrations"
+    (root / "data").mkdir(parents=True)
+    (root / "events").mkdir(parents=True)
+    for src in sorted(real_data.glob("*.sql")):
+        if not src.name.startswith("0015"):
+            shutil.copy(src, root / "data" / src.name)
+    for src in (migrations._MIGRATIONS_ROOT / "events").glob("*.sql"):
+        shutil.copy(src, root / "events" / src.name)
+    monkeypatch.setattr(migrations, "_MIGRATIONS_ROOT", root)
+
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO items (id, title, status, created_ts, updated_ts)"
+            " VALUES ('item_x', 'Teak lamp', 'ready', 100.0, 100.0)"
+        )
+        conn.execute(
+            "INSERT INTO threads (thread_id, side, market, item_id, counterpart_handle, status,"
+            " created_ts, updated_ts) VALUES ('carousell:1', 'sell', 'carousell', 'item_x',"
+            " 'bob', 'agreed', 100.0, 100.0)"
+        )
+        conn.execute(
+            "INSERT INTO send_intents (intent_id, thread_id, text, kind, status, created_ts)"
+            " VALUES ('intent_x', 'carousell:1', 'on its way!', 'reply', 'sent_unverified', 100.0)"
+        )
+
+    verify_sql = "0015_intent_verify.sql"
+    shutil.copy(real_data / verify_sql, root / "data" / verify_sql)
+    _run(tmp_path, data_db, events_db)
+
+    intent = data_db.query("SELECT * FROM send_intents WHERE intent_id = 'intent_x'")[0]
+    assert intent["status"] == "sent_unverified"  # the row survives the ALTER
+    assert intent["verify_attempts"] == 0
+    thread = data_db.query("SELECT * FROM threads WHERE thread_id = 'carousell:1'")[0]
+    assert thread["status"] == "agreed"
+    assert thread["escalated_from_status"] is None
 
 
 # --- against synthetic migration sets ------------------------------------------------------

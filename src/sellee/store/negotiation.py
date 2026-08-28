@@ -151,7 +151,12 @@ class NegotiationMixin:
             led = self._load_negotiation(conn, item_id)
             buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
             buyer["buyer_handle"] = handle
-            negotiate_engine.record_offer(buyer, offer)
+            if not negotiate_engine.record_offer(buyer, offer):
+                # The same offer, handed to us again — a retrying lane, not a moving buyer. Answer
+                # from what we already told them and change nothing: re-deciding would walk the
+                # counter down a step per call (the engine targets list - step * rounds), which is
+                # how no.202 was countered at $101 instead of $105 on 2026-08-27.
+                return self._repeat_offer(buyer, led, currency)
 
             res = negotiate_engine.decide(
                 offer, thread_id, buyer, led, floor, list_price, knobs["step"], knobs
@@ -162,6 +167,23 @@ class NegotiationMixin:
             res["item_state"] = led["state"]
             res["currency"] = currency
             return res
+
+    @staticmethod
+    def _repeat_offer(buyer: dict, led: dict, currency: str) -> dict:
+        """The answer to an offer we have already decided. Persists nothing — no round, no offer
+        row, no state change — and carries the price we last named so the buyer hears one number,
+        not a
+        new concession every time a lane retries."""
+        last = buyer["last_counter"]
+        return {
+            "decision": "repeat_offer",
+            "counter_price": int(last) if last is not None else None,
+            "hold_firm": True,
+            "needs_seller_confirm": False,
+            "message_intent": f"repeat:{int(last)}" if last is not None else "repeat",
+            "item_state": led["state"],
+            "currency": currency,
+        }
 
     def _hold_for_floor(self, conn, item_id, thread_id, handle, offer, currency) -> dict:
         """No floor and a below-list offer: record the offer and hold, so the caller asks the

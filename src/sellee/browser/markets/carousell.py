@@ -83,10 +83,10 @@ CONVERSATIONS_LIST_JS = """async () => {
 
 # Read the trailing message bubbles of the open conversation.
 #
-# Two filters do the work, and both are about *not* inventing messages nobody sent. The chat pane is
-# full of text that reads like a short message — the counterpart's name and "Online 11 days ago" in
-# the header, a profile card ("14 verified orders", "11 years on Carousell"), system notices
-# ("Message blocked", "Older messages have been…"), per-message timestamps, and Carousell's
+# Three filters do the work, and all of them are about *not* inventing messages nobody sent. The
+# chat pane is full of text that reads like a short message — the counterpart's name and "Online 11
+# days ago" in the header, a profile card ("14 verified orders", "11 years on Carousell"), system
+# notices ("Message blocked", "Older messages have been…"), per-message timestamps, and Carousell's
 # quick-reply suggestion chips ("Yes?", "Interested?"). A chip in particular is indistinguishable
 # from a real buyer message by text alone, and recording one would have the agent answering itself.
 #
@@ -94,6 +94,22 @@ CONVERSATIONS_LIST_JS = """async () => {
 #   2. Keep only what is actually a bubble: a bubble is an *inline* rounded container, where every
 #      one of the impostors above sits in a block/flex container with square corners. Clickable text
 #      is dropped as well, which is a second, independent guard on the chips.
+#   3. Keep a bubble whose text is broken up by *inline* markup, and drop one built out of anything
+#      else — the difference between reading a message and reading a widget.
+#
+# That third filter used to be spelled `children.length === 0`, which silently discarded every
+# message containing a link: Carousell autolinks a URL in place, inside the message's own `<p>`.
+# Captured from the live DOM on 2026-08-27:
+#
+#     <p>here's your checkout link: <a href="https://api.carousell.ai/checkout/…"
+#        rel="noopener noreferrer" target="_blank"><span>https://…</span></a> tap through…</p>
+#
+# So a checkout link was unreadable to us the moment we sent it — the read-back could never confirm
+# one — and a buyer pasting a link, a scam link included, was never recorded at all. Two things the
+# same capture settles: the anchor is a DESCENDANT and `clickable` walks ANCESTORS (every ancestor
+# of that `<p>` is `cursor: auto`), so the chip guard is untouched and stays exactly as strict; and
+# the deletion tombstone Carousell renders as `<svg><use>` is still dropped, because svg is not
+# text-level. Contract recorded in docs/browser-layer.md.
 #
 # Direction comes from GEOMETRY, never from CSS classes: within the list, an outbound bubble hugs
 # the right edge and an inbound one hugs the left. Anything roughly centred is reported as "center"
@@ -108,6 +124,16 @@ CONVERSATIONS_LIST_JS = """async () => {
 # null vs [] means to the caller.
 CONVERSATION_TAIL_JS = """async () => {
   const cut = window.innerWidth * 0.35;
+  const INLINE_TAGS = ['A', 'SPAN', 'EM', 'STRONG', 'B', 'I', 'BR', 'WBR', 'U', 'SMALL'];
+  // Whether every element inside this node is text-level markup, so its textContent IS the message.
+  // A block or interactive descendant (svg, button, img, div) means a widget, not a message.
+  const inlineOnly = (el) => {
+    const kids = el.querySelectorAll('*');
+    for (let i = 0; i < kids.length; i++) {
+      if (INLINE_TAGS.indexOf(kids[i].tagName) === -1) return false;
+    }
+    return true;
+  };
   const clickable = (el) => {
     for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {
       if (getComputedStyle(n).cursor === 'pointer') return true;
@@ -132,7 +158,7 @@ CONVERSATION_TAIL_JS = """async () => {
     const pr = pane.getBoundingClientRect();
     const out = [];
     pane.querySelectorAll('p').forEach((el) => {
-      if (el.children.length > 0) return;
+      if (!inlineOnly(el)) return;
       const r = el.getBoundingClientRect();
       if (r.width === 0) return;
       const text = (el.textContent || '').trim();

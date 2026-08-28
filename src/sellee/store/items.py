@@ -12,6 +12,7 @@ from sellee.store.helpers import (
     _QA_SEARCH_CAP,
     _QA_SOURCES,
     _UI_CACHE_STRATEGIES,
+    _WORD_RE,
     QA_GLOBAL_ITEM,
     FloorAck,
     FloorRecord,
@@ -20,8 +21,8 @@ from sellee.store.helpers import (
     StoreError,
     _insert_item_in_txn,
     _item_from_row,
-    _like_escape,
     _now,
+    _term_overlap,
     _ui_cache_from_row,
     validate_photos,
 )
@@ -174,23 +175,26 @@ class ItemsMixin:
         return {"id": entry_id, "item_id": item_id, "source": source, "created_ts": ts}
 
     def qa_search(self, item_id: str, query: str | None = None, limit: int = _QA_SEARCH_CAP):
-        """The item's entries plus the global ones, newest first, capped.
+        """The item's entries plus the global ones, capped — the whole bank, for the model to match.
 
-        Matching is a deliberately dumb substring filter over question and answer: the rows come
-        back for the LLM to match semantically, so a smarter index would only narrow what it can
-        see. An empty/absent query returns the whole (capped) bank for the item.
+        `query` ORDERS the rows; it never removes any. This used to filter, and the filter was one
+        `LIKE '%<the entire query string>%'`, so it only ever matched a query that was literally a
+        substring of one stored row. A natural-language question therefore matched nothing: on
+        2026-08-27 `search_qa_bank(item, "location pickup area where is item located")` returned
+        zero while "Where is the pickup location? → Hillview or One North" sat in the bank, banked
+        four minutes earlier — and the seller was asked the same question a second time. Silently.
+
+        Returning everything is also what this module already says it wants: the rows come back for
+        the model to match semantically, and narrowing them here can only hide the one that answers
+        the question. The cap is what keeps that affordable, so ranking matters — rows sharing a
+        word with the query come first, then the newest.
         """
         limit = max(1, min(int(limit), _QA_SEARCH_CAP))
-        params: list = [item_id, QA_GLOBAL_ITEM]
-        sql = "SELECT * FROM qa_bank WHERE item_id IN (?, ?)"
-        needle = (query or "").strip()
-        if needle:
-            sql += " AND (question LIKE ? ESCAPE '\\' OR answer LIKE ? ESCAPE '\\')"
-            like = f"%{_like_escape(needle)}%"
-            params += [like, like]
-        sql += " ORDER BY created_ts DESC, id DESC LIMIT ?"
-        params.append(limit)
-        return [
+        rows = self._db.query(
+            "SELECT * FROM qa_bank WHERE item_id IN (?, ?) ORDER BY created_ts DESC, id DESC",
+            (item_id, QA_GLOBAL_ITEM),
+        )
+        entries = [
             {
                 "id": r["id"],
                 "item_id": r["item_id"],
@@ -199,8 +203,12 @@ class ItemsMixin:
                 "source": r["source"],
                 "created_ts": r["created_ts"],
             }
-            for r in self._db.query(sql, tuple(params))
+            for r in rows
         ]
+        terms = {t for t in _WORD_RE.findall((query or "").lower()) if len(t) > 2}
+        if terms:
+            entries.sort(key=lambda e: -_term_overlap(e, terms))
+        return entries[:limit]
 
     # --- selector cache ("page memory") -----------------------------------------------------
     #

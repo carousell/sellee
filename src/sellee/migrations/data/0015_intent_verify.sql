@@ -1,0 +1,21 @@
+-- Let a send confirm itself off the page, instead of asking the seller to go and look.
+--
+-- On 2026-08-27 a checkout link to no.202 was delivered, the read-back could not see it (the reader
+-- was blind to a bubble containing a link), and the escalation that followed flipped the thread to
+-- `escalated` — which is exactly the status the inbox lane skips. So the one reader that could have
+-- answered the question was switched off by the act of asking it, and the only way out was a human
+-- opening the marketplace app. Two columns close that loop.
+--
+-- `send_intents.verify_attempts` — how many times a lane has re-read the thread looking for this
+-- message. The stale sweep escalates on elapsed time alone today, which means it can ask the seller
+-- before the machine has actually tried; counting the attempts is what lets the ask be gated on real
+-- effort rather than on the clock. Starts at 0, so every existing intent reads as "not yet checked",
+-- and the sweep's hard ceiling still covers a lane that cannot run at all.
+--
+-- `threads.escalated_from_status` — the status to put back when an escalation is settled from the
+-- page. Mirrors `held_from_status` / release_thread exactly, and for the same reason: without it,
+-- restoring means guessing, and guessing `active` on a thread that was `agreed` would re-open a
+-- closed deal to nudges and fresh negotiation. Nullable — an escalation opened before this
+-- migration, or one resolved the old way, restores nothing and is unaffected.
+ALTER TABLE send_intents ADD COLUMN verify_attempts INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE threads ADD COLUMN escalated_from_status TEXT;

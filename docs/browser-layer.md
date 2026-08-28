@@ -269,6 +269,27 @@ Mercari link.
   and Carousell's quick-reply suggestion chips are all block/flex with square
   corners. A chip is indistinguishable from a buyer message by text alone, and
   recording one would have the agent answering itself.
+- **A bubble's text may contain inline markup, and that used to hide it.** The
+  reader kept a `<p>` only when `children.length === 0`, which silently discarded
+  every message containing a link, because Carousell autolinks a URL in place.
+  Captured from the live DOM on 2026-08-27 (`/inbox/2154409548/`):
+
+  ```html
+  <p class="D_mM …">All sorted — here's your checkout link:
+    <a class="D_Zm" href="https://api.carousell.ai/checkout/8a08c727-…"
+       rel="noopener noreferrer" target="_blank"><span class="…">https://…</span></a>
+    Just tap through to pay securely…</p>
+  ```
+
+  So the gate is now "every descendant is text-level" (`A`, `SPAN`, `EM`, `STRONG`,
+  `B`, `I`, `BR`, `WBR`, `U`, `SMALL`) rather than "no descendants". Two things the
+  same capture settles: the anchor is a **descendant**, and `clickable` walks
+  **ancestors** — every ancestor of that `<p>` is `cursor: auto` — so the chip guard
+  is untouched and stays exactly as strict. And a deletion tombstone renders as
+  `<svg><use>` inside the bubble, which is not text-level, so it is still dropped.
+  Cost of the old gate: a checkout link was unreadable to us the moment we sent it
+  (the read-back could never confirm one), and a buyer pasting a link — a scam link
+  included — was never recorded at all, so `engines/scam.py` never saw it.
 - **Direction is geometry.** An outbound bubble hugs the right edge, inbound the
   left; anything roughly centred is reported `center` so the caller ignores it.
 - **The login probe is three-state and never guesses `logged_out`** — a false
@@ -308,6 +329,12 @@ for each row, adopt or match a thread, skip or open it, reconcile → one
 3. *Reading never advances the reply cursor.* Only a committed reply does, so a
    crash between seeing a message and answering it leaves the buyer eligible
    rather than silently handled.
+4. *A thread holding a send we cannot account for is always opened.* It bypasses
+   both the status filter and the skip gate, because the lane is the only thing
+   that can answer "did our own message land" — and the escalation that asks the
+   seller instead makes the thread `escalated`, which the status filter skips. The
+   `settling` count on `browser.read` says how many of a tick's opens were for
+   this. See [The send](#the-send).
 
 **Adoption.** A buyer writing about one of our listings for the first time gets a
 thread only if three things hold: they approached us (`offer_type == received`,
@@ -485,37 +512,73 @@ containing a newline cannot commit part-way through itself and send half a
 message. Verification is strict: "no error from the key press" is not success — a
 refused validation, a composer that silently cleared, or a chat that ignored the
 key because it thought the box was empty all look like success from outside. Only
-our own words in an outbound bubble count.
+our own words in an outbound bubble count (`reconcile.contains_outbound`, the one
+definition of that question, shared with the inbox lane's settle pass).
+
+The read-back **polls** rather than asking once (`_VERIFY_WINDOW_SEC`, 6s at 1s
+intervals). The chat commits the message to its own server and re-renders
+afterwards, so a single read taken the instant after the submit is a read of the
+page as it was *before* the send. The adapter's own polling cannot cover this: it
+waits for a tail to become non-empty, and after a send the tail is never empty, so
+it returns the stale one immediately. A bubble already on the page — the normal
+case — returns on the first read and costs nothing.
 
 **The two failure shapes are treated oppositely, because the safe response to
 each is the opposite:**
 
 | | nothing was sent | sent, unconfirmed |
 | --- | --- | --- |
-| how it happens | composer not located, page refused the commit, browser error before the commit | the commit was accepted and the read-back failed or found nothing |
+| how it happens | composer not located, page refused the commit, browser error before the commit | the commit was accepted and the polled read-back failed or never found our bubble |
 | intent status | stays `pending` | `sent_unverified` |
 | the sink raises | `SendNotAttempted` | `SendUnverified` |
 | `send_reply` returns | `send_failed` | `send_unverified` |
-| what happens next | safe to retry | **never re-driven** |
+| what happens next | safe to retry | **never re-driven** — settled from the page by a later read, or finally asked about |
 
 Everything before the commit fails closed, so "nothing was sent" is a guarantee
 and not a hope. Past the commit nothing may retry and nothing may claim the send
 did not happen — because the one thing worse than an unconfirmed message is the
 same message twice.
 
-An unconfirmed send is then handed off, not resolved in code:
+An unconfirmed send settles itself off the page. The seller is the last resort,
+not the first:
 
-1. While it is open, `reserve_reply` refuses any fresh send on that thread with
-   `unverified_open` — no caller can talk past it, and no second intent or pacing
-   row is minted.
-2. The `stale_intent_sweep` task folds the intent as `unconfirmed` past its grace
-   window (600s, held well above the pacing delay ceiling so a merely-jittered
-   send can never look like a stall) and opens an escalation. The thread becomes
-   `escalated`, which is the gate from then on.
-3. Only the seller can settle it, by looking at the real chat. If the message is
-   there: resolve the escalation and reactivate the thread. If it is not: resolve
-   and reactivate **first** — sends are refused while a thread is escalated — then
-   send again. The framing lives in the `seller-comms` skill.
+1. While it is unsettled, `reserve_reply` refuses any fresh send on that thread
+   with `unverified_open` — no caller can talk past it, and no second intent or
+   pacing row is minted. **This**, not the escalation, is what bounds the damage.
+2. The **inbox lane settles it**. `store.unsettled_intents()` lists every intent in
+   `pending` / `sent_unverified` / `unconfirmed`, and a thread holding one is opened
+   whatever its status and whatever the list preview claims — bypassing both
+   `_ACTIVE_STATUSES` and `_can_skip`. With the conversation on screen the lane
+   asks the same question the read-back asked:
+   - **found** → `settle_intent_from_read` commits the intent exactly as a verified
+     send would have (the deterministic `out|{intent_id}` msg_id makes it a no-op if
+     anything commits it again), withdraws any `unconfirmed_send` escalation, and
+     restores `escalated_from_status`. Silent: no notice, no seller-facing message.
+   - **not found** → `verify_attempts` is incremented and nothing else. Never a
+     resend: the page is evidence about what happened, never permission to repeat it.
+3. `stale_intent_sweep` is the last resort, gated on effort rather than the clock:
+   it folds an intent past its grace window (600s, held well above the pacing delay
+   ceiling so a merely-jittered send cannot look like a stall) **and** only once
+   `verify_attempts >= MIN_VERIFY_ATTEMPTS` (2) — or `HARD_GRACE_SEC` (1h) has
+   passed, the backstop for a lane that cannot run at all. Only then does the thread
+   become `escalated` and the ask reach the seller, worded **in code**
+   (`UNCONFIRMED_SEND_ASK`) so a pass cannot raise it early.
+4. On the seller's answer: "it's there" → resolve and reactivate. "nothing there" →
+   resolve and reactivate **first** (sends are refused while a thread is escalated),
+   then send again. The framing lives in the `seller-comms` skill.
+
+Settling runs *before* `reconcile.new_rows`, and the settled text is also dropped
+from what that read records. Both are needed: `new_rows` aligns the tail as a
+trailing window, so a settled outbound row sitting after an inbound one we have
+never stored leaves no matching suffix and the whole tail reads as new — and our own
+reply would be journaled a second time as a `manual` seller reply, which means "our
+account spoke last" and silences follow-ups on the thread.
+
+Why this exists: on 2026-08-27 a checkout link to `no.202` was delivered, the
+read-back could not see it, and the escalation that followed flipped the thread to
+`escalated` — the one status the inbox lane skipped. The only reader that could have
+answered the question was switched off by the act of asking it, so the agent asked a
+seller to go and open a chat it reads every five minutes itself.
 
 ## Selectors and the heal cache
 
@@ -629,7 +692,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `survey.relist_retry` | it recorded no URL and is owed another go |
 | `survey.relist_failed` | it ran out of attempts and the seller was told |
 | `browser.chrome_launched` | the daemon started Chrome because an acquisition needed it |
-| `browser.read` | one market's tick: rows listed, threads opened, rows recorded, unreadable count, whether it was a full sweep |
+| `browser.read` | one market's tick: rows listed, threads opened, rows recorded, unreadable count, whether it was a full sweep, and how many opens were to settle a send of our own (`settling`) |
 | `browser.inbound` | one message folded into a durable row, with its scam verdict |
 | `browser.thread_new` | a buyer's conversation adopted as a thread |
 | `browser.unmatched` | a conversation deliberately not adopted, and which check failed |
@@ -637,6 +700,8 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `browser.login` | the login probe answered `logged_out` |
 | `browser.unavailable` | the browser cannot be driven at all |
 | `browser.send` | a send's outcome: `sent`, `refused`, `unverified`, `browser_error` |
+| `intent.settled` | a send of ours was found on the page and committed by a later read, with how many asks it withdrew |
+| `intent.unconfirmed` | a send the machine gave up on, folded for the seller to check |
 | `browser.heal` | a selector candidate that did not resolve, and where it came from |
 
 ## Configuration

@@ -28,6 +28,14 @@ from sellee.tools.registry import (
 
 _KINDS = ("reply", "holding", "followup", "nudge")
 
+# Whether the buyer has this message, on every single return. Three-valued because the honest answer
+# genuinely has three shapes, and collapsing them is what let a dropped reply be reported as a sent
+# one: a `wait` verdict and an unverified send both look like "not an error" from the outside, and
+# they are opposite cases. Read this before saying anything to the seller about a send.
+_YES = "yes"
+_NOT = "no"
+_UNKNOWN = "unknown"
+
 # Terminal / owned statuses a reply must never re-engage.
 _SELL_REFUSED = frozenset(
     {"lost", "handover", "closed", "escalated", "held", "agreed", "seller_handling"}
@@ -53,7 +61,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     # A paused agent acts on nothing — even an attended session's send respects the pause. Refuse
     # before any thread load or reserve so nothing is recorded.
     if ctx.store.is_paused():
-        return {"status": "paused", "thread_id": params["thread_id"]}
+        return {"status": "paused", "delivered": _NOT, "thread_id": params["thread_id"]}
     kind = params.get("kind", "reply")
     thread = ctx.store.get_thread(params["thread_id"])
     if thread is None:
@@ -72,6 +80,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     except BrowserError as exc:
         return {
             "status": "no_send_path",
+            "delivered": _NOT,
             "thread_id": params["thread_id"],
             "market": thread["market"],
             "detail": str(exc),
@@ -79,6 +88,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     if sink is None:
         return {
             "status": "no_send_path",
+            "delivered": _NOT,
             "thread_id": params["thread_id"],
             "market": thread["market"],
         }
@@ -97,8 +107,16 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     if reserved["verdict"] != "go":
-        # a blocked verdict created no intent, no transcript row, no pacing row
-        return {"status": reserved["verdict"], "delay_sec": reserved["delay_sec"]}
+        # A blocked verdict created no intent, no transcript row and no pacing row: this reply does
+        # not exist anywhere, and there is no queue that will send it later. Named `retry_after_sec`
+        # rather than `delay_sec` because a delay reads like something the engine is holding on our
+        # behalf — on 2026-08-27 six replies came back `wait`, were reported to the seller as
+        # "queued, ~26 minutes out", and were simply gone.
+        return {
+            "status": reserved["verdict"],
+            "delivered": _NOT,
+            "retry_after_sec": round(reserved["delay_sec"], 2),
+        }
 
     # the anti-automation jitter is slept here, after the reserve transaction — never under the lock
     if reserved["delay_sec"] > 0:
@@ -114,8 +132,8 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
         # `sent_unverified` means the page took it, and the sweep asks a human rather than
         # anyone sending it again.
         if ctx.store.intent_status(intent_id) == "sent_unverified":
-            return {"status": "send_unverified", "intent_id": intent_id}
-        return {"status": "send_failed", "intent_id": intent_id}
+            return {"status": "send_unverified", "delivered": _UNKNOWN, "intent_id": intent_id}
+        return {"status": "send_failed", "delivered": _NOT, "intent_id": intent_id}
 
     commit = ctx.store.commit_reply(
         intent_id=intent_id,
@@ -125,7 +143,12 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
         kind=kind,
         pass_id=ctx.session.pass_id,
     )
-    return {"status": "sent", "intent_id": intent_id, "msg_id": commit["msg_id"]}
+    return {
+        "status": "sent",
+        "delivered": _YES,
+        "intent_id": intent_id,
+        "msg_id": commit["msg_id"],
+    }
 
 
 def _record_manual_reply(ctx: ToolContext, params: dict) -> dict:
@@ -141,11 +164,22 @@ register(
     ToolSpec(
         name="send_reply",
         description="Send a reply on a marketplace thread: pacing + durable intent + send + cursor "
-        "advance, composed atomically. Blocked verdicts record nothing; kinds: "
-        "reply|holding|followup|nudge. Statuses: send_failed = nothing was delivered, retrying is "
-        "safe; send_unverified = the page took it but it could not be confirmed — never resend, an "
-        "escalation follows; unverified_open = an earlier send on this thread is still "
-        "unconfirmed, wait for its escalation to be resolved.",
+        "advance, composed atomically. Kinds: reply|holding|followup|nudge. "
+        "EVERY result carries `delivered`: yes | no | unknown — that field, never the absence "
+        "of an error, is what you may tell the seller. Statuses: "
+        "sent = delivered yes. "
+        "wait / quiet = delivered NO. The pacing cap or quiet hours blocked it, and NOTHING was "
+        "recorded: no intent, no queue, no scheduled retry. This reply does not exist and will not "
+        "be sent by anything later; the thread simply stays unanswered and the reply lane picks it "
+        "up again once `retry_after_sec` has passed. Never describe it to the seller as sent, "
+        "queued, or on its way. "
+        "send_failed = delivered no, nothing reached the page, retrying is safe. "
+        "send_unverified = delivered unknown: the page took it but it could not be read back. An "
+        "automatic re-check settles this on the next inbox read — do not resend, do not escalate, "
+        "and do not report it to the seller. "
+        "unverified_open = delivered no, because an earlier send on this thread is still "
+        "unsettled; wait for it rather than talking past it. "
+        "paused / no_send_path = delivered no, nothing was recorded.",
         input_schema={
             "type": "object",
             "properties": {

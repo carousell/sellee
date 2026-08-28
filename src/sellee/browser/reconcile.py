@@ -63,6 +63,23 @@ def _same_normalized(a: str, b: str) -> bool:
     return len(shorter) >= _TRUNCATION_FLOOR and longer.startswith(shorter)
 
 
+def contains_outbound(tail, text: str) -> bool:
+    """Whether `text` is on this tail as one of our own (outbound) bubbles.
+
+    The single definition of "our message is on the page", shared by the send read-back and the
+    inbox lane's settle pass — two callers asking the same question about the same page, which must
+    never be able to disagree. Truncation-tolerant via `same_text`, because the reader caps how much
+    of a bubble it returns and a checkout link runs past that cap.
+
+    Only an outbound bubble counts. "No error from the send" is not success, and neither is our text
+    appearing somewhere on the page: a buyer quoting us back is not us having spoken.
+    """
+    return any(
+        bubble.get("side") == "out" and same_text(bubble.get("text") or "", text)
+        for bubble in tail or []
+    )
+
+
 def message_id(direction: str, text: str, occurrence: int) -> str:
     digest = hashlib.sha256(normalize(text).encode()).hexdigest()[:12]  # an id, not a security hash
     return f"{direction}|{digest}|{occurrence}"

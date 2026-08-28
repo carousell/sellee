@@ -84,19 +84,33 @@ def blank_buyer(handle: str) -> dict:
     }
 
 
-def record_offer(buyer: dict, offer, held_for_floor: bool = False) -> None:
-    """Append the buyer's offer (in place). A pre-floor offer is marked held_for_floor; the
-    post-floor re-decide of the SAME amount consumes that hold instead of appending a duplicate."""
+def record_offer(buyer: dict, offer, held_for_floor: bool = False) -> bool:
+    """Record the buyer's offer (in place) and answer whether it is a NEW one.
+
+    A pre-floor offer is marked held_for_floor; the post-floor re-decide of the SAME amount consumes
+    that hold instead of appending a duplicate.
+
+    Re-submitting the amount already at the top of the list is the same offer being decided again,
+    not the buyer moving. Saying so is what keeps the ledger honest under a lane that retries: on
+    2026-08-27 the reply lane re-ran `negotiate_offer` on no.202's single "$80?" every tick while
+    the send kept coming back paced — 61 calls for 4 real offers — and the ledger ended up holding
+    55 copies of that one offer, with both negotiation rounds spent and the counter walked 105 →
+    101. We haggled ourselves down against a buyer who never said anything. A genuinely new number
+    still counts, so a buyer who improves their offer is unaffected.
+    """
     last = buyer["offers"][-1] if buyer["offers"] else None
     if last and last.get("held_for_floor") and last["amount"] == offer:
         if not held_for_floor:
             last.pop("held_for_floor", None)  # the floor arrived; this decision consumes the hold
-    else:
-        row = {"amount": offer}
-        if held_for_floor:
-            row["held_for_floor"] = True
-        buyer["offers"].append(row)
+        return True
+    if last and not last.get("held_for_floor") and last["amount"] == offer:
+        return False  # the same offer, decided again
+    row = {"amount": offer}
+    if held_for_floor:
+        row["held_for_floor"] = True
+    buyer["offers"].append(row)
     buyer["highest_offer"] = max(buyer["highest_offer"], int(offer))
+    return True
 
 
 def other_best(buyers: dict, thread_id: str) -> int:

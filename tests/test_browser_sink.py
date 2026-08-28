@@ -112,8 +112,12 @@ def trusted_market(monkeypatch):
     return plain
 
 
-def _sink(store, bus, client):
-    return sink.BrowserReplySink(client=client, store=store, bus=bus, region="SG")
+def _sink(store, bus, client, *, verify_window_sec: float = 0.0):
+    # verify_window_sec=0 means "read the page back exactly once": the unverified path never finds
+    # the bubble, and spending the real poll window on every such test would only buy waiting.
+    return sink.BrowserReplySink(
+        client=client, store=store, bus=bus, region="SG", verify_window_sec=verify_window_sec
+    )
 
 
 @pytest.fixture
@@ -129,12 +133,12 @@ def thread(store):
     return store.get_thread("carousell:99")
 
 
-def _reserve(store, thread_id="carousell:99", text="yes, still available!"):
+def _reserve(store, thread_id="carousell:99", text="yes, still available!", kind="reply"):
     from sellee.engines import pacing
 
     reserved = store.reserve_reply(
         thread_id=thread_id,
-        kind="reply",
+        kind=kind,
         text=text,
         in_msg_id="m1",
         cfg=pacing.resolve(_FAST, quiet_hours=(0, 0)),
@@ -339,6 +343,67 @@ def test_a_long_reply_verifies_against_its_truncated_bubble(store, bus, thread) 
     assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
 
 
+def test_the_read_back_keeps_looking_until_the_bubble_renders(store, bus, thread) -> None:
+    """The chat commits the message to its server and re-renders afterwards, so the page read the
+    instant after the submit is the page as it was BEFORE the send. On 2026-08-27 a checkout link to
+    no.202 was reported unverified for exactly this shape of reason; one read is not an answer."""
+
+    class SlowRenderClient(StubClient):
+        """Takes the message but only paints it on the third tail read."""
+
+        def __init__(self, **kw):
+            super().__init__(echo_on_send=False, **kw)
+            self.reads = 0
+            self.pending: str | None = None
+
+        def call_tool(self, name, arguments):
+            result = super().call_tool(name, arguments)
+            if name == "browser_type":
+                self.pending = arguments["text"]
+            return result
+
+        def evaluate(self, function, **kwargs):
+            if function == carousell_market.CONVERSATION_TAIL_JS:
+                self.reads += 1
+                if self.reads >= 3 and self.pending is not None:
+                    self.bubbles.append({"text": self.pending, "side": "out", "y": 99})
+                return list(self.bubbles)
+            return super().evaluate(function, **kwargs)
+
+    client = SlowRenderClient()
+    intent = _reserve(store)
+    _sink(store, bus, client, verify_window_sec=5.0).send(thread, "on its way!", "reply", intent)
+    assert client.reads >= 3
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
+def test_a_checkout_link_bubble_verifies_the_way_the_live_page_renders_it(store, bus, thread):
+    """Carousell autolinks a URL into `<a><span>…</span></a>` inside the message's own `<p>`, and
+    the reader caps bubble text at 300 characters. Captured from the live DOM on 2026-08-27: the
+    bubble
+    comes back as one outbound row holding the whole message, cut short. It must verify."""
+    link = (
+        "All sorted — here's your checkout link: "
+        "https://api.carousell.ai/checkout/8a08c727-872d-430c-968e-4978a2cafca1"
+        "?listing_id=2313c1ec-da9d-465e-bd89-6f16be050d90 Just tap through to pay securely and "
+        "I'll get it packed and shipped to your postal code 😊 (Heads up: this sale is handled by "
+        "SELLY for the seller — you'll complete payment and delivery securely at checkout.)"
+    )
+    assert len(link) > 300, "the point of this test is a reply longer than the reader's cap"
+
+    class LinkBubbleClient(StubClient):
+        def evaluate(self, function, **kwargs):
+            result = super().evaluate(function, **kwargs)
+            if function == carousell_market.CONVERSATION_TAIL_JS:
+                return [dict(bubble, text=bubble["text"][:300]) for bubble in result]
+            return result
+
+    client = LinkBubbleClient()
+    intent = _reserve(store, text=link)
+    _sink(store, bus, client).send(thread, link, "reply", intent)
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
 def test_a_send_we_cannot_confirm_stays_sent_unverified_and_is_never_resent(store, bus, thread):
     """The one thing worse than an unconfirmed message is the same message twice, so this hands the
     thread to the sweep rather than committing again."""
@@ -377,10 +442,174 @@ def test_the_sweep_escalates_an_unverified_send_without_resending(store, bus, th
     intent = _reserve(store)
     with pytest.raises(sink.SendUnverified):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
+    for _ in range(intent_sweep.MIN_VERIFY_ATTEMPTS):  # the lane re-read and still could not see it
+        store.bump_verify_attempt(intent)
     folded = intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0)
     assert len(folded) == 1 and folded[0]["escalation_new"] is True
     assert _intent_status(store, intent) == "unconfirmed"
     assert store.get_thread("carousell:99")["status"] == "escalated"
+
+
+def test_the_seller_is_not_asked_before_the_machine_has_looked(store, bus, thread) -> None:
+    """The complaint this answers: on 2026-08-27 the seller was asked to go and open the app while
+    the agent, which reads that same inbox every five minutes, had not re-checked even once. Elapsed
+    time is not effort, so the fold waits for a real attempt — and folds anyway once the hard
+    ceiling is reached, because a lane that never runs would otherwise leave a buyer hanging."""
+    from sellee import intent_sweep
+
+    client = StubClient(echo_on_send=False)
+    intent = _reserve(store)
+    with pytest.raises(sink.SendUnverified):
+        _sink(store, bus, client).send(thread, "hi", "reply", intent)
+
+    assert intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0) == []
+    assert _intent_status(store, intent) == "sent_unverified"
+    assert store.get_thread("carousell:99")["status"] == "active"  # never escalated
+    assert store.list_open_escalations() == []
+
+    store.bump_verify_attempt(intent)  # one look is not enough either
+    assert intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0) == []
+
+    # a lane that cannot run at all never bumps the count, so the ceiling folds it regardless
+    folded = intent_sweep.run_stale_intent_sweep(
+        bus=bus, store=store, grace_sec=0, hard_grace_sec=0
+    )
+    assert len(folded) == 1
+    assert _intent_status(store, intent) == "unconfirmed"
+
+
+def test_the_ask_the_seller_finally_sees_is_authored_in_code(store, bus, thread) -> None:
+    """A pass must not be able to write this one itself — it is only ever legitimate after the gate
+    above, and a model raising it early is what made the agent look like it hadn't tried."""
+    from sellee import intent_sweep
+    from sellee.store import send as send_store
+
+    client = StubClient(echo_on_send=False)
+    intent = _reserve(store)
+    with pytest.raises(sink.SendUnverified):
+        _sink(store, bus, client).send(thread, "hi", "reply", intent)
+    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+
+    escalation = store.list_open_escalations()[0]
+    assert escalation["kind"] == "unconfirmed_send"
+    assert escalation["open_question"] == send_store.UNCONFIRMED_SEND_ASK
+    assert escalation["options"] == list(send_store.UNCONFIRMED_SEND_OPTIONS)
+
+
+# --- settling an unconfirmed send off the page --------------------------------------------------
+
+
+def _unverified(
+    store, bus, thread, text="here's your checkout link: https://x.test/c/1", kind="reply"
+):
+    intent = _reserve(store, text=text, kind=kind)
+    with pytest.raises(sink.SendUnverified):
+        _sink(store, bus, StubClient(echo_on_send=False)).send(thread, text, kind, intent)
+    return intent, text
+
+
+def test_an_unsettled_send_is_listed_for_a_lane_to_go_and_look(store, bus, thread) -> None:
+    intent, text = _unverified(store, bus, thread)
+    listed = store.unsettled_intents()
+    assert [r["intent_id"] for r in listed] == [intent]
+    assert listed[0]["thread_id"] == "carousell:99"
+    assert listed[0]["text"] == text  # the lane needs the words to look for
+    assert listed[0]["verify_attempts"] == 0
+
+
+def test_finding_our_own_message_commits_it_and_withdraws_the_ask(store, bus, thread) -> None:
+    """The whole point: Sellee looked, found its own message, and cleaned up after itself."""
+    from sellee import intent_sweep
+
+    intent, text = _unverified(store, bus, thread)
+    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+    assert store.get_thread("carousell:99")["status"] == "escalated"
+    escalation = store.list_open_escalations()[0]
+
+    settled = store.settle_intent_from_read(intent)
+    assert settled["msg_id"] == f"out|{intent}"
+    assert settled["escalations_resolved"] == [escalation["id"]]
+    assert _intent_status(store, intent) == "committed"
+    folded = store.get_thread("carousell:99")
+    assert [(m["dir"], m["text"], m["source"]) for m in folded["messages"]] == [
+        ("out", text, "agent")
+    ]
+    assert folded["status"] == "active"  # restored, and no longer escalated
+    assert store.list_open_escalations() == []
+
+
+def test_a_settle_restores_the_status_the_thread_actually_had(store, bus, thread) -> None:
+    """`agreed` must not come back as `active`: the reply tool lets a nudge and a fresh negotiation
+    through on an active thread, which on a closed deal is re-opening a sale nobody re-opened."""
+    # `agreed` is owned by the confirm flows, not update_thread — stamped directly here so the test
+    # stays about the restore rather than about reaching the state.
+    with store._db.transaction() as conn:
+        conn.execute("UPDATE threads SET status = 'agreed' WHERE thread_id = 'carousell:99'")
+    intent, _ = _unverified(store, bus, thread)
+    from sellee import intent_sweep
+
+    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+    assert store.get_thread("carousell:99")["status"] == "escalated"
+
+    store.settle_intent_from_read(intent)
+    assert store.get_thread("carousell:99")["status"] == "agreed"
+
+
+def test_a_settle_leaves_the_thread_escalated_when_another_ask_is_still_open(store, bus, thread):
+    """Withdrawing our own bookkeeping question must not answer the seller's."""
+    intent, _ = _unverified(store, bus, thread)
+    from sellee import intent_sweep
+
+    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+    store.resolve_escalation(store.list_open_escalations()[0]["id"], "asked and answered")
+    store.escalate("carousell:99", open_question="is it sealed or opened?", kind="question")
+
+    store.settle_intent_from_read(intent)
+    assert _intent_status(store, intent) == "committed"
+    assert store.get_thread("carousell:99")["status"] == "escalated"
+    assert [e["kind"] for e in store.list_open_escalations()] == ["question"]
+
+
+def test_settling_twice_changes_nothing(store, bus, thread) -> None:
+    """The lane re-reads freely, so a second find has to be a no-op rather than a second row."""
+    intent, _ = _unverified(store, bus, thread)
+    assert store.settle_intent_from_read(intent) is not None
+    assert store.settle_intent_from_read(intent) is None
+    assert len(store.get_thread("carousell:99")["messages"]) == 1
+
+
+def test_a_settled_holding_line_still_leaves_the_buyer_unanswered(store, bus, thread) -> None:
+    """A holding line answered nothing, so confirming one must not mark the question handled —
+    otherwise settling it strands the buyer exactly the way committing one does."""
+    store.record_inbound("carousell:99", msg_id="in|1", text="70 can?", ts=10.0)
+    intent, _ = _unverified(
+        store, bus, thread, text="Let me check and get right back to you!", kind="holding"
+    )
+    store.settle_intent_from_read(intent)
+    assert store.get_thread("carousell:99")["cursor_last_msg_id"] is None
+
+
+def test_looking_for_a_message_that_is_gone_eventually_stops(store, bus, thread) -> None:
+    """A send the seller deleted, or the marketplace removed, will never be found. Without a ceiling
+    the lane would force-open that one conversation on every tick for the life of the install."""
+    from sellee.store import send as send_store
+
+    intent, _ = _unverified(store, bus, thread)
+    for _ in range(send_store.MAX_VERIFY_ATTEMPTS):
+        assert [r["intent_id"] for r in store.unsettled_intents()] == [intent]
+        store.bump_verify_attempt(intent)
+    assert store.unsettled_intents() == []  # stopped looking
+    # …and it is left exactly as it was: never committed, never re-sent
+    assert _intent_status(store, intent) == "sent_unverified"
+    assert store.get_thread("carousell:99")["messages"] == []
+
+
+def test_a_miss_only_counts_the_attempt(store, bus, thread) -> None:
+    intent, _ = _unverified(store, bus, thread)
+    assert store.bump_verify_attempt(intent) == 1
+    assert store.bump_verify_attempt(intent) == 2
+    assert _intent_status(store, intent) == "sent_unverified"  # never re-sent, never committed
+    assert store.get_thread("carousell:99")["messages"] == []
 
 
 def test_an_inbound_bubble_with_our_text_does_not_count_as_verification(store, bus, thread):

@@ -12,6 +12,7 @@ import pytest
 from sellee.browser.markets.carousell import LISTING_ID_PATTERN as PATTERN
 from sellee.browser.reconcile import (
     classify_tail,
+    contains_outbound,
     listing_id,
     matching_items,
     message_id,
@@ -76,6 +77,40 @@ def test_texts_match_exactly_or_as_a_long_truncation() -> None:
 
 
 # --- idempotency --------------------------------------------------------------------------------
+
+
+# --- "our message is on the page" -----------------------------------------------------------
+
+
+def test_our_own_bubble_is_what_counts_as_on_the_page() -> None:
+    tail = [_bubble("still available?", "in"), _bubble("yes it is!", "out")]
+    assert contains_outbound(tail, "yes it is!") is True
+    assert contains_outbound(tail, "Yes  it  is!") is True  # normalized
+    assert contains_outbound(tail, "not said at all") is False
+
+
+def test_the_buyer_quoting_us_back_is_not_us_having_spoken() -> None:
+    """Only an outbound bubble is evidence of a send. Accepting either side would let a buyer
+    confirm our own message for us just by repeating it."""
+    assert contains_outbound([_bubble("same words", "in")], "same words") is False
+
+
+def test_a_checkout_link_cut_short_by_the_reader_still_counts() -> None:
+    """The reader caps a bubble at 300 characters and a checkout-link reply runs past that, so the
+    read-back compares a truncated bubble against the full text it sent."""
+    link = (
+        "All sorted — here's your checkout link: "
+        "https://api.carousell.ai/checkout/8a08c727-872d-430c-968e-4978a2cafca1"
+        "?listing_id=2313c1ec-da9d-465e-bd89-6f16be050d90 Just tap through to pay securely and "
+        "I'll get it packed and shipped to your postal code 😊 (Heads up: this sale is handled by "
+        "SELLY for the seller — you'll complete payment and delivery securely at checkout.)"
+    )
+    assert contains_outbound([_bubble(link[:300], "out")], link) is True
+
+
+def test_an_empty_or_missing_tail_confirms_nothing() -> None:
+    assert contains_outbound([], "anything") is False
+    assert contains_outbound(None, "anything") is False
 
 
 def test_re_reading_an_unchanged_tail_yields_nothing() -> None:

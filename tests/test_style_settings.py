@@ -103,9 +103,19 @@ def _offer_with_firmness(store: Store, level: str | None, make_ctx, offer: float
         seed_setting(store, "firmness", level)
     item = store.create_item(title="Thing", list_price=100.0, currency="SGD")
     store.set_floor(item["id"], 40.0, "seller")
+    # One thread per item: the tool refuses an (item, thread) pair that is not really a pair, and
+    # this helper is called several times in one test, minting a fresh item each time.
+    thread_id = f"fb:{item['id'][-6:]}"
+    store.create_thread(
+        thread_id=thread_id,
+        side="sell",
+        market="fb",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
     return dispatch(
         "negotiate_offer",
-        {"item_id": item["id"], "thread_id": "fb:1", "buyer": "b", "offer": offer},
+        {"item_id": item["id"], "thread_id": thread_id, "buyer": "b", "offer": offer},
         make_ctx(TIER_ATTENDED),
     )
 

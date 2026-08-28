@@ -247,9 +247,28 @@ class ThreadsMixin:
                         "by hold_thread/release_thread, escalated by escalate, and sale states by "
                         "negotiate_confirm_sold / buyer_negotiate_accept"
                     )
+                # Reactivating is only legitimate once the question has actually been answered. The
+                # escalation, not the status, is the substrate: leaving it open and flipping the
+                # status back is how a refused send gets sent anyway — on 2026-08-27 a pass hit
+                # "thread is 'escalated' — not eligible for a reply" and, twice, called this with
+                # status=active to get past it. resolve_escalation first; it is one extra call and
+                # it records WHY the thread may talk again.
+                if (
+                    row["status"] == "escalated"
+                    and conn.execute(
+                        "SELECT 1 FROM escalations WHERE thread_id = ? AND status = 'open' LIMIT 1",
+                        (thread_id,),
+                    ).fetchone()
+                ):
+                    raise StoreError(
+                        f"thread {thread_id!r} still has an open escalation — resolve_escalation "
+                        "first; reactivating around an unanswered question is not allowed"
+                    )
                 assignments["status"] = status
                 if status == "closed":
                     assignments["closed_ts"] = _now()
+                if row["status"] == "escalated":
+                    assignments["escalated_from_status"] = None
             if not assignments:
                 raise StoreError("no fields to update")
             clause = ", ".join(f"{name} = ?" for name in assignments)

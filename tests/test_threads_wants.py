@@ -88,6 +88,29 @@ def test_update_thread_field_and_status_constraints(make_ctx, store) -> None:
         )
 
 
+def test_reactivating_around_an_open_escalation_is_refused(make_ctx, store) -> None:
+    """An escalated thread refuses a send, and on 2026-08-27 a pass answered that refusal twice by
+    flipping the status back to active rather than resolving the question. The escalation, not the
+    status, is the substrate — so reactivating while one is open is not a thing this tool can do."""
+    ctx = make_ctx("attended")
+    item = _item(store)
+    store.create_thread(
+        thread_id="fb:1", side="sell", market="fb", counterpart_handle="b", item_id=item["id"]
+    )
+    store.escalate("fb:1", open_question="is it sealed or opened?", kind="question")
+    assert store.get_thread("fb:1")["status"] == "escalated"
+
+    with pytest.raises(ToolError, match="open escalation"):
+        dispatch("update_thread", {"thread_id": "fb:1", "fields": {"status": "active"}}, ctx)
+    assert store.get_thread("fb:1")["status"] == "escalated"
+
+    # resolving it first is the way back in, and it clears the restore memory with it
+    store.resolve_escalation(store.list_open_escalations()[0]["id"], "sealed, never opened")
+    back = dispatch("update_thread", {"thread_id": "fb:1", "fields": {"status": "active"}}, ctx)
+    assert back["status"] == "active"
+    assert store.get_thread("fb:1")["escalated_from_status"] is None
+
+
 # --- hold / release -----------------------------------------------------------------------------
 
 

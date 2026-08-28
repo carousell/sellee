@@ -251,6 +251,132 @@ def test_the_full_sweep_opens_a_thread_the_gate_would_have_skipped(store, bus, s
     ]
 
 
+# --- settling our own unconfirmed sends ---------------------------------------------------------
+# The 2026-08-27 incident in one section: a checkout link landed, the read-back could not see it,
+# the escalation that followed flipped the thread to `escalated`, and `escalated` is the one status
+# this lane skips — so the reader that could have answered the question was switched off by asking
+# it.
+
+
+_LINK = "here's your checkout link: https://api.carousell.ai/checkout/abc?listing_id=def"
+
+
+def _unverified_intent(store, tid="carousell:99", text=_LINK, kind="reply"):
+    """An intent the page took and we could not read back, exactly as the sink leaves one."""
+    from sellee.engines import pacing
+
+    reserved = store.reserve_reply(
+        thread_id=tid,
+        kind=kind,
+        text=text,
+        in_msg_id=None,
+        cfg=pacing.resolve(Config(reply_delay_sec=(0, 0)), quiet_hours=(0, 0)),
+    )
+    store.mark_intent_sent_unverified(reserved["intent_id"])
+    return reserved["intent_id"]
+
+
+def test_an_escalated_thread_is_still_opened_to_chase_our_own_send(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    # the buyer message our reply answered, already read on an earlier tick
+    store.record_inbound("carousell:99", msg_id="in|q|1", text="still available?", ts=500.0)
+    intent = _unverified_intent(store)
+    store.escalate("carousell:99", open_question="is my message there?", kind="unconfirmed_send")
+    assert store.get_thread("carousell:99")["status"] == "escalated"
+
+    client = StubClient(
+        conversations=[_conv(unread=0, last_message=_LINK[:40])],
+        tails={"99": [_bubble("still available?"), _bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.intent_status(intent) == "committed"
+    messages = store.get_thread("carousell:99")["messages"]
+    assert [(m["dir"], m["text"], m["source"]) for m in messages] == [
+        ("in", "still available?", "marketplace"),
+        ("out", _LINK, "agent"),
+    ]
+    assert store.get_thread("carousell:99")["status"] == "active"  # restored, ask withdrawn
+    assert store.list_open_escalations() == []
+    assert [e.payload["intent_id"] for e in _kinds(bus, "intent.settled")] == [intent]
+    assert _notices(store) == []  # the seller hears nothing: this is our own bookkeeping
+
+
+def test_a_settled_bubble_is_not_also_recorded_as_a_manual_seller_reply(store, bus, seeded) -> None:
+    """Settling has to keep the reconciler off the bubble it just recognised, or our own reply is
+    journaled as one the seller typed in the app — a `manual` outbound row means "our account spoke
+    last" and silences follow-ups on the thread.
+
+    The hard shape: an inbound bubble we have never stored sits BEFORE our settled one, so the
+    stored rows share no suffix with the tail's opening and the aligner calls the whole tail new.
+    """
+    _thread(store, seeded)
+    _unverified_intent(store)
+    client = StubClient(
+        conversations=[_conv(unread=0, last_message=_LINK[:40])],
+        tails={"99": [_bubble("wait, still available?"), _bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    messages = store.get_thread("carousell:99")["messages"]
+    assert [(m["dir"], m["source"]) for m in messages] == [
+        ("in", "marketplace"),
+        ("out", "agent"),
+    ]
+    assert [m["text"] for m in messages].count(_LINK) == 1
+
+
+def test_not_finding_the_message_only_counts_the_attempt(store, bus, seeded) -> None:
+    """A miss is never a re-send and never a status change — only evidence that we looked, which is
+    what the sweep needs before it may ask the seller anything."""
+    _thread(store, seeded)
+    intent = _unverified_intent(store)
+    client = StubClient(
+        conversations=[_conv(unread=1, last_message="still available?")],
+        tails={"99": [_bubble("still available?")]},
+    )
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+    assert [r["verify_attempts"] for r in store.unsettled_intents()] == [1]
+    inbox.inbox_lane(deps)
+    assert [r["verify_attempts"] for r in store.unsettled_intents()] == [2]
+    assert store.intent_status(intent) == "sent_unverified"
+    assert _kinds(bus, "intent.settled") == []
+
+
+def test_a_find_after_the_seller_was_asked_takes_the_question_back(store, bus, seeded) -> None:
+    """The case that matters most. Once the sweep has given up and asked, finding the message is
+    what lets the ask be withdrawn instead of the seller having to answer it."""
+    from sellee import intent_sweep
+
+    _thread(store, seeded)
+    intent = _unverified_intent(store)
+    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+    assert store.intent_status(intent) == "unconfirmed"
+    assert len(store.list_open_escalations()) == 1
+
+    client = StubClient(
+        conversations=[_conv(unread=0, last_message=_LINK[:40])],
+        tails={"99": [_bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.intent_status(intent) == "committed"
+    assert store.list_open_escalations() == []
+    assert store.get_thread("carousell:99")["status"] == "active"
+
+
+def test_the_read_event_says_how_many_threads_were_opened_to_settle(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    _unverified_intent(store)
+    client = StubClient(
+        conversations=[_conv(unread=0, last_message=_LINK[:40])],
+        tails={"99": [_bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+    assert [e.payload["settling"] for e in _kinds(bus, "browser.read")] == [1]
+
+
 # --- new threads --------------------------------------------------------------------------------
 
 

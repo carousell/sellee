@@ -47,7 +47,9 @@ register(
         name="search_qa_bank",
         description="Look up answers the seller has already taught for this item, plus the ones "
         f"that apply to everything they sell. item_id {QA_GLOBAL_ITEM!r} means the global entries "
-        "only. Returns candidate rows to match yourself; an empty result means ask the seller.",
+        "only. Returns the item's whole bank for you to match yourself — `query` only orders the "
+        "rows, it never filters any out, so read them all before deciding. An empty result "
+        "therefore means nothing is banked for this item, and only then ask the seller.",
         input_schema={
             "type": "object",
             "properties": {

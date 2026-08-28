@@ -208,9 +208,15 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
 
     known = {t["thread_id"]: t for t in deps.store.list_threads(side="sell")}
     items = deps.store.list_items()
+    # Threads holding a send we cannot account for. These are opened whatever their status and
+    # whatever the list preview claims: an unconfirmed send escalates its thread, `escalated` is not
+    # in _ACTIVE_STATUSES, and skipping it is what left the only reader that could answer the
+    # question switched off by the act of asking it.
+    unsettled = _unsettled_by_thread(deps.store)
     opened = 0
     recorded = 0
     unreadable = 0
+    settling = 0
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -224,12 +230,15 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
                 continue
-        if thread["status"] not in _ACTIVE_STATUSES:
+        must_settle = thread_id in unsettled
+        if must_settle:
+            settling += 1
+        elif thread["status"] not in _ACTIVE_STATUSES:
             continue
-        if not full_sweep and _can_skip(deps.store, thread, row):
+        elif not full_sweep and _can_skip(deps.store, thread, row):
             continue
         opened += 1
-        fresh = _read_thread(deps, client, adapter, thread, region, row)
+        fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled)
         if fresh is None:
             unreadable += 1
         else:
@@ -244,6 +253,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             "recorded": recorded,
             "unreadable": unreadable,
             "full_sweep": full_sweep,
+            # How many of the opened threads were opened to chase a send of our own, so a tick spent
+            # settling rather than reading is legible in the event stream.
+            "settling": settling,
         },
     )
     # Only a read where every opened thread was legible counts as seeing the market. A conversation
@@ -325,6 +337,56 @@ def _adopt(deps: InboxDeps, market: str, adapter, thread_id: str, row: dict, han
     return True
 
 
+def _settle_unsettled(deps: InboxDeps, thread_id: str, tail: list, unsettled: dict) -> list:
+    """Answer "did our own message actually land" for every unsettled send on this thread.
+
+    The lane is already here with the conversation on screen, so this is unfinished work it can
+    finish rather than a reason to ask the seller anything. A found bubble commits its intent — same
+    deterministic msg_id a verified send would have used — and withdraws the `unconfirmed_send`
+    escalation it caused; a miss only counts the attempt, which is what makes the eventual ask a
+    last resort instead of a timeout. Never a re-send either way: the page is evidence about what
+    happened, never permission to do it again.
+
+    Runs BEFORE the reconciler so a settled reply is already stored when the tail is aligned —
+    otherwise the very bubble we just recognised is inserted a second time as a phantom manual
+    seller reply, which is what the live database's 34 `manual` rows against 13 `agent` ones look
+    like.
+
+    Returns the texts it settled. Storing them is not on its own enough to keep the reconciler off
+    them: `new_rows` aligns the tail as a trailing window, so a settled outbound row sitting after
+    an inbound one we have never stored leaves no matching suffix and the whole tail reads as new.
+    The caller drops these texts from what it records for exactly that case.
+    """
+    settled = []
+    for intent in unsettled.get(thread_id, ()):
+        if reconcile.contains_outbound(tail, intent["text"]):
+            result = deps.store.settle_intent_from_read(intent["intent_id"])
+            if result is None:
+                continue
+            settled.append(intent["text"])
+            deps.bus.publish(
+                "intent.settled",
+                {
+                    "intent_id": result["intent_id"],
+                    "thread_id": thread_id,
+                    "escalations_resolved": len(result["escalations_resolved"]),
+                },
+            )
+            for esc_id in result["escalations_resolved"]:
+                deps.bus.publish("escalation.resolved", {"id": esc_id})
+        else:
+            deps.store.bump_verify_attempt(intent["intent_id"])
+    return settled
+
+
+def _unsettled_by_thread(store) -> dict:
+    """Unsettled sends grouped by thread, read once per tick rather than per conversation."""
+    grouped: dict = {}
+    for intent in store.unsettled_intents():
+        grouped.setdefault(intent["thread_id"], []).append(intent)
+    return grouped
+
+
 def _read_thread(
     deps: InboxDeps,
     client,
@@ -332,6 +394,7 @@ def _read_thread(
     thread: dict,
     region: str | None,
     row: dict | None = None,
+    unsettled: dict | None = None,
 ) -> int | None:
     """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
     conversation could not be read at all — which the caller counts as being blind on this market,
@@ -356,6 +419,9 @@ def _read_thread(
         # over; this says we could not see it.
         return None
     tail = reconcile.classify_tail(raw)
+    # Settle our own unconfirmed sends first, so anything recognised is stored before the tail is
+    # aligned against what we have — see _settle_unsettled.
+    just_settled = _settle_unsettled(deps, thread["thread_id"], tail, unsettled or {})
     stored = deps.store.get_thread_messages(thread["thread_id"], limit=None)
     if not tail:
         # A thread exists because somebody wrote in it, so a conversation we have already recorded
@@ -366,6 +432,18 @@ def _read_thread(
             return None
         return 0
     fresh = reconcile.new_rows(tail, stored, now=deps.now())
+    if just_settled:
+        # A message we just settled is already stored as ours. Recording it again would journal our
+        # own reply as one the seller typed in the app, which is how a thread goes quiet: a `manual`
+        # outbound row means "our account spoke last" and stops follow-ups.
+        fresh = [
+            entry
+            for entry in fresh
+            if not (
+                entry["direction"] == "out"
+                and any(reconcile.same_text(entry["text"], text) for text in just_settled)
+            )
+        ]
     if not fresh and (row or {}).get("unread"):
         # A buyer repeating the same text past TAIL_BUBBLES looks to the aligner like an
         # already-stored tail (every overlap size matches trivially). The list's unread count is
