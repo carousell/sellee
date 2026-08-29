@@ -680,7 +680,7 @@ def run_daemon(*, once: bool) -> int:
         Task(
             name="reply_lane",
             interval_sec=_REPLY_LANE_INTERVAL_SEC,
-            func=lambda: inbox.reply_lane(store=store, bus=bus),
+            func=lambda: inbox.reply_lane(store=store, bus=bus, config=cfg),
         )
     )
     # List what is on carousell.ai everywhere else the seller sells, and report each outcome. Driven
@@ -730,6 +730,16 @@ def run_daemon(*, once: bool) -> int:
             name="first_listing_nudge",
             interval_sec=outbound.FIRST_LISTING_NUDGE_INTERVAL_SEC,
             func=lambda: outbound.first_listing_nudge(store=store),
+        )
+    )
+    # Say when a buyer has gone unanswered. The reply lane holds a pass it knows would be refused,
+    # which is right — but held reads exactly like handled unless something says otherwise, and a
+    # blocked reply records no intent, no transcript row and no error to notice it by.
+    scheduler.register(
+        Task(
+            name="buyer_waiting_notice",
+            interval_sec=outbound.BUYER_WAITING_INTERVAL_SEC,
+            func=lambda: outbound.buyer_waiting_notice(store=store),
         )
     )
 

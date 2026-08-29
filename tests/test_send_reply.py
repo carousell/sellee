@@ -224,10 +224,29 @@ def test_quiet_verdict_records_nothing_at_store(store) -> None:
     cfg = pacing.resolve(Config(), quiet_hours=(1380, 480))  # default night window
     two_am = datetime.fromisoformat("2026-07-22T02:00:00").timestamp()
     res = store.reserve_reply(
-        thread_id="fb:1", kind="reply", text="x", in_msg_id=None, cfg=cfg, now=two_am
+        thread_id="fb:1", kind="followup", text="x", in_msg_id=None, cfg=cfg, now=two_am
     )
     assert res["verdict"] == "quiet"
     assert _intents(store) == [] and _pacing_rows(store) == []
+
+
+def test_a_buyers_reply_is_answered_during_quiet_hours(store) -> None:
+    """Quiet hours hold outreach we start, not an answer someone is waiting on. Holding these is
+    what left a 03:14 "still available?" unanswered until 08:00 while the lane respawned a pass
+    every 28 seconds to be refused again."""
+    _sell_thread(store)
+    cfg = pacing.resolve(Config(), quiet_hours=(1380, 480))
+    two_am = datetime.fromisoformat("2026-07-22T02:00:00").timestamp()
+    res = store.reserve_reply(
+        thread_id="fb:1",
+        kind="reply",
+        text="yes, still available!",
+        in_msg_id=None,
+        cfg=cfg,
+        now=two_am,
+    )
+    assert res["verdict"] == "go"
+    assert len(_intents(store)) == 1 and len(_pacing_rows(store)) == 1
 
 
 # --- crash healing ----------------------------------------------------------------------------

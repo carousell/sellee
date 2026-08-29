@@ -49,10 +49,36 @@ def test_at_cap_waits_without_recording() -> None:
 
 
 def test_quiet_checked_before_cap_and_no_record() -> None:
-    # default quiet hours 23..8; at 02:00 even an empty ledger is quiet, never a go
+    # default quiet hours 23..8; at 02:00 even an empty ledger is quiet, never a go. A followup is
+    # outreach we *start*, which is exactly what the window holds.
     cfg = pacing.resolve(Config(max_actions_per_hour=12), quiet_hours=[1380, 480])
-    r = pacing.evaluate([], now=_midnight_ish(), cfg=cfg, kind="reply")
+    r = pacing.evaluate([], now=_midnight_ish(), cfg=cfg, kind="followup")
     assert r["verdict"] == "quiet" and r["record"] is False
+
+
+@pytest.mark.parametrize("kind", pacing.REACTIVE_KINDS)
+def test_reactive_kinds_answer_during_quiet_hours(kind) -> None:
+    # A buyer who writes at 2am is awake and waiting. Answering them is not the pattern the quiet
+    # window exists to hide — starting a conversation at 2am is.
+    cfg = pacing.resolve(Config(max_actions_per_hour=12), quiet_hours=[1380, 480])
+    r = pacing.evaluate([], now=_midnight_ish(), cfg=cfg, kind=kind)
+    assert r["verdict"] == "go" and r["record"] is True
+
+
+@pytest.mark.parametrize("kind", ("followup", "nudge", "publish"))
+def test_proactive_kinds_stay_held_during_quiet_hours(kind) -> None:
+    cfg = pacing.resolve(Config(max_actions_per_hour=12), quiet_hours=[1380, 480])
+    r = pacing.evaluate([], now=_midnight_ish(), cfg=cfg, kind=kind)
+    assert r["verdict"] == "quiet" and r["record"] is False
+
+
+def test_cap_still_bites_a_reactive_kind_during_quiet_hours() -> None:
+    # Only the quiet gate is loosened: account safety's hard cap still applies at every hour, so an
+    # exempt reply can never outrun it.
+    cfg = pacing.resolve(Config(max_actions_per_hour=2), quiet_hours=[1380, 480])
+    now = _midnight_ish()
+    r = pacing.evaluate([now - 10, now - 20], now=now, cfg=cfg, kind="reply")
+    assert r["verdict"] == "wait" and r["record"] is False
 
 
 def test_fast_mode_zeroes_jitter_lifts_cap_disables_quiet() -> None:

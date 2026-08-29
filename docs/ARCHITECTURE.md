@@ -92,7 +92,11 @@ their tests:
 - **`engines/pacing.py`** — the account-safety gate (go/wait/quiet; quiet hours
   and the per-marketplace hourly cap checked before jitter; FAST mode; ceilings as
   code constants). The store's `reserve_action` records at reserve in one
-  transaction; the caller sleeps the go-jitter after, never under the lock.
+  transaction; the caller sleeps the go-jitter after, never under the lock. Quiet
+  hours hold only what we *start* (`REACTIVE_KINDS` — a reply or holding line to a
+  waiting buyer is exempt); the hourly cap holds every kind. The reply lane asks
+  the same question read-only via `peek_action` **before** spawning a pass, so a
+  send the engine would refuse never costs a model turn.
 - **`engines/shipping.py`** — the deterministic delivery-fee computation; the
   origin address is never an input.
 - **`engines/negotiate.py`** / **`engines/buyer_negotiate.py`** — the sell/buy

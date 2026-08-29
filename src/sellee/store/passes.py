@@ -164,16 +164,23 @@ class PassesMixin:
         rows = self._db.query(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES)
         return _unhandled_inbound_rows(rows)
 
-    def enqueue_reply_pass(self) -> dict | None:
+    def enqueue_reply_pass(self, skip_markets=()) -> dict | None:
         """Coalescing route for the reply lane, one transaction: claim every sell thread with
         unhandled inbound into a single queued pass, unless one is already queued or running.
 
         The claimed thread ids (and their owning items) become the pass's payload — the pass token
         is minted with exactly that scope, so the spawned pass can read nothing else. Returns
         {pass_id, thread_ids, item_ids} or None when there is nothing to reply to.
+
+        `skip_markets` holds back the marketplaces whose next send the pacing engine would refuse
+        anyway. Filtering here rather than in the caller keeps the claim atomic — a market decided
+        sendable and a market actually claimed are the same read — and per-market rather than
+        all-or-nothing, because the cap is per marketplace account: one saturated market must never
+        mute the buyers waiting on another.
         """
         pass_id = _new_id("pass")
         now = _now()
+        skipped = frozenset(skip_markets)
         with self._db.transaction() as conn:
             active = conn.execute(
                 "SELECT 1 FROM passes WHERE type = 'reply' "
@@ -181,7 +188,8 @@ class PassesMixin:
             ).fetchone()
             if active:
                 return None
-            claimable = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            rows = conn.execute(_UNHANDLED_INBOUND_SQL, _REPLY_THREAD_STATUSES).fetchall()
+            claimable = [row for row in rows if row["market"] not in skipped]
             pending = _unhandled_inbound_rows(claimable)
             if not pending:
                 return None
@@ -198,6 +206,21 @@ class PassesMixin:
                 (pass_id, json.dumps(payload, sort_keys=True), now),
             )
         return {"pass_id": pass_id, **payload}
+
+    def last_finished_pass(self, pass_type: str) -> dict | None:
+        """The most recently finished pass of a type, as {class, finished_ts} — or None.
+
+        The reply lane's cooldown read: a pass that ended `no_send` is the one signal that
+        respawning right now would only repeat it.
+        """
+        rows = self._db.query(
+            "SELECT class, finished_ts FROM passes WHERE type = ? AND finished_ts IS NOT NULL "
+            "ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",
+            (pass_type,),
+        )
+        if not rows:
+            return None
+        return {"class": rows[0]["class"], "finished_ts": rows[0]["finished_ts"]}
 
     def active_passes_of_types(self, types) -> list[dict]:
         """Queued or running passes of the given types, as {type, payload}.

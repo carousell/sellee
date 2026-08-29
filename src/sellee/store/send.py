@@ -353,6 +353,26 @@ class SendMixin:
             "escalations_resolved": resolved,
         }
 
+    def has_intent_for_threads(self, thread_ids, since_ts: float) -> bool:
+        """Whether any of these threads gained a send intent at or after `since_ts`.
+
+        "Did that pass actually try to send?" — the reply pass's progress test. Intent creation is
+        the first durable mark the send bracket makes, and `reserve_reply` writes one only on a `go`
+        verdict, so its absence across every claimed thread means the pass reached no send path at
+        all. Every status counts: a `pending` or `sent_unverified` intent did reach the page, and
+        the stale-intent sweep owns its fate from there.
+        """
+        ids = tuple(thread_ids)
+        if not ids:
+            return False
+        placeholders = ",".join("?" for _ in ids)
+        rows = self._db.query(
+            f"SELECT 1 FROM send_intents WHERE thread_id IN ({placeholders}) "
+            "AND created_ts >= ? LIMIT 1",
+            (*ids, since_ts),
+        )
+        return bool(rows)
+
     def intent_status(self, intent_id: str) -> str | None:
         """The send bracket's durable truth for one intent — what a caller consults after a sink
         failure, because the exception cannot say whether the page took the message."""

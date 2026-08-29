@@ -129,8 +129,15 @@ def _term_overlap(entry: dict, terms: set) -> int:
 # as an outbound row on the next read, and talking over them is worse than staying quiet. It tests
 # provenance rather than the last row's direction, because direction cannot tell that case from "we
 # replied and the buyer has since said more" — the common one, which must stay eligible.
+#
+# The last answers "is an earlier send still in the air". `reserve_reply` refuses a thread holding a
+# `sent_unverified` intent — the buyer may already have that message — so a pass spawned for one
+# could only be turned away. Mirrored here because eligibility is what the lane spends a pass on,
+# and a refusal it could have predicted is the livelock of 2026-08-29 in miniature. Bounded exactly
+# as the refusal is: the sweep folds the intent to `unconfirmed` and opens the escalation that the
+# clause below already holds the thread on.
 _UNHANDLED_INBOUND_SQL = (
-    "SELECT t.thread_id, t.item_id, "
+    "SELECT t.thread_id, t.item_id, t.market, "
     "  (SELECT mw.msg_id FROM thread_messages mw WHERE mw.thread_id = t.thread_id "
     "     AND mw.dir = 'in' ORDER BY mw.ts DESC, mw.rowid DESC LIMIT 1) AS newest_in_msg_id, "
     "  (SELECT MAX(mx.ts) FROM thread_messages mx WHERE mx.thread_id = t.thread_id "
@@ -145,12 +152,29 @@ _UNHANDLED_INBOUND_SQL = (
     "               WHERE mi.thread_id = t.thread_id AND mi.dir = 'in')) "
     "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
     "  AND e.status = 'open') "
+    "AND NOT EXISTS (SELECT 1 FROM send_intents si WHERE si.thread_id = t.thread_id "
+    "  AND si.status = 'sent_unverified') "
     "ORDER BY t.thread_id ASC"
 ).format(statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES))
 
 
 def _unhandled_inbound_rows(rows) -> list[dict]:
-    return [{"thread_id": r["thread_id"], "item_id": r["item_id"]} for r in rows]
+    """The waiting threads, plus the buyer message each is waiting on.
+
+    The message identifies *what* is unanswered, which is what lets a report about it be guarded by
+    content rather than by thread: a buyer answered and then ignored again is a new wait, not a
+    repeat of the old one.
+    """
+    return [
+        {
+            "thread_id": r["thread_id"],
+            "item_id": r["item_id"],
+            "market": r["market"],
+            "waiting_on_msg_id": r["newest_in_msg_id"],
+            "waiting_since_ts": r["newest_in_ts"],
+        }
+        for r in rows
+    ]
 
 
 def _claimed_through(rows) -> dict:

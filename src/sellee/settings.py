@@ -552,10 +552,11 @@ register(
         parse=_parse_quiet_hours,
         render=_render_quiet_hours,
         default=[2300, 800],  # 23:00–08:00
-        description="A nightly window that holds routine updates until it ends (urgent decisions "
-        "still come through). A [start, end] pair of HHMM times (2300 = 11pm, 930 = 9:30am); equal "
-        "values disable it.",
-        take_effect="takes effect immediately for new marketplace sends; already-queued notices "
+        description="A nightly window that holds routine updates and outreach until it ends — "
+        "follow-ups, nudges and new listings wait for morning. Buyers who message you are still "
+        "answered at any hour, and urgent decisions still come through. A [start, end] pair of "
+        "HHMM times (2300 = 11pm, 930 = 9:30am); equal values disable it.",
+        take_effect="takes effect immediately for new marketplace outreach; already-queued notices "
         "re-check at the next drain.",
         requires_approval=True,
     )

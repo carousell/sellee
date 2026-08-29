@@ -27,12 +27,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import marketplaces
+from sellee import marketplaces, settings
 from sellee.browser import blindness, reconcile
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
 from sellee.engines import hosts
+from sellee.engines import pacing as pacing_engine
 from sellee.engines import scam as scam_engine
 from sellee.store import StoreError
 
@@ -522,7 +523,53 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
     )
 
 
-def reply_lane(*, store, bus) -> None:
+# How long the lane waits after a reply pass that sent nothing. The pacing pre-gate predicts the
+# refusals we know about; this is the backstop for the ones nobody has diagnosed yet, and it is a
+# flat cooldown rather than exponential backoff on purpose — the job is to turn a 28-second respawn
+# loop into a 5-minute one, which is cheap enough to wait out and slow enough to notice, without
+# inventing per-thread retry state the eligibility rows deliberately do not carry.
+NO_SEND_COOLDOWN_SEC = 300.0
+
+
+def paced_out_markets(store, config, now=None) -> tuple:
+    """The marketplaces whose next buyer reply the pacing engine would refuse right now.
+
+    Asked before a pass is spawned rather than discovered inside one. `send_reply` documents that a
+    blocked verdict records nothing and "the thread simply stays unanswered and the reply lane picks
+    it up again once `retry_after_sec` has passed" — but eligibility is only ever cleared by a
+    *committed* reply, so nothing honoured that delay and the lane respawned the pass immediately.
+    On 2026-08-29 one buyer's "still available?" cost 101 model spawns in 48 minutes and was still
+    unanswered; the same shape burned 49 on 2026-08-27 against the hourly cap.
+
+    Per market, because the cap is a per-marketplace-account ledger. `peek_action` records nothing,
+    so asking never spends the slot the real send needs.
+    """
+    cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store))
+    now = time.time() if now is None else now
+    waiting = {row["market"] for row in store.threads_with_unhandled_inbound()}
+    return tuple(
+        sorted(
+            market
+            for market in waiting
+            if store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
+            != "go"
+        )
+    )
+
+
+def in_no_send_cooldown(store, now) -> bool:
+    """Whether the last reply pass sent nothing recently enough to hold this tick.
+
+    Read off the ledger rather than kept in lane state: a daemon restart mid-loop must not clear the
+    brake, and the pass rows are already the durable record of what happened.
+    """
+    last = store.last_finished_pass("reply")
+    if last is None or last["class"] != "no_send":
+        return False
+    return (now - last["finished_ts"]) < NO_SEND_COOLDOWN_SEC
+
+
+def reply_lane(*, store, bus, config, now=None) -> None:
     """One tick of the reply lane: spawn a scoped reply pass for the buyers who are waiting.
 
     Coalescing and single-flight like the channel lane: the store claims every waiting thread into
@@ -530,10 +577,19 @@ def reply_lane(*, store, bus) -> None:
     becomes one pass rather than a queue of them. Nothing is auto-refired: a pass that failed
     leaves its threads eligible, and the next tick picks them up because eligibility comes from the
     rows and not from a retry counter.
+
+    That last property is what makes the pacing pre-gate load-bearing rather than an optimization:
+    "eligible" and "sendable" are different questions, and a tick that spawns a pass for a thread
+    the send path will refuse re-asks the same refused question every ~28 seconds, forever. The gate
+    holds the *pass*, never the buyer — the rows stay eligible and the next unblocked tick claims
+    them.
     """
     if store.is_paused():
         return
-    claimed = store.enqueue_reply_pass()
+    now = time.time() if now is None else now
+    if in_no_send_cooldown(store, now):
+        return
+    claimed = store.enqueue_reply_pass(skip_markets=paced_out_markets(store, config, now))
     if claimed is None:
         return
     bus.publish(

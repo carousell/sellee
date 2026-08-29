@@ -157,3 +157,94 @@ def test_delivery_hands_an_asks_buttons_to_the_provider(store, bus, xdg_tmp) -> 
     )
 
     assert seen == [[["Checkout", "n1:a0"], ["Myself", "n1:a1"]]]
+
+
+# --- a buyer nobody answered ---------------------------------------------------------------------
+#
+# The gap this closes: on 2026-08-29 two buyers waited from 03:14 with no reply and no word to the
+# seller, while the reply lane respawned a pass every 28 seconds. Every pass was ledgered class=ok,
+# so nothing anywhere said a buyer was waiting. Silence has to be reportable.
+
+
+def _waiting(store, tid="carousell:1", *, handle="bob", title="Teak lamp", ts=10.0):
+    item = store.create_item(title=title, list_price=80.0, currency="SGD")
+    store.create_thread(
+        thread_id=tid,
+        side="sell",
+        market="carousell",
+        counterpart_handle=handle,
+        item_id=item["id"],
+    )
+    store.record_inbound(tid, msg_id="m1", text="still available?", ts=ts)
+    return item
+
+
+def _texts(store):
+    return [n["text"] for n in store.list_queued_notices()]
+
+
+def test_a_long_unanswered_buyer_is_reported_once(store, bus, xdg_tmp) -> None:
+    _bind(store)
+    _waiting(store, ts=0.0)
+    late = outbound.BUYER_WAITING_AGE_SEC + 1
+
+    outbound.buyer_waiting_notice(store=store, now=late)
+    outbound.buyer_waiting_notice(store=store, now=late + 60)  # tick repeats, notice does not
+    assert len(_texts(store)) == 1
+    assert "bob" in _texts(store)[0] and "Teak lamp" in _texts(store)[0]
+
+
+def test_a_buyer_inside_the_window_is_not_reported_yet(store, bus, xdg_tmp) -> None:
+    """A reply in flight is normal. Only silence past the threshold is news."""
+    _bind(store)
+    _waiting(store, ts=0.0)
+    outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC - 1)
+    assert _texts(store) == []
+
+
+def test_the_notice_is_not_holdable_so_quiet_hours_cannot_swallow_it(store, bus, xdg_tmp) -> None:
+    """A holdable notice about a buyer waiting overnight would arrive exactly when it stopped
+    mattering. A waiting buyer is the seller's call, not a routine update."""
+    _bind(store)
+    _waiting(store, ts=0.0)
+    outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC + 1)
+    assert store.list_queued_notices()[0]["holdable"] is False
+
+
+def test_answering_the_buyer_stops_the_report(store, bus, xdg_tmp) -> None:
+    _bind(store)
+    _waiting(store, ts=0.0)
+    store.record_manual_reply("carousell:1", "yes, still available")
+    outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC + 1)
+    assert _texts(store) == []
+
+
+def test_a_second_question_after_an_answer_reports_again(store, bus, xdg_tmp) -> None:
+    """The guard is the message waited on, not the thread — so a buyer who is answered and then
+    ignored again is not silently written off by the first notice's ref."""
+    _bind(store)
+    _waiting(store, ts=0.0)
+    late = outbound.BUYER_WAITING_AGE_SEC + 1
+    outbound.buyer_waiting_notice(store=store, now=late)
+    assert len(_texts(store)) == 1
+
+    store.record_inbound("carousell:1", msg_id="m2", text="hello?", ts=late)
+    outbound.buyer_waiting_notice(store=store, now=late * 2 + 1)
+    assert len(_texts(store)) == 2
+
+
+def test_an_escalated_thread_is_not_double_reported(store, bus, xdg_tmp) -> None:
+    """An open escalation already put the decision in front of the seller."""
+    _bind(store)
+    _waiting(store, ts=0.0)
+    store.escalate("carousell:1", open_question="Buyer offered $30 — take it?")
+    outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC + 1)
+    assert _texts(store) == []
+
+
+def test_a_paused_agent_reports_nothing(store, bus, xdg_tmp) -> None:
+    _bind(store)
+    _waiting(store, ts=0.0)
+    store.set_paused(True, source="test")
+    outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC + 1)
+    assert _texts(store) == []

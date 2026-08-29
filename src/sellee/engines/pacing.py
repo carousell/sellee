@@ -9,6 +9,7 @@ under-sends — the safe direction.
 Verdicts: `go` (act after the returned jitter), `wait` (at the hourly cap; delay is when a slot
 frees), `quiet` (inside quiet hours; delay is until the window ends). quiet hours and the cap are
 checked BEFORE any jitter is chosen, so a mode can only change the jitter, never a safety floor.
+Quiet hours hold only the kinds we *start* — see REACTIVE_KINDS; the cap holds every kind.
 FAST mode zeroes jitter, lifts the cap to its ceiling, and disables quiet hours — it drops the
 account-safety disguise for a live demo and never auto-reverts.
 
@@ -23,6 +24,16 @@ from dataclasses import dataclass
 from datetime import datetime
 
 WINDOW_SECONDS = 3600  # the cap is per hour
+
+# The kinds quiet hours do NOT hold. The window is an account-safety disguise, and what gives an
+# automated account away is *starting* things at 4am — a cold nudge, a follow-up, a burst of
+# listings. Answering a buyer who just wrote is the opposite: they are awake, they are waiting, and
+# a seller who replies is the most ordinary thing on the marketplace.
+#
+# Holding these was how a buyer's 03:14 "still available?" sat unanswered until 08:00 while the
+# reply lane respawned a pass every 28 seconds to be refused again. The cap below still applies to
+# every kind, so exempting these loosens exactly one gate and never account safety itself.
+REACTIVE_KINDS = ("reply", "holding")
 
 
 @dataclass(frozen=True)
@@ -116,7 +127,9 @@ def evaluate(
     count = len(in_window)
     base = {"kind": kind, "count": count, "cap": cfg.cap, "record": False}
 
-    if in_quiet_window(minute_of_day, cfg.quiet_start_min, cfg.quiet_end_min):
+    if kind not in REACTIVE_KINDS and in_quiet_window(
+        minute_of_day, cfg.quiet_start_min, cfg.quiet_end_min
+    ):
         return {
             **base,
             "verdict": "quiet",

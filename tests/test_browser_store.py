@@ -244,7 +244,14 @@ def _waiting_thread(store, tid="carousell:1", *, ts=100.0):
 def test_unhandled_inbound_lists_a_waiting_sell_thread(store) -> None:
     item = _waiting_thread(store)
     assert store.threads_with_unhandled_inbound() == [
-        {"thread_id": "carousell:1", "item_id": item["id"]}
+        {
+            "thread_id": "carousell:1",
+            "item_id": item["id"],
+            "market": "carousell",
+            # the message the buyer is waiting on — what a report about the wait is keyed to
+            "waiting_on_msg_id": "m1",
+            "waiting_since_ts": 100.0,
+        }
     ]
 
 

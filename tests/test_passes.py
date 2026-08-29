@@ -143,6 +143,41 @@ def test_a_rail_publish_never_touches_the_window(
     assert raised == []
 
 
+def test_a_reply_pass_that_sent_nothing_is_ledgered_no_send(
+    bus, store, fake_harness, xdg_tmp
+) -> None:
+    """rc == 0 is not "it worked". On 2026-08-29 a reply pass composed a good reply, had it refused
+    by the pacing gate, exited clean, and was ledgered class=ok — 101 times, for one buyer who was
+    never answered. A pass whose claimed threads gained no send intent says so."""
+    paths.ensure_state_dirs()
+    item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    store.create_thread(
+        thread_id="carousell:1",
+        side="sell",
+        market="carousell",
+        counterpart_handle="bob",
+        item_id=item["id"],
+    )
+    pid = store.enqueue_pass("reply", {"thread_ids": ["carousell:1"], "item_ids": [item["id"]]})
+    claimed = store.claim_queued_pass()
+
+    cls = passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+    assert cls == "no_send"
+
+    row = store.get_pass(pid)
+    assert row["status"] == "error" and row["class"] == "no_send" and row["rc"] == 0
+    assert row["summary"].startswith("no_send (turns=")
+    assert _events(bus, "pass.end")[0].payload["is_error"] is True
+
+
+def test_a_pass_type_with_no_progress_hook_stays_ok(bus, store, fake_harness, xdg_tmp) -> None:
+    """Only the reply type can answer "did this send anything" — a publish's success is its own."""
+    paths.ensure_state_dirs()
+    store.enqueue_pass("publish", {"item_id": "item_1"})
+    claimed = store.claim_queued_pass()
+    assert passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed) == "ok"
+
+
 def test_run_pass_error_exit_classifies_error(bus, store, fake_harness, xdg_tmp) -> None:
     paths.ensure_state_dirs()
     pid = store.enqueue_pass("publish", {"item_id": "item_1"})

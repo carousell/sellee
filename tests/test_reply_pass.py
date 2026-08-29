@@ -7,10 +7,14 @@ forbidden, so a buyer can never learn what else the seller is selling by asking.
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from sellee import passes, reply_prompt
 from sellee.browser import inbox
+from sellee.config import Config
+from sellee.engines import pacing
 from sellee.proc_tree import PASS_PROMPT_MARKER
 from sellee.store import Scope, ScopedStore
 from sellee.tools import tools_for_tier
@@ -250,10 +254,15 @@ def test_a_reply_session_cannot_reach_a_seller_side_tool(store, bus) -> None:
 # --- the lane ------------------------------------------------------------------------------------
 
 
+def _lane(store, bus, **overrides):
+    """One reply-lane tick under a permissive pacing config, unless a test tightens it."""
+    return inbox.reply_lane(store=store, bus=bus, config=Config(**overrides))
+
+
 def test_the_lane_spawns_one_pass_for_the_waiting_buyers(store, bus) -> None:
     item = _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="still available?", ts=10.0)
-    inbox.reply_lane(store=store, bus=bus)
+    _lane(store, bus)
 
     queued = bus.store.read(kinds=["pass.queued"])
     assert [e.payload["type"] for e in queued] == ["reply"]
@@ -271,7 +280,7 @@ def test_a_burst_of_buyers_becomes_one_pass(store, bus) -> None:
     second = _thread(store, "carousell:2", title="Office chair", handle="carol")
     store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
     store.record_inbound("carousell:2", msg_id="m1", text="hi", ts=11.0)
-    inbox.reply_lane(store=store, bus=bus)
+    _lane(store, bus)
     claimed = store.claim_queued_pass()
     assert claimed.payload["thread_ids"] == ["carousell:1", "carousell:2"]
     assert claimed.payload["item_ids"] == sorted([first["id"], second["id"]])
@@ -281,10 +290,10 @@ def test_a_failed_pass_leaves_its_threads_eligible(store, bus) -> None:
     """Eligibility comes from the rows, not a retry counter, so nothing needs to auto-refire."""
     _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
-    inbox.reply_lane(store=store, bus=bus)
+    _lane(store, bus)
     claimed = store.claim_queued_pass()
     store.finish_pass(claimed.pass_id, status="error", rc=1, cls="error", summary="died")
-    inbox.reply_lane(store=store, bus=bus)
+    _lane(store, bus)
     assert len(bus.store.read(kinds=["pass.queued"])) == 2
 
 
@@ -292,8 +301,157 @@ def test_a_paused_agent_spawns_nothing(store, bus) -> None:
     _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
     store.set_paused(True, source="test")
-    inbox.reply_lane(store=store, bus=bus)
+    _lane(store, bus)
     assert bus.store.read(kinds=["pass.queued"]) == []
+
+
+# --- the lane's pacing pre-gate ------------------------------------------------------------------
+#
+# The livelock this exists to stop: a pass whose send the pacing engine will refuse still leaves its
+# thread eligible (the cursor only advances on a *committed* reply), so the lane respawned it every
+# ~28s forever. On 2026-08-29 that was 101 passes in 48 minutes for one buyer, all class=ok, none
+# sent. The lane now asks the same question the send will ask, before spending a pass on it.
+
+
+def _fill_cap(store, market="carousell", n=2):
+    """Burn `n` pacing slots on `market`, so the next reserve there is at the cap."""
+    cfg = pacing.resolve(Config(max_actions_per_hour=n, reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    for _ in range(n):
+        assert store.reserve_action(marketplace=market, kind="reply", cfg=cfg)["verdict"] == "go"
+
+
+def test_a_capped_market_is_not_claimed_into_a_pass(store, bus) -> None:
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    _fill_cap(store, "carousell", n=2)
+    _lane(store, bus, max_actions_per_hour=2)
+    assert bus.store.read(kinds=["pass.queued"]) == []
+    assert store.claim_queued_pass() is None
+
+
+def test_the_capped_market_is_claimed_again_once_a_slot_frees(store, bus) -> None:
+    """The gate holds the pass, it does not drop the buyer — eligibility is still in the rows."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    _fill_cap(store, "carousell", n=2)
+    _lane(store, bus, max_actions_per_hour=2)
+    assert store.claim_queued_pass() is None
+    # the cap is per hour and the ledger is read in-window, so a wider cap frees a slot
+    _lane(store, bus, max_actions_per_hour=3)
+    claimed = store.claim_queued_pass()
+    assert claimed is not None and claimed.payload["thread_ids"] == ["carousell:1"]
+
+
+def test_a_capped_market_never_mutes_a_healthy_one(store, bus) -> None:
+    """Per-market, because the cap is per marketplace account — one saturated market must not
+    silence the buyers waiting on another."""
+    _thread(store, "carousell:1")
+    item = store.create_item(title="Desk fan", list_price=40.0, currency="SGD")
+    store.create_thread(
+        thread_id="fb:9", side="sell", market="fb", counterpart_handle="dana", item_id=item["id"]
+    )
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    store.record_inbound("fb:9", msg_id="m1", text="hi", ts=11.0)
+    _fill_cap(store, "carousell", n=2)
+
+    _lane(store, bus, max_actions_per_hour=2)
+    claimed = store.claim_queued_pass()
+    assert claimed is not None
+    assert claimed.payload["thread_ids"] == ["fb:9"]  # carousell held, fb answered
+
+
+def test_the_gate_records_no_pacing_action(store, bus) -> None:
+    """The pre-check is a dry run — it must not consume the slot the real send needs."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    _lane(store, bus, max_actions_per_hour=12)
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace='carousell'")
+    assert rows == []
+
+
+def test_a_thread_with_an_unverified_send_is_not_reclaimed(store, bus) -> None:
+    """`reserve_reply` refuses a thread whose earlier send is still unsettled, so spawning a pass
+    for it is the same wasted loop. The sweep's escalation is the deliberate way back in."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    cfg = pacing.resolve(Config(reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    reserved = store.reserve_reply(
+        thread_id="carousell:1", kind="reply", text="on its way", in_msg_id="m1", cfg=cfg
+    )
+    store.mark_intent_sent_unverified(reserved["intent_id"])
+
+    _lane(store, bus)
+    assert bus.store.read(kinds=["pass.queued"]) == []
+
+
+# --- a pass that sent nothing says so -------------------------------------------------------------
+#
+# The backstop for whatever the gate above does not predict. `_classify` returns "ok" on any rc of
+# 0, so all 101 no-op passes of 2026-08-29 were ledgered class=ok — indistinguishable from a pass
+# that answered every buyer. A reply pass whose claimed threads gained no send intent sent nothing,
+# whatever the harness's exit code said.
+
+
+def _claimed_pass(store, bus):
+    _lane(store, bus)
+    return store.claim_queued_pass()
+
+
+def test_a_reply_pass_that_reserved_nothing_is_not_ok(store, bus) -> None:
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    assert REPLY.made_progress(claimed.payload, store, claimed.pass_id) is False
+
+
+def test_a_reserved_intent_counts_as_progress_even_before_it_commits(store, bus) -> None:
+    """`pending` and `sent_unverified` both reached the send path — the intent sweep owns their
+    fate from there, so neither is a silent no-op."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    cfg = pacing.resolve(Config(reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    store.reserve_reply(thread_id="carousell:1", kind="reply", text="yes!", in_msg_id="m1", cfg=cfg)
+    assert REPLY.made_progress(claimed.payload, store, claimed.pass_id) is True
+
+
+def test_an_intent_on_an_unclaimed_thread_is_not_this_passs_progress(store, bus) -> None:
+    """Otherwise a busy neighbouring thread would mask a pass that ignored its own buyers."""
+    _thread(store, "carousell:1")
+    _thread(store, "carousell:2", title="Office chair", handle="carol")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    cfg = pacing.resolve(Config(reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    store.reserve_reply(thread_id="carousell:2", kind="reply", text="hi", in_msg_id=None, cfg=cfg)
+    assert REPLY.made_progress(claimed.payload, store, claimed.pass_id) is False
+
+
+def test_a_no_send_pass_holds_the_next_tick_then_lets_it_through(store, bus) -> None:
+    """The circuit breaker for a cause nobody has diagnosed yet: a flat cooldown turns a 28-second
+    respawn loop into a 5-minute one without inventing retry state."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    store.finish_pass(
+        claimed.pass_id, status="error", rc=0, cls="no_send", summary="no_send (turns=5)"
+    )
+    before = len(bus.store.read(kinds=["pass.queued"]))
+
+    _lane(store, bus)  # inside the cooldown — held
+    assert len(bus.store.read(kinds=["pass.queued"])) == before
+
+    later = time.time() + inbox.NO_SEND_COOLDOWN_SEC + 1
+    inbox.reply_lane(store=store, bus=bus, config=Config(), now=later)
+    assert len(bus.store.read(kinds=["pass.queued"])) == before + 1
+
+
+def test_an_ok_pass_does_not_arm_the_cooldown(store, bus) -> None:
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    store.finish_pass(claimed.pass_id, status="done", rc=0, cls="ok", summary="ok (turns=5)")
+    _lane(store, bus)
+    assert len(bus.store.read(kinds=["pass.queued"])) == 2
 
 
 # --- thread metadata is fenced too (SEC-2818) ---------------------------------------------------

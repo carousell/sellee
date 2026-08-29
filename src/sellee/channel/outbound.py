@@ -51,6 +51,20 @@ FIRST_LISTING_NUDGE_REF = "first-listing-nudge"
 FIRST_LISTING_NUDGE_AGE_SEC = 24 * 3600
 FIRST_LISTING_NUDGE_INTERVAL_SEC = 3600.0
 
+# A buyer the agent has not answered. Silence used to be the one outcome nothing reported: a reply
+# blocked by pacing records no intent, no transcript row and no error, so the ledger, the notices
+# and a health check all read exactly as they would if every buyer had been answered. On 2026-08-29
+# two buyers waited from 03:14 with no reply and no word to the seller.
+BUYER_WAITING_TEXT = (
+    "Heads up: {handle} has been waiting {minutes} minutes for a reply about {title} and I "
+    "haven't been able to send one. You may want to answer them in the app."
+)
+BUYER_WAITING_REF = "buyer-waiting"
+# Long enough that an ordinary reply in flight is never reported — a pass takes seconds and the
+# lane's own retries have room — short enough that the seller can still save the sale.
+BUYER_WAITING_AGE_SEC = 1800.0
+BUYER_WAITING_INTERVAL_SEC = 300.0
+
 
 def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=None) -> None:
     """Deliver queued notices to the bound chat, FIFO, via the provider's `deliver`. No-op while
@@ -170,3 +184,51 @@ def first_listing_nudge(*, store, now=None) -> None:
     if store.has_notice_with_ref(FIRST_LISTING_NUDGE_REF):
         return
     store.queue_notice(FIRST_LISTING_NUDGE_TEXT, ref=FIRST_LISTING_NUDGE_REF, holdable=True)
+
+
+def buyer_waiting_notice(*, store, now=None) -> None:
+    """Tell the seller about a buyer the agent has not managed to answer.
+
+    The reply lane holds a pass it knows would be refused, which is right — but held is
+    indistinguishable from handled unless somebody says so, and a buyer waiting past the threshold
+    is a sale the seller can still save by hand.
+
+    `threads_with_unhandled_inbound` is the same read the lane claims from, so this reports exactly
+    what is genuinely unanswered: a thread already carrying an open escalation is excluded there,
+    and needs no second telling.
+
+    Guarded by the *message* rather than the thread, so a buyer who is answered and then ignored
+    again is reported afresh instead of being written off by the first notice's ref. Not holdable:
+    a notice about an overnight wait that arrives at 08:00 arrives exactly when it stopped
+    mattering.
+    """
+    if store.is_paused():
+        return
+    if store.get_channel()["chat_id"] is None:
+        return
+    now = time.time() if now is None else now
+    for row in store.threads_with_unhandled_inbound():
+        since = row["waiting_since_ts"]
+        # `is None`, not `or now`: a legitimate ts of 0.0 is falsy and would read as "just now".
+        if since is None:
+            continue
+        waiting_sec = now - since
+        if waiting_sec < BUYER_WAITING_AGE_SEC:
+            continue
+        ref = f"{BUYER_WAITING_REF}:{row['thread_id']}:{row['waiting_on_msg_id']}"
+        if store.has_notice_with_ref(ref):
+            continue
+        store.queue_notice(_buyer_waiting_text(store, row, waiting_sec), ref=ref)
+
+
+def _buyer_waiting_text(store, row: dict, waiting_sec: float) -> str:
+    """The seller-facing line. The handle is marketplace-sourced and the title is seller-authored;
+    both are collapsed to one line, because a newline in either would stage a second message the
+    agent never wrote."""
+    thread = store.get_thread(row["thread_id"])
+    item = store.get_item(row["item_id"]) if row["item_id"] else None
+    return BUYER_WAITING_TEXT.format(
+        handle=prompt_data.one_line(thread["counterpart_handle"] if thread else "a buyer"),
+        minutes=int(waiting_sec // 60),
+        title=prompt_data.one_line(item["title"]) if item else "one of your listings",
+    )

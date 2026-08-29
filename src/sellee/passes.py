@@ -258,6 +258,32 @@ def _no_browser_tools(payload: dict, store, pass_id: str) -> tuple:
     return ()
 
 
+def _always_progressed(payload: dict, store, pass_id: str) -> bool:
+    """The default: a pass type that cannot tell a productive run from an empty one.
+
+    Right for a publish, whose success is its own verified listing, and for the channel pass, whose
+    job is often to read and decide rather than to write anything.
+    """
+    return True
+
+
+def _reply_progressed(payload: dict, store, pass_id: str) -> bool:
+    """Whether a reply pass reached a send path for any buyer it was given.
+
+    A clean exit is not the same as a delivered reply. `send_reply` returns a `quiet`/`wait`/
+    `unverified_open` verdict as an ordinary result, so a pass that composed a good answer and had
+    it refused exits rc 0 with nothing recorded anywhere — indistinguishable, in the ledger, from
+    one that answered every buyer. That is how 101 consecutive passes were filed class=ok on
+    2026-08-29 while a buyer's "still available?" went unanswered for hours.
+
+    Intent creation is the honest mark: `reserve_reply` writes one only once pacing has said go.
+    """
+    started = (store.get_pass(pass_id) or {}).get("started_ts")
+    if started is None:
+        return True  # no start stamp to measure against — never invent a failure
+    return store.has_intent_for_threads(payload.get("thread_ids") or (), started)
+
+
 def _full_scope(payload: dict) -> object | None:
     """No entity scope: the pass may reach any row its tier allows.
 
@@ -311,6 +337,9 @@ class PassType:
     # otherwise `skills` is the declaration and stays readable at a glance.
     build_skills: Callable[[dict, object, str], tuple] | None = None
     max_turns: int = PASS_MAX_TURNS
+    # Did this run actually do its job? Asked only when the harness exited clean, and only by the
+    # types that can answer honestly — the default says yes rather than inventing a failure.
+    made_progress: Callable[[dict, object, str], bool] = _always_progressed
 
     def skills_for(self, payload: dict, store=None, pass_id: str = "") -> tuple:
         if self.build_skills is None:
@@ -341,6 +370,7 @@ PASS_TYPES = {
         build_prompt=_reply_prompt,
         skills=("sellee-conventions", "voice-and-style", "buyer-conversation", "scam-guard"),
         build_scope=_reply_scope,
+        made_progress=_reply_progressed,
     ),
     # The channel pass is the seller conversation: it writes to a human, so it needs voice and the
     # escalation copy, and it runs the listing flow end to end — including the comps research the
@@ -708,6 +738,11 @@ def run_pass(deps: PassDeps, claimed) -> str:
 
         result = holder.get("result")
         cls = _classify(rc, killed, result)
+        # A clean exit only means the harness ended tidily. Whether the pass did the thing it was
+        # spawned for is a different question, and one only the pass type can answer — asked here so
+        # a run that accomplished nothing cannot be filed as a success and hot-loop unnoticed.
+        if cls == "ok" and not pass_type.made_progress(payload, deps.store, pass_id):
+            cls = "no_send"
         status = "done" if cls == "ok" else "error"
         deps.store.finish_pass(
             pass_id, status=status, rc=rc, cls=cls, summary=_summary(cls, result)

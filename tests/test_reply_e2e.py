@@ -204,7 +204,7 @@ def test_a_buyer_message_becomes_a_scoped_reply_that_reaches_the_marketplace(
     assert thread["messages"][0]["scam_verdict"] == "clean"
 
     # 2. the reply lane claims it into one scoped pass
-    inbox.reply_lane(store=store, bus=bus)
+    inbox.reply_lane(store=store, bus=bus, config=Config())
     claimed = store.claim_queued_pass()
     assert claimed.type == "reply"
     assert claimed.payload["thread_ids"] == ["carousell:1"]
@@ -263,7 +263,7 @@ def test_the_scope_stops_the_pass_reading_another_buyers_thread(wired, tmp_path)
             now=lambda: 100.0,
         )
     )
-    inbox.reply_lane(store=store, bus=bus)
+    inbox.reply_lane(store=store, bus=bus, config=Config())
     claimed = store.claim_queued_pass()
 
     script = tmp_path / "reply_harness.py"
@@ -313,7 +313,7 @@ def test_the_floor_never_appears_anywhere_in_the_loop(wired, tmp_path) -> None:
             now=lambda: 100.0,
         )
     )
-    inbox.reply_lane(store=store, bus=bus)
+    inbox.reply_lane(store=store, bus=bus, config=Config())
     claimed = store.claim_queued_pass()
 
     script = tmp_path / "reply_harness.py"
