@@ -1,4 +1,4 @@
-"""install.sh, run for real: the checksum gate and the hand-off.
+"""install.sh: the checksum gate and the hand-off.
 
 The script is executed as a script — no reimplementation of its logic here — against a release
 served over HTTP. The OS it thinks it is on is supplied as a `uname` shim, so both supported
