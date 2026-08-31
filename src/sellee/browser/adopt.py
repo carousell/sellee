@@ -107,6 +107,50 @@ def adopt_phase(deps) -> None:
         _summarise_if_drained(deps, market)
 
 
+# What a marketplace prints instead of a currency code, and what it means. Only symbols that are
+# unambiguous on their own are here: a bare "$" is not one — it is USD, SGD, AUD, CAD and more —
+# which is exactly why the seller's own recorded currency is the fallback rather than a guess.
+_CURRENCY_SYMBOLS = {
+    "RM": "MYR",
+    "NT$": "TWD",
+    "HK$": "HKD",
+    "S$": "SGD",
+    "Rp": "IDR",
+    "₱": "PHP",
+    "£": "GBP",
+    "€": "EUR",
+    "¥": "JPY",
+    "₹": "INR",
+    "฿": "THB",
+    "₫": "VND",
+}
+
+
+def _currency_for(store, detail: dict) -> str:
+    """Which currency a listing's price is in.
+
+    The reader answers this when the page prints a code, and marketplaces mostly do not: Facebook
+    renders "S$65" for this seller's account and "$65" for a US one. The reader used to scrape
+    `/[A-Z]{3}/` out of the price text, which matches "SGD65" and nothing else — so adoption failed
+    terminally with "no usable price" for every seller whose marketplace shows a symbol, including
+    every US seller, who has no other marketplace at all because Carousell runs no US site.
+
+    So the code is preferred, a known unambiguous symbol comes next, and the seller's own recorded
+    currency is the fallback. That last one is not a guess: the price is on their own listing, on
+    their own account, in the country they told us they sell in.
+    """
+    said = str(detail.get("currency") or "").strip().upper()
+    if len(said) == 3 and said.isalpha():
+        return said
+    text = str(detail.get("price_text") or "")
+    # Longest first, so "S$" and "HK$" are not shadowed by a bare "$" ever being added here.
+    for symbol in sorted(_CURRENCY_SYMBOLS, key=len, reverse=True):
+        if symbol in text:
+            return _CURRENCY_SYMBOLS[symbol]
+    basics = store.get_seller_config_section("basics") or {}
+    return str(basics.get("currency") or "").strip().upper()
+
+
 def _adopt_one(deps, row: dict, adapter) -> None:
     market, listing_id = row["market"], row["listing_id"]
     relist = row["manage"] == MANAGE_RELIST
@@ -172,7 +216,8 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         # Sold or taken down since the ask. This check is what makes a late yes safe.
         _fail(deps, row, f"no longer for sale ({detail.get('availability') or 'unknown'})")
         return
-    price, currency = detail.get("price"), detail.get("currency")
+    price = detail.get("price")
+    currency = _currency_for(deps.store, detail)
     if not price or not currency:
         # carousell.ai refuses an item without both.
         _fail(deps, row, "the listing page shows no usable price")

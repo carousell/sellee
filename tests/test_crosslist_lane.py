@@ -597,3 +597,163 @@ def test_answering_the_ask_releases_the_fan_out(store, bus) -> None:
     store.decide_discovered_listings("carousell", decision="decline")
 
     assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
+
+
+# --- driving a publish ourselves ----------------------------------------------------------------
+#
+# `_drive_publish` had no coverage at all, which is how both of the defects below shipped. What is
+# held here is one invariant above everything: NOTHING may leave that function without a ledger row
+# unless the pair is genuinely still worth trying, because the row is the only thing standing
+# between a failed publish and a duplicate one.
+
+
+class _HeldClient:
+    """The daemon's browser, as far as the fan-out is concerned: something it can hold."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def exclusive(self):
+        return self
+
+
+def _driving(store, bus, monkeypatch, *, outcome=None, raises=None, published=None):
+    """A seller with one item eligible for a driven market, and a publisher that answers
+    to order."""
+    from sellee.browser import publisher
+
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    store.record_survey_result("carousell", [])
+    item = _rail_item(store)
+
+    monkeypatch.setattr(publisher, "can_drive", lambda market: True)
+    monkeypatch.setattr(publisher, "stage_photos", lambda item_id, photos: [])
+    monkeypatch.setattr(publisher, "clear_staged", lambda item_id: None)
+
+    def fake_publish(*args, **kwargs):
+        if raises is not None:
+            raise raises
+        if published is not None:
+            published.append(True)
+        return outcome
+
+    monkeypatch.setattr(publisher, "publish", fake_publish)
+    return item
+
+
+def _ledger(store):
+    return [r for r in store.publish_pass_index() if r["origin"] == "crosslist"]
+
+
+def test_a_terminal_refusal_spends_the_shot_rather_than_looping(store, bus, monkeypatch) -> None:
+    """The lane always takes the first eligible pair, so a refusal that can never succeed re-drove
+    the same item every thirty seconds forever while everything else queued behind it."""
+    from sellee.browser import publisher
+
+    item = _driving(
+        store,
+        bus,
+        monkeypatch,
+        raises=publisher.PublishNotAttempted("the form shows the title as truncated"),
+    )
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert len(_ledger(store)) == 1, "no row was written, so the pair stays eligible forever"
+    assert crosslist.pending_pairs(deps) == []
+    assert item
+
+
+def test_a_transient_refusal_is_retried_but_not_forever(store, bus, monkeypatch) -> None:
+    """ "Retryable" with no bound is the same forever-loop by another name: a browser that will not
+    settle looks transient on every single attempt."""
+    from sellee.browser import publisher
+
+    _driving(
+        store,
+        bus,
+        monkeypatch,
+        raises=publisher.PublishNotAttempted("could not fill title", retryable=True),
+    )
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    for _ in range(crosslist.MAX_DRIVE_ATTEMPTS - 1):
+        crosslist.enqueue_next(deps)
+        assert _ledger(store) == [], "gave up too early on a genuinely transient failure"
+        assert crosslist.pending_pairs(deps), "the pair should still be eligible"
+
+    crosslist.enqueue_next(deps)
+
+    assert len(_ledger(store)) == 1
+    assert crosslist.pending_pairs(deps) == []
+
+
+def test_an_unverified_publish_is_never_driven_twice(store, bus, monkeypatch) -> None:
+    from sellee.browser import publisher
+
+    _driving(
+        store,
+        bus,
+        monkeypatch,
+        raises=publisher.PublishUnverified("the publish may have gone through"),
+    )
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert len(_ledger(store)) == 1
+    assert crosslist.pending_pairs(deps) == []
+
+
+def test_an_unexpected_browser_error_is_treated_as_maybe_published(store, bus, monkeypatch) -> None:
+    """The driver is supposed to answer in its own two exceptions. If a bare one escapes we cannot
+    know which side of the commit it came from, so it is treated as the dangerous side — this is
+    exactly what leaked before, leaving no row and duplicating on the next tick."""
+    from sellee.browser.client import BrowserToolError
+
+    _driving(store, bus, monkeypatch, raises=BrowserToolError("chrome went away"))
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert len(_ledger(store)) == 1
+    assert crosslist.pending_pairs(deps) == []
+
+
+def test_a_verified_publish_records_the_url_and_reports_it(store, bus, monkeypatch) -> None:
+    from sellee.browser.publisher import PublishOutcome
+
+    item = _driving(
+        store,
+        bus,
+        monkeypatch,
+        outcome=PublishOutcome(listing_id="9", url=_CAROUSELL_URL, verified=True),
+    )
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert store.get_item(item["id"])["listing_urls"]["carousell"] == _CAROUSELL_URL
+    assert crosslist.report_settled(deps) == 1
+    assert any(_CAROUSELL_URL in text for text in _notices(store))
+
+
+def test_a_driven_publish_never_runs_while_a_pair_is_ineligible(store, bus, monkeypatch) -> None:
+    """The guard above the driver: nothing is driven for a market that has not been looked at."""
+    from sellee.browser import publisher
+
+    published: list = []
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store)  # deliberately NO survey result
+    monkeypatch.setattr(publisher, "can_drive", lambda market: True)
+    monkeypatch.setattr(publisher, "publish", lambda *a, **k: published.append(True))
+
+    crosslist.enqueue_next(_deps(store, bus, browser_factory=_HeldClient))
+
+    assert published == []

@@ -39,7 +39,7 @@ from typing import Callable
 from sellee import marketplaces, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher, reconcile
-from sellee.browser.client import BrowserUnavailable
+from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
@@ -49,6 +49,11 @@ log = logging.getLogger(__name__)
 # The marker that separates a publish the daemon started from one a person ran from the CLI. Only
 # ours is reported, because whoever runs a pass by hand is already watching it.
 ORIGIN = "crosslist"
+
+# How many times a *transient* publish refusal is allowed before the pair spends its one shot. A
+# browser that will not settle, or a page that keeps arriving half-built, looks transient on every
+# single attempt — so "retryable" without a bound is the same forever-loop by another name.
+MAX_DRIVE_ATTEMPTS = 3
 
 NO_BROWSER_NOTICE = (
     "I can't list on {market} because I can't drive a browser here. The carousell.ai listing is "
@@ -75,6 +80,10 @@ class CrosslistDeps:
     # Lane state, in process on purpose: it is all notice de-duplication, and a restart re-arming it
     # errs toward telling the seller twice rather than never.
     notified: dict = field(default_factory=dict)
+    # Consecutive transient publish refusals per (item, market). In process for the same reason the
+    # notice de-duplication beside it is: a restart re-arming it errs toward trying once more rather
+    # than toward never trying again.
+    attempts: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
 
 
@@ -282,11 +291,33 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 listings_url=marketplaces.market_url(market, "my_listings", region),
             )
     except publisher.PublishNotAttempted as exc:
-        # Nothing exists. Left eligible: the next tick tries again.
+        # Nothing exists — but "try again" is only right when trying again could differ. The lane
+        # always takes the first eligible pair, so a refusal that will never succeed re-drove the
+        # same item every thirty seconds forever: Chrome opened, the form filled and abandoned, the
+        # browser held against the read lane each time, every other item stuck behind it, and the
+        # seller told nothing at all.
+        #
+        # A terminal refusal spends the pair's one shot immediately. A transient one is allowed a
+        # bounded number of goes and then spends it too, because a condition that has not cleared in
+        # that many attempts is not behaving like a transient one.
+        attempts = deps.attempts.get((item["id"], market), 0) + 1
+        deps.attempts[(item["id"], market)] = attempts
+        giving_up = not getattr(exc, "retryable", False) or attempts >= MAX_DRIVE_ATTEMPTS
         deps.bus.publish(
             "crosslist.not_attempted",
-            {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
+            {
+                "item_id": item["id"],
+                "market": market,
+                "reason": str(exc)[:200],
+                "attempts": attempts,
+                "giving_up": giving_up,
+            },
         )
+        if giving_up:
+            # Ledgered, so the pair stops qualifying and the seller is told through the same path
+            # every other settled publish uses.
+            deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+            deps.attempts.pop((item["id"], market), None)
         return
     except publisher.PublishUnverified as exc:
         # Something may exist. Never re-driven.
@@ -298,6 +329,17 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     except BrowserUnavailable as exc:
         deps.bus.publish("browser.unavailable", {"reason": str(exc)})
+        return
+    except BrowserError as exc:
+        # The driver is supposed to answer in its own two exceptions and never leak a bare browser
+        # error. If one gets out anyway we cannot know which side of the commit it came from, so it
+        # is treated as the dangerous side: a row is written and the pair is never re-driven. Losing
+        # a listing we could have made is recoverable by asking; making two is not.
+        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+        deps.bus.publish(
+            "crosslist.unverified",
+            {"item_id": item["id"], "market": market, "reason": f"unexpected: {str(exc)[:180]}"},
+        )
         return
     finally:
         # Copies, so dropping them costs nothing and leaving them would grow the state tree one

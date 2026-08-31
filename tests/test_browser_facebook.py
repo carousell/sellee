@@ -656,3 +656,48 @@ def test_two_items_with_one_title_are_linked_to_neither(store, bus) -> None:
     survey.discover_phase(_survey_deps(store, bus, client))
 
     assert all("fb" not in i["listing_urls"] for i in store.list_items())
+
+
+# --- what currency a listing's price is in --------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "detail,basics,expected",
+    [
+        # A code on the page wins outright.
+        ({"currency": "SGD", "price_text": "SGD65"}, {"currency": "SGD"}, "SGD"),
+        ({"currency": "sgd", "price_text": ""}, {}, "SGD"),
+        # A symbol the marketplace prints instead, resolved unambiguously.
+        ({"currency": "", "price_text": "S$65"}, {"currency": "USD"}, "SGD"),
+        ({"currency": "", "price_text": "RM 1,200"}, {}, "MYR"),
+        ({"currency": "", "price_text": "HK$40"}, {}, "HKD"),
+        ({"currency": "", "price_text": "Rp1.500.000"}, {}, "IDR"),
+        # A bare "$" is USD, SGD, AUD and more — so the seller's own currency answers it, which is
+        # the case that matters most: a US seller has no other marketplace at all.
+        ({"currency": "", "price_text": "$65"}, {"currency": "USD"}, "USD"),
+        ({"currency": "", "price_text": "$65"}, {"currency": "SGD"}, "SGD"),
+        # Nothing anywhere is still nothing — the caller refuses rather than inventing one.
+        ({"currency": "", "price_text": "65"}, {}, ""),
+    ],
+)
+def test_the_currency_is_resolved_from_the_page_then_the_seller(
+    store, detail, basics, expected
+) -> None:
+    """Scraping /[A-Z]{3}/ out of the price text matched "SGD65" and nothing else, so adoption
+    failed terminally with "no usable price" for every seller whose marketplace prints a symbol."""
+    from sellee.browser import adopt
+
+    if basics:
+        store.set_seller_config_section("basics", {"region": "SG", **basics})
+
+    assert adopt._currency_for(store, detail) == expected
+
+
+def test_a_us_seller_can_adopt_a_dollar_priced_listing(store, bus) -> None:
+    """The regression in one line: Facebook shows a US seller "$65", and before this they could
+    adopt nothing at all."""
+    from sellee.browser import adopt
+
+    store.set_seller_config_section("basics", {"region": "US", "currency": "USD"})
+
+    assert adopt._currency_for(store, {"currency": "", "price_text": "$65"}) == "USD"

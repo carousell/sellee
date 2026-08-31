@@ -49,7 +49,22 @@ COMMIT_SETTLE_SEC = 6.0
 
 
 class PublishNotAttempted(BrowserError):
-    """Nothing was created. Retryable, and the caller should retry."""
+    """Nothing was created.
+
+    `retryable` says whether trying again could ever produce a different answer, and the caller
+    turns that into "leave the pair eligible" or "spend its one shot". The distinction is not
+    cosmetic: the fan-out always takes the first eligible pair, so a refusal that will never succeed
+    — a title the form truncates, a category its menu does not offer, photographs that are not on
+    disk — re-drove the same item every thirty seconds forever, opening Chrome and filling the form
+    each time, while every other item queued behind it and the seller was told nothing.
+
+    It defaults to False because most refusals here are about the *shape of the form or the item*,
+    and neither changes on a retry. Only a caller that knows the condition is transient says so.
+    """
+
+    def __init__(self, message: str, *, retryable: bool = False):
+        super().__init__(message)
+        self.retryable = retryable
 
 
 class PublishUnverified(BrowserError):
@@ -122,7 +137,8 @@ def _refuse_unless_ready(market: str, found: dict) -> None:
     missing = [step for step in REQUIRED_FIELDS if step not in (found.get("marked") or [])]
     if missing:
         raise PublishNotAttempted(
-            f"the {market} create form is missing {missing} — nothing was filled in"
+            f"the {market} create form is missing {missing} — nothing was filled in",
+            retryable=True,
         )
 
 
@@ -142,11 +158,15 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
             )
             pause(STEP_SETTLE_SEC)
         except BrowserError as exc:
-            raise PublishNotAttempted(f"the photo chooser would not open: {exc}") from exc
+            raise PublishNotAttempted(
+                f"the photo chooser would not open: {exc}", retryable=True
+            ) from exc
     try:
         client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
     except BrowserError as exc:
-        raise PublishNotAttempted(f"the photographs would not attach: {exc}") from exc
+        raise PublishNotAttempted(
+            f"the photographs would not attach: {exc}", retryable=True
+        ) from exc
 
 
 def _fill_text(client, adapter, item: dict, found: dict) -> None:
@@ -166,7 +186,7 @@ def _fill_text(client, adapter, item: dict, found: dict) -> None:
                 },
             )
         except BrowserError as exc:
-            raise PublishNotAttempted(f"could not fill {step}: {exc}") from exc
+            raise PublishNotAttempted(f"could not fill {step}: {exc}", retryable=True) from exc
 
 
 def _text_fields(item: dict) -> list:
@@ -212,7 +232,7 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
             raise
-        raise PublishNotAttempted(f"could not choose a {step}: {exc}") from exc
+        raise PublishNotAttempted(f"could not choose a {step}: {exc}", retryable=True) from exc
 
 
 def _refuse_paid_promotion(client, adapter) -> None:
@@ -231,7 +251,9 @@ def _refuse_paid_promotion(client, adapter) -> None:
             {"target": adapter.publish_target("boost"), "element": "the paid boost switch"},
         )
     except BrowserError as exc:
-        raise PublishNotAttempted(f"the paid boost was on and would not turn off: {exc}") from exc
+        raise PublishNotAttempted(
+            f"the paid boost was on and would not turn off: {exc}", retryable=True
+        ) from exc
     if (client.evaluate(adapter.publish_fields_js) or {}).get("boost_on"):
         raise PublishNotAttempted("the paid boost is still on — refusing to publish")
 
@@ -289,32 +311,39 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
             "browser_click", {"target": adapter.publish_target("publish"), "element": "Publish"}
         )
         pause(COMMIT_SETTLE_SEC)
+
+        # Reading the result is INSIDE the bracket, and that is the whole point of where this line
+        # sits. It runs on a page that has just navigated, which is exactly when a browser call is
+        # most likely to fail — and a failure here means a listing that probably exists and that we
+        # cannot name. Outside the bracket it escaped as a bare `BrowserError`, which the fan-out
+        # does not catch, so no ledger row was written and the next tick published a second copy:
+        # the precise duplicate this two-exception bracket exists to prevent, at the one moment it
+        # matters most.
+        result = client.evaluate(adapter.publish_result_js) or {}
+        listing_id = result.get("listing_id")
+        if listing_id:
+            return PublishOutcome(
+                listing_id=str(listing_id), url=str(result.get("url") or ""), verified=True
+            )
+
+        # The page we land on may not name the listing at all — Facebook redirects to its selling
+        # page, whose cards carry no id — so the seller's own listings are asked instead. Verified
+        # live: the publish worked and this was the only thing between "done" and "we cannot tell".
+        found = _confirm_by_title(client, adapter, item, listings_url, pause)
+        if found is not None:
+            return found
+        # Not an error: a publish whose listing we could not name is reported as unverified and left
+        # for a human, rather than retried into a duplicate.
+        return PublishOutcome(
+            listing_id=None,
+            url=str(result.get("url") or ""),
+            verified=False,
+            reason="published, but the new listing could not be identified afterwards",
+        )
     except PublishUnverified:
         raise
     except BrowserError as exc:
         raise PublishUnverified(f"the publish may have gone through: {exc}") from exc
-
-    result = client.evaluate(adapter.publish_result_js) or {}
-    listing_id = result.get("listing_id")
-    if listing_id:
-        return PublishOutcome(
-            listing_id=str(listing_id), url=str(result.get("url") or ""), verified=True
-        )
-
-    # The page we land on may not name the listing at all — Facebook redirects to its selling page,
-    # whose cards carry no id — so the seller's own listings are asked instead. Verified live: the
-    # publish worked and this was the only thing standing between "done" and "we cannot tell".
-    found = _confirm_by_title(client, adapter, item, listings_url, pause)
-    if found is not None:
-        return found
-    # Not an error: a publish whose listing we could not name is reported as unverified and left
-    # for a human, rather than retried into a duplicate.
-    return PublishOutcome(
-        listing_id=None,
-        url=str(result.get("url") or ""),
-        verified=False,
-        reason="published, but the new listing could not be identified afterwards",
-    )
 
 
 def _confirm_by_title(client, adapter, item: dict, listings_url, pause) -> PublishOutcome | None:
