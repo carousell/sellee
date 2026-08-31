@@ -133,6 +133,10 @@ def _ready(store):
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
 
 
+def _notices(store):
+    return list(store.claim_queued_notices(10))
+
+
 def _events(bus, kind):
     return bus.store.read(kinds=[kind])
 
@@ -895,3 +899,36 @@ def test_the_ask_never_offers_to_relist_somewhere_it_already_is(store, bus) -> N
 
     assert "list them on Carousell.ai too" in text
     assert "and Carousell too" not in text
+
+
+# --- when a market's listings cannot be read at all ---------------------------------------------
+
+
+def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) -> None:
+    """Abandonment set a state no lane picks up again, and said so only to the event log. The
+    market then quietly stopped being publishable — the fan-out will not post to a marketplace it
+    has never read — with no explanation anywhere and no door back."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    for _ in range(survey.SURVEY_MAX_ATTEMPTS):
+        survey.discover_phase(deps)
+
+    assert store.get_market_survey(_MARKET)["state"] == "abandoned"
+    notices = _notices(store)
+    assert any("couldn't read your" in n["text"] for n in notices)
+    controls = [tuple(c) for n in notices for c in (n["controls"] or [])]
+    assert (fastpaths.LOOK_AGAIN_LABEL, f"{_MARKET}:{fastpaths.CB_SURVEY_YES}") in controls
+
+
+def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:
+    """The button has to reach a handler that does something. It rides the yes token, which already
+    reopens a survey for a market with nothing left to decide."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.abandon_market_survey(_MARKET)
+
+    _tap(store, bus, fastpaths.CB_SURVEY_YES)
+
+    assert store.get_market_survey(_MARKET)["state"] == "due"

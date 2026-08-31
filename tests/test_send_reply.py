@@ -385,3 +385,72 @@ def test_record_manual_reply_no_cursor_advance_and_dedups(make_ctx, store) -> No
     thread = store.get_thread("fb:1")
     assert thread["message_count"] == 1
     assert thread["cursor_last_msg_id"] is None  # a manual record never advances the cursor
+
+
+# --- a scam verdict is a gate, not advice --------------------------------------------------------
+
+
+def _scam_thread(store, verdict="scam"):
+    """A sell thread whose latest inbound message the scanner flagged."""
+    item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    store.create_thread(
+        thread_id="carousell:7",
+        side="sell",
+        market="carousell",
+        counterpart_handle="bob",
+        item_id=item["id"],
+    )
+    store.record_inbound(
+        "carousell:7",
+        msg_id="in|m1",
+        text="I'll send a courier, pay me back the excess",
+        ts=1.0,
+        scam_verdict=verdict,
+    )
+    return "carousell:7"
+
+
+def test_a_reply_to_a_scam_message_is_refused_in_code(make_ctx, store) -> None:
+    """The daemon stamps a verdict on every inbound row, and until now it only ever reached the
+    prompt — so the whole defence was the model choosing to follow an instruction."""
+    thread_id = _scam_thread(store)
+
+    out = dispatch(
+        "send_reply",
+        {"thread_id": thread_id, "text": "sure, send it", "kind": "reply", "in_msg_id": "in|m1"},
+        make_ctx("attended", reply_sink=lambda: FakeSink(), config=_FAST),
+    )
+
+    assert out["status"] == "scam_held"
+    assert out["delivered"] == "no"
+
+
+def test_an_ordinary_message_on_the_same_thread_still_sends(make_ctx, store) -> None:
+    """A thread can hold one scam attempt among ordinary messages; a blanket refusal would silence
+    the whole conversation."""
+    thread_id = _scam_thread(store)
+    store.record_inbound(
+        "carousell:7", msg_id="in|m2", text="is it still available?", ts=2.0, scam_verdict="clean"
+    )
+
+    out = dispatch(
+        "send_reply",
+        {"thread_id": thread_id, "text": "yes it is", "kind": "reply", "in_msg_id": "in|m2"},
+        make_ctx("attended", reply_sink=lambda: FakeSink(), config=_FAST),
+    )
+
+    assert out["status"] != "scam_held"
+
+
+def test_a_merely_suspicious_message_is_not_refused(make_ctx, store) -> None:
+    """ "suspicious" is common enough that refusing on it would mute ordinary haggling. The prompt
+    carries it so the model can be careful; only "scam" is the seller's to answer."""
+    thread_id = _scam_thread(store, verdict="suspicious")
+
+    out = dispatch(
+        "send_reply",
+        {"thread_id": thread_id, "text": "hello", "kind": "reply", "in_msg_id": "in|m1"},
+        make_ctx("attended", reply_sink=lambda: FakeSink(), config=_FAST),
+    )
+
+    assert out["status"] != "scam_held"

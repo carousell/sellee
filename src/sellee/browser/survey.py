@@ -63,6 +63,15 @@ STALE_NOTICE = (
     "That list is out of date, so I'd rather not act on it — let me take a fresh look at what you "
     "have on {name} and I'll come back to you."
 )
+# Five looks in a row could not be served, so the market stops being asked about. Said out loud,
+# with the way back attached: nothing else ever revisits an abandoned survey, and the fan-out will
+# not publish to a marketplace it has never read — so silence here is a market that quietly stops
+# working with no explanation anywhere.
+ABANDONED_NOTICE = (
+    "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
+    "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
+    "again."
+)
 ALREADY_MANAGING_NOTICE = (
     "I've already taken over {count} on {name} and I'm answering buyers on them. Tell me which "
     "ones you'd rather I left and I'll stop."
@@ -369,6 +378,10 @@ def stale_text(market: str) -> str:
     return STALE_NOTICE.format(name=marketplaces.display_name(market))
 
 
+def abandoned_text(market: str) -> str:
+    return ABANDONED_NOTICE.format(name=marketplaces.display_name(market))
+
+
 def already_managing_text(market: str, count: int) -> str:
     return ALREADY_MANAGING_NOTICE.format(
         count=_listings(count), name=marketplaces.display_name(market)
@@ -388,3 +401,6 @@ def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
     if attempts >= SURVEY_MAX_ATTEMPTS:
         deps.store.abandon_market_survey(market)
         deps.bus.publish("survey.abandoned", {"market": market, "reason": reason[:200]})
+        deps.store.queue_notice(
+            abandoned_text(market), controls=fastpaths.look_again_controls(market)
+        )

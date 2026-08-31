@@ -79,6 +79,10 @@ CHECK_AGAIN_LABEL = "Check again"
 # has to explain that split in every conversation. The tools carry the finer answers.
 SURVEY_YES_LABEL = "Yes, manage them"
 SURVEY_NO_LABEL = "No thanks"
+# The way back from a look that could not be served. It rides the same token as the yes, because
+# the decision handler already reopens a survey for a market with nothing left to decide — this
+# only gives that path a label that means what it does here.
+LOOK_AGAIN_LABEL = "Take another look"
 # The watch-mode toggle. Each label names what tapping *does*, not what is currently set — the card
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
@@ -97,6 +101,15 @@ def survey_controls(market: str) -> list:
         (SURVEY_YES_LABEL, f"{market}:{CB_SURVEY_YES}"),
         (SURVEY_NO_LABEL, f"{market}:{CB_SURVEY_NO}"),
     ]
+
+
+def look_again_controls(market: str) -> list:
+    """The one-button spec on the notice that a market's listings could not be read.
+
+    Without it, abandonment is a dead end: the state is neither `due` nor `done`, so no lane picks
+    it up again, and the only door back is a button on a notice nobody was ever sent.
+    """
+    return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
 def check_again_controls(market: str) -> list:
