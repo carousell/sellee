@@ -48,12 +48,22 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
         return None
 
 
-def allowed_url(url: str, hosts) -> bool:
-    """Whether `url` is an https URL on one of `hosts` — exact host match, never a suffix one.
+def allowed_url(url: str, hosts, suffixes=()) -> bool:
+    """Whether `url` is an https URL on one of `hosts`, or under one of `suffixes`.
 
-    A suffix match is how a host check ends up accepting `media.karousell.com.evil.test`.
+    `hosts` is an exact match and nothing else. `suffixes` is a **dot-anchored** match — the host
+    must equal the suffix or sit directly under it — which is a different thing from the naive
+    substring suffix that would accept `media.karousell.com.evil.test`: that host does not end in
+    `.fbcdn.net`, and the leading dot is what makes it not. The same boundary
+    `engines.hosts.host_is_marketplace` uses.
+
+    Suffixes exist because some marketplaces cannot be enumerated: Facebook serves listing images
+    from `scontent-<pop><n>-<n>.xx.fbcdn.net`, which is generated per request. A registry that could
+    only list exact hosts would be a registry that could never allow them, so the choice is between
+    a bounded suffix and no photographs at all — and the bound is per marketplace, in data, so
+    granting one says nothing about any other.
     """
-    if not url or not hosts:
+    if not url or (not hosts and not suffixes):
         return False
     try:
         parsed = urllib.parse.urlsplit(url)
@@ -61,7 +71,14 @@ def allowed_url(url: str, hosts) -> bool:
         return False
     if parsed.scheme != "https":
         return False
-    return (parsed.hostname or "").lower() in {host.lower() for host in hosts}
+    host = (parsed.hostname or "").lower()
+    if not host:
+        return False
+    if host in {h.lower() for h in hosts}:
+        return True
+    return any(
+        host == s or host.endswith("." + s) for s in (t.lower().strip(". ") for t in suffixes) if s
+    )
 
 
 def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> list:
@@ -71,7 +88,8 @@ def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> l
     brought across — which the caller reports rather than treating as an item with no pictures.
     """
     hosts = marketplaces.media_hosts(market)
-    if not hosts:
+    suffixes = marketplaces.media_host_suffixes(market)
+    if not hosts and not suffixes:
         log.warning("no media hosts recorded for %s — not fetching any photos", market)
         return []
 
@@ -79,7 +97,7 @@ def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> l
     stored: list = []
     budget = MAX_TOTAL_BYTES
     for url in list(urls)[:MAX_PHOTOS]:
-        if not allowed_url(url, hosts):
+        if not allowed_url(url, hosts, suffixes):
             log.warning("refusing a listing photo that is not https on a %s media host", market)
             continue
         data = _fetch_one(opener, url, referer=referer, cap=min(MAX_PHOTO_BYTES, budget))

@@ -93,6 +93,15 @@ _ADAPTERS = {CAROUSELL.market: CAROUSELL}
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"
 
+# The composer steps an adapter may ship selectors for, under REPLY_FLOW.
+#
+# `send_button` is optional and is the *best* way to commit a message where a marketplace has one:
+# a real click through the browser needs no window focus, unlike a trusted key press, and carries no
+# `isTrusted: false`, unlike a page-dispatched keystroke. An adapter that ships one is choosing
+# neither of the two costs the other paths impose. See `sink._commit` for the precedence.
+MESSAGE_BOX = "message_box"
+SEND_BUTTON = "send_button"
+
 
 def get_adapter(market: str) -> MarketAdapter | None:
     return _ADAPTERS.get(market)

@@ -74,6 +74,17 @@ def media_hosts(market: str) -> list:
     return list((get_marketplace(market) or {}).get("media_hosts") or [])
 
 
+def media_host_suffixes(market: str) -> list:
+    """Domains a market's listing photographs may sit under, matched on a dot boundary.
+
+    The escape hatch for a marketplace whose image hosts are generated per request and so cannot be
+    enumerated the way `media_hosts` enumerates them. Data for the same reason: which domain a
+    marketplace serves images from is a fact about them, and granting one says nothing about any
+    other. An entry with neither this nor `media_hosts` fetches nothing.
+    """
+    return list((get_marketplace(market) or {}).get("media_host_suffixes") or [])
+
+
 def listing_flow(market: str) -> str:
     """The skill holding this market's publish recipe, or "" when it has none."""
     return str((get_marketplace(market) or {}).get("listing_flow") or "")

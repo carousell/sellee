@@ -28,7 +28,22 @@ from sellee.browser.client import BrowserError
 
 log = logging.getLogger(__name__)
 
-_MESSAGE_BOX = "message_box"
+
+def _needs_the_foreground(adapter) -> bool:
+    """Whether committing this market's send takes the seller's window.
+
+    Only the real key press does — it reaches nothing but the active tab. A send button is clicked
+    through the browser and a dispatched keystroke never leaves the page, so neither needs the tab
+    in front, and taking it anyway would spend the cost this ordering exists to avoid.
+    """
+    return (
+        adapter.composer_step(market_adapters.SEND_BUTTON) is None
+        and not adapter.chat_message_submit_js
+    )
+
+
+_MESSAGE_BOX = market_adapters.MESSAGE_BOX
+_SEND_BUTTON = market_adapters.SEND_BUTTON
 
 _SEND_KEY = "Enter"
 
@@ -91,7 +106,7 @@ class BrowserReplySink:
         try:
             with self._client.exclusive():
                 self._client.navigate(url)
-                if not adapter.chat_message_submit_js:
+                if _needs_the_foreground(adapter):
                     # A real key event lands only on the active tab, so this market's send needs the
                     # agent's tab brought forward first.
                     self._client.ensure_frontmost(url)
@@ -102,7 +117,7 @@ class BrowserReplySink:
                     "browser_type",
                     {"target": box.target, "element": "the reply message box", "text": text},
                 )
-                if not self._commit(adapter, box):
+                if not self._commit(adapter, market, box):
                     # The page did not take it, so nothing was delivered and this is still safe to
                     # retry — the one case a key press could never tell us about.
                     self._publish(market, thread, "refused", "the page did not accept the send")
@@ -141,12 +156,32 @@ class BrowserReplySink:
         except Exception:
             log.debug("could not bring the window forward for this send", exc_info=True)
 
-    def _commit(self, adapter, box) -> bool:
+    def _commit(self, adapter, market: str, box) -> bool:
         """Send what the composer holds, the way this market's adapter says to.
 
-        Answers whether the page accepted it. A market with its own commit reports that; a key press
-        cannot, so the trusted path assumes it landed and leaves the read-back to judge.
+        Three ways, in the order of what they cost the seller:
+
+        1. **A send button**, clicked for real through the browser. Best where a marketplace has
+           one: no window focus is taken, and the click carries no automation signature.
+        2. **The adapter's own submit JS**, dispatched on the page. Costs an `isTrusted: false`
+           event on the seller's account, which is a per-market decision someone has taken.
+        3. **A real Enter key**, which reaches only the active tab — so it pulls the seller's
+           window in front of whatever they were doing.
+
+        Answers whether the page accepted it. Only the second can actually report that; a click and
+        a key press cannot, so both assume it landed and leave the read-back to judge.
+
+        The button is located here rather than beside the message box because a send control is
+        typically inert until the composer holds text. Still before the commit, so a miss raises
+        `SendNotAttempted` with nothing delivered — the same fail-closed guarantee as every other
+        step above this line.
         """
+        if adapter.composer_step(_SEND_BUTTON) is not None:
+            button = self._locate(market, adapter, _SEND_BUTTON)
+            self._client.call_tool(
+                "browser_click", {"target": button.target, "element": "the send button"}
+            )
+            return True
         if not adapter.chat_message_submit_js:
             self._client.call_tool("browser_press_key", {"key": _SEND_KEY})
             return True
