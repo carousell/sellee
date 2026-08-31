@@ -22,7 +22,7 @@ from sellee.tools.registry import (
 )
 
 _CFG = Config(carousell_ai_api_base="https://api.carousell.ai")
-_URL = "https://api.carousell.ai/checkout/abc123?listing_id=L1"
+_URL = "https://www.carousell.ai/checkout/abc123?listing_id=L1"
 _GUEST_REFUSAL = (
     "checkout is unavailable for this listing: it belongs to a guest account, and the seller must "
     "sign in before checkout links can be created"
@@ -163,6 +163,19 @@ def test_foreign_url_base_rejected(make_ctx, store) -> None:
             _ctx(make_ctx, rogue),
         )
     assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0  # nothing recorded
+
+
+def test_checkout_base_is_the_web_origin_not_the_api_origin(make_ctx, store) -> None:
+    """Real checkout pages are served on the web origin; a link on the API origin (the old,
+    wrong base — only the coming-soon demo ever minted there) must be rejected."""
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    api_hosted = FakeRail(url="https://api.carousell.ai/checkout/abc123?listing_id=L1")
+    with pytest.raises(ToolError, match="checkout base"):
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "fb:1", "agreed_price": 90.0},
+            _ctx(make_ctx, api_hosted),
+        )
 
 
 def test_missing_item_errors(make_ctx, store) -> None:

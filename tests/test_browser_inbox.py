@@ -262,7 +262,7 @@ def test_the_full_sweep_opens_a_thread_the_gate_would_have_skipped(store, bus, s
 # it.
 
 
-_LINK = "here's your checkout link: https://api.carousell.ai/checkout/abc?listing_id=def"
+_LINK = "here's your checkout link: https://www.carousell.ai/checkout/abc?listing_id=def"
 
 
 def _unverified_intent(store, tid="carousell:99", text=_LINK, kind="reply"):

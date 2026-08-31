@@ -8,7 +8,7 @@ import pytest
 from sellee import marketplaces
 from sellee.engines import hosts
 
-BASE = "https://api.carousell.ai/checkout"
+BASE = "https://www.carousell.ai/checkout"
 
 
 @pytest.fixture
@@ -33,16 +33,16 @@ def test_marketplace_match_is_boundary_exact(allowlist) -> None:
 @pytest.mark.parametrize(
     "url,expected",
     [
-        ("https://api.carousell.ai/checkout/abc123", True),
-        ("https://api.carousell.ai/checkout/abc123?listing_id=xyz", True),
-        ("https://api.carousell.ai@evil.com/checkout/x", False),  # userinfo trick
-        ("https://api.carousell.ai.scam.site/checkout/x", False),  # subdomain lookalike
-        ("https://carousell.ai/checkout/x", False),  # bare host, not api.
-        ("http://api.carousell.ai/checkout/x", False),  # not https
+        ("https://www.carousell.ai/checkout/abc123", True),
+        ("https://www.carousell.ai/checkout/abc123?listing_id=xyz", True),
+        ("https://www.carousell.ai@evil.com/checkout/x", False),  # userinfo trick
+        ("https://www.carousell.ai.scam.site/checkout/x", False),  # subdomain lookalike
+        ("https://carousell.ai/checkout/x", False),  # bare apex host, not www.
+        ("http://www.carousell.ai/checkout/x", False),  # not https
         ("https://xn--carousel-x.ai/checkout/x", False),  # punycode
-        ("https://api.carousell.ai/pay/x", False),  # wrong path
-        ("https://api.carousell.ai/checkout/", False),  # no sale id
-        ("https://api.carousell.ai:8080/checkout/x", False),  # odd port
+        ("https://www.carousell.ai/pay/x", False),  # wrong path
+        ("https://www.carousell.ai/checkout/", False),  # no sale id
+        ("https://www.carousell.ai:8080/checkout/x", False),  # odd port
     ],
 )
 def test_checkout_carveout(url, expected) -> None:
@@ -50,12 +50,12 @@ def test_checkout_carveout(url, expected) -> None:
 
 
 def test_checkout_base_is_config_derived() -> None:
-    # keys on api.carousell.ai (the tested live behaviour), not the docstring's bare carousell.ai
+    # keys on the configured base host exactly — nothing is hardcoded to a carousell.ai shape
     assert hosts.is_checkout_link(
         "https://shop.example.com/checkout/x", "https://shop.example.com/checkout"
     )
     assert not hosts.is_checkout_link(
-        "https://api.carousell.ai/checkout/x", "https://shop.example.com/checkout"
+        "https://www.carousell.ai/checkout/x", "https://shop.example.com/checkout"
     )
 
 

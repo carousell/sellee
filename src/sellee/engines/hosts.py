@@ -8,7 +8,7 @@ off-platform link in a scam scan (anything that is NOT one).
 The match is boundary-exact: a host matches a marketplace only when it equals the domain or is a
 subdomain of it, so facebook.com.scam.site and carousell-pay.net both fail. The checkout carve-out
 recognises the single inbound link the agent may open — a genuine carousell.ai checkout link —
-keyed on the config-derived base (api.carousell.ai/checkout), rejecting every lookalike
+keyed on the config-derived base (www.carousell.ai/checkout), rejecting every lookalike
 (userinfo tricks, subdomains, punycode, wrong scheme/port/path).
 
 Network-free by construction: URLs are parsed with pure string ops, never urllib — an engine must
@@ -183,7 +183,7 @@ def defang(raw: str) -> str:
 
 
 def checkout_base_parts(checkout_base: str) -> UrlParts:
-    """Parse the config-derived checkout base (e.g. https://api.carousell.ai/checkout)."""
+    """Parse the config-derived checkout base (e.g. https://www.carousell.ai/checkout)."""
     return parse_url(checkout_base)
 
 
@@ -197,7 +197,7 @@ def is_checkout_link(raw: str, checkout_base: str) -> bool:
     base = checkout_base_parts(checkout_base)
     if p.scheme != (base.scheme or "https"):
         return False
-    if p.userinfo:  # reject api.carousell.ai@evil.com tricks
+    if p.userinfo:  # reject www.carousell.ai@evil.com tricks
         return False
     if p.host != base.host:  # EXACT host, not a subdomain or lookalike
         return False
