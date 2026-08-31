@@ -190,6 +190,8 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         if market_adapters.can_survey(market, region):
             deps.store.request_market_survey(market)
 
+    _open_inbox_folder(client, adapter)
+
     answer = client.evaluate(adapter.conversations_list_js)
     if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
         # The list came back as a failure rather than as content. Unlike a DOM read that finds
@@ -242,6 +244,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             continue  # the platform talking to the seller, not a buyer
         thread = known.get(thread_id)
         if thread is None:
+            row = _with_product_id(client, adapter, market, thread_id, row, region)
             if _adopt(deps, market, adapter, thread_id, row, handle, items):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
@@ -291,6 +294,68 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         # What makes this a market we can see is that every thread we opened was legible, which is
         # exactly what `unreadable == 0` on a tick that opened something means.
         _clear_blind(deps, market, read_content=opened > 0)
+
+
+def _open_inbox_folder(client, adapter) -> None:
+    """Open the marketplace's own folder inside a general messages app, where it has no URL.
+
+    Facebook's marketplace conversations are a folder of Messenger that no address reaches: the
+    inbox URL lands on the seller's personal chats, and the folder opens only when its row in the
+    rail is clicked. The control ignores a click dispatched from the page — it listens for the real
+    event — so the adapter only marks it and the click is made through the browser.
+
+    Nothing here fails a read, and nothing here decides whether the folder actually opened. A market
+    with no folder has none to open, and a folder that could not be found leaves the reader on the
+    general list, where the list artifact refuses to answer at all because it proves the folder is
+    open before reporting conversations. That refusal is a counted blindness carrying the reader's
+    own measurements, which is a better account of what went wrong than an exception from here — and
+    it is what stops an unopened folder being read as a marketplace inbox with nothing in it.
+    """
+    if not adapter.inbox_folder_js or not adapter.inbox_folder_target:
+        return
+    try:
+        marked = client.evaluate(adapter.inbox_folder_js) or {}
+        if not marked.get("marked"):
+            log.warning("no %s inbox folder control on the page: %s", adapter.market, marked)
+            return
+        client.call_tool(
+            "browser_click",
+            {"target": adapter.inbox_folder_target, "element": "the marketplace inbox folder"},
+        )
+    except BrowserError:
+        log.warning("could not open the %s inbox folder", adapter.market, exc_info=True)
+
+
+def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, region) -> dict:
+    """Fill in which listing a conversation is about, for a market that names it only inside the
+    conversation itself.
+
+    Facebook's folder rows carry the listing's *title* and not its id, and a title is not something
+    to match an item on — `reconcile.matching_items` joins on the id or refuses, which is what stops
+    a conversation being attached to the wrong item and negotiated against the wrong floor. The id
+    is on a banner inside the open conversation, so it is read there, once, before the thread is
+    adopted.
+
+    Answers a new row rather than filling the caller's in place, and answers it unchanged whenever
+    there is nothing to add: a market whose list already carries the id, a row that has one, or a
+    conversation whose banner would not answer. An unresolved id is not an error here — it becomes
+    an `unknown_listing` in `_adopt`, which is the event that already explains why a buyer is going
+    unanswered.
+    """
+    if not adapter.product_id_js or row.get("product_id"):
+        return row
+    native = thread_id.split(":", 1)[1] if ":" in thread_id else ""
+    url = marketplaces.market_url(market, "thread", region, thread_id=native) if native else None
+    if url is None:
+        return row
+    try:
+        client.navigate(url)
+        answer = client.evaluate(adapter.product_id_js) or {}
+    except BrowserError:
+        log.warning("could not read the listing behind %s", thread_id, exc_info=True)
+        return row
+    product_id = answer.get("product_id")
+    return {**row, "product_id": str(product_id)} if product_id else row
 
 
 def _thread_key(market: str, native_id) -> str | None:

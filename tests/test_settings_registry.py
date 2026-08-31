@@ -121,10 +121,16 @@ def test_check_for_seller_says_so_when_nothing_at_all_is_available(
     assert "which country you sell in" in str(excinfo.value)
 
 
-def test_check_for_seller_refuses_before_a_region_is_known(fresh_store) -> None:
+def test_a_market_needing_a_region_is_refused_but_offers_one_that_does_not(fresh_store) -> None:
+    """A missing region is not a blanket refusal. Carousell enumerates regional sites and so cannot
+    resolve without one; Facebook serves everywhere and can, so the seller is pointed at what they
+    *can* have rather than being sent away to fill in a country first."""
     with pytest.raises(settings.SettingError) as excinfo:
         settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
-    assert "which country you sell in" in str(excinfo.value)
+
+    message = str(excinfo.value)
+    assert "Carousell isn't available" in message
+    assert "Facebook Marketplace" in message
 
 
 def test_check_for_seller_refuses_a_market_with_no_site_in_the_region(fresh_store) -> None:

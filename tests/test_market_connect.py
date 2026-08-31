@@ -12,7 +12,7 @@ import pytest
 from tests.conftest import seed_setting
 
 from sellee.browser import connect
-from sellee.browser.markets import carousell as carousell_market
+from sellee.browser import markets as market_adapters
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.store import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -53,7 +53,9 @@ class StubClient:
         self.frontmost.append(url)
 
     def evaluate(self, function, **kwargs):
-        if function == carousell_market.LOGIN_JS:
+        # Every market's login probe, because the lane serves each connected market on its own and
+        # this file is about that scheduling rather than about any one marketplace's DOM.
+        if function in {adapter.login_js for adapter in market_adapters.adapters()}:
             return {"state": self.login}
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
@@ -185,7 +187,13 @@ def test_connect_and_the_buttons_are_answered_without_a_pass(store) -> None:
 # --- /connect resolving the market ---------------------------------------------------------------
 
 
-def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
+def test_connect_with_one_market_to_offer_just_opens_it(store, bus, monkeypatch) -> None:
+    """One connectable marketplace is not a choice, so it is not offered as one. Which markets are
+    connectable is pinned here rather than taken from the registry: the answer grows with every
+    adapter added, and this test is about the *one* case."""
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "connectable_markets", lambda region: ["carousell"]
+    )
     seed_setting(store, "connected_markets", ["carousell"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
@@ -236,8 +244,11 @@ def test_connect_never_offers_carousell_ai(store, bus) -> None:
 
     _text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    assert controls is None  # resolved to the one browser market, not a two-way picker
-    assert store.pending_market_connects()[0]["market"] == "carousell"
+    # Asserted on the refs rather than on there being no picker at all: how many browser markets we
+    # can drive grows with every adapter, and none of that may ever put the rail among them.
+    offered = [ref.split(":", 1)[0] for _label, ref in controls or []]
+    assert "carousell-ai" not in offered
+    assert "carousell" in offered
 
 
 # --- the lane -------------------------------------------------------------------------------------

@@ -115,7 +115,7 @@ def test_propose_crosslist_without_a_region_is_refused(make_ctx) -> None:
     accepts can still be refused by who the seller is. Carousell enumerates its regional sites, so
     with no region recorded there is none to post to."""
     ctx = make_ctx(TIER_ATTENDED)
-    with pytest.raises(ToolError, match="which country"):
+    with pytest.raises(ToolError, match="Carousell isn't available"):
         dispatch(
             "propose_setting_change", {"key": "connected_markets", "raw_value": ["carousell"]}, ctx
         )

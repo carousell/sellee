@@ -15,7 +15,7 @@ import sys
 import threading
 
 import pytest
-from tests.conftest import leak_paths
+from tests.conftest import leak_paths, seed_setting
 
 import sellee.tools  # noqa: F401  registration
 from sellee import passes
@@ -161,6 +161,9 @@ class StubBrowser:
 def _seed(store):
     """A published item with a private floor, and a second buyer's thread the pass must not see."""
     store.set_seller_config_section("basics", {"region": "SG"})
+    # Just Carousell connected: a lane tick drives every connected market, and this file scripts
+    # Carousell's artifacts and nothing else.
+    seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=_LIST_PRICE, currency="SGD")
     store.set_floor(item["id"], _FLOOR, "seller")
     store.record_listing_url(item["id"], "carousell", "https://www.carousell.sg/p/lamp-1/")

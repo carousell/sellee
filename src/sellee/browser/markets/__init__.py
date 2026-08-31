@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell
+from sellee.browser.markets import carousell, facebook
 
 
 @dataclass(frozen=True)
@@ -63,6 +63,15 @@ class MarketAdapter:
     # Where the listing id sits in a permalink, as a regex with one group — what joins a
     # conversation to one of our items.
     listing_id_pattern: str = ""
+    # For a market whose inbox is a folder inside a general messages app, reachable at no URL of its
+    # own: JS that MARKS the control opening it, and the selector that mark creates. Two fields
+    # rather than one script because the control ignores a click dispatched from the page — so the
+    # caller clicks the mark for real — and empty for a market whose inbox is just a page.
+    inbox_folder_js: str = ""
+    inbox_folder_target: str = ""
+    # Which listing the open conversation is about, for a market that names it only there. Read once
+    # when first seen; a market whose list already carries `product_id` needs none of this.
+    product_id_js: str = ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -88,7 +97,20 @@ CAROUSELL = MarketAdapter(
     system_handles=carousell.SYSTEM_HANDLES,
 )
 
-_ADAPTERS = {CAROUSELL.market: CAROUSELL}
+FACEBOOK = MarketAdapter(
+    market="fb",
+    conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
+    conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
+    login_js=facebook.LOGIN_JS,
+    listing_id_pattern=facebook.LISTING_ID_PATTERN,
+    inbox_folder_js=facebook.INBOX_FOLDER_JS,
+    inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
+    product_id_js=facebook.PRODUCT_ID_JS,
+    composer=tuple(Selector(**row) for row in facebook.COMPOSER_DEFAULTS),
+    system_handles=facebook.SYSTEM_HANDLES,
+)
+
+_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
 
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"
