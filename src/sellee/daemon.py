@@ -35,7 +35,7 @@ from sellee import (
     secrets,
     settings,
 )
-from sellee.browser import chrome, inbox
+from sellee.browser import blindness, chrome, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
 from sellee.browser import sink as browser_sink
@@ -280,6 +280,28 @@ def recycle_browser_client(bus, holder: dict, reason: str, *, now) -> None:
         stale.close(graceful=DETACHED_MARKER not in reason)
 
 
+def _widen_window(bus, port: int) -> None:
+    """Keep the agent's Chrome wide enough for marketplaces to serve their desktop layout.
+
+    Run on every acquisition rather than once at launch: `--restore-last-session` brings back
+    whatever width the window last had, so a window narrowed once stays narrow across restarts.
+
+    Never fatal. A window we cannot widen is a read that may still succeed, and if it then fails the
+    reader's own measurements promote it to `CAUSE_VIEWPORT`, which tells the seller the one thing
+    they can act on. Publishing the event only when a resize was actually needed keeps the steady
+    state silent.
+    """
+    try:
+        width = chrome.ensure_window_width(port, blindness.MIN_USABLE_WIDTH_PX)
+    except Exception:  # noqa: BLE001 — never let a cosmetic fix fail an acquisition
+        log.debug("could not check the agent's Chrome window width", exc_info=True)
+        return
+    if 0 < width < blindness.MIN_USABLE_WIDTH_PX:
+        bus.publish(
+            "browser.window_narrow", {"width": width, "needed": blindness.MIN_USABLE_WIDTH_PX}
+        )
+
+
 def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
@@ -316,6 +338,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
         browser_client.ensure_available(cfg.playwright_mcp_cmd or [browser_client.SERVER_BINARY])
         port = ensure_chrome(cfg, store, bus, should_stop)
         _notice_window_reopening(store, bus, holder, port)
+        _widen_window(bus, port)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
             browser_client.cdp_endpoint(port)
         )

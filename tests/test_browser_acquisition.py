@@ -13,7 +13,7 @@ import time
 import pytest
 
 from sellee import daemon
-from sellee.browser import chrome
+from sellee.browser import blindness, chrome
 from sellee.browser.client import BrowserUnavailable
 from sellee.config import Config
 
@@ -489,3 +489,70 @@ def test_a_chrome_that_cannot_be_asked_says_nothing(store, bus, factory_bits, mo
     monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: None)
     factory()
     assert _notices(store) == []
+
+
+# --- the window has to be wide enough for the marketplace to serve its desktop layout ------------
+
+
+def _factory(store, bus, monkeypatch, width, calls):
+    """A browser factory whose Chrome is ready and whose window reports `width`."""
+    monkeypatch.setattr(daemon.chrome, "ensure_running", lambda port, **kw: (chrome.READY, 9222))
+    monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)
+    monkeypatch.setattr(
+        daemon.chrome,
+        "ensure_window_width",
+        lambda port, minimum, **kw: calls.append((port, minimum)) or width,
+    )
+
+    class _Stub:
+        def set_follow(self, on):
+            pass
+
+        def failing_streak(self):
+            return 0
+
+        def age_sec(self, now=None):
+            return 0.0
+
+    monkeypatch.setattr(daemon.browser_client, "BrowserClient", lambda **kw: _Stub())
+    return daemon.make_browser_factory(Config(), store, bus, {})
+
+
+def test_every_acquisition_checks_the_window_width(store, bus, monkeypatch) -> None:
+    """Not once at launch: --restore-last-session brings back whatever width the window last had,
+    so a window narrowed once would otherwise stay narrow across every restart."""
+    calls: list = []
+    factory = _factory(store, bus, monkeypatch, 1600, calls)
+    factory()
+    factory()
+
+    assert calls == [(9222, blindness.MIN_USABLE_WIDTH_PX)] * 2
+
+
+def test_a_window_that_stays_narrow_is_evented_not_raised(store, bus, monkeypatch) -> None:
+    """A window we cannot widen must not fail the acquisition — the read may still work, and if it
+    does not, the reader's own measurements promote it to CAUSE_VIEWPORT for the seller."""
+    factory = _factory(store, bus, monkeypatch, 756, [])
+    factory()
+
+    narrow = bus.store.read(kinds=["browser.window_narrow"])
+    assert [e.payload["width"] for e in narrow] == [756]
+    assert narrow[0].payload["needed"] == blindness.MIN_USABLE_WIDTH_PX
+
+
+def test_a_wide_enough_window_says_nothing(store, bus, monkeypatch) -> None:
+    """Steady state is silent: the event exists to explain a failure, not to narrate success."""
+    factory = _factory(store, bus, monkeypatch, 1600, [])
+    factory()
+
+    assert bus.store.read(kinds=["browser.window_narrow"]) == []
+
+
+def test_a_window_that_cannot_be_measured_is_not_reported_as_narrow(
+    store, bus, monkeypatch
+) -> None:
+    """0 means "we could not ask", which must never read as "the window is too small"."""
+    factory = _factory(store, bus, monkeypatch, 0, [])
+    factory()
+
+    assert bus.store.read(kinds=["browser.window_narrow"]) == []

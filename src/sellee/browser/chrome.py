@@ -231,6 +231,85 @@ def page_targets(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int |
     return sum(1 for target in payload if isinstance(target, dict) and target.get("type") == "page")
 
 
+def ensure_window_width(port: int, minimum: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int:
+    """Widen the agent's Chrome windows to at least `minimum` px, answering the narrowest seen.
+
+    Marketplaces serve a different site to a narrow window, and the difference is invisible from
+    inside: Carousell collapses to a single column below roughly 900px, which made every
+    conversation unreadable for 22 hours on a window the seller had sized to half their screen, and
+    Facebook serves a layout whose conversation list carries no thread identity at all.
+
+    `--window-size` at launch is not enough. With `--restore-last-session` and a persisted profile,
+    a window once dragged narrow comes back narrow forever, so this runs on every acquisition
+    rather than once. It is the agent's own dedicated profile, never the seller's everyday browser,
+    so there is nothing of theirs to resize.
+
+    Best-effort by design: a Chrome that will not answer, or a window that will not move, must never
+    stop a read. The caller logs and carries on, and `blindness.CAUSE_VIEWPORT` is the backstop that
+    tells the seller when a read then fails on a window we could not widen.
+
+    Answers the narrowest width observed (after any resize), or 0 when nothing could be measured.
+    """
+    from websockets.sync.client import connect as ws_connect
+
+    try:
+        with urllib.request.urlopen(version_url(port), timeout=timeout_sec) as resp:
+            payload = json.loads(resp.read().decode("utf-8", "replace"))
+            endpoint = payload.get("webSocketDebuggerUrl")
+        with urllib.request.urlopen(list_url(port), timeout=timeout_sec) as resp:
+            targets = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0
+    if not endpoint or not isinstance(targets, list):
+        return 0
+    pages = [t.get("id") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+    if not pages:
+        return 0
+
+    narrowest = 0
+    try:
+        with ws_connect(endpoint, open_timeout=timeout_sec, close_timeout=timeout_sec) as ws:
+            counter = 0
+
+            def call(method: str, params: dict) -> dict:
+                nonlocal counter
+                counter += 1
+                ws.send(json.dumps({"id": counter, "method": method, "params": params}))
+                while True:
+                    message = json.loads(ws.recv(timeout=timeout_sec))
+                    if message.get("id") == counter:
+                        return message.get("result") or {}
+
+            seen: set = set()
+            for target_id in pages:
+                window = call("Browser.getWindowForTarget", {"targetId": target_id})
+                window_id = window.get("windowId")
+                bounds = window.get("bounds") or {}
+                if window_id is None or window_id in seen:
+                    continue
+                seen.add(window_id)
+                width = int(bounds.get("width") or 0)
+                if 0 < width < minimum:
+                    # Restore first: a maximised or minimised window refuses a bounds change.
+                    call(
+                        "Browser.setWindowBounds",
+                        {"windowId": window_id, "bounds": {"windowState": "normal"}},
+                    )
+                    call(
+                        "Browser.setWindowBounds",
+                        {
+                            "windowId": window_id,
+                            "bounds": {"width": minimum, "height": max(minimum, 900)},
+                        },
+                    )
+                    width = minimum
+                narrowest = width if narrowest == 0 else min(narrowest, width)
+    except Exception:  # noqa: BLE001 — a window that will not move must not fail a read
+        log.debug("could not widen the agent's Chrome window", exc_info=True)
+        return narrowest
+    return narrowest
+
+
 def clear_stale_locks() -> list:
     """Remove the singleton lock files and the announced port from the profile, returning what went.
 
