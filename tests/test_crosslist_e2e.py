@@ -190,6 +190,10 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
     )
     assert settings.publish_markets(store) == ["carousell"]
 
+    # Before listing anywhere new, Sellee looks at what the seller already has there — otherwise it
+    # would post a second copy of everything they had listed by hand. Here it finds nothing.
+    store.record_survey_result("carousell", [])
+
     # The lane notices the gap and queues the browser publish.
     _lane(store, bus)
     assert _queued(store) == [
@@ -224,6 +228,7 @@ def test_a_failed_fan_out_is_one_notice_and_no_second_attempt(
     seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
+    store.record_survey_result("carousell", [])  # looked first, and the seller had nothing there
 
     _lane(store, bus)
     assert len(_queued(store)) == 1

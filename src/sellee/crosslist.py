@@ -38,7 +38,7 @@ from typing import Callable
 
 from sellee import marketplaces, settings
 from sellee.browser import markets as market_adapters
-from sellee.browser import publisher
+from sellee.browser import publisher, reconcile
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.passes import DEFAULT_PUBLISH_MARKET
@@ -126,7 +126,12 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
     makes it backfill: an item listed long before this existed qualifies, and a recorded URL — or a
     single settled attempt — stops it qualifying forever.
     """
-    markets = settings.publish_markets(deps.store)
+    region = deps.store.seller_region()
+    markets = [
+        market
+        for market in settings.publish_markets(deps.store)
+        if _looked_first(deps, market, region)
+    ]
     if not markets:
         return []
 
@@ -137,6 +142,7 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
         if row["market"] and row["market"] != DEFAULT_PUBLISH_MARKET
     }
     sold = deps.store.sold_item_ids()
+    already_there = {market: _titles_seen_on(deps.store, market) for market in markets}
 
     pairs = []
     for item in deps.store.list_items():
@@ -145,11 +151,55 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
             continue  # nothing to fan out from yet: the rail listing comes first
         if item["id"] in sold:
             continue
+        title = reconcile.normalize(item.get("title") or "")
         for market in markets:
             if urls.get(market) or (item["id"], market) in attempted:
                 continue
+            if title and title in already_there[market]:
+                continue  # the seller already has this one there, by hand
             pairs.append((item, market))
     return pairs
+
+
+def _titles_seen_on(store, market: str) -> set:
+    """What the seller already has on this marketplace, by title, whatever they said about it.
+
+    Read from `discovered_listings` rather than from item URLs, and that is the whole point. An item
+    carries a marketplace's URL only once the seller has said yes to *managing* the listing there;
+    say no, and the listing is still on their marketplace while the item still looks absent from it.
+    Fanning out on that would post a second copy of something they told us to leave alone.
+
+    Every discovered row counts — pending, accepted, declined, adopted — because the question
+    here is not what we manage, it is what exists.
+    """
+    return {
+        reconcile.normalize(row.get("title") or "")
+        for row in store.list_discovered_listings(market)
+        if row.get("title")
+    }
+
+
+def _looked_first(deps: CrosslistDeps, market: str, region) -> bool:
+    """Whether we have looked at what the seller already has on this marketplace.
+
+    Publishing to a market we have never read is how a seller ends up with two of everything. On the
+    first tick after Facebook became publishable, fourteen items were on the rail and absent from
+    every item's `listing_urls['fb']` — and thirteen of them were already on the seller's Facebook,
+    posted by hand, which nothing in the store knew. Without this the fan-out would have posted all
+    thirteen again.
+
+    So the survey comes first, and this asks for one rather than merely waiting for another lane to:
+    the request is insert-only, so it is a no-op on a market already looked at, and it makes the
+    ordering hold even if nothing else ever ran.
+
+    A market nothing could survey is not held back — there is no look to wait for, and blocking on
+    one that can never come would mean never publishing there at all.
+    """
+    if not market_adapters.can_survey(market, region):
+        return True
+    deps.store.request_market_survey(market)
+    survey = deps.store.get_market_survey(market)
+    return bool(survey) and survey["state"] != "due"
 
 
 def publish_in_flight(index) -> bool:

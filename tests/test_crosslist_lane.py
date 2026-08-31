@@ -58,9 +58,15 @@ def _midnight() -> float:
 
 @pytest.fixture
 def enabled(store):
-    """A seller in SG who has asked for Carousell, with one item live on the rail."""
+    """A seller in SG who has asked for Carousell, with one item live on the rail.
+
+    Carousell has already been looked at, and found nothing: the fan-out will not publish to a
+    marketplace it has never read, so every test about *what it publishes* has to be past that gate.
+    The gate itself is tested on its own, further down.
+    """
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
+    store.record_survey_result("carousell", [])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
     return store.get_item(item["id"])
@@ -344,6 +350,7 @@ def test_enabling_a_market_picks_up_items_listed_before(store, bus) -> None:
     assert crosslist.enqueue_next(_deps(store, bus)) is None
 
     seed_setting(store, "connected_markets", ["carousell"])
+    store.record_survey_result("carousell", [])  # looked at, and the seller had nothing there
     assert crosslist.enqueue_next(_deps(store, bus))
 
 
@@ -384,3 +391,124 @@ def test_settings_read_filters_to_publishable_markets(store, bus, enabled) -> No
     seed_setting(store, "connected_markets", ["carousell", "mercari"])
     assert settings.publish_markets(store) == ["carousell"]
     assert [market for _, market in crosslist.pending_pairs(_deps(store, bus))] == ["carousell"]
+
+
+# --- looking before listing ----------------------------------------------------------------------
+
+
+def _rail_item(store, title="Teak lamp"):
+    item = store.create_item(title=title, list_price=80.0, currency="SGD")
+    store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
+    return store.get_item(item["id"])
+
+
+def test_nothing_is_published_to_a_marketplace_we_have_never_read(store, bus) -> None:
+    """The whole reason this gate exists. On the first tick after Facebook became publishable the
+    seller had fourteen items on the rail and none of them recording a Facebook URL — and thirteen
+    were already on their Facebook, posted by hand, which nothing in the store knew. Fanning out
+    then would have posted all thirteen a second time."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store)
+
+    assert crosslist.pending_pairs(_deps(store, bus)) == []
+    assert crosslist.enqueue_next(_deps(store, bus)) is None
+
+
+def test_the_lane_asks_for_the_look_it_is_waiting_on(store, bus) -> None:
+    """Waiting on another lane to request the survey would make the ordering depend on which ran
+    first. It asks itself, and the request is insert-only, so it is a no-op once one exists."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store)
+
+    crosslist.pending_pairs(_deps(store, bus))
+
+    assert store.get_market_survey("carousell")["state"] == "due"
+
+
+def test_once_the_look_is_done_the_fan_out_proceeds(store, bus) -> None:
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    item = _rail_item(store)
+    store.record_survey_result("carousell", [])
+
+    assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
+
+
+def test_an_item_the_seller_already_has_there_is_not_listed_again(store, bus) -> None:
+    """Matched against what the survey *found*, not against what we manage — see below."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store, title="Teak lamp")
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/lamp-1/",
+                "title": "Teak Lamp",
+                "price": 80.0,
+                "price_text": "S$80",
+            }
+        ],
+    )
+
+    assert crosslist.pending_pairs(_deps(store, bus)) == []
+
+
+def test_a_listing_the_seller_declined_to_manage_still_stops_a_second_copy(store, bus) -> None:
+    """The case item URLs cannot cover. Say no to managing a listing and it is still on their
+    marketplace, while the item still looks absent from it — so a fan-out keyed on `listing_urls`
+    would post a second copy of the very thing they told us to leave alone."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store, title="Teak lamp")
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/lamp-1/",
+                "title": "Teak lamp",
+                "price": 80.0,
+                "price_text": "S$80",
+            }
+        ],
+    )
+    store.decide_discovered_listings("carousell", decision="decline")
+
+    assert crosslist.pending_pairs(_deps(store, bus)) == []
+
+
+def test_something_the_seller_does_not_have_there_is_still_listed(store, bus) -> None:
+    """The gate must not become a blanket refusal: a survey that found other things still leaves
+    this item missing from that marketplace, which is exactly what the fan-out is for."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    item = _rail_item(store, title="Dyson HushJet Mini Cool Fan")
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/lamp-1/",
+                "title": "Teak lamp",
+                "price": 80.0,
+                "price_text": "S$80",
+            }
+        ],
+    )
+
+    assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
+
+
+def test_a_marketplace_nothing_can_survey_is_not_held_back(store, bus, monkeypatch) -> None:
+    """There is no look to wait for, and blocking on one that can never come would mean never
+    publishing there at all."""
+    monkeypatch.setattr(crosslist.market_adapters, "can_survey", lambda market, region=None: False)
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    item = _rail_item(store)
+
+    assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
