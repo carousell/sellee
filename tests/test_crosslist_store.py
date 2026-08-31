@@ -33,7 +33,14 @@ def test_publish_pass_index_carries_a_rail_publish_with_no_market(store) -> None
     item = store.create_item(title="Lamp", list_price=80.0)
     store.enqueue_pass("publish", {"item_id": item["id"]})
     assert store.publish_pass_index() == [
-        {"market": None, "item_id": item["id"], "origin": None, "status": "queued"}
+        {
+            "market": None,
+            "item_id": item["id"],
+            "origin": None,
+            "status": "queued",
+            # None until it settles — what the retry clock reads, and never set on a queued row.
+            "finished_ts": None,
+        }
     ]
 
 

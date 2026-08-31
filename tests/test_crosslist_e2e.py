@@ -120,6 +120,9 @@ def _no_rail():
 
 
 def _lane(store, bus) -> None:
+    # Real time: the retry cooldown compares this clock against the `finished_ts` the store writes
+    # with its own, so a fixed fake hour reads as hours past every attempt and turns it off. Quiet
+    # hours no longer gate this lane, which is what the fake midday was for.
     crosslist.crosslist_lane(
         crosslist.CrosslistDeps(
             store=store,
@@ -127,7 +130,6 @@ def _lane(store, bus) -> None:
             config=Config(),
             browser_factory=lambda: object(),
             rail_factory=_no_rail,
-            now=_noon,
         )
     )
 
@@ -159,7 +161,13 @@ def _drain(store, bus, api) -> list:
 
 
 def _queued(store):
-    return [row for row in store.publish_pass_index() if row["status"] == "queued"]
+    # Projected: the index also carries `finished_ts`, which is None for a queued row and is the
+    # retry clock's business rather than these tests'.
+    return [
+        {k: v for k, v in row.items() if k != "finished_ts"}
+        for row in store.publish_pass_index()
+        if row["status"] == "queued"
+    ]
 
 
 def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) -> None:
@@ -237,7 +245,19 @@ def test_a_failed_fan_out_is_one_notice_and_no_second_attempt(
     passes.pass_lane(_pass_deps(server, bus, store, script))
     assert store.publish_pass_index()[0]["status"] == "error"
 
-    # One needs-me notice, naming the retry and reassuring about the rail — and no retry of ours.
+    # Nothing is said yet: another go is coming, and three "I couldn't list your lamp" messages
+    # for one lamp that is about to appear is noise that trains a seller to ignore the notice that
+    # matters. Nor is the retry queued on this tick — the cooldown holds it.
+    _lane(store, bus)
+    with FakeTelegramAPI() as api:
+        assert _drain(store, bus, api) == []
+    assert _queued(store) == []
+
+    # Run the attempts out. Only the last one speaks.
+    for _ in range(crosslist.PUBLISH_MAX_ATTEMPTS - 1):
+        store.record_driven_publish(
+            item["id"], "carousell", status="error", origin=crosslist.ORIGIN
+        )
     _lane(store, bus)
     with FakeTelegramAPI() as api:
         texts = _drain(store, bus, api)

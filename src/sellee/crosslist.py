@@ -60,6 +60,14 @@ ORIGIN = "crosslist"
 # single attempt — so "retryable" without a bound is the same forever-loop by another name.
 MAX_DRIVE_ATTEMPTS = 3
 
+# How many times the fan-out will try a given item on a given marketplace, and how long it waits
+# between goes. A publish that failed is retried now — see `_shots_spent` — because a listing that
+# did not appear is not something a seller should have to notice and ask for. Bounded because the
+# failure is often the kind no retry can fix, and spaced because the lane ticks every thirty
+# seconds and three attempts inside two minutes is not a retry, it is the same attempt three times.
+PUBLISH_MAX_ATTEMPTS = 3
+PUBLISH_RETRY_AFTER_SEC = 30 * 60.0
+
 NO_BROWSER_NOTICE = (
     "I can't list on {market} because I can't drive a browser here. The carousell.ai listing is "
     "unaffected. Details: {reason}"
@@ -147,11 +155,7 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
         return []
 
     index = deps.store.publish_pass_index() if index is None else index
-    attempted = {
-        (row["item_id"], row["market"])
-        for row in index
-        if row["market"] and row["market"] != DEFAULT_PUBLISH_MARKET
-    }
+    spent = _shots_spent(index, deps.now())
     sold = deps.store.sold_item_ids()
     already_there = {market: _titles_seen_on(deps.store, market) for market in markets}
 
@@ -164,12 +168,67 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
             continue
         title = item.get("title") or ""
         for market in markets:
-            if urls.get(market) or (item["id"], market) in attempted:
+            if urls.get(market) or spent.get((item["id"], market)):
                 continue
             if any(reconcile.same_thing_loosely(title, seen) for seen in already_there[market]):
                 continue  # the seller already has this one there, by hand
             pairs.append((item, market))
     return pairs
+
+
+def _shots_spent(index, now: float) -> dict:
+    """Which (item, market) pairs are out of attempts for the moment, and why.
+
+    A failed publish used to be final. That was right when every publish was a model pass costing
+    real money, so an automatic retry could burn a second one on a repeat of the same failure — but
+    a driven market spends no model tokens at all, and either way a listing that simply did not
+    appear is not something a seller should have to ask for twice.
+
+    So a pair gets `PUBLISH_MAX_ATTEMPTS` goes, spaced by `PUBLISH_RETRY_AFTER_SEC`. The spacing is
+    the part that matters: the lane ticks every thirty seconds, and without it three attempts would
+    burn inside two minutes against a condition — a page mid-redesign, a marketplace refusing the
+    account — that none of them could have changed.
+
+    Counted from the pass rows themselves, which are never pruned, so there is no second counter to
+    keep in step. A pair still in flight counts as spent, so nothing is queued twice.
+    """
+    attempts: dict = {}
+    latest: dict = {}
+    for row in index:
+        market = row.get("market")
+        if not market or market == DEFAULT_PUBLISH_MARKET:
+            continue
+        key = (row.get("item_id"), market)
+        if row.get("status") in ("queued", "running"):
+            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS  # in flight: hold it
+            continue
+        attempts[key] = attempts.get(key, 0) + 1
+        finished = row.get("finished_ts") or 0
+        latest[key] = max(latest.get(key, 0), finished)
+    return {
+        key: True
+        for key, count in attempts.items()
+        if count >= PUBLISH_MAX_ATTEMPTS or (now - latest.get(key, 0)) < PUBLISH_RETRY_AFTER_SEC
+    }
+
+
+def _shots_out(index) -> dict:
+    """Which pairs have no attempts left at all — the question reporting asks.
+
+    Deliberately not `_shots_spent`, which also holds a pair back during its cooldown. A pair
+    waiting out a cooldown still has a go coming, and telling the seller it failed would be telling
+    them about something that has not finished happening.
+    """
+    attempts: dict = {}
+    for row in index:
+        market = row.get("market")
+        if not market or market == DEFAULT_PUBLISH_MARKET:
+            continue
+        if row.get("status") in ("queued", "running"):
+            continue
+        key = (row.get("item_id"), market)
+        attempts[key] = attempts.get(key, 0) + 1
+    return {key: True for key, count in attempts.items() if count >= PUBLISH_MAX_ATTEMPTS}
 
 
 def _titles_seen_on(store, market: str) -> set:
@@ -414,8 +473,18 @@ def report_settled(deps: CrosslistDeps) -> int:
     The verdict comes from the item's recorded listing URL, not from the pass's exit code: a pass
     that ended cleanly without recording a URL has left no listing anyone can find, which is a
     failure whatever it reported about itself.
+
+    A failure the lane is going to try again is not announced. The seller is not the one who acts
+    on it, and three "I couldn't list your desk" messages for one desk that is about to appear is
+    noise that trains them to ignore the notice that matters. Only the last attempt speaks — and a
+    success always does, whichever attempt it was.
     """
     reported = 0
+    index = deps.store.publish_pass_index()
+    spent = _shots_out(index)
+    # One message per item and marketplace, however many attempts are settling at once. The seller
+    # cares that their lamp is not on Carousell, not how many goes it took to establish that.
+    announced: set = set()
     for row in deps.store.unreported_crosslist_passes():
         item = deps.store.get_item(row["item_id"]) if row["item_id"] else None
         market = row["market"] or ""
@@ -424,8 +493,15 @@ def report_settled(deps: CrosslistDeps) -> int:
         market_name = marketplaces.display_name(market)
         if url:
             text = PUBLISHED_NOTICE.format(item=title, market=market_name, url=url)
+        elif not spent.get((row["item_id"], market)) or (row["item_id"], market) in announced:
+            # Another go is coming, or this pair has already had its say in this sweep. The row is
+            # still marked reported so the sweep stays bounded; what is withheld is the message,
+            # not the bookkeeping.
+            deps.store.report_crosslist_pass(row["pass_id"], None, ref=row["item_id"])
+            continue
         else:
             text = FAILED_NOTICE.format(item=title, market=market_name)
+            announced.add((row["item_id"], market))
         if not deps.store.report_crosslist_pass(row["pass_id"], text, ref=row["item_id"]):
             continue
         reported += 1

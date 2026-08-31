@@ -68,6 +68,7 @@ def test_it_queues_a_publish_the_lane_would_never_queue_again(make_ctx, store, e
             "item_id": enabled["id"],
             "origin": "crosslist",
             "status": "queued",
+            "finished_ts": None,
         }
     ]
 

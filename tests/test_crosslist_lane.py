@@ -33,8 +33,10 @@ def _deps(store, bus, browser_factory=None, rail_factory=None, **overrides):
         browser_factory=browser_factory if browser_factory is not None else lambda: object(),
         # And no rail key, so the push phase skips — these tests are about the lane's decisions.
         rail_factory=rail_factory if rail_factory is not None else _no_rail,
-        # Midday, so the default quiet window (23:00–08:00) is not in force.
-        now=lambda: _noon(),
+        # Real time, because the retry cooldown compares this clock against the `finished_ts` the
+        # store writes with its own. A fixed fake hour here reads as many hours past every attempt
+        # and quietly turns the cooldown off. Quiet hours no longer gate this lane, so the fake
+        # midday it used to need is gone; the tests that are *about* an hour pass their own.
     )
 
 
@@ -73,7 +75,13 @@ def enabled(store):
 
 
 def _queued(store):
-    return [row for row in store.publish_pass_index() if row["status"] == "queued"]
+    # Projected: the index also carries `finished_ts`, which is None for a queued row and is the
+    # retry clock's business rather than these tests'.
+    return [
+        {k: v for k, v in row.items() if k != "finished_ts"}
+        for row in store.publish_pass_index()
+        if row["status"] == "queued"
+    ]
 
 
 def _notices(store):
@@ -147,18 +155,55 @@ def test_a_market_the_sellers_region_lost_is_not_queued(store, bus, enabled) -> 
 # --- one shot ---------------------------------------------------------------------------------
 
 
+def _later(seconds: float):
+    """A clock past the retry cooldown, so a test can reach the next attempt without waiting."""
+    import time as _time
+
+    stamp = _time.time() + seconds
+    return lambda: stamp
+
+
 @pytest.mark.parametrize("status,cls", [("done", "ok"), ("error", "error"), ("error", "timeout")])
-def test_a_settled_attempt_is_never_retried(store, bus, enabled, status, cls) -> None:
-    """Every attempt is minutes of browser work and a vision-priced token bill, so a failure is
-    reported to the seller rather than repeated behind their back."""
+def test_a_settled_attempt_is_not_retried_immediately(store, bus, enabled, status, cls) -> None:
+    """The lane ticks every thirty seconds. Retrying on the next one is not a retry, it is the same
+    attempt again against a condition nothing has had time to change."""
     pass_id = crosslist.enqueue_next(_deps(store, bus))
     store.finish_pass(pass_id, status=status, rc=1, cls=cls, summary=cls)
 
     assert crosslist.enqueue_next(_deps(store, bus)) is None
 
 
-def test_an_attempt_by_hand_also_spends_the_shot(store, bus, enabled) -> None:
-    """Same pair, same outcome: the lane's memory is the pass history, not a counter of its own."""
+@pytest.mark.parametrize("status,cls", [("done", "ok"), ("error", "error"), ("error", "timeout")])
+def test_a_publish_that_left_no_listing_is_retried_later(store, bus, enabled, status, cls) -> None:
+    """A listing that did not appear is not something a seller should have to notice and ask for.
+    `done` counts too: the pass exited cleanly and recorded no URL, which is the shape the real
+    failure took — the seller's book reported success and was never on the marketplace."""
+    pass_id = crosslist.enqueue_next(_deps(store, bus))
+    store.finish_pass(pass_id, status=status, rc=1, cls=cls, summary=cls)
+
+    later = _deps(store, bus)
+    later.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC + 60)
+
+    assert crosslist.enqueue_next(later)
+
+
+def test_retries_run_out(store, bus, enabled) -> None:
+    """Bounded, because the failure is often the kind no retry can fix — a page mid-redesign, a
+    marketplace refusing the account."""
+    for _ in range(crosslist.PUBLISH_MAX_ATTEMPTS):
+        deps = _deps(store, bus)
+        deps.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC * 100)
+        pass_id = crosslist.enqueue_next(deps)
+        assert pass_id, "gave up before the bound"
+        store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
+
+    deps = _deps(store, bus)
+    deps.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC * 100)
+    assert crosslist.enqueue_next(deps) is None
+
+
+def test_an_attempt_by_hand_also_counts(store, bus, enabled) -> None:
+    """Same pair, same ledger: the lane's memory is the pass history, not a counter of its own."""
     manual = store.enqueue_pass("publish", {"item_id": enabled["id"], "market": "carousell"})
     store.finish_pass(manual, status="error", rc=1, cls="error", summary="error")
 
@@ -282,25 +327,43 @@ def test_a_recorded_url_is_reported_as_a_live_listing(store, bus, enabled) -> No
     assert notices == [f"Teak lamp is now listed on Carousell: {_CAROUSELL_URL}"]
 
 
-def test_a_clean_exit_without_a_url_is_reported_as_a_failure(store, bus, enabled) -> None:
+def _burn_attempts(store, bus, status="done", cls="ok"):
+    """Run the pair out of attempts, settling each one without a listing URL."""
+    for _ in range(crosslist.PUBLISH_MAX_ATTEMPTS):
+        deps = _deps(store, bus)
+        deps.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC * 100)
+        pass_id = crosslist.enqueue_next(deps)
+        assert pass_id
+        store.finish_pass(pass_id, status=status, rc=0, cls=cls, summary=cls)
+
+
+def test_a_failure_still_being_retried_is_not_announced(store, bus, enabled) -> None:
+    """Three "I couldn't list your desk" messages for one desk that is about to appear is noise
+    that trains a seller to ignore the notice that matters."""
+    pass_id = crosslist.enqueue_next(_deps(store, bus))
+    store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
+
+    assert crosslist.report_settled(_deps(store, bus)) == 0
+    assert _notices(store) == []
+
+
+def test_a_clean_exit_without_a_url_is_reported_once_the_retries_run_out(store, bus, enabled):
     """The 07 shape: the pass said it was done and recorded nothing, so no listing exists that
     anyone can find. The row is the fact, not the exit code."""
-    pass_id = crosslist.enqueue_next(_deps(store, bus))
-    store.finish_pass(pass_id, status="done", rc=0, cls="ok", summary="ok")
+    _burn_attempts(store, bus)
 
-    assert crosslist.report_settled(_deps(store, bus)) == 1
-    text = _notices(store)[0]
+    assert crosslist.report_settled(_deps(store, bus)) >= 1
+    text = [t for t in _notices(store) if "couldn't list" in t][0]
     assert "couldn't list Teak lamp on Carousell" in text
     # The retry is something to ask for, not a command to run: the notice lands on a phone.
     assert "Ask me" in text
 
 
 def test_a_failure_names_the_retry_and_reassures_about_the_rail(store, bus, enabled) -> None:
-    pass_id = crosslist.enqueue_next(_deps(store, bus))
-    store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
+    _burn_attempts(store, bus, status="error", cls="error")
 
     crosslist.report_settled(_deps(store, bus))
-    assert "carousell.ai listing" in _notices(store)[0]
+    assert any("carousell.ai listing" in t for t in _notices(store))
 
 
 def test_a_running_publish_is_not_reported_yet(store, bus, enabled) -> None:
@@ -533,12 +596,15 @@ def test_a_driven_publish_is_reported_to_the_seller(store, bus, enabled, monkeyp
     assert pass_id
 
 
-def test_a_driven_publish_that_recorded_no_url_is_reported_as_a_failure(
+def test_a_driven_publish_that_recorded_no_url_is_reported_once_it_gives_up(
     store, bus, enabled
 ) -> None:
-    store.record_driven_publish(enabled["id"], "carousell", status="error", origin=crosslist.ORIGIN)
+    for _ in range(crosslist.PUBLISH_MAX_ATTEMPTS):
+        store.record_driven_publish(
+            enabled["id"], "carousell", status="error", origin=crosslist.ORIGIN
+        )
 
-    assert crosslist.report_settled(_deps(store, bus)) == 1
+    assert crosslist.report_settled(_deps(store, bus)) >= 1
     assert any("couldn't list" in text for text in _notices(store))
 
 

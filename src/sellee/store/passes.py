@@ -271,14 +271,16 @@ class PassesMixin:
         return [{"type": r["type"], "payload": json.loads(r["payload"])} for r in rows]
 
     def publish_pass_index(self) -> list[dict]:
-        """Every publish pass ever queued, as {market, item_id, status, origin}.
+        """Every publish pass ever queued, as {market, item_id, status, origin, finished_ts}.
 
-        The fan-out's whole memory of what it has tried. A publish is attempted once per item and
-        marketplace: rows are never pruned, so the history is the attempt counter and there is no
-        second piece of state to keep in step with it. Markets are decided by the caller — the store
-        holds no marketplace knowledge.
+        The fan-out's whole memory of what it has tried. Rows are never pruned, so the history *is*
+        the attempt counter and there is no second piece of state to keep in step with it — which
+        is what lets the caller both count attempts and space them. Markets are decided by the
+        caller; the store holds no marketplace knowledge.
         """
-        rows = self._db.query("SELECT payload, status FROM passes WHERE type = 'publish'")
+        rows = self._db.query(
+            "SELECT payload, status, finished_ts FROM passes WHERE type = 'publish'"
+        )
         out = []
         for row in rows:
             payload = json.loads(row["payload"])
@@ -288,6 +290,9 @@ class PassesMixin:
                     "item_id": payload.get("item_id"),
                     "origin": payload.get("origin"),
                     "status": row["status"],
+                    # When it settled, so the caller can space retries. None while it is still
+                    # queued or running, which is what `publish_in_flight` reads.
+                    "finished_ts": row["finished_ts"],
                 }
             )
         return out
@@ -326,12 +331,18 @@ class PassesMixin:
                 conn.executemany("UPDATE passes SET reported = 1 WHERE pass_id = ?", owes_nothing)
         return out
 
-    def report_crosslist_pass(self, pass_id: str, text: str, *, ref: str | None = None) -> bool:
+    def report_crosslist_pass(
+        self, pass_id: str, text: str | None, *, ref: str | None = None
+    ) -> bool:
         """Tell the seller how a fan-out publish went and flag the pass, or do neither.
 
         One transaction, and the flag is only cleared-to-set once, so a crash mid-sweep cannot
         announce a listing twice or swallow the announcement. Returns whether this call was the one
         that reported it.
+
+        `text=None` closes the row without saying anything — for a failure the lane intends to try
+        again, where the seller is not the one who acts on it. The flag still moves, so the sweep
+        stays bounded by work owed rather than by history; what is withheld is the message.
         """
         with self._db.transaction() as conn:
             cur = conn.execute(
@@ -339,7 +350,8 @@ class PassesMixin:
             )
             if cur.rowcount == 0:
                 return False
-            _insert_notice(conn, text, ref=ref)
+            if text is not None:
+                _insert_notice(conn, text, ref=ref)
         return True
 
     def sold_item_ids(self) -> set:
