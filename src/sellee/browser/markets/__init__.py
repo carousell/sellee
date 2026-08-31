@@ -72,6 +72,10 @@ class MarketAdapter:
     # Which listing the open conversation is about, for a market that names it only there. Read once
     # when first seen; a market whose list already carries `product_id` needs none of this.
     product_id_js: str = ""
+    # For a market whose listings page is not at a fixed address but behind a link on one: JS
+    # answering `{url}` for the survey to follow before reading `my_listings_js`. Empty for a market
+    # whose `urls.my_listings` is already the page.
+    my_listings_entry_js: str = ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -102,6 +106,9 @@ FACEBOOK = MarketAdapter(
     conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
     conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
     login_js=facebook.LOGIN_JS,
+    my_listings_js=facebook.MY_LISTINGS_JS,
+    listing_detail_js=facebook.LISTING_DETAIL_JS,
+    my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,

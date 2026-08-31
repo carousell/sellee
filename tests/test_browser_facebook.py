@@ -292,3 +292,103 @@ def test_a_row_the_folder_reports_with_an_id_is_taken_at_its_word(store, bus, se
 
     assert store.get_thread("fb:99") is not None
     assert client.navigations.count(_THREAD) == 1
+
+
+# --- reaching the seller's listings ---------------------------------------------------------------
+
+
+class SurveyStub:
+    """A browser answering Facebook's survey artifacts, recording where the lane sent it."""
+
+    def __init__(self, *, entry_url="/marketplace/profile/1513211510/", listings=None):
+        self.entry_url = entry_url
+        self.listings = listings if listings is not None else {"listings": [], "active_count": 0}
+        self.navigations: list = []
+
+    class _Exclusive:
+        def __init__(self, client):
+            self.client = client
+
+        def __enter__(self):
+            return self.client
+
+        def __exit__(self, *exc):
+            return False
+
+    def exclusive(self):
+        return self._Exclusive(self)
+
+    def navigate(self, url):
+        self.navigations.append(url)
+
+    def evaluate(self, function, **kwargs):
+        if function == fb_market.LOGIN_JS:
+            return {"state": "logged_in"}
+        if function == fb_market.MY_LISTINGS_ENTRY_JS:
+            return {"url": self.entry_url, "width": 1600, "visible": True}
+        if function == fb_market.MY_LISTINGS_JS:
+            return self.listings
+        raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
+
+
+def _survey_deps(store, bus, client):
+    from sellee.browser import survey
+
+    return survey.SurveyDeps(store=store, bus=bus, config=Config(), browser_factory=lambda: client)
+
+
+def test_the_survey_follows_the_link_to_the_page_that_has_the_ids(store, bus) -> None:
+    """`/marketplace/you/selling` shows the listings and gives them no id, so a survey that read it
+    could record nothing. The ids are on the seller's own profile, one link away."""
+    from sellee.browser import survey
+
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub()
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert client.navigations == [
+        "https://www.facebook.com/marketplace/you/selling",
+        "https://www.facebook.com/marketplace/profile/1513211510/",
+    ]
+
+
+def test_a_missing_profile_link_is_an_unserved_survey_not_an_empty_one(store, bus) -> None:
+    """The ask-once guard closes on an empty list, so a page we never reached must never answer as
+    one — that would tell the seller we looked and found nothing listed."""
+    from sellee.browser import survey
+
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(entry_url=None)
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert store.get_market_survey("fb")["state"] == "due"
+    reasons = [e.payload["reason"] for e in _kinds(bus, "survey.unserved")]
+    assert reasons == ["could not reach the seller's listings page"]
+
+
+def test_a_market_whose_listings_page_is_an_address_takes_no_hop(
+    store, bus, carousell_only
+) -> None:
+    """Carousell's manage-listings page is the page. The hop must stay inert for it."""
+    from sellee.browser import survey
+    from sellee.browser.markets import carousell as carousell_market
+
+    class CarousellSurveyStub(SurveyStub):
+        def evaluate(self, function, **kwargs):
+            if function == carousell_market.LOGIN_JS:
+                return {"state": "logged_in"}
+            if function == carousell_market.MY_LISTINGS_JS:
+                return {"listings": [], "active_count": 0}
+            raise AssertionError(f"unexpected artifact: {function}")
+
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("carousell")
+    client = CarousellSurveyStub()
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert client.navigations == ["https://www.carousell.sg/manage-listings/"]

@@ -23,6 +23,7 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urljoin
 
 from sellee import marketplaces, settings
 from sellee.browser import adopt, inbox, reconcile
@@ -129,6 +130,30 @@ def discover_phase(deps: SurveyDeps) -> None:
             _unserved(deps, market, f"browser error: {exc}")
 
 
+def _follow_to_listings(client, adapter, current: str) -> bool:
+    """Take the one hop to the page a seller's listings are actually on, where it is not the one we
+    navigated to.
+
+    Facebook's `/marketplace/you/selling` shows the listings and gives them no id, so nothing read
+    there could be recorded as a listing URL or joined to a conversation. The ids are on the
+    seller's public Marketplace profile, whose address contains their own account id — a fact about
+    them rather than about Facebook, so it is read off the page instead of being stored or guessed.
+
+    Answers whether the reader is somewhere it can read from: True for a market that needs no hop,
+    True once the hop is made, and False when the link was not there — which the caller reports as
+    an unserved survey rather than letting the listings artifact answer "nothing listed" from a page
+    that was never the right one.
+    """
+    if not adapter.my_listings_entry_js:
+        return True
+    answer = client.evaluate(adapter.my_listings_entry_js) or {}
+    target = answer.get("url")
+    if not target:
+        return False
+    client.navigate(urljoin(current, str(target)))
+    return True
+
+
 def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     """Read one market's listings and ask about them, or record why we could not."""
     adapter = market_adapters.get_adapter(market)
@@ -141,6 +166,9 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
             # Signed out again. The read lane owns that notice; a second voice about a survey the
             # seller never asked for is noise.
             _unserved(deps, market, f"login state {login.get('state')!r}")
+            return
+        if not _follow_to_listings(client, adapter, url):
+            _unserved(deps, market, "could not reach the seller's listings page")
             return
         answer = client.evaluate(adapter.my_listings_js)
 

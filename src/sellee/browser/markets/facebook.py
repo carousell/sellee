@@ -26,6 +26,10 @@ on every deploy, so nothing here matches one.
 
 from __future__ import annotations
 
+import json
+
+from sellee.browser.markets import jslib
+
 # Where a listing's id sits in its permalink. Facebook names the listing a conversation is about
 # only inside the opened conversation — see `PRODUCT_ID_JS` — and this is what turns that link into
 # the id `reconcile.matching_items` joins on.
@@ -277,6 +281,198 @@ LOGIN_JS = """() => {
     return { state: 'unknown' };
   }
 }"""
+
+# Where the seller's own listings actually are.
+#
+# `/marketplace/you/selling` looks like the page and is not: its cards carry the title, the price
+# and a per-card "In stock", but no listing id anywhere — no link, no data attribute — so nothing
+# read there can be joined to a conversation or recorded as a listing URL. The seller's public
+# Marketplace profile carries the same listings as real `/marketplace/item/<id>` links, and it is
+# reached from the selling page by a link whose href holds the seller's own account id. That id is
+# a fact about *them*, not about Facebook, so it is not in the registry and not stored: it is read
+# from the page each time, which costs one hop and nothing else.
+#
+# Answers `{url}` — the address to read the listings from — or `{url: null}` when the link is not
+# there, which the caller reports rather than reading the wrong page.
+MY_LISTINGS_ENTRY_JS = """() => {
+  const link = document.querySelector('a[href*="/marketplace/profile/"]');
+  const href = link ? link.getAttribute('href') : null;
+  return {
+    url: href || null,
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  };
+}"""
+
+_MY_LISTINGS_TEMPLATE = """async () => {
+  const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
+  const parsePrice = __PARSE_PRICE__;
+  // The seller's own listings, and nothing else on the page. Their profile renders under a heading
+  // that names them ("Jerry Neo's listings"), and Facebook interleaves a "Today's picks" grid of
+  // OTHER people's listings down the same page — at overlapping vertical positions, so neither the
+  // heading's offset nor a column band separates them. The first ancestor of that heading which
+  // holds any listing link is the seller's grid and holds only it, which is the one rule here that
+  // matters: read the wrong container and the survey offers to relist strangers' items.
+  const scope = () => {
+    const heading = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
+      .find((el) => /listings$/i.test((el.innerText || '').trim()));
+    if (!heading) return null;
+    for (let node = heading; node; node = node.parentElement) {
+      if (node.querySelector('a[href*="/marketplace/item/"]')) return node;
+    }
+    return null;
+  };
+  const cards = (root) => {
+    const seen = new Map();
+    root.querySelectorAll('a[href*="/marketplace/item/"]').forEach((a) => {
+      const href = a.href || a.getAttribute('href') || '';
+      const match = href.match(LISTING_HREF);
+      if (match && !seen.has(match[1])) seen.set(match[1], a);
+    });
+    return seen;
+  };
+
+  const root = scope();
+  if (root === null) {
+    return {
+      error: 'no scoped listings container',
+      headings: document.querySelectorAll('h1,h2,h3,[role="heading"]').length,
+      width: window.innerWidth,
+      visible: document.visibilityState === 'visible',
+    };
+  }
+  // The page's own count of what is live — the only thing that can tell a partial render from a
+  // small inventory, and what stops an ask-once survey closing on 12 of 17.
+  const bodyText = (document.body && document.body.innerText) || '';
+  const active = Number((bodyText.match(/(\\d+)\\s+active listings?/i) || [])[1]) || 0;
+
+  // The grid loads lazily, and `window.scrollTo` does not drive it — bringing the last card into
+  // view does. Stop when the count has stopped growing, or when it reaches the page's own tally.
+  let previous = -1;
+  let settled = 0;
+  for (let pass = 0; pass < 30 && settled < 3; pass++) {
+    const found = cards(root);
+    if (found.size === previous) settled++;
+    else { settled = 0; previous = found.size; }
+    if (active && found.size >= active) break;
+    const all = Array.from(found.values());
+    if (all.length) all[all.length - 1].scrollIntoView({ block: 'end' });
+    await new Promise((r) => setTimeout(r, 400));
+  }
+
+  const listings = [];
+  let dropped = 0;
+  cards(root).forEach((a, id) => {
+    // A card reads price, title, location — one line each. The title is taken by position rather
+    // than by guessing which line is not a price, because a listing may legitimately be titled
+    // something that parses as one.
+    const lines = (a.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
+    const priceText = lines[0] || '';
+    const title = lines[1] || '';
+    const price = parsePrice(priceText);
+    if (!title || !isFinite(price)) { dropped++; return; }
+    listings.push({
+      listing_id: id,
+      url: a.href || a.getAttribute('href') || '',
+      title: title,
+      price: price,
+      price_text: priceText,
+    });
+  });
+
+  return {
+    listings: listings,
+    active_count: active,
+    dropped: dropped,
+    unreadable: dropped,
+    // Never report a partial grid as the seller's whole inventory. The tally is the page's own
+    // statement of how many are live; short of it, this read did not finish.
+    truncated: active > 0 && listings.length + dropped < active,
+    visible: document.visibilityState === 'visible',
+  };
+}"""
+
+MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
+    "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
+).replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
+
+# One listing's own page, read at adoption time.
+#
+# There is no JSON-LD — Facebook publishes none for a marketplace item — so this is DOM work, and
+# that makes liveness the dangerous field. `active` is true ONLY on a positive in-stock marker: a
+# reader that cannot prove a listing is live must say it is not, because the cost of the other
+# mistake is relisting something the seller already sold.
+#
+# The item's own block is located by the title rather than by position: navigating to an item URL
+# renders the marketplace's whole chrome — nav, categories, notifications — around a panel, and
+# `document.body.innerText` begins with all of it.
+#
+# Photographs are taken only from images Facebook labels "Product photo of …". The page also
+# carries a grid of similar listings from other sellers at the same CDN hosts, and their pictures
+# are indistinguishable from the item's own by host, size or position.
+LISTING_DETAIL_JS = """async () => {
+  const parsePrice = __PARSE_PRICE__;
+  // Facebook's own section labels inside the panel. Walking up stops at the first ancestor whose
+  // opening line is NOT one of these, which is the ancestor whose opening line is the title.
+  const SECTIONS = ['Details', 'Condition', 'Description', 'Seller information'];
+  // The panel's own footer, which sits where a description would be when there is not one.
+  const TRAILER = /Location is approximate|^See (more|less)$|^Edit$|^Message$/i;
+  const read = () => {
+    // Anchored on the "Condition" label rather than on the title, because the title cannot be
+    // recognised without already knowing it: navigating to an item renders the marketplace's whole
+    // chrome around the panel, and the biggest heading on the page is the word "Marketplace".
+    const anchor = Array.from(document.querySelectorAll('span,div')).find(
+      (el) => el.children.length === 0 && (el.innerText || '').trim() === 'Condition'
+    );
+    if (!anchor) return null;
+    let panel = null;
+    for (let node = anchor, i = 0; node && i < 18; node = node.parentElement, i++) {
+      const first = ((node.innerText || '').trim().split('\\n')[0] || '').trim();
+      if (first && SECTIONS.indexOf(first) === -1) { panel = node; break; }
+    }
+    if (panel === null) return null;
+    const lines = (panel.innerText || '').split('\\n').map((s) => s.trim()).filter(Boolean);
+    const title = lines[0] || '';
+    // The price is the line under the title, and only falls back to a scan if that is not one —
+    // a title containing a number must never be read as the asking price.
+    const priceText = isFinite(parsePrice(lines[1] || '')) && /\\d/.test(lines[1] || '')
+      ? lines[1]
+      : (lines.slice(1).find((l) => isFinite(parsePrice(l)) && /\\d/.test(l)) || '');
+    const conditionAt = lines.indexOf('Condition');
+    const photos = Array.from(document.querySelectorAll('img'))
+      .filter((i) => /^Product photo of /i.test(i.getAttribute('alt') || ''))
+      .map((i) => i.src || '')
+      .filter(Boolean);
+    // Liveness, and the whole reason this fails closed. "In stock" is Facebook's own words on a
+    // live listing; a sold one says so instead, and anything we cannot read says nothing.
+    const body = (panel.innerText || '');
+    const live = /\\bIn stock\\b/i.test(body);
+    const sold = /\\b(Sold|Out of stock|Pending|no longer available)\\b/i.test(body);
+    return {
+      active: live && !sold,
+      title: title,
+      // The line under the condition value, when there is one. A listing with no description at
+      // all runs straight on to the panel's footer, so that footer is named and refused rather
+      // than being adopted as the seller's own words.
+      description: conditionAt >= 0 && !TRAILER.test(lines[conditionAt + 2] || '')
+        ? (lines[conditionAt + 2] || '')
+        : '',
+      price: parsePrice(priceText),
+      price_text: priceText,
+      currency: (priceText.match(/[A-Z]{3}/) || [''])[0],
+      condition: conditionAt >= 0 ? (lines[conditionAt + 1] || '') : '',
+      photo_urls: Array.from(new Set(photos)).slice(0, 20),
+    };
+  };
+  // The panel arrives after the load event, like every other read here.
+  const deadline = Date.now() + 5000;
+  let result = read();
+  while (Date.now() < deadline && (result === null || !result.title)) {
+    await new Promise((r) => setTimeout(r, 250));
+    result = read();
+  }
+  return result;
+}""".replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
 
 # The reply composer, as shipped defaults under the heal cache.
 #

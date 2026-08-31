@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import json
 
+from sellee.browser.markets import jslib
+
 # Conversations with Carousell itself — the platform assistant and its promotional accounts — rather
 # than with a buyer. Never conversations to answer. (`is_bot_offer` looks like it should say this
 # and does not: it is false for the campaign accounts.)
@@ -287,28 +289,10 @@ LOGIN_JS = """() => {
 # empty list means "you have nothing listed" — the answer that stops the asking — so a page that
 # would not parse must never arrive as that answer.
 #
-# A price is read from rendered text, and the thousands separator is not the same on every regional
-# site, so neither `,` nor `.` can be assumed to be the decimal point. Kept as its own function
-# because it is the one piece here worth testing directly.
-PARSE_PRICE_JS = """(text) => {
-  const trimmed = String(text || '').replace(/[^0-9.,]/g, '');
-  if (!trimmed) return NaN;
-  const lastDot = trimmed.lastIndexOf('.');
-  const lastComma = trimmed.lastIndexOf(',');
-  if (lastDot >= 0 && lastComma >= 0) {
-    // Both appear: the later is the decimal point, the other groups thousands.
-    const decimal = lastDot > lastComma ? '.' : ',';
-    const grouping = decimal === '.' ? ',' : '.';
-    return Number(trimmed.split(grouping).join('').replace(decimal, '.'));
-  }
-  const sep = lastDot >= 0 ? '.' : (lastComma >= 0 ? ',' : '');
-  if (!sep) return Number(trimmed);
-  // One separator, so its job is inferred: repeated, or three digits after the last one, groups
-  // thousands ("1.500.000", "1,299"); anything else is a decimal point ("40.00", "1,5").
-  const parts = trimmed.split(sep);
-  const groups = parts.length > 2 || parts[parts.length - 1].length === 3;
-  return Number(groups ? parts.join('') : parts.join('.'));
-}"""
+# A price is read from rendered text, and reading one is not Carousell-specific — it moved to
+# `jslib` when Facebook's reader needed the same thing. Re-exported here because it is tested by
+# name, and because a market's module is where a reader looks for what its artifacts are made of.
+PARSE_PRICE_JS = jslib.PARSE_PRICE_JS
 
 _MY_LISTINGS_TEMPLATE = """async () => {
   const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
