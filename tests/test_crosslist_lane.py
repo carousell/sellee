@@ -512,3 +512,39 @@ def test_a_marketplace_nothing_can_survey_is_not_held_back(store, bus, monkeypat
     item = _rail_item(store)
 
     assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
+
+
+def test_a_driven_publish_is_reported_to_the_seller(store, bus, enabled, monkeypatch) -> None:
+    """A driven market spawns no pass, and the ledger row it writes instead was marked as owing no
+    report — so a listing went live with nobody told, which is the one failure the fan-out's
+    reporting exists to prevent."""
+    pass_id = store.record_driven_publish(
+        enabled["id"], "carousell", status="done", origin=crosslist.ORIGIN
+    )
+    store.record_listing_url(enabled["id"], "carousell", _CAROUSELL_URL)
+
+    assert crosslist.report_settled(_deps(store, bus)) == 1
+    assert any(_CAROUSELL_URL in text for text in _notices(store))
+    assert crosslist.report_settled(_deps(store, bus)) == 0  # exactly once
+    assert pass_id
+
+
+def test_a_driven_publish_that_recorded_no_url_is_reported_as_a_failure(
+    store, bus, enabled
+) -> None:
+    store.record_driven_publish(enabled["id"], "carousell", status="error", origin=crosslist.ORIGIN)
+
+    assert crosslist.report_settled(_deps(store, bus)) == 1
+    assert any("couldn't list" in text for text in _notices(store))
+
+
+def test_an_abandoned_survey_does_not_open_the_gate(store, bus) -> None:
+    """`abandoned` means five looks in a row could not be served, so we know LESS about that
+    marketplace than when we started — and it is exactly the state where the title set is empty.
+    Treating it as "looked" opens the gate at the moment we can least afford it."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store)
+    store.abandon_market_survey("carousell")
+
+    assert crosslist.pending_pairs(_deps(store, bus)) == []

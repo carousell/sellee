@@ -401,7 +401,9 @@ def stage_photos(item_id: str, photos) -> list:
         log.warning("could not make a staging directory for %s", item_id, exc_info=True)
         return staged
     for index, source in enumerate(photos, start=1):
-        candidate = Path(str(source))
+        candidate = Path(_photo_path(source))
+        if not candidate.name:
+            continue
         destination = target / f"{index:02d}{candidate.suffix or '.jpg'}"
         try:
             shutil.copyfile(candidate, destination)
@@ -410,6 +412,23 @@ def stage_photos(item_id: str, photos) -> list:
             continue
         staged.append(str(destination))
     return staged
+
+
+def _photo_path(photo) -> str:
+    """Where one of an item's photographs actually is on disk.
+
+    An item stores each photograph as a mapping — `{"path": ..., "uploaded_url": ...}` — and this
+    used to take `str(photo)` of it, which stringified the whole mapping into a filename hundreds of
+    characters long. Every copy failed, every publish went out with no photograph, and Facebook
+    leaves its Next button disabled until it has one: the drive raised `PublishNotAttempted`, the
+    pair stayed eligible, and the lane re-drove the same item every thirty seconds forever while the
+    other thirteen waited behind it.
+
+    A bare string is still accepted, because that is what a caller holding paths already has.
+    """
+    if isinstance(photo, dict):
+        return str(photo.get("path") or "")
+    return str(photo or "")
 
 
 def clear_staged(item_id: str) -> None:

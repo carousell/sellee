@@ -30,6 +30,7 @@ from sellee.browser import adopt, inbox, reconcile
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
+from sellee.store import StoreError
 
 log = logging.getLogger(__name__)
 
@@ -241,10 +242,50 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
             continue
         if reconcile.matching_items(listing_id, items, market, adapter.listing_id_pattern):
             continue
-        if reconcile.items_for_same_listing(row.get("title") or "", items, market):
+        twins = reconcile.items_for_same_listing(row.get("title") or "", items, market)
+        if twins:
+            _link_twin(deps, market, row, twins)
             continue
         fresh.append(row)
     return fresh
+
+
+def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> None:
+    """Record that an item we already manage is also listed here.
+
+    Recognising the seller's own cross-listing and then writing nothing down was a hole with real
+    consequences. The listing was dropped from the ask — right, they are already being helped with
+    it — but the item went on carrying no URL for this marketplace, so everything downstream still
+    believed it was absent from here. The fan-out believed it hardest: on the first tick after
+    Facebook became publishable it found fourteen such items and would have posted thirteen of them
+    a second time, each a duplicate of the very listing the survey had just correctly recognised.
+
+    Writing the URL is not a new claim about the seller's intent. It is what we just read off their
+    own listings page, live, seconds ago — the same standard `record_listing_url` asks of every
+    other caller — and it is what lets a buyer writing about this listing be joined to this item.
+
+    Only ever on a single match, exactly as adoption refuses an ambiguous merge: with two items
+    sharing a title there is no way to tell from the page which one this listing is, and guessing
+    would put a buyer on the wrong item's floor.
+    """
+    if len(twins) != 1:
+        deps.bus.publish(
+            "survey.twin_ambiguous",
+            {"market": market, "listing_id": row.get("listing_id"), "items": len(twins)},
+        )
+        return
+    url = str(row.get("url") or "")
+    if not url:
+        return
+    try:
+        deps.store.record_listing_url(twins[0], market, url)
+    except StoreError as exc:
+        log.warning("could not link %s to %s: %s", row.get("listing_id"), twins[0], exc)
+        return
+    deps.bus.publish(
+        "survey.linked",
+        {"market": market, "listing_id": row.get("listing_id"), "item_id": twins[0], "url": url},
+    )
 
 
 def _found_text(deps: SurveyDeps, market: str, listings: list) -> str:

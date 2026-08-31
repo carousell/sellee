@@ -554,3 +554,105 @@ def test_an_item_already_listed_on_this_market_is_not_a_twin() -> None:
 
     assert reconcile.items_for_same_listing("IKEA Elloven", items, "fb") == []
     assert reconcile.items_for_same_listing("IKEA Elloven", items, "carousell") == ["a"]
+
+
+# --- recognising the seller's own cross-listing --------------------------------------------------
+
+
+def test_recognising_a_twin_records_the_url_on_the_item(store, bus) -> None:
+    """Recognising it and writing nothing down was a hole with real consequences: the listing left
+    the ask, but the item still carried no Facebook URL, so the fan-out believed it was absent from
+    Facebook and would have posted a second copy of the very listing just recognised."""
+    from sellee.browser import survey
+
+    item = _twin(store)
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "222",
+                    "url": "https://www.facebook.com/marketplace/item/222/",
+                    "title": "White Study Desk",
+                    "price": 65.0,
+                    "price_text": "SGD65",
+                }
+            ],
+            "active_count": 1,
+        }
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert store.get_item(item["id"])["listing_urls"]["fb"] == (
+        "https://www.facebook.com/marketplace/item/222/"
+    )
+    assert store.list_discovered_listings("fb") == []  # still not asked about
+
+
+def test_a_recognised_twin_is_not_published_again(store, bus) -> None:
+    """The end the linking exists for."""
+    from sellee import crosslist
+    from sellee.browser import survey
+
+    item = _twin(store)
+    store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/l/desk")
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "222",
+                    "url": "https://www.facebook.com/marketplace/item/222/",
+                    "title": "White Study Desk",
+                    "price": 65.0,
+                    "price_text": "SGD65",
+                }
+            ],
+            "active_count": 1,
+        }
+    )
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    deps = crosslist.CrosslistDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        browser_factory=lambda: object(),
+        rail_factory=lambda: None,
+    )
+    assert [m for _i, m in crosslist.pending_pairs(deps) if m == "fb"] == []
+
+
+def test_two_items_with_one_title_are_linked_to_neither(store, bus) -> None:
+    """Same discipline as adoption: with two items sharing a title there is no telling from the
+    page which one this listing is, and guessing puts a buyer on the wrong item's floor."""
+    from sellee.browser import survey
+
+    for suffix in ("a", "b"):
+        it = store.create_item(title="White Study Desk", list_price=65.0, currency="SGD")
+        store.record_listing_url(
+            it["id"], "carousell", f"https://www.carousell.sg/p/desk-{suffix}/"
+        )
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "222",
+                    "url": "https://www.facebook.com/marketplace/item/222/",
+                    "title": "White Study Desk",
+                    "price": 65.0,
+                    "price_text": "SGD65",
+                }
+            ],
+            "active_count": 1,
+        }
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert all("fb" not in i["listing_urls"] for i in store.list_items())

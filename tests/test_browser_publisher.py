@@ -410,3 +410,43 @@ def test_confirmation_is_skipped_when_there_is_nowhere_to_look() -> None:
     outcome = _publish(client)
 
     assert outcome.verified is False
+
+
+# --- staging the item's photographs ---------------------------------------------------------
+
+
+def test_photographs_are_staged_from_the_shape_an_item_stores_them_in(
+    tmp_path, monkeypatch
+) -> None:
+    """An item stores each photograph as a mapping, not a path. Taking `str()` of it stringified
+    the whole mapping into a filename hundreds of characters long, so every copy failed and every
+    publish went out with no photograph — and Facebook keeps Next disabled until it has one, so the
+    lane re-drove the same item every thirty seconds forever."""
+    from sellee import paths
+
+    monkeypatch.setattr(paths, "publish_staging_dir", lambda: tmp_path / "staging")
+    real = tmp_path / "01.jpg"
+    real.write_bytes(b"\xff\xd8\xff" + b"0" * 32)
+
+    staged = publisher.stage_photos("item_1", [{"path": str(real), "uploaded_url": "x" * 900}])
+
+    assert len(staged) == 1
+    assert open(staged[0], "rb").read() == real.read_bytes()
+
+
+def test_a_bare_path_still_stages(tmp_path, monkeypatch) -> None:
+    from sellee import paths
+
+    monkeypatch.setattr(paths, "publish_staging_dir", lambda: tmp_path / "staging")
+    real = tmp_path / "01.jpg"
+    real.write_bytes(b"\xff\xd8\xff")
+
+    assert len(publisher.stage_photos("item_1", [str(real)])) == 1
+
+
+def test_a_photograph_with_no_path_is_skipped_rather_than_crashing(tmp_path, monkeypatch) -> None:
+    from sellee import paths
+
+    monkeypatch.setattr(paths, "publish_staging_dir", lambda: tmp_path / "staging")
+
+    assert publisher.stage_photos("item_1", [{"uploaded_url": "x"}, {}, ""]) == []

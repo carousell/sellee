@@ -36,7 +36,7 @@ class PassesMixin:
             )
         return pass_id
 
-    def record_driven_publish(self, item_id: str, market: str, *, status: str) -> str:
+    def record_driven_publish(self, item_id: str, market: str, *, status: str, origin: str) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
         A driven market spawns no model pass, so it would otherwise leave no trace — and the
@@ -44,18 +44,23 @@ class PassesMixin:
         may have gone through would be retried on the next tick, and the seller would end up with
         two listings for one item.
 
-        Written already terminal: nothing is going to run it, and a `queued` row would be claimed by
-        the pass runner and told to publish something that is already published.
+        Written already terminal, because nothing is going to run it: a `queued` row would be
+        claimed by the pass runner and told to publish something already published.
+
+        `reported` stays 0 and `origin` is the caller's, so the row owes the seller a report just as
+        a pass row does. Written as `reported=1` it was invisible to `unreported_crosslist_passes` —
+        a Facebook listing went live with nobody told, which is the one failure the fan-out's
+        reporting exists to prevent.
         """
         if status not in _PASS_TERMINAL:
             raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
         pass_id = _new_id("pass")
-        payload = {"item_id": item_id, "market": market, "origin": "driver"}
+        payload = {"item_id": item_id, "market": market, "origin": origin}
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT INTO passes (pass_id, type, payload, status, requested_ts, started_ts, "
-                "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 1)",
+                "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 0)",
                 (pass_id, json.dumps(payload, sort_keys=True), status, now, now, now),
             )
         return pass_id

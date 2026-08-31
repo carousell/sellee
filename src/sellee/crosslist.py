@@ -199,7 +199,11 @@ def _looked_first(deps: CrosslistDeps, market: str, region) -> bool:
         return True
     deps.store.request_market_survey(market)
     survey = deps.store.get_market_survey(market)
-    return bool(survey) and survey["state"] != "due"
+    # `done` and nothing else. `abandoned` means five looks in a row could not be served — signed
+    # out, unreadable, or a page that would not finish loading — so we know less about that
+    # marketplace than when we started, and it is the state where the dedup set below is empty.
+    # Treating it as "looked" would open the gate at exactly the moment we can least afford it.
+    return bool(survey) and survey["state"] == "done"
 
 
 def publish_in_flight(index) -> bool:
@@ -278,7 +282,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     except publisher.PublishUnverified as exc:
         # Something may exist. Never re-driven.
-        deps.store.record_driven_publish(item["id"], market, status="error")
+        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
         deps.bus.publish(
             "crosslist.unverified",
             {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
@@ -293,7 +297,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         publisher.clear_staged(item["id"])
 
     deps.store.record_driven_publish(
-        item["id"], market, status="done" if outcome.verified else "error"
+        item["id"], market, status="done" if outcome.verified else "error", origin=ORIGIN
     )
     if outcome.verified and outcome.url:
         deps.store.record_listing_url(item["id"], market, outcome.url)
