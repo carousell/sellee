@@ -21,9 +21,15 @@ _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
 
 @pytest.fixture
 def enabled(store):
-    """A seller in SG with Carousell turned on, and one item live on the rail."""
+    """A seller in SG with Carousell turned on, and one item live on the rail.
+
+    Carousell has already been looked at, and found nothing. The tool asks the same two questions
+    the lane does — has this marketplace been read, and does the seller already have this there —
+    so a test about what it *queues* has to be past them. Both are tested on their own below.
+    """
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
+    store.record_survey_result("carousell", [])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
     return store.get_item(item["id"])
@@ -203,3 +209,69 @@ def test_the_buyer_facing_reply_pass_cannot_publish(make_ctx, store, enabled) ->
     ctx = make_ctx(TIER_PASS_REPLY, pass_id="p1", browser_factory=lambda: object())
     with pytest.raises(UnknownTool):
         _call(ctx, enabled["id"])
+
+
+# --- the tool asks the same questions the lane does ----------------------------------------
+
+
+def _unlooked(store):
+    """The `enabled` fixture's world, minus the look — this file's fixture seeds one."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
+    return store.get_item(item["id"])
+
+
+def test_the_tool_will_not_publish_to_a_market_nobody_has_looked_at(store, make_ctx) -> None:
+    """It re-implemented eligibility inline and had neither guard, so a publish asked for in
+    conversation could post onto a marketplace the lane beside it was refusing to touch."""
+    item = _unlooked(store)
+
+    out = dispatch(
+        "queue_marketplace_publish",
+        {"item_id": item["id"], "market": "carousell"},
+        _ctx(make_ctx),
+    )
+
+    assert out["status"] == "looking_first"
+    assert store.publish_pass_index() == []
+
+
+def test_the_tool_will_not_publish_something_the_seller_already_has_there(store, make_ctx) -> None:
+    item = _unlooked(store)
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/lamp-1/",
+                "title": "Teak Lamp",
+                "price": 80.0,
+                "price_text": "S$80",
+            }
+        ],
+    )
+    store.decide_discovered_listings("carousell", decision="decline")
+
+    out = dispatch(
+        "queue_marketplace_publish",
+        {"item_id": item["id"], "market": "carousell"},
+        _ctx(make_ctx),
+    )
+
+    assert out["status"] == "already_there"
+    assert store.publish_pass_index() == []
+
+
+def test_the_tool_still_queues_once_both_questions_are_answered(store, make_ctx) -> None:
+    item = _unlooked(store)
+    store.record_survey_result("carousell", [])
+
+    out = dispatch(
+        "queue_marketplace_publish",
+        {"item_id": item["id"], "market": "carousell"},
+        _ctx(make_ctx),
+    )
+
+    assert out["status"] == "queued"

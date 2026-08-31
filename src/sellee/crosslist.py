@@ -139,7 +139,7 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
     markets = [
         market
         for market in settings.publish_markets(deps.store)
-        if _looked_first(deps, market, region)
+        if looked_first(deps.store, market, region)
     ]
     if not markets:
         return []
@@ -188,7 +188,18 @@ def _titles_seen_on(store, market: str) -> set:
     }
 
 
-def _looked_first(deps: CrosslistDeps, market: str, region) -> bool:
+def already_listed_by_hand(store, item: dict, market: str) -> bool:
+    """Whether the seller already has this thing on that marketplace, posted themselves.
+
+    The other half of the ordering guard, and public for the same reason `looked_first` is: the
+    publish tool re-implemented eligibility inline and had neither, so a model could post a
+    duplicate through it onto a marketplace nobody had looked at.
+    """
+    title = reconcile.normalize(item.get("title") or "")
+    return bool(title) and title in _titles_seen_on(store, market)
+
+
+def looked_first(store, market: str, region) -> bool:
     """Whether we have looked at what the seller already has on this marketplace.
 
     Publishing to a market we have never read is how a seller ends up with two of everything. On the
@@ -212,10 +223,10 @@ def _looked_first(deps: CrosslistDeps, market: str, region) -> bool:
     # from our item ("... (Yudkowsky & Soares)" against "... by Yudkowsky & Soares") is not caught
     # by it — but it IS sitting in the ask, and a yes records its URL and settles the question
     # properly. Publishing first would post the second copy the ask exists to prevent.
-    if deps.store.list_discovered_listings(market, status="pending"):
+    if store.list_discovered_listings(market, status="pending"):
         return False
-    deps.store.request_market_survey(market)
-    survey = deps.store.get_market_survey(market)
+    store.request_market_survey(market)
+    survey = store.get_market_survey(market)
     # `done` and nothing else. `abandoned` means five looks in a row could not be served — signed
     # out, unreadable, or a page that would not finish loading — so we know less about that
     # marketplace than when we started, and it is the state where the dedup set below is empty.
