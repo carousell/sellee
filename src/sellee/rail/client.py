@@ -205,6 +205,20 @@ class RailClient:
             raise RailToolError("create_checkout returned no checkout URL")
         return {"checkout_url": url}
 
+    def create_promotion_url(self) -> dict:
+        """Mint the seller's one-time sign-in link (the rail calls it a promotion). Takes no
+        arguments — the account is the one the API key belongs to. Returns {promotion_url}; raises
+        RailToolError if the rail returns no URL (we never fabricate one).
+
+        An account that has already signed in comes back as RailToolError("already a seller"),
+        which propagates: what that means is the caller's call, not the transport's.
+        """
+        result = self.call_tool("create_promotion_url", {})
+        url = result.get("promotion_url")
+        if not url:
+            raise RailToolError("create_promotion_url returned no promotion URL")
+        return {"promotion_url": url}
+
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
         200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""
