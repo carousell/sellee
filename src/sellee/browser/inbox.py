@@ -296,6 +296,12 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         _clear_blind(deps, market, read_content=opened > 0)
 
 
+# Give the marked control keyboard focus. Generic on purpose: which control, and what it opens, is
+# the adapter's business; that a re-rendering node is reachable by focus and not by click is the
+# browser's.
+_FOCUS_JS = "(el) => { el.focus(); return document.activeElement === el; }"
+
+
 def _open_inbox_folder(client, adapter) -> None:
     """Open the marketplace's own folder inside a general messages app, where it has no URL.
 
@@ -315,15 +321,46 @@ def _open_inbox_folder(client, adapter) -> None:
         return
     try:
         marked = client.evaluate(adapter.inbox_folder_js) or {}
+        if marked.get("already_open"):
+            # Activating an open folder is at best wasted and at worst a toggle back to the general
+            # list. The artifact answers this from the rail's own heading rather than from the
+            # control's `aria-pressed`, which reads "true" while the folder is shut.
+            return
         if not marked.get("marked"):
             log.warning("no %s inbox folder control on the page: %s", adapter.market, marked)
             return
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.inbox_folder_target, "element": "the marketplace inbox folder"},
-        )
+        _activate(client, adapter)
     except BrowserError:
         log.warning("could not open the %s inbox folder", adapter.market, exc_info=True)
+
+
+def _activate(client, adapter) -> None:
+    """Press the marked control, by focus and a real Enter.
+
+    Not a click, and that is the whole point. The control lives in a list the marketplace re-renders
+    continuously — Messenger's chat rail repaints as conversations tick over — so a click never
+    finds the node still enough to act on and times out on its stability check while resolving the
+    element perfectly well. In production that meant five consecutive blind ticks: the folder never
+    opened, the reader stayed on the seller's personal inbox, and it refused to read that, correctly
+    and uselessly.
+
+    Focus plus a key event asks nothing about stability, and it is still a real event — which the
+    folder requires, since a click dispatched from the page does nothing at all. The control is
+    `tabindex="0" role="button"`, so Enter activates it exactly as it would for anyone using a
+    keyboard.
+
+    The click is kept as a fallback for a market whose control cannot take focus.
+    """
+    focused = client.evaluate(
+        _FOCUS_JS, target=adapter.inbox_folder_target, element="the marketplace inbox folder"
+    )
+    if focused:
+        client.call_tool("browser_press_key", {"key": "Enter"})
+        return
+    client.call_tool(
+        "browser_click",
+        {"target": adapter.inbox_folder_target, "element": "the marketplace inbox folder"},
+    )
 
 
 def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, region) -> dict:

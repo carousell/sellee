@@ -15,6 +15,11 @@ Two rules keep it from being expensive or surprising:
   * One shot per item and marketplace. Every attempt is a real pass — minutes of browser work and a
     vision-priced token bill — so a settled attempt is never repeated automatically. What is retried
     freely is the cheap part: whether Chrome is up, whether Node is installed.
+  * Listing is not held by quiet hours. It was, on the reasoning that a burst of listings
+    starting at 4am is a pattern nobody sells like — but a listing sits there until someone looks
+    at it, so the hour it went up is not what a buyer sees. The window still holds the outbound
+    activity that is genuinely timed: follow-ups and nudges, which land in someone's notifications
+    at that hour.
   * The outcome is reported by the daemon, from the rows the pass wrote. A publish pass has no
     conversation to report into, and asking a model to remember to send a message is how a listing
     went live once with nobody told.
@@ -101,9 +106,9 @@ def _clear_notice(deps: CrosslistDeps, key: str) -> None:
 def in_quiet_hours(deps: CrosslistDeps) -> bool:
     """Whether now is inside the seller's quiet window.
 
-    A publish is a burst of visible activity on the seller's own marketplace account, and one that
-    starts at 4am is a pattern nobody sells like. Nothing already running is interrupted — the
-    window holds the *start* of new work.
+    No longer consulted by this lane — see the module docstring. Kept because it is the one place
+    that resolves the seller's window against the pacing config, and the reporting and push phases
+    are hour-independent for reasons of their own.
     """
     cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
     stamp = time.localtime(deps.now())
@@ -114,14 +119,11 @@ def in_quiet_hours(deps: CrosslistDeps) -> bool:
 
 def crosslist_lane(deps: CrosslistDeps) -> None:
     """One tick: report the fan-out publishes that have settled, push any cross-links the rail is
-    missing, then queue at most one more publish. The push sits before the quiet-hours gate on
-    purpose — see the module docstring."""
+    missing, then queue at most one more publish."""
     report_settled(deps)
     if deps.store.is_paused():
         return
     push_crosslinks(deps)
-    if in_quiet_hours(deps):
-        return
     enqueue_next(deps)
 
 

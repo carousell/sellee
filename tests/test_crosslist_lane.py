@@ -190,8 +190,11 @@ def test_a_paused_agent_queues_nothing(store, bus, enabled) -> None:
     assert _queued(store) == []
 
 
-def test_quiet_hours_hold_the_start_of_new_work(store, bus, enabled) -> None:
-    # The store fixture seeds quiet hours off; this is the one test that needs a real window.
+def test_listing_is_not_held_by_quiet_hours(store, bus, enabled) -> None:
+    """Listing used to wait for morning, on the reasoning that a burst starting at 4am is a pattern
+    nobody sells like. But a listing sits there until someone looks at it, so the hour it went up is
+    not something a buyer ever sees — unlike a nudge, which lands in their notifications at that
+    hour and is still held."""
     seed_setting(store, "quiet_hours", [2300, 800])
 
     deps = crosslist.CrosslistDeps(
@@ -203,7 +206,7 @@ def test_quiet_hours_hold_the_start_of_new_work(store, bus, enabled) -> None:
         now=_midnight,
     )
     crosslist.crosslist_lane(deps)
-    assert _queued(store) == []
+    assert len(_queued(store)) == 1
 
     deps = crosslist.CrosslistDeps(
         store=store,

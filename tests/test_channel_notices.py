@@ -248,3 +248,52 @@ def test_a_paused_agent_reports_nothing(store, bus, xdg_tmp) -> None:
     store.set_paused(True, source="test")
     outbound.buyer_waiting_notice(store=store, now=outbound.BUYER_WAITING_AGE_SEC + 1)
     assert _texts(store) == []
+
+
+def test_an_escalation_names_the_listing_it_is_about(make_ctx, store, bus) -> None:
+    """The question is whatever the model wrote, and one that forgets the item produces a notice
+    nobody can act on — "No floor is set yet for this item" is unanswerable across eighteen
+    listings. The row carries the thread and the thread carries the item, so the name is always
+    available and never depends on the model remembering."""
+    bus.subscribe(outbound.escalation_notifier(store))
+    item = store.create_item(title="IKEA Elloven monitor stand", list_price=15.0, currency="SGD")
+    store.create_thread(
+        thread_id="carousell:t9",
+        side="sell",
+        market="carousell",
+        counterpart_handle="emline",
+        item_id=item["id"],
+    )
+
+    dispatch(
+        "escalate",
+        {
+            "thread_id": "carousell:t9",
+            "open_question": "No floor is set for this item — $10 offer?",
+        },
+        make_ctx(TIER_ATTENDED),
+    )
+
+    text = _texts(store)[0]
+    assert "IKEA Elloven monitor stand" in text
+    assert text.startswith("Needs your call — IKEA Elloven monitor stand:")
+
+
+def test_a_question_that_already_names_the_item_is_not_doubled(make_ctx, store, bus) -> None:
+    bus.subscribe(outbound.escalation_notifier(store))
+    item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    store.create_thread(
+        thread_id="carousell:t8",
+        side="sell",
+        market="carousell",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+
+    dispatch(
+        "escalate",
+        {"thread_id": "carousell:t8", "open_question": "Accept $70 for the Teak lamp?"},
+        make_ctx(TIER_ATTENDED),
+    )
+
+    assert _texts(store)[0] == "Needs your call: Accept $70 for the Teak lamp?"

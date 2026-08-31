@@ -34,6 +34,8 @@ class StubClient:
         conversations=(),
         list_error=None,
         folder_marked=True,
+        folder_already_open=False,
+        focus_works=True,
         product_id=_PRODUCT_ID,
         tails=None,
         click_fails=False,
@@ -42,6 +44,8 @@ class StubClient:
         self.conversations = conversations
         self.list_error = list_error
         self.folder_marked = folder_marked
+        self.folder_already_open = folder_already_open
+        self.focus_works = focus_works
         self.product_id = product_id
         self.tails = tails or {}
         self.click_fails = click_fails
@@ -86,7 +90,16 @@ class StubClient:
         if function == fb_market.LOGIN_JS:
             return {"state": self.login}
         if function == fb_market.INBOX_FOLDER_JS:
-            return {"marked": self.folder_marked, "candidates": 1, "width": 1600, "visible": True}
+            return {
+                "marked": self.folder_marked,
+                "already_open": self.folder_already_open,
+                "candidates": 1,
+                "width": 1600,
+                "visible": True,
+            }
+        if function == inbox._FOCUS_JS:
+            self.calls.append(("focus", kwargs.get("target")))
+            return self.focus_works
         if function == fb_market.CONVERSATIONS_LIST_JS:
             if self.list_error is not None:
                 return {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
@@ -158,10 +171,11 @@ def test_the_folder_is_opened_by_a_real_click_before_the_list_is_read(store, bus
 
     inbox.inbox_lane(_deps(store, bus, client))
 
-    assert client.clicks, "the lane never clicked the folder open"
-    assert client.clicks[0]["target"] == fb_market.INBOX_FOLDER_TARGET
-    clicked = [i for i, (name, _) in enumerate(client.calls) if name == "browser_click"]
-    assert clicked, "no click was recorded at all"
+    focused = [c for c in client.calls if c[0] == "focus"]
+    keys = [c for c in client.calls if c[0] == "browser_press_key"]
+    assert focused, "the lane never focused the folder control"
+    assert focused[0][1] == fb_market.INBOX_FOLDER_TARGET
+    assert keys, "focus without a key press opens nothing"
 
 
 def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_only) -> None:
@@ -861,3 +875,42 @@ def test_an_ambiguous_twin_is_asked_about_rather_than_dropped(store, bus) -> Non
     survey.discover_phase(_survey_deps(store, bus, client))
 
     assert [r["listing_id"] for r in store.list_discovered_listings("fb")] == ["222"]
+
+
+# --- opening the folder without a click ------------------------------------------------
+
+
+def test_the_folder_is_opened_by_focus_and_a_real_key(store, bus, seeded) -> None:
+    """Not a click. The control sits in a list Messenger repaints continuously, so a click never
+    finds the node still enough to act on: it resolves the element and then times out on its
+    stability check. In production that was five consecutive blind ticks."""
+    client = StubClient(conversations=[_conv()])
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    order = [c for c in client.calls if c[0] in ("focus", "browser_press_key", "browser_click")]
+    assert [c[0] for c in order][:2] == ["focus", "browser_press_key"]
+    assert not [c for c in order if c[0] == "browser_click"], "fell back to a click unnecessarily"
+
+
+def test_a_control_that_will_not_take_focus_falls_back_to_a_click(store, bus, seeded) -> None:
+    """Focus is the better route, not the only one — another marketplace's control may not be
+    focusable at all, and the old path still works there."""
+    client = StubClient(conversations=[_conv()], focus_works=False)
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.clicks, "nothing tried to open the folder at all"
+    assert client.clicks[0]["target"] == fb_market.INBOX_FOLDER_TARGET
+
+
+def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
+    """Activating an open folder is at best wasted and at worst a toggle back to the general list.
+    Answered from the rail's own heading — the control's `aria-pressed` reads "true" while the
+    folder is shut, so trusting it would skip an activation that never happened."""
+    client = StubClient(conversations=[_conv()], folder_already_open=True)
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert not [c for c in client.calls if c[0] in ("focus", "browser_press_key")]
+    assert client.clicks == []

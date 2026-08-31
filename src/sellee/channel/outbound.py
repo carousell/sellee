@@ -150,10 +150,33 @@ def escalation_notifier(store):
         # before options existed, or a decision with no fixed answers) — the ask still delivers, and
         # is still answerable in words, which is the door buttons never replace.
         store.queue_notice(
-            f"Needs your call: {question}", ref=esc["thread_id"], options=esc["options"]
+            f"Needs your call{_about(store, esc)}: {question}",
+            ref=esc["thread_id"],
+            options=esc["options"],
         )
 
     return _on
+
+
+def _about(store, esc) -> str:
+    """Which listing this decision is about, named from the row rather than from the question.
+
+    The question is whatever the model wrote, and a model that forgets to say which item it means
+    produces a notice nobody can act on: "No floor is set yet for this item, so I can't decide on
+    buyer emline's $10 offer (list price $15)" — read on a phone, about one of eighteen listings.
+    The escalation carries the thread and the thread carries the item, so the name is always here
+    to be had and never depends on remembering.
+
+    Left off when the question already names the item, so the common case does not read twice, and
+    when there is no item to name — an escalation on a buy thread, or one raised about nothing in
+    particular.
+    """
+    thread = store.get_thread(esc["thread_id"]) if esc.get("thread_id") else None
+    item = store.get_item(thread["item_id"]) if thread and thread.get("item_id") else None
+    title = (item or {}).get("title") or ""
+    if not title or title.lower() in (esc.get("open_question") or "").lower():
+        return ""
+    return f" — {title}"
 
 
 def queue_welcome(store) -> None:

@@ -56,6 +56,13 @@ INBOX_FOLDER_TARGET = f"[{FOLDER_MARK_ATTR}='1']"
 # cause is neither: it is a window too narrow for the rail to render.
 INBOX_FOLDER_JS = f"""() => {{
   const RAIL_EDGE = 500;
+  // Whether the folder is already open, by the same heading the list artifact proves itself with.
+  // The control's own `aria-pressed` is NOT this: it reads "true" while the rail still says
+  // "Chats", so trusting it would have us skip an activation that never happened.
+  const alreadyOpen = Array.from(document.querySelectorAll('h1')).some((el) => {{
+    const r = el.getBoundingClientRect();
+    return r.left < 400 && r.width > 0 && (el.innerText || '').trim() === 'Marketplace';
+  }});
   let marked = false;
   let candidates = 0;
   document.querySelectorAll('div[role="button"]').forEach((el) => {{
@@ -70,6 +77,7 @@ INBOX_FOLDER_JS = f"""() => {{
   }});
   return {{
     marked: marked,
+    already_open: alreadyOpen,
     candidates: candidates,
     width: window.innerWidth,
     visible: document.visibilityState === 'visible',

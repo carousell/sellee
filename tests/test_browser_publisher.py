@@ -450,3 +450,23 @@ def test_a_photograph_with_no_path_is_skipped_rather_than_crashing(tmp_path, mon
     monkeypatch.setattr(paths, "publish_staging_dir", lambda: tmp_path / "staging")
 
     assert publisher.stage_photos("item_1", [{"uploaded_url": "x"}, {}, ""]) == []
+
+
+def test_the_settles_between_form_steps_are_jittered(monkeypatch) -> None:
+    """Filling a form is the most regular thing the agent does — the same fields in the same order,
+    and previously with the same pause between every one of them to the millisecond. The point is
+    variance, not slowness, so the average pause is unchanged and a publish takes as long as it did.
+    """
+    import statistics
+
+    slept: list = []
+    monkeypatch.setattr("time.sleep", slept.append)
+
+    for _ in range(400):
+        publisher._sleep(publisher.STEP_SETTLE_SEC)
+
+    assert len(set(slept)) > 300, "the pause is effectively constant"
+    assert min(slept) >= publisher.STEP_SETTLE_SEC * (1 - publisher._JITTER)
+    assert max(slept) <= publisher.STEP_SETTLE_SEC * (1 + publisher._JITTER)
+    # Jitter, not delay: the mean is where it always was.
+    assert statistics.mean(slept) == pytest.approx(publisher.STEP_SETTLE_SEC, rel=0.08)

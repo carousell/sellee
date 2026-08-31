@@ -403,10 +403,21 @@ def _condition_for(item: dict) -> str:
     return "Used - Good"
 
 
+# How much a settle is allowed to vary, as a fraction either side. Filling a form is the most
+# regular thing the agent does — the same fields in the same order, and previously with the same
+# fixed pause between every one of them, to the millisecond. Nobody fills a form on a metronome, and
+# a marketplace does not need a model to notice that it is not a person.
+#
+# Deliberately jitter and not delay: the point is variance, not slowness, so the average pause is
+# unchanged and a publish takes as long as it did.
+_JITTER = 0.4
+
+
 def _sleep(seconds: float) -> None:
+    import random
     import time
 
-    time.sleep(seconds)
+    time.sleep(random.uniform(seconds * (1 - _JITTER), seconds * (1 + _JITTER)))
 
 
 def stage_photos(item_id: str, photos) -> list:
