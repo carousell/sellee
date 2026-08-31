@@ -34,7 +34,8 @@ _RECORD_KIND_MAP = {
 
 
 def _checkout_base(ctx: ToolContext) -> str:
-    return ctx.config.carousell_ai_api_base.rstrip("/") + "/checkout"
+    # the web origin, not the API origin: real checkout pages are served on www.carousell.ai
+    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/checkout"
 
 
 def _allowlist():

@@ -1,13 +1,19 @@
-"""carousell_ai_create_checkout_link — the checkout-at-close, composed atomically.
+"""The checkout-at-close, and the one wall in front of it.
 
-Legacy's three-step choreography (precheck → LLM MCP call → record) collapses into one tool:
-sale-id idempotency → floor gate → resolve listing_id → mint over the rail (outside any store
-transaction) → fail-closed URL-base validation → record. Idempotency runs first so an
-already-issued link is returned as-is even if the floor moved since — the floor gate only guards
-genuinely new checkout attempts. The floor never crosses the boundary: a below-floor close returns
-a structured below_floor error carrying no value, a floorless below-list close returns no_floor
-(ask the seller), and an unpublished item returns not_published naming the publish tool — the
-legacy self-heal (inline create-then-checkout) is deliberately not ported.
+`carousell_ai_create_checkout_link` composes legacy's three-step choreography (precheck → LLM MCP
+call → record) into one tool: sale-id idempotency → floor gate → resolve listing_id → mint over the
+rail (outside any store transaction) → fail-closed URL-base validation → record. Idempotency runs
+first so an already-issued link is returned as-is even if the floor moved since — the floor gate
+only guards genuinely new checkout attempts. The floor never crosses the boundary: a below-floor
+close returns a structured below_floor error carrying no value, a floorless below-list close returns
+no_floor (ask the seller), and an unpublished item returns not_published naming the publish tool —
+the legacy self-heal (inline create-then-checkout) is deliberately not ported.
+
+`carousell_ai_create_signin_link` is the wall's way out: the rail refuses to mint checkout links
+for an account that has never been signed into, and the refusal maps to guidance naming this tool.
+The sign-in URL grants ownership of the seller's account, so the tool is seller-channel only —
+invisible to the buyer-facing reply tier, whose refusal wording says escalate instead and never
+names a tool it cannot call.
 """
 
 from __future__ import annotations
@@ -15,7 +21,12 @@ from __future__ import annotations
 import hashlib
 
 from sellee.money import to_price_cents
-from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
+from sellee.rail.client import (
+    RailError,
+    RailToolError,
+    RailUnprovisioned,
+    listing_id_from_url,
+)
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -29,6 +40,25 @@ from sellee.tools.registry import (
 
 _MARKET = "carousell-ai"
 
+# The rail deliberately ships a bare refusal for a guest account — no error code to match on (a
+# sign-in URL must never ride a buyer-facing error path). This clause is the stable part of that
+# copy; if it drifts, the mapping below stops firing and the raw rail text surfaces as before —
+# degraded (it still says the seller must sign in), never wrong.
+_GUEST_GATE_CLAUSE = "belongs to a guest account"
+_ALREADY_SIGNED_IN_CLAUSE = "already a seller"
+
+_GUEST_GATE_SELLER_GUIDANCE = (
+    "the seller hasn't done their one-time carousell.ai sign-in yet, so checkout links are "
+    "refused. Mint a sign-in link with carousell_ai_create_signin_link and send it to the seller "
+    "with a one-line why; once they say they've signed in, call this tool again"
+)
+_GUEST_GATE_REPLY_GUIDANCE = (
+    "the seller hasn't completed a one-time carousell.ai sign-in, so no checkout link can be "
+    "minted yet. Post the buyer a neutral holding line — never mention the seller or their "
+    "account — then escalate to the seller asking them to sign in; the seller's own channel "
+    "handles the link"
+)
+
 
 def _sale_id(item_id: str, thread_id: str, price) -> str:
     seed = f"{item_id}|{thread_id}|{price}".encode()
@@ -40,7 +70,31 @@ def _listing_id(item: dict) -> str:
 
 
 def _checkout_base(ctx: ToolContext) -> str:
-    return ctx.config.carousell_ai_api_base.rstrip("/") + "/checkout"
+    # the web origin, not the API origin: real checkout pages are served on www.carousell.ai
+    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/checkout"
+
+
+def _signin_base(ctx: ToolContext) -> str:
+    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/signin"
+
+
+def _rail(ctx: ToolContext):
+    if ctx.rail_factory is None:
+        raise ToolError("the carousell.ai rail is not available in this session")
+    try:
+        return ctx.rail_factory()
+    except RailUnprovisioned as exc:
+        raise ToolError(
+            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+        ) from exc
+
+
+def _guest_gate_guidance(ctx: ToolContext) -> str:
+    """The remedy, worded per tier: naming the sign-in tool to a tier that cannot see it would
+    send the model at an unknown tool, so the reply tier gets the escalate route instead."""
+    if ctx.session.tier == TIER_PASS_REPLY:
+        return _GUEST_GATE_REPLY_GUIDANCE
+    return _GUEST_GATE_SELLER_GUIDANCE
 
 
 def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
@@ -79,14 +133,7 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
             "carousell_ai_publish_listing, then create the checkout link"
         )
 
-    if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
-    try:
-        rail = ctx.rail_factory()
-    except RailUnprovisioned as exc:
-        raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
-        ) from exc
+    rail = _rail(ctx)
 
     try:
         price_cents = to_price_cents(price)
@@ -95,6 +142,10 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
 
     try:
         minted = rail.create_checkout({"listing_id": listing_id, "agreed_price_cents": price_cents})
+    except RailToolError as exc:
+        if _GUEST_GATE_CLAUSE in str(exc):
+            raise ToolError(_guest_gate_guidance(ctx)) from exc
+        raise ToolError(str(exc)) from exc
     except RailError as exc:
         raise ToolError(str(exc)) from exc
 
@@ -132,5 +183,44 @@ register(
         },
         handler=_create_checkout_link,
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY, TIER_PASS_CHANNEL}),
+    )
+)
+
+
+def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
+    rail = _rail(ctx)
+    try:
+        minted = rail.create_promotion_url()
+    except RailToolError as exc:
+        if _ALREADY_SIGNED_IN_CLAUSE in str(exc):
+            # a result, not an error — an error here would read as failure and invite re-mint loops
+            return {
+                "already_signed_in": True,
+                "note": "the seller has already signed in — create the checkout link now",
+            }
+        raise ToolError(str(exc)) from exc
+    except RailError as exc:
+        raise ToolError(str(exc)) from exc
+
+    url = (minted.get("promotion_url") or "").strip()
+    base = _signin_base(ctx)
+    # fail closed — this URL hands over the seller's account. Exact base or a real `?`/`/`
+    # boundary; a bare prefix match would also accept a same-origin `/signinfoo`.
+    if url != base and not url.startswith((base + "?", base + "/")):
+        raise ToolError("sign-in link did not come from the expected carousell.ai sign-in base")
+    return {"signin_url": url}
+
+
+register(
+    ToolSpec(
+        name="carousell_ai_create_signin_link",
+        description="Mint a fresh carousell.ai sign-in link for the seller's one-time Google "
+        "sign-in — required before checkout links can be created. Send it to the seller on their "
+        "own channel ONLY (never to a buyer, never into a listing or note). The link expires in "
+        "about 15 minutes; mint a fresh one any time. Returns already_signed_in when the account "
+        "no longer needs it.",
+        input_schema={"type": "object", "properties": {}, "additionalProperties": False},
+        handler=_create_signin_link,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )

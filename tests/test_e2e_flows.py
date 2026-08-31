@@ -31,7 +31,7 @@ class FakeRail:
         return None
 
     def create_checkout(self, args):
-        return {"checkout_url": "https://api.carousell.ai/checkout/deal-xyz"}
+        return {"checkout_url": "https://www.carousell.ai/checkout/deal-xyz"}
 
 
 class FakeSink:

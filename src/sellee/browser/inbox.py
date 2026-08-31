@@ -518,7 +518,7 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
         history_text=history,
         allowlist=hosts.build_allowlist(marketplaces.all_marketplaces()),
         signatures=merged,
-        checkout_base=deps.config.carousell_ai_api_base.rstrip("/") + "/checkout",
+        checkout_base=deps.config.carousell_ai_web_base_url.rstrip("/") + "/checkout",
         registry_ok=registry_ok,
     )
 

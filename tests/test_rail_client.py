@@ -281,6 +281,37 @@ def test_update_listing_sends_an_empty_set_as_present(recording_rail) -> None:
     assert call["arguments"]["external_urls"] == {"urls": []}
 
 
+# --- create_promotion_url: the seller's sign-in link ---------------------------------------------
+
+
+def test_create_promotion_url_returns_the_minted_link(recording_rail) -> None:
+    server, base = recording_rail
+    url = f"{base}/signin?flow=guest-promotion&promote=tok"
+    server.tool_result = {"structuredContent": {"promotion_url": url}}
+    assert _client(base).create_promotion_url() == {"promotion_url": url}
+    (call,) = server.calls
+    assert call["arguments"] == {}  # the account is the one the key belongs to
+
+
+def test_create_promotion_url_without_a_url_is_a_tool_error(fake_rail) -> None:
+    """No link means no link — never fabricate one for a credential-bearing URL."""
+    server, base = fake_rail
+    server.tool_result = {"structuredContent": {"ok": True}}
+    with pytest.raises(RailToolError, match="no promotion URL"):
+        _client(base).create_promotion_url()
+
+
+def test_create_promotion_url_propagates_already_a_seller(fake_rail) -> None:
+    """The transport does not interpret it — the tool layer decides that it means success."""
+    server, base = fake_rail
+    server.tool_result = {
+        "isError": True,
+        "content": [{"type": "text", "text": "already a seller"}],
+    }
+    with pytest.raises(RailToolError, match="already a seller"):
+        _client(base).create_promotion_url()
+
+
 # --- listing_id_from_url: the inverse of listing_url ----------------------------------------------
 
 

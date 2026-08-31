@@ -9,7 +9,7 @@ from sellee.engines import hosts, scam
 from sellee.store import StoreError
 from sellee.tools.registry import ToolError, dispatch
 
-BASE = "https://api.carousell.ai/checkout"
+BASE = "https://www.carousell.ai/checkout"
 
 
 def _allowlist():

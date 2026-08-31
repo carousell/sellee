@@ -390,7 +390,7 @@ def test_a_checkout_link_bubble_verifies_the_way_the_live_page_renders_it(store,
     comes back as one outbound row holding the whole message, cut short. It must verify."""
     link = (
         "All sorted — here's your checkout link: "
-        "https://api.carousell.ai/checkout/8a08c727-872d-430c-968e-4978a2cafca1"
+        "https://www.carousell.ai/checkout/8a08c727-872d-430c-968e-4978a2cafca1"
         "?listing_id=2313c1ec-da9d-465e-bd89-6f16be050d90 Just tap through to pay securely and "
         "I'll get it packed and shipped to your postal code 😊 (Heads up: this sale is handled by "
         "SELLY for the seller — you'll complete payment and delivery securely at checkout.)"
