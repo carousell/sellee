@@ -22,18 +22,6 @@ die() {
 	exit 1
 }
 
-# --- not yet ---------------------------------------------------------------------------------
-# Release hosting is not public yet, so say so rather than 404 halfway through.
-# REMOVE THIS BLOCK at cutover, when releases are published.
-case "$RELEASE_URL" in
-https://github.com/*)
-	echo "SELLEE: installing with this script isn't supported yet." >&2
-	echo "SELLEE:   Clone the repo and run ./setup instead:" >&2
-	echo "SELLEE:     git clone https://github.com/carousell/sellee && cd sellee && ./setup" >&2
-	exit 1
-	;;
-esac
-
 # --dev points the install at the tree it was run from, and this one is a temp directory that is
 # deleted the moment setup returns — the install would be dead on arrival, with no error.
 for arg in "$@"; do
