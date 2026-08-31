@@ -195,27 +195,31 @@ def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
     assert "Carousell" in text
 
 
-def test_connect_with_several_switched_on_asks_which(store, bus, monkeypatch) -> None:
+def test_connect_with_several_to_offer_asks_which(store, bus, monkeypatch) -> None:
     """The command carries no argument — providers normalize a command to its first word — so an
-    ambiguous answer has to be a question, and buttons make it a tap rather than a spelling.
-
-    Carousell is the only market with a browser adapter today, so the second one is stubbed in:
-    this is the branch that has to already work when the next adapter lands.
-    """
-    monkeypatch.setattr(fastpaths.market_adapters, "supported_markets", lambda: ["carousell", "fb"])
-    seed_setting(store, "connected_markets", ["carousell", "fb"])
+    ambiguous answer has to be a question, and buttons make it a tap rather than a spelling."""
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "connectable_markets", lambda region: ["carousell", "other"]
+    )
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "drivable_markets", lambda: ["carousell", "other"]
+    )
+    seed_setting(store, "connected_markets", ["carousell", "other"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert store.pending_market_connects() == []
     assert text == fastpaths.CONNECT_PICK
-    assert controls == [
-        ("Carousell", f"carousell:{fastpaths.CB_CONNECT_MARKET}"),
-        ("Facebook Marketplace", f"fb:{fastpaths.CB_CONNECT_MARKET}"),
+    assert [ref for _label, ref in controls] == [
+        f"carousell:{fastpaths.CB_CONNECT_MARKET}",
+        f"other:{fastpaths.CB_CONNECT_MARKET}",
     ]
 
 
-def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
+def test_connect_with_no_marketplace_we_can_drive_says_so(store, bus, monkeypatch) -> None:
+    """Nothing *connectable*, which is a different thing from nothing switched on: with a market
+    available the command offers it, and only a seller we could open nothing for is told so."""
+    monkeypatch.setattr(fastpaths.market_adapters, "connectable_markets", lambda region: [])
     seed_setting(store, "connected_markets", [])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))

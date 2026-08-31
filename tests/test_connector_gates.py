@@ -254,6 +254,108 @@ def test_a_buy_thread_is_not_governed_by_the_sell_side_switch(make_ctx, store) -
     assert res["status"] == "no_send_path"  # reached the send path, not the connection gate
 
 
+# --- the Connections block on /sellee -------------------------------------------------------------
+
+
+def _card(store, bus):
+    return fastpaths.handle_fast_path(store, bus, {"kind": "command", "text": "/sellee"})
+
+
+def test_the_card_lists_a_market_that_is_off_so_it_can_be_found(store, bus) -> None:
+    """A switch you can only see once it is on is not a switch anyone finds. The block is built
+    from every marketplace we *could* work, so one that is off is still listed, with the button
+    that turns it on."""
+    _disconnect(store)
+
+    text, controls = _card(store, bus)
+
+    assert "Carousell — off" in text
+    assert ("Connect Carousell", f"{_MARKET}:{fastpaths.CB_ADD_MARKET}") in controls
+
+
+def test_a_connected_market_reads_as_on_and_offers_the_way_back(store, bus) -> None:
+    seed_setting(store, "connected_markets", [_MARKET])
+
+    text, controls = _card(store, bus)
+
+    assert "Carousell — on" in text
+    assert ("Disconnect Carousell", f"{_MARKET}:{fastpaths.CB_REMOVE_MARKET}") in controls
+
+
+def test_connecting_from_the_card_applies_immediately_with_an_undo(store, bus) -> None:
+    """The approval gate on this setting exists to stop the *model* switching a marketplace on
+    unasked. An authenticated tap on the seller's own card has already given that signal, so it
+    applies through `set_now` — which still parses, still checks seller state, and still records the
+    prior value so the change is in the ledger with a working Undo."""
+    _disconnect(store)
+    text, _controls = fastpaths.handle_fast_path(
+        store,
+        bus,
+        {"kind": "action", "payload": {"choice": fastpaths.CB_ADD_MARKET, "ref": _MARKET}},
+    )
+
+    assert settings.connected_markets(store) == [_MARKET]
+    # Connecting opens the sign-in too: until the seller is signed in there is nothing to read, so
+    # a switch that left them to find the second step themselves would appear to do nothing.
+    assert "sign in" in text
+    assert store.pending_market_connects()[0]["market"] == _MARKET
+    applied = [c for c in store.list_pending_changes() if c["key"] == "connected_markets"]
+    assert applied == [] or applied[0]["status"] == "applied"  # never left awaiting approval
+
+
+def test_disconnecting_from_the_card_says_the_sign_in_survives(store, bus) -> None:
+    """The seller's cookies are untouched, and saying so is what makes the switch feel reversible
+    rather than destructive — the difference between "off for now" and "start over"."""
+    seed_setting(store, "connected_markets", [_MARKET])
+    text, _controls = fastpaths.handle_fast_path(
+        store,
+        bus,
+        {"kind": "action", "payload": {"choice": fastpaths.CB_REMOVE_MARKET, "ref": _MARKET}},
+    )
+
+    assert settings.connected_markets(store) == []
+    assert "no password" in text
+
+
+@pytest.mark.parametrize(
+    "choice_attr,seeded,expected",
+    [
+        ("CB_ADD_MARKET", [_MARKET], "already on"),
+        ("CB_REMOVE_MARKET", [], "already off"),
+    ],
+)
+def test_a_stale_card_button_re_acks_rather_than_flipping(
+    store, bus, choice_attr, seeded, expected
+) -> None:
+    """These buttons live in the scrollback forever, so a tap that changes nothing is ordinary. It
+    must never toggle: a stale Connect on an already-connected market that flipped it off would be
+    the exact opposite of what the seller pressed."""
+    seed_setting(store, "connected_markets", seeded)
+    text, _controls = fastpaths.handle_fast_path(
+        store,
+        bus,
+        {"kind": "action", "payload": {"choice": getattr(fastpaths, choice_attr), "ref": _MARKET}},
+    )
+
+    assert expected in text
+    assert settings.connected_markets(store) == seeded
+
+
+def test_a_market_with_no_site_for_this_seller_is_refused_with_the_reason(store, bus) -> None:
+    """`check_for_seller` still runs on this door. A US seller cannot be connected to Carousell,
+    which runs no US site, and the refusal is written for them."""
+    store.set_seller_config_section("basics", {"region": "US"})
+    _disconnect(store)
+    text, _controls = fastpaths.handle_fast_path(
+        store,
+        bus,
+        {"kind": "action", "payload": {"choice": fastpaths.CB_ADD_MARKET, "ref": _MARKET}},
+    )
+
+    assert settings.connected_markets(store) == []
+    assert "US" in text or "can't work" in text
+
+
 # --- what the setting still means ---------------------------------------------------------------
 
 

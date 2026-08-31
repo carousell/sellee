@@ -44,8 +44,13 @@ PROPOSAL_TTL_SEC = 24 * 3600
 # watch_browser earns its place for the same reason and one more: where the work happens is not
 # something any wording the agent produces could hint at, and the card carries the button that
 # flips it — a toggle whose current state is not legible right above it is a coin toss.
-CARD_HEADLINE = ("quiet_hours", "connected_markets", "watch_browser")
+CARD_HEADLINE = ("quiet_hours", "watch_browser")
 
+# Settings the card renders in a section of their own, and which `card_lines` therefore leaves out.
+# connected_markets is the only one: the Connections block lists every marketplace with its state
+# and carries the buttons that change it, which is strictly more than a value line can say — and
+# printing both would show the same fact twice, once in a form the seller cannot act on.
+CARD_OWN_SECTION = frozenset({"connected_markets"})
 
 # The door tokens. A callback carries the change id and one of these choices (the channel encodes it
 # as "<change_id>:<choice>"); a text fast path is "<verb> <change_id>". Both are LLM-free doors: an
@@ -164,10 +169,11 @@ def card_lines(store) -> list[str]:
     shown = [
         spec
         for spec in _REGISTRY.values()
-        if spec.key in CARD_HEADLINE or not is_default(spec.key, values[spec.key])
+        if spec.key not in CARD_OWN_SECTION
+        and (spec.key in CARD_HEADLINE or not is_default(spec.key, values[spec.key]))
     ]
     lines = [f"• {spec.label}: {spec.render(values[spec.key])}" for spec in shown]
-    remaining = len(_REGISTRY) - len(shown)
+    remaining = len(_REGISTRY) - len(shown) - len(CARD_OWN_SECTION)
     if remaining > 0:
         plural = "settings" if remaining != 1 else "setting"
         lines.append(f"{remaining} more {plural} at defaults — ask me about settings.")

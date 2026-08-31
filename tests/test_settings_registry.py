@@ -96,6 +96,7 @@ def test_crosslist_default_is_rail_only() -> None:
 def test_crosslist_helper_drops_a_no_longer_publishable_value(fresh_store, monkeypatch) -> None:
     """A stored market that stops being publishable — an adapter withdrawn, or a region that does
     not serve it — must not leave an eligible publish behind."""
+    from tests.conftest import seed_setting
 
     seed_setting(fresh_store, "connected_markets", ["carousell"])
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
@@ -264,6 +265,7 @@ def test_effective_covers_every_registered_key(fresh_store) -> None:
 
 
 def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
+    from tests.conftest import seed_setting
 
     seed_setting(fresh_store, "gone_setting", [1, 2])
     assert "gone_setting" not in settings.effective(fresh_store)  # never crashes on a stale row
@@ -273,12 +275,22 @@ def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
 
 
 def test_card_lists_headline_at_default(fresh_store) -> None:
+    # connected_markets is absent by design: the card renders it as its own Connections block, with
+    # every marketplace and the buttons that switch them, so a value line here would say the same
+    # thing twice — the second time in a form the seller cannot act on.
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
-        "• Connected marketplaces: none — carousell.ai only",
         "• Watch mode: off — I work in the background",
         "3 more settings at defaults — ask me about settings.",
     ]
+
+
+def test_a_setting_with_its_own_card_section_is_not_also_a_value_line(fresh_store) -> None:
+    """Even once it is changed from its default — the rule is about where it is rendered, not about
+    whether it is interesting, so a connected market must not reappear as a duplicate line."""
+    seed_setting(fresh_store, "connected_markets", ["carousell"])
+
+    assert not any("marketplace" in line.lower() for line in settings.card_lines(fresh_store))
 
 
 def test_card_shows_changed_value(fresh_store) -> None:

@@ -42,6 +42,12 @@ CB_SURVEY_NO = "adoptno"
 # Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
 # button that carried the value would apply a stale one when tapped from the scrollback.
 CB_WATCH = "watch"
+# Connecting and disconnecting a marketplace, from the Connections block on the /sellee card. These
+# carry the market as the ref rather than being a toggle like CB_WATCH: the card lists several
+# markets at once, so a button has to say which one it means, and a toggle tapped from scrollback
+# could flip a market the seller was not looking at.
+CB_ADD_MARKET = "addmkt"
+CB_REMOVE_MARKET = "rmmkt"
 _FAST_PATH_CALLBACKS = frozenset(
     {
         CB_PAUSE,
@@ -53,6 +59,8 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_SURVEY_YES,
         CB_SURVEY_NO,
         CB_WATCH,
+        CB_ADD_MARKET,
+        CB_REMOVE_MARKET,
     }
 )
 
@@ -124,6 +132,24 @@ WATCH_ON_NOTICE = (
     "follows whatever page I'm on. Reading your inboxes stays quiet in the background."
 )
 WATCH_OFF_NOTICE = "Watch mode off — I'll keep out of your way and work in the background."
+
+# Connecting a marketplace. The reply names the sign-in as the next step rather than assuming it,
+# because connecting is only half of it: the switch is on, and nothing can be read until the seller
+# is signed in on the desktop where my Chrome is.
+CONNECT_MARKET_LABEL = "Connect {name}"
+DISCONNECT_MARKET_LABEL = "Disconnect {name}"
+MARKET_ADDED_NOTICE = (
+    "{name} is on — I'm opening it in my Chrome now so you can sign in. That takes a few seconds; "
+    "I'll message you the moment the sign-in page is there. After that I'll read your inbox and "
+    "answer buyers for you."
+)
+MARKET_REMOVED_NOTICE = (
+    "{name} is off — I've stopped reading it, answering buyers on it, and listing to it. Your "
+    "sign-in stays put, so turning it back on takes one tap and no password."
+)
+MARKET_ALREADY_ON = "{name} is already on."
+MARKET_ALREADY_OFF = "{name} is already off."
+MARKET_CANT_CONNECT = "I can't work {name}, so there's nothing to turn on."
 
 # The one meta row this surface writes: when the seller tapped Skip on the first-listing CTA. An
 # explicit seller answer is genuine, underivable state; the nudge lane reads it to stay quiet.
@@ -208,6 +234,10 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
     settings ledger publishes what it applied, and the window raise rides on that event.
     """
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
+    if token in ("/watch", CB_WATCH):
+        return _watch_toggle(store, bus)
+    if token in (CB_ADD_MARKET, CB_REMOVE_MARKET):
+        return _market_button(store, bus, event["payload"].get("ref"), token)
     if token in (CB_SURVEY_YES, CB_SURVEY_NO):
         return _survey_button(store, event["payload"].get("ref"), token)
     if token in ("/watch", CB_WATCH):
@@ -217,7 +247,7 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
         )
     if token == "/connect":
-        return _connect_command(store)
+        return _connect_command(store, bus)
     if token in ("/pause", CB_PAUSE):
         store.set_paused(True, source="channel")
         return "Paused — I won't act on anything until you resume.", _control_spec(store)
@@ -240,14 +270,16 @@ def _signin_markets(store) -> list:
     """The marketplaces `/connect` can offer: the ones the seller switched on that the agent has a
     browser adapter for.
 
-    The seller's raw setting, not `settings.publish_markets` — that one filters to what is
-    *publishable*, which is a different question. A market can be readable long before it can be
-    listed to, and being signed out of it stops the read lane either way. carousell.ai is excluded
-    by the same filter: it is reached with an API key, so there is no window to open and nothing
-    for the seller to type into.
+    Every marketplace we could drive for this seller, connected or not — not `connected_markets`.
+    "Sign me in to Facebook" is a perfectly ordinary thing to ask before Facebook is switched on,
+    and offering only what is already on makes the command useless for the one case it is most
+    wanted: setting a new marketplace up. Picking an unconnected one connects it on the way through,
+    which is what `_connect_command` builds the buttons for.
+
+    carousell.ai is excluded by the same filter that includes the rest: it is reached with an API
+    key, so there is no window to open and nothing for the seller to type into.
     """
-    signable = set(market_adapters.supported_markets())
-    return [market for market in settings.get(store, "connected_markets") if market in signable]
+    return market_adapters.connectable_markets(store.seller_region())
 
 
 def _connect_button(store, market, mode: str) -> tuple:
@@ -266,6 +298,49 @@ def _connect_button(store, market, mode: str) -> tuple:
     if market not in settings.connected_markets(store):
         return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
     return _request(store, market, mode)
+
+
+def _market_button(store, bus, market, token: str) -> tuple:
+    """A tap on Connect / Disconnect in the Connections block.
+
+    Applied immediately rather than proposed. The approval gate on this setting exists to stop the
+    *model* switching a marketplace on unasked; an authenticated tap on the seller's own card has
+    already given the signal that gate waits for — the same rule the watch toggle and the shell door
+    follow — so this goes through `set_now`, which still runs the registry parser and the
+    seller-state check and still records the prior value for Undo.
+
+    A tap that changes nothing re-acks. These buttons live in the scrollback forever, so a stale one
+    is ordinary rather than exceptional, and "already on" is the honest answer to it.
+    """
+    adding = token == CB_ADD_MARKET
+    if not market:
+        return SURVEY_UNKNOWN, None
+    name = marketplaces.display_name(market)
+    current = settings.connected_markets(store)
+    if adding and market not in market_adapters.connectable_markets(store.seller_region()):
+        return MARKET_CANT_CONNECT.format(name=name), _control_spec(store)
+    if adding and market in current:
+        return MARKET_ALREADY_ON.format(name=name), _control_spec(store)
+    if not adding and market not in current:
+        return MARKET_ALREADY_OFF.format(name=name), _control_spec(store)
+
+    wanted = sorted(set(current) | {market}) if adding else [m for m in current if m != market]
+    try:
+        settings.set_now(
+            store, bus, key="connected_markets", raw_value=wanted, decided_via="button"
+        )
+    except settings.SettingError as exc:
+        # The registry or the seller-state check refused it — a region with no site for this
+        # market, most often. Its message is written for the seller, so it is the reply.
+        return str(exc), _control_spec(store)
+    if adding:
+        # Switching a marketplace on and signing in to it are one intent: until the seller is signed
+        # in there is nothing to read, so a connect that left them to find the sign-in themselves
+        # would be a switch that appears to do nothing. Just the row — opening Chrome takes seconds
+        # to tens of seconds and this is the provider's receive loop; the connect lane serves it.
+        store.request_market_connect(market, CONNECT_MODE_OPEN)
+    template = MARKET_ADDED_NOTICE if adding else MARKET_REMOVED_NOTICE
+    return template.format(name=name), _control_spec(store)
 
 
 def _survey_button(store, market, token: str) -> tuple:
@@ -313,17 +388,30 @@ def _survey_button(store, market, token: str) -> tuple:
     return survey.stale_text(market), None
 
 
-def _connect_command(store) -> tuple:
+def _connect_command(store, bus) -> tuple:
     """`/connect`, which carries no argument — the providers normalize a command to its first word
-    — so the market is resolved here. One switched on is unambiguous; several is a question, and
-    asking it as buttons keeps the answer a tap rather than a spelling."""
+    — so the market is resolved here. One candidate is unambiguous; several is a question, and
+    asking it as buttons keeps the answer a tap rather than a spelling.
+
+    A marketplace the seller has not connected yet is offered too, and picking it switches it on as
+    well as opening it. Those are one intent — nobody asks to be signed in to a marketplace they
+    want left alone — so the button carries the add token and the add does both.
+    """
     markets = _signin_markets(store)
     if not markets:
         return CONNECT_NONE, None
+    connected = set(settings.connected_markets(store))
     if len(markets) == 1:
-        return _request(store, markets[0], CONNECT_MODE_OPEN)
+        market = markets[0]
+        if market in connected:
+            return _request(store, market, CONNECT_MODE_OPEN)
+        return _market_button(store, bus, market, CB_ADD_MARKET)
     controls = [
-        (marketplaces.display_name(market), f"{market}:{CB_CONNECT_MARKET}") for market in markets
+        (
+            marketplaces.display_name(market),
+            f"{market}:{CB_CONNECT_MARKET if market in connected else CB_ADD_MARKET}",
+        )
+        for market in markets
     ]
     return CONNECT_PICK, controls
 
@@ -363,12 +451,52 @@ def _watch_toggle(store, bus) -> tuple:
 
 def _control_spec(store) -> list:
     """The one control row as provider-neutral (label, token) buttons: a pause/resume toggle
-    reflecting current state, a what-needs-me shortcut, and the watch-mode toggle. The provider
-    renders it."""
+    reflecting current state, a what-needs-me shortcut, the watch-mode toggle, and one connect or
+    disconnect button per marketplace. The provider renders it, wrapping onto as many rows as it
+    takes — which is why this stays a flat list however many marketplaces exist."""
     toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
     watching = settings.get(store, window.WATCH_SETTING)
     watch = (WATCH_OFF_LABEL, CB_WATCH) if watching else (WATCH_ON_LABEL, CB_WATCH)
-    return [toggle, ("What needs me", CB_NEEDS_ME), watch]
+    return [toggle, ("What needs me", CB_NEEDS_ME), watch] + _connection_controls(store)
+
+
+def _connection_controls(store) -> list:
+    """One button per marketplace we could work for this seller, each naming what tapping does.
+
+    Built from `connectable_markets` rather than from what is connected, because the whole point of
+    the block is that a market they have *not* connected is discoverable: a switch you can only see
+    once it is on is not a switch anyone finds.
+    """
+    connected = set(settings.connected_markets(store))
+    controls = []
+    for market in market_adapters.connectable_markets(store.seller_region()):
+        name = marketplaces.display_name(market)
+        if market in connected:
+            controls.append(
+                (DISCONNECT_MARKET_LABEL.format(name=name), f"{market}:{CB_REMOVE_MARKET}")
+            )
+        else:
+            controls.append((CONNECT_MARKET_LABEL.format(name=name), f"{market}:{CB_ADD_MARKET}"))
+    return controls
+
+
+def _connections_lines(store) -> list:
+    """The Connections block: every marketplace we could work, and whether it is on.
+
+    Says on or off and nothing about being signed in, because nothing here has evidence of that —
+    the login probe runs on the read lane, and a card that claimed "signed in" from a stale memory
+    would be wrong exactly when it matters. A seller who is off gets told by the read lane, which
+    owns that conversation.
+    """
+    markets = market_adapters.connectable_markets(store.seller_region())
+    if not markets:
+        return ["• Marketplaces: carousell.ai only — there are no others I can work yet"]
+    connected = set(settings.connected_markets(store))
+    lines = ["Marketplaces I can work for you:"]
+    for market in markets:
+        state = "on" if market in connected else "off"
+        lines.append(f"• {marketplaces.display_name(market)} — {state}")
+    return lines
 
 
 def _needs_me_counts(store) -> tuple:
@@ -437,9 +565,10 @@ def render_catchup(store) -> str:
 
 
 def render_settings_card(store) -> str:
-    """The `/sellee` card: current state, then the settings lines (changed-from-default plus the
-    headline set), closing with the free-text invitation. A capped summary — discovery is by
-    display, mutation by free text; get_settings carries the tail."""
+    """The `/sellee` card: current state, the marketplaces and their switches, then the settings
+    lines (changed-from-default plus the headline set), closing with the free-text invitation. A
+    capped summary — discovery is by display, mutation by free text or the buttons this card
+    carries; get_settings carries the tail."""
     escalations, notices = _needs_me_counts(store)
     ch = store.get_channel()
     bound = "connected" if ch["chat_id"] is not None else "not connected"
@@ -450,7 +579,10 @@ def render_settings_card(store) -> str:
         f"• Telegram: {bound}",
         f"• Waiting on you: {escalations} decision(s), {notices} update(s)",
         _listings_line(store),
+        "",
     ]
+    lines.extend(_connections_lines(store))
+    lines.append("")
     lines.extend(settings.card_lines(store))
     lines += ["", "Tell me in plain language what you'd like to change."]
     return "\n".join(lines)

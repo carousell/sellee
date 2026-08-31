@@ -126,14 +126,21 @@ def test_catchup_render_lists_questions_and_updates(store, bus, xdg_tmp) -> None
 
 def test_sellee_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     _bound(store)
+    # A marketplace is only connectable where the seller actually sells, so the Connections block
+    # needs a region to have anything to list.
+    store.set_seller_config_section("basics", {"region": "SG"})
     with FakeTelegramAPI() as api:
         api.inject_command("/sellee")
         _poller(store, bus, api).tick()
         msg = api.outbox[-1]
     assert "where things stand" in msg["text"]
     assert "plain language" in msg["text"]  # the free-text invitation, not a numbered menu
+    assert "Marketplaces I can work for you" in msg["text"]
+    # The control row is the three agent controls, then one connect/disconnect per marketplace —
+    # a flat spec the provider wraps, so the row grows with the marketplaces rather than being
+    # capped. Only the leading three are pinned here; the connector buttons have their own tests.
     buttons = msg["reply_markup"]["inline_keyboard"][0]
-    assert [b["callback_data"] for b in buttons] == [
+    assert [b["callback_data"] for b in buttons][:3] == [
         CB_PAUSE,
         CB_NEEDS_ME,
         CB_WATCH,
@@ -239,7 +246,8 @@ def test_watch_button_confirms_once_and_offers_the_way_back(store, bus, xdg_tmp)
         _poller(store, bus, api).tick()
         buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
     assert store.list_queued_notices() == []
-    assert buttons[-1] == {"text": WATCH_OFF_LABEL, "callback_data": CB_WATCH}
+    # Index rather than [-1]: the connector buttons follow the three agent controls.
+    assert buttons[2] == {"text": WATCH_OFF_LABEL, "callback_data": CB_WATCH}
 
 
 def test_control_row_watch_button_reflects_the_setting(store, bus, xdg_tmp) -> None:
@@ -248,7 +256,7 @@ def test_control_row_watch_button_reflects_the_setting(store, bus, xdg_tmp) -> N
         api.inject_tap(CB_NEEDS_ME)
         _poller(store, bus, api).tick()
         buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
-    assert buttons[-1] == {"text": WATCH_ON_LABEL, "callback_data": CB_WATCH}  # off -> offers on
+    assert buttons[2] == {"text": WATCH_ON_LABEL, "callback_data": CB_WATCH}  # off -> offers on
 
 
 def test_watch_state_is_on_the_sellee_card_at_its_default(store, bus, xdg_tmp) -> None:
