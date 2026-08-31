@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from sellee.browser import inbox, reconcile
+from sellee.browser import blindness, inbox, reconcile
 from sellee.browser.client import BrowserDetached, BrowserToolError, BrowserUnavailable
 from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
@@ -24,10 +24,20 @@ _PRODUCT_ID = "1328307791"
 class StubClient:
     """A browser answering each of the adapter's artifacts from a script."""
 
-    def __init__(self, *, login="logged_in", conversations=(), tails=None, fail=None, error=None):
+    def __init__(
+        self,
+        *,
+        login="logged_in",
+        conversations=(),
+        tails=None,
+        fail=None,
+        error=None,
+        measured=None,
+    ):
         self.login = login
         self.conversations = conversations
         self.error = error
+        self.measured = measured or {}
         self.tails = tails or {}
         self.fail = fail
         self.navigations: list = []
@@ -61,7 +71,9 @@ class StubClient:
             return {"state": self.login}
         if function == carousell_market.CONVERSATIONS_LIST_JS:
             if self.error is not None:
-                return {"error": self.error}
+                # A reader that gives up says what it saw as well as that it failed, so the stub
+                # can carry those extra fields the way a real artifact does.
+                return {"error": self.error, **self.measured}
             return {"conversations": list(self.conversations)}
         if function == carousell_market.CONVERSATION_TAIL_JS:
             native = self.url.rstrip("/").rsplit("/", 1)[-1]
@@ -88,6 +100,13 @@ def _deps(store, bus, client, **overrides):
         browser_factory=lambda: client,
         now=now,
     )
+
+
+@pytest.fixture(autouse=True)
+def _one_market(carousell_only):
+    """This file scripts Carousell's artifacts and nothing else, so the seller here has connected
+    only Carousell. A lane tick drives every connected market, so leaving Facebook on would have
+    each of these reading a marketplace its stub was never taught."""
 
 
 @pytest.fixture
@@ -459,6 +478,34 @@ def test_a_failed_conversation_list_is_counted_not_treated_as_empty(store, bus, 
     assert [e.payload["failures"] for e in _kinds(bus, "browser.blind")] == [1, 2]
     assert "HTTP 503" in _kinds(bus, "browser.blind")[0].payload["reason"]
     assert store.count_queued_notices() == 1
+
+
+def test_what_the_reader_measured_travels_with_the_failure(store, bus, seeded) -> None:
+    """A reader that cannot find the conversations is the one moment its own view of the page is
+    worth having. Keeping only the sentence cost a real diagnosis: a market reported the same line
+    for hours while the counts that would have explained it were computed and thrown away."""
+    client = StubClient(
+        error="no conversation rows on the inbox page",
+        measured={"marketplace_links": 31, "thread_links": 0, "rows": 12, "still_loading": False},
+    )
+    inbox.inbox_lane(_deps(store, bus, client, browser_blind_after=9))
+
+    payload = _kinds(bus, "browser.blind")[0].payload
+    assert payload["marketplace_links"] == 31
+    assert payload["thread_links"] == 0
+    assert payload["rows"] == 12
+    assert payload["still_loading"] is False
+
+
+def test_a_reader_cannot_overwrite_the_fields_the_lane_owns(store, bus, seeded) -> None:
+    """The measurements are merged *under* the reserved keys. An artifact naming a field `market` or
+    `failures` must not be able to relabel whose read failed or how many times."""
+    client = StubClient(error="boom", measured={"market": "not-a-market", "failures": 99})
+    inbox.inbox_lane(_deps(store, bus, client, browser_blind_after=9))
+
+    payload = _kinds(bus, "browser.blind")[0].payload
+    assert payload["market"] == "carousell"
+    assert payload["failures"] == 1
 
 
 def test_the_blind_notice_is_raised_once_not_every_tick(store, bus, seeded) -> None:
@@ -879,3 +926,49 @@ def test_a_blip_fixed_within_the_half_hour_is_not_worth_a_message(store, bus, se
     )
     inbox.inbox_lane(deps)
     assert not any("inbox again" in text for text in _texts(store))
+
+
+# --- the one cause the seller can fix ------------------------------------------------------------
+
+
+def test_a_window_too_narrow_is_named_as_such_not_blamed_on_the_market(store, bus, seeded) -> None:
+    """Twice now, from two marketplaces, at the same window size: a page laid out for a narrower
+    screen reads exactly like a marketplace refusing us. Told "it's Carousell that won't hand over
+    your conversations", nobody drags a window wider — so the reader's own measurement of the window
+    is what decides which sentence the seller gets."""
+    client = StubClient(error="no conversation rows", measured={"width": 756})
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VIEWPORT
+    notice = _texts(store)[0]
+    assert "756px" in notice and "900px" in notice  # what it is, and what it needs
+    assert "wider" in notice
+
+
+def test_a_wide_window_still_blames_the_market(store, bus, seeded) -> None:
+    """The promotion only ever fires on a narrow window. Above the breakpoint a failed read has a
+    dozen other causes and this must not claim otherwise."""
+    client = StubClient(error="HTTP 503", measured={"width": 1440})
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_MARKET
+
+
+def test_a_reader_that_measured_nothing_is_left_alone(store, bus, seeded) -> None:
+    """An artifact with no width to report — an API read, say — must not be promoted on a guess."""
+    client = StubClient(error="HTTP 503")
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_MARKET
+
+
+def test_our_own_plumbing_failure_is_never_blamed_on_the_window(store, bus, seeded) -> None:
+    """A server that lost Chrome is not something the seller can drag away, however narrow the
+    window is. Only a cause about the market may be promoted."""
+    assert blindness.cause_for(blindness.CAUSE_PLUMBING, {"width": 400}) == blindness.CAUSE_PLUMBING

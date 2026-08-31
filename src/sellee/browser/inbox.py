@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
-from sellee.browser import blindness, reconcile
+from sellee.browser import blindness, reconcile, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -194,9 +194,23 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
         # The list came back as a failure rather than as content. Unlike a DOM read that finds
         # nothing, this cannot be mistaken for an empty inbox, so it is reported as what it is.
+        #
+        # Whatever else the artifact measured travels with it. A reader that cannot find the
+        # conversations is the one moment its own view of the page is worth having — how many
+        # candidate elements it saw, how wide the viewport was, whether the tab was even visible —
+        # and this used to keep only the sentence. That cost a real diagnosis: Facebook reported
+        # "no conversation rows on the inbox page" for hours while the count that would have said
+        # whether the page had any rows at all was computed and thrown away on every tick.
         reason = (answer or {}).get("error") if isinstance(answer, dict) else "unreadable"
+        measured = (
+            {k: v for k, v in answer.items() if k != "error"} if isinstance(answer, dict) else {}
+        )
         _count_blind(
-            deps, market, f"conversation list unavailable: {reason}", cause=blindness.CAUSE_MARKET
+            deps,
+            market,
+            f"conversation list unavailable: {reason}",
+            cause=blindness.CAUSE_MARKET,
+            measured=measured,
         )
         return
     rows = answer["conversations"]
@@ -216,6 +230,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     recorded = 0
     unreadable = 0
     settling = 0
+    # The last abstaining tail read's own measurements, so the market's blind notice can name a
+    # window that is too narrow rather than blaming the marketplace for it.
+    tail_measured: dict = {}
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -237,7 +254,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         elif not full_sweep and _can_skip(deps.store, thread, row):
             continue
         opened += 1
-        fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled)
+        fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
         if fresh is None:
             unreadable += 1
         else:
@@ -267,6 +284,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             f"{unreadable} conversation(s) unreadable",
             cause=blindness.CAUSE_TAILS,
             count=unreadable,
+            measured=tail_measured,
         )
     else:
         # `recorded` is not the test — a tick can legitimately open threads and find nothing new.
@@ -418,6 +436,7 @@ def _read_thread(
     region: str | None,
     row: dict | None = None,
     unsettled: dict | None = None,
+    measured_out: dict | None = None,
 ) -> int | None:
     """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
     conversation could not be read at all — which the caller counts as being blind on this market,
@@ -439,6 +458,12 @@ def _read_thread(
     raw = client.evaluate(adapter.conversation_tail_js)
     unreadable = reconcile.unreadable_reason(raw)
     if unreadable is not None:
+        # Carry what the reader measured up to the market's blind count. The tail artifact reports
+        # the window it was looking at precisely so a layout we cannot parse is distinguishable from
+        # a marketplace that changed shape — and dropping it here is what made the 2026-08-29 outage
+        # take a day to explain.
+        if measured_out is not None and isinstance(raw, dict):
+            measured_out.update({k: v for k, v in raw.items() if k != "error"})
         # The reader could not find the message list. An empty tail would claim the conversation is
         # over; this says we could not see it — and now says why, which is the difference between a
         # marketplace that changed shape and a window too narrow to render the one we know.
@@ -609,25 +634,41 @@ def _count_blind(
     *,
     cause: str = blindness.CAUSE_MARKET,
     count: int = 0,
+    measured: dict | None = None,
 ) -> None:
     """Count a failed read, and raise one notice once a run of them means we are genuinely blind.
 
     `cause` decides which sentence the seller gets, and it is the caller's to supply because only
     the caller knows how far the read got. The rule the causes encode: never tell the seller to
     check something we have already established is fine.
+
+    `measured` is whatever the artifact saw when it gave up — the reader's own view of the page,
+    carried into the event so a run of these is diagnosable from the log rather than from a
+    screenshot. Merged under the reserved keys rather than over them, so an artifact cannot
+    overwrite the market or the count by naming a field the same thing.
     """
     failures = deps.blind.get(market, 0) + 1
     deps.blind[market] = failures
     deps.blind_since.setdefault(market, deps.now())
-    deps.bus.publish(
-        "browser.blind",
-        {"market": market, "failures": failures, "cause": cause, "reason": reason[:200]},
-    )
+    # What the reader measured can change which cause this is. A window too narrow for the
+    # marketplace to lay its page out is indistinguishable, from here, from the marketplace refusing
+    # us — and it is the only one of the two the seller can do anything about, so the measurement is
+    # what promotes it rather than the lane guessing.
+    cause = blindness.cause_for(cause, measured)
+    payload = {k: v for k, v in (measured or {}).items() if isinstance(k, str)}
+    payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})
+    deps.bus.publish("browser.blind", payload)
     if failures >= int(deps.config.browser_blind_after):
         _notify_once(
             deps,
             f"blind:{market}",
-            blindness.notice_for(cause, name=marketplaces.display_name(market), count=count),
+            blindness.notice_for(
+                cause,
+                name=marketplaces.display_name(market),
+                count=count,
+                width=(measured or {}).get("width") or 0,
+                where=window.where(),
+            ),
         )
 
 

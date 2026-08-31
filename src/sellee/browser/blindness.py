@@ -18,6 +18,9 @@ So the causes are separated here, and each one only claims what the lane has evi
     refusing us, while an unreadable tail is our reader failing on a page Carousell served fine.
     One sentence covering both would blame the marketplace for our own drift, which is the same
     species of lie this module exists to delete.
+  * **viewport** — the window is too narrow for the marketplace to render the thing we read. The
+    only cause the *seller* can fix, which is the whole reason it is separated from `market`: told
+    "it's Facebook that won't hand over your conversations", nobody drags a window wider.
 
 None of them tells the seller to go and look at Chrome. That sentence lives on, once, in
 `chrome_hint` — for the one caller that reaches a state where it might be true.
@@ -35,6 +38,21 @@ from sellee import deployment
 CAUSE_PLUMBING = "plumbing"
 CAUSE_MARKET = "market"
 CAUSE_TAILS = "tails"
+CAUSE_VIEWPORT = "viewport"
+
+# Below this, a marketplace is liable to serve a layout we cannot read — and the failure looks
+# exactly like the marketplace refusing us, which is what makes it worth naming separately.
+#
+# Twice now, from two marketplaces, at the same window size. Carousell collapses to a single
+# full-width column below roughly 900px, which on 2026-08-29 made every conversation unreadable for
+# 22 hours on a window the seller had sized to half their screen (innerWidth 756). Facebook, on
+# 2026-08-31, on a window of the same 756px: the Marketplace inbox renders no scoped conversation
+# list and the listings page renders its cards only intermittently.
+#
+# So the number is the narrower marketplace's own breakpoint, not a guess, and it is deliberately a
+# floor rather than a target: above it a read can still fail for a dozen other reasons, and this
+# cause never claims otherwise. It only fires on a read that ALREADY failed.
+MIN_USABLE_WIDTH_PX = 900
 
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
 # the seller is signed in — no login probe ran, because the navigate before it failed. Not that the
@@ -86,22 +104,55 @@ CONTAINER_CHROME_CHECK = (
     "still logged in."
 )
 
+# The one the seller can fix, so it is the one that asks them to. Names the size because "wider"
+# alone invites a nudge of a few pixels, and says what it costs them not to — a window they have
+# deliberately parked at half a screen is a choice, and this has to be worth reversing.
+VIEWPORT_NOTICE = (
+    "I can't read your {name} inbox, and I think it's the window: my Chrome{where} is {width}px "
+    "wide and {name} needs about {needed}px to lay the page out the way I read it. Drag that "
+    "window wider — or full-screen it — and I'll pick up on my next look, in a few minutes. "
+    "Until then your {name} app has anything I've missed."
+)
+
 _NOTICES = {
     CAUSE_PLUMBING: PLUMBING_NOTICE,
     CAUSE_MARKET: MARKET_NOTICE,
     CAUSE_TAILS: TAILS_NOTICE,
+    CAUSE_VIEWPORT: VIEWPORT_NOTICE,
 }
 
 
-def notice_for(cause: str, *, name: str, count: int = 0) -> str:
+def cause_for(cause: str, measured: dict | None) -> str:
+    """Promote a failed read to `viewport` when the reader says the window was too narrow.
+
+    The lane cannot tell these apart by itself — a marketplace serving a layout we cannot parse and
+    a marketplace refusing us both arrive as "the list did not answer". What tells them apart is the
+    artifact's own measurement of the window it was looking at, which is why every reader reports
+    its width on the way out.
+
+    Only ever *promotes*, and only from a cause about the market. A plumbing failure stays plumbing
+    however narrow the window is: our server losing Chrome is not something the seller can drag
+    away.
+    """
+    if cause not in (CAUSE_MARKET, CAUSE_TAILS):
+        return cause
+    width = (measured or {}).get("width")
+    if isinstance(width, bool) or not isinstance(width, (int, float)):
+        return cause
+    return CAUSE_VIEWPORT if 0 < width < MIN_USABLE_WIDTH_PX else cause
+
+
+def notice_for(cause: str, *, name: str, count: int = 0, width: int = 0, where: str = "") -> str:
     """The sentence for one cause, addressed to the seller.
 
-    Falls back to the marketplace wording for an unknown cause: of the three it is the only one that
+    Falls back to the marketplace wording for an unknown cause: of the four it is the only one that
     asserts nothing about our own machinery, so a cause nobody has taught this module yet cannot
     make us claim a fault we have not established.
     """
     template = _NOTICES.get(cause, MARKET_NOTICE)
-    return template.format(name=name, count=count)
+    return template.format(
+        name=name, count=count, width=int(width or 0), needed=MIN_USABLE_WIDTH_PX, where=where
+    )
 
 
 def gap_text(seconds: float) -> str:
