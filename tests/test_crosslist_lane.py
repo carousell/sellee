@@ -499,6 +499,7 @@ def test_something_the_seller_does_not_have_there_is_still_listed(store, bus) ->
             }
         ],
     )
+    store.decide_discovered_listings("carousell", decision="decline")  # nothing outstanding
 
     assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]
 
@@ -548,3 +549,51 @@ def test_an_abandoned_survey_does_not_open_the_gate(store, bus) -> None:
     store.abandon_market_survey("carousell")
 
     assert crosslist.pending_pairs(_deps(store, bus)) == []
+
+
+def test_the_fan_out_waits_while_the_seller_is_still_being_asked(store, bus) -> None:
+    """The window where the two halves disagree. The title match is whole-string, so a listing the
+    seller worded differently from our item is not caught by it — but it IS in the ask, and a yes
+    records its URL and settles it. Publishing first posts the copy the ask exists to prevent."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store, title="If Anyone Builds It, Everyone Dies by Yudkowsky & Soares")
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/book-1/",
+                "title": "If Anyone Builds It, Everyone Dies (Yudkowsky & Soares)",
+                "price": 20.0,
+                "price_text": "S$20",
+            }
+        ],
+    )
+
+    assert crosslist.pending_pairs(_deps(store, bus)) == []
+
+
+def test_answering_the_ask_releases_the_fan_out(store, bus) -> None:
+    """The hold is temporary. Once nothing is outstanding the lane proceeds — here the seller said
+    no, so the listing stays theirs and only the exact-title guard applies."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    item = _rail_item(store, title="Dyson HushJet Mini Cool Fan")
+    store.record_survey_result(
+        "carousell",
+        [
+            {
+                "listing_id": "1",
+                "url": "https://www.carousell.sg/p/lamp-1/",
+                "title": "Teak lamp",
+                "price": 80.0,
+                "price_text": "S$80",
+            }
+        ],
+    )
+    assert crosslist.pending_pairs(_deps(store, bus)) == []  # held while unanswered
+
+    store.decide_discovered_listings("carousell", decision="decline")
+
+    assert [i["id"] for i, _m in crosslist.pending_pairs(_deps(store, bus))] == [item["id"]]

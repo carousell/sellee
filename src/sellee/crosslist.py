@@ -197,6 +197,14 @@ def _looked_first(deps: CrosslistDeps, market: str, region) -> bool:
     """
     if not market_adapters.can_survey(market, region):
         return True
+    # An answer is still outstanding about what the seller already has there. Holding is temporary
+    # and clears itself the moment they tap, and it closes the window where the two halves disagree:
+    # the title match below is whole-string, so a listing the seller worded slightly differently
+    # from our item ("... (Yudkowsky & Soares)" against "... by Yudkowsky & Soares") is not caught
+    # by it — but it IS sitting in the ask, and a yes records its URL and settles the question
+    # properly. Publishing first would post the second copy the ask exists to prevent.
+    if deps.store.list_discovered_listings(market, status="pending"):
+        return False
     deps.store.request_market_survey(market)
     survey = deps.store.get_market_survey(market)
     # `done` and nothing else. `abandoned` means five looks in a row could not be served — signed
