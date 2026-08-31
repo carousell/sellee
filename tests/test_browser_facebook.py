@@ -701,3 +701,163 @@ def test_a_us_seller_can_adopt_a_dollar_priced_listing(store, bus) -> None:
     store.set_seller_config_section("basics", {"region": "US", "currency": "USD"})
 
     assert adopt._currency_for(store, {"currency": "", "price_text": "$65"}) == "USD"
+
+
+# --- what the system believes exists on a marketplace ---------------------------------------------
+
+
+def test_a_near_miss_is_withheld_even_after_the_seller_declines(store, bus) -> None:
+    """The decline path was the hole. The seller is told "I'll leave your Facebook listings alone",
+    and on the next tick the fan-out posted a second copy of the very book they meant."""
+    from sellee import crosslist
+    from sellee.browser import survey
+
+    item = store.create_item(
+        title="If Anyone Builds It, Everyone Dies by Yudkowsky & Soares",
+        list_price=20.0,
+        currency="SGD",
+    )
+    store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/l/book")
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    survey.discover_phase(
+        _survey_deps(
+            store,
+            bus,
+            SurveyStub(
+                listings={
+                    "listings": [
+                        {
+                            "listing_id": "77",
+                            "url": "https://www.facebook.com/marketplace/item/77/",
+                            "title": "If Anyone Builds It, Everyone Dies (Yudkowsky & Soares)",
+                            "price": 20.0,
+                            "price_text": "SGD20",
+                        }
+                    ],
+                    "active_count": 1,
+                },
+            ),
+        )
+    )
+    store.decide_discovered_listings("fb", decision="decline")
+
+    deps = crosslist.CrosslistDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        browser_factory=lambda: object(),
+        rail_factory=lambda: None,
+    )
+    assert [m for _i, m in crosslist.pending_pairs(deps) if m == "fb"] == []
+
+
+def test_a_near_miss_is_refused_rather_than_adopted_as_a_second_item(store, bus) -> None:
+    """The accept path: adopting made a second item, then a second rail listing, and then fanned
+    the first one out to the marketplace this listing was already on."""
+    from sellee.browser import adopt
+
+    item = store.create_item(
+        title="If Anyone Builds It, Everyone Dies by Yudkowsky & Soares",
+        list_price=20.0,
+        currency="SGD",
+    )
+    store.record_listing_url(item["id"], "carousell", "https://www.carousell.sg/p/book-1/")
+    store.record_survey_result(
+        "fb",
+        [
+            {
+                "listing_id": "77",
+                "url": "https://www.facebook.com/marketplace/item/77/",
+                "title": "If Anyone Builds It, Everyone Dies (Yudkowsky & Soares)",
+                "price": 20.0,
+                "price_text": "SGD20",
+            }
+        ],
+    )
+    store.decide_discovered_listings("fb", decision="manage", manage="relist")
+
+    adopt.adopt_phase(_merge_deps(store, bus))
+
+    assert len(store.list_items()) == 1, "a second item was created for one book"
+    assert store.list_discovered_listings("fb")[0]["status"] == "failed"
+
+
+def test_a_sold_item_never_captures_a_live_listing(store, bus) -> None:
+    """A seller sells one of two identical chairs. Matching the sold one to the live listing puts
+    its URL on a closed sale, and from then on every buyer on it is told "it's sold"."""
+    from sellee.browser import reconcile
+
+    sold_item = store.create_item(title="Herman Miller Aeron", list_price=500.0, currency="SGD")
+    live_item = store.create_item(title="Herman Miller Aeron", list_price=500.0, currency="SGD")
+    items = store.list_items()
+
+    without = reconcile.items_for_same_listing("Herman Miller Aeron", items, "fb")
+    with_sold = reconcile.items_for_same_listing(
+        "Herman Miller Aeron", items, "fb", {sold_item["id"]}
+    )
+
+    assert set(without) == {sold_item["id"], live_item["id"]}
+    assert with_sold == [live_item["id"]], "the sold item is still a candidate"
+
+
+def test_an_unreadable_row_stops_the_survey_closing_as_complete(store, bus) -> None:
+    """Both readers count a dropped row as read when they compute `truncated`, so 14 of 17 with 3
+    unparseable arrives claiming to be complete — and the 3 leave no trace for the fan-out."""
+    from sellee.browser import survey
+
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "1",
+                    "url": "https://www.facebook.com/marketplace/item/1/",
+                    "title": "A thing",
+                    "price": 10.0,
+                    "price_text": "SGD10",
+                }
+            ],
+            "active_count": 4,
+            "unreadable": 3,
+            "truncated": False,
+        }
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert store.get_market_survey("fb")["state"] == "due", "closed on a page it could not read"
+    assert store.list_discovered_listings("fb") == []
+
+
+def test_an_ambiguous_twin_is_asked_about_rather_than_dropped(store, bus) -> None:
+    """Dropped silently, it existed on the marketplace and in none of our tables — which the
+    fan-out reads as an absence and duplicates."""
+    from sellee.browser import survey
+
+    for suffix in ("a", "b"):
+        it = store.create_item(title="White Study Desk", list_price=65.0, currency="SGD")
+        store.record_listing_url(
+            it["id"], "carousell", f"https://www.carousell.sg/p/desk-{suffix}/"
+        )
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "222",
+                    "url": "https://www.facebook.com/marketplace/item/222/",
+                    "title": "White Study Desk",
+                    "price": 65.0,
+                    "price_text": "SGD65",
+                }
+            ],
+            "active_count": 1,
+        }
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert [r["listing_id"] for r in store.list_discovered_listings("fb")] == ["222"]

@@ -160,11 +160,11 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
             continue  # nothing to fan out from yet: the rail listing comes first
         if item["id"] in sold:
             continue
-        title = reconcile.normalize(item.get("title") or "")
+        title = item.get("title") or ""
         for market in markets:
             if urls.get(market) or (item["id"], market) in attempted:
                 continue
-            if title and title in already_there[market]:
+            if any(reconcile.same_thing_loosely(title, seen) for seen in already_there[market]):
                 continue  # the seller already has this one there, by hand
             pairs.append((item, market))
     return pairs
@@ -195,8 +195,13 @@ def already_listed_by_hand(store, item: dict, market: str) -> bool:
     publish tool re-implemented eligibility inline and had neither, so a model could post a
     duplicate through it onto a marketplace nobody had looked at.
     """
-    title = reconcile.normalize(item.get("title") or "")
-    return bool(title) and title in _titles_seen_on(store, market)
+    title = item.get("title") or ""
+    if not reconcile.normalize(title):
+        return False
+    # Loose on purpose. Withholding is the cheap mistake — one item not cross-listed, which the
+    # seller can ask for — against posting on their account after we said we would not. The strict
+    # rule stays where merging happens.
+    return any(reconcile.same_thing_loosely(title, seen) for seen in _titles_seen_on(store, market))
 
 
 def looked_first(store, market: str, region) -> bool:

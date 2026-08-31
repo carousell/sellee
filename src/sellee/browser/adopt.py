@@ -179,7 +179,9 @@ def _adopt_one(deps, row: dict, adapter) -> None:
     # is one desk: it becomes one item carrying both listing URLs, so buyers from either market land
     # on the same row and carousell.ai gets it once. `rail_owed` is false whenever the twin already
     # has a rail listing, which is what stops the second copy.
-    twins = reconcile.items_for_same_listing(row["title"], deps.store.list_items(), market)
+    twins = reconcile.items_for_same_listing(
+        row["title"], deps.store.list_items(), market, deps.store.sold_item_ids()
+    )
     if len(twins) == 1:
         item = deps.store.get_item(twins[0])
         owed = relist and not (item or {}).get("listing_urls", {}).get(marketplaces.RAIL)
@@ -201,6 +203,22 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         # Several items share this title, so which one this listing *is* cannot be settled from the
         # page. Left for the seller rather than merged into whichever came first.
         _fail(deps, row, f"{len(twins)} items already have this title on another marketplace")
+        return
+
+    # No exact twin, but something that is plausibly the same object worded differently — the
+    # seller's "… (Yudkowsky & Soares)" against our "… by Yudkowsky & Soares". Adopting would make a
+    # second item for one book, and then a second rail listing for it, and then fan the first one
+    # out to the marketplace this listing is already on. Refused rather than merged: the loose rule
+    # is good enough to withhold on and never good enough to fuse two rows with.
+    close = [
+        candidate["id"]
+        for candidate in deps.store.list_items()
+        if candidate["id"] not in deps.store.sold_item_ids()
+        and not (candidate.get("listing_urls") or {}).get(market)
+        and reconcile.same_thing_loosely(row["title"], candidate.get("title") or "")
+    ]
+    if close:
+        _fail(deps, row, "an item you already have looks like this listing under another name")
         return
 
     client = deps.browser_factory()

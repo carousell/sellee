@@ -213,7 +213,36 @@ def new_rows(tail, recorded, *, now: float) -> list:
     return out
 
 
-def items_for_same_listing(title: str, items, market: str) -> list:
+# Trailing qualifiers a seller adds on one marketplace and not the other: a parenthetical or
+# bracketed aside, or an attribution tail. Real pairs from one real inventory —
+# "If Anyone Builds It, Everyone Dies (Yudkowsky & Soares)" against "... by Yudkowsky & Soares",
+# and "Koss Porta Pro ... (used, with case)" against "Koss PortaPro ... (ComfortZone Headband)".
+_QUALIFIER_RE = re.compile(r"\s*[\(\[].*?[\)\]]\s*|\s+(?:by|-|–|—)\s+.*$")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def same_thing_loosely(left: str, right: str) -> bool:
+    """Whether two titles are plausibly the same object, worded differently.
+
+    Used ONLY to withhold or to refuse — never to merge — and that asymmetry is the whole design.
+    The two decisions have opposite costs. Merging two rows into one item is destructive if wrong:
+    one floor for two objects, and a buyer on each haggling over the other's. Deciding "the seller
+    already has this here, so do not post" is cheap if wrong: one item not cross-listed, which they
+    can ask for in a sentence — against posting on their account after we told them we would not.
+
+    So `items_for_same_listing` stays exact and this is allowed to be generous. It still separates
+    the things that must stay separate: "Monster Open-Ear Clip Wireless Earbuds" and "Monster Open
+    Ear Hook Wireless Earbuds" differ in the stem, not in a qualifier, and remain two products.
+    """
+    return bool(_loose_key(left)) and _loose_key(left) == _loose_key(right)
+
+
+def _loose_key(title: str) -> str:
+    stripped = _QUALIFIER_RE.sub(" ", normalize(title))
+    return _NON_ALNUM_RE.sub("", stripped)
+
+
+def items_for_same_listing(title: str, items, market: str, sold=()) -> list:
     """Which of our items are already the thing this marketplace listing is, listed elsewhere.
 
     A seller who has one desk on two marketplaces has one desk. Adopting the second listing as its
@@ -231,14 +260,22 @@ def items_for_same_listing(title: str, items, market: str) -> list:
     can refuse an ambiguous merge instead of guessing at one. An item that already holds a listing
     on *this* market is not a candidate at all: whatever it is, it is not this listing moved from
     somewhere else, and a seller with two same-titled listings on one marketplace has two of them.
+
+    `sold` are the ids of items that have been sold, and passing them is not optional in spirit: a
+    sold item is still an ordinary row, so without this a seller who sold one of two identical
+    chairs has the sold one matched to the live listing of the other. The listing's URL lands on the
+    closed sale, the listing never enters the ask, and from then on `negotiate.decide` answers every
+    buyer on it with "it's sold" — the sale lost, and no notice anywhere saying why.
     """
     wanted = normalize(title)
     if not wanted:
         return []
+    closed = set(sold or ())
     return [
         item["id"]
         for item in items
         if normalize(item.get("title") or "") == wanted
+        and item["id"] not in closed
         and not (item.get("listing_urls") or {}).get(market)
     ]
 

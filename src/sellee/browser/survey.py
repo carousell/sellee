@@ -207,6 +207,21 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
             f"read {len(answer['listings'])} of {answer.get('active_count')} live listings",
         )
         return
+    if answer.get("unreadable"):
+        # Some rows were on the page and would not parse — a free item, a price line that shifted.
+        # `truncated` does not catch this: both readers count a dropped row as read when they
+        # compute it, so 14 of 17 with 3 unparseable arrives here claiming to be complete.
+        #
+        # It matters because a row we could not read leaves no trace anywhere: not on an item, not
+        # in `discovered_listings`. The fan-out reads that absence as "the seller does not have this
+        # there" and posts a second copy of a listing they already have. So a partial look is not a
+        # look, and the ask waits for a page we can read all of.
+        _unserved(
+            deps,
+            market,
+            f"{answer['unreadable']} of {answer.get('active_count')} listings would not read",
+        )
+        return
     if not fresh:
         # Surveyed, with nothing to ask about. Recorded as done so it is not asked again.
         deps.store.record_survey_result(market, [])
@@ -234,6 +249,7 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
     question says.
     """
     items = deps.store.list_items()
+    sold = deps.store.sold_item_ids()
     known = {row["listing_id"] for row in deps.store.list_discovered_listings(market)}
     fresh = []
     for row in listings:
@@ -242,15 +258,18 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
             continue
         if reconcile.matching_items(listing_id, items, market, adapter.listing_id_pattern):
             continue
-        twins = reconcile.items_for_same_listing(row.get("title") or "", items, market)
-        if twins:
-            _link_twin(deps, market, row, twins)
+        twins = reconcile.items_for_same_listing(row.get("title") or "", items, market, sold)
+        if twins and _link_twin(deps, market, row, twins):
             continue
+        # Either nothing matched, or the match could not be written down. Both go into the ask,
+        # because the alternative is a listing that exists on the seller's marketplace and appears
+        # in none of our records — not on an item, not in `discovered_listings` — which is precisely
+        # the state the fan-out reads as "they do not have this there" and duplicates.
         fresh.append(row)
     return fresh
 
 
-def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> None:
+def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> bool:
     """Record that an item we already manage is also listed here.
 
     Recognising the seller's own cross-listing and then writing nothing down was a hole with real
@@ -267,25 +286,31 @@ def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> None:
     Only ever on a single match, exactly as adoption refuses an ambiguous merge: with two items
     sharing a title there is no way to tell from the page which one this listing is, and guessing
     would put a buyer on the wrong item's floor.
+
+    Answers whether the link was written. A False sends the listing into the ask instead of dropping
+    it, which is the difference between "the seller decides" and "nobody has any record of it": a
+    row that is neither linked nor asked about exists on their marketplace and in none of our
+    tables, and the fan-out reads that as an absence and posts a second copy.
     """
     if len(twins) != 1:
         deps.bus.publish(
             "survey.twin_ambiguous",
             {"market": market, "listing_id": row.get("listing_id"), "items": len(twins)},
         )
-        return
+        return False
     url = str(row.get("url") or "")
     if not url:
-        return
+        return False
     try:
         deps.store.record_listing_url(twins[0], market, url)
     except StoreError as exc:
         log.warning("could not link %s to %s: %s", row.get("listing_id"), twins[0], exc)
-        return
+        return False
     deps.bus.publish(
         "survey.linked",
         {"market": market, "listing_id": row.get("listing_id"), "item_id": twins[0], "url": url},
     )
+    return True
 
 
 def _found_text(deps: SurveyDeps, market: str, listings: list) -> str:
