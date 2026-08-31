@@ -187,11 +187,25 @@ CONVERSATIONS_LIST_JS = """async () => {
 # Facebook puts the item on a banner above the message log, as a real link, and that link is the
 # only place in the whole flow where the conversation and the listing id appear together. Read once,
 # when a conversation is first seen, and from then on the thread carries the item.
-PRODUCT_ID_JS = """() => {
-  const link = document.querySelector('a[href*="/marketplace/item/"]');
-  if (!link) return { product_id: null, visible: document.visibilityState === 'visible' };
-  const id = ((link.getAttribute('href') || '').match(/\\/marketplace\\/item\\/(\\d+)/) || [])[1];
-  return { product_id: id || null, visible: document.visibilityState === 'visible' };
+PRODUCT_ID_JS = """async () => {
+  const read = () => {
+    const link = document.querySelector('a[href*="/marketplace/item/"]');
+    if (!link) return null;
+    const id = ((link.getAttribute('href') || '').match(/\\/marketplace\\/item\\/(\\d+)/) || [])[1];
+    return id || null;
+  };
+  // Polled, like every other read here, and for a reason that cost a real buyer. The banner is
+  // fetched after the load event, so a synchronous look at a freshly navigated tab finds no link
+  // at all — and a missing id is `unknown_listing`, which is silence. Gerry's conversation went
+  // unanswered for days on exactly this: the id was there a second later, every time it was asked
+  // for by hand, and never there at the instant the lane asked.
+  const deadline = Date.now() + 8000;
+  let id = read();
+  while (Date.now() < deadline && id === null) {
+    await new Promise((r) => setTimeout(r, 250));
+    id = read();
+  }
+  return { product_id: id, visible: document.visibilityState === 'visible' };
 }"""
 
 # Read the trailing message bubbles of the open conversation.

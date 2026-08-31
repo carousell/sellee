@@ -914,3 +914,12 @@ def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
 
     assert not [c for c in client.calls if c[0] in ("focus", "browser_press_key")]
     assert client.clicks == []
+
+
+def test_the_listing_banner_is_polled_rather_than_glanced_at() -> None:
+    """The banner is fetched after the load event, so a synchronous look at a freshly navigated tab
+    finds no link — and a missing id is `unknown_listing`, which is silence. One conversation went
+    unanswered for days on exactly this: the id was there a second later every time it was asked
+    for by hand, and never there at the instant the lane asked."""
+    assert fb_market.PRODUCT_ID_JS.strip().startswith("async"), "a glance, not a read"
+    assert "setTimeout" in fb_market.PRODUCT_ID_JS, "nothing waits for the banner"
