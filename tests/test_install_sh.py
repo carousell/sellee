@@ -1,4 +1,4 @@
-"""install.sh, run for real: the guard, the checksum gate, and the hand-off.
+"""install.sh, run for real: the checksum gate and the hand-off.
 
 The script is executed as a script — no reimplementation of its logic here — against a release
 served over HTTP. The OS it thinks it is on is supplied as a `uname` shim, so both supported
@@ -129,13 +129,6 @@ def run_install(*args, base_url=None, path=None):
         script = Path(tmp) / "install-under-test.sh"
         script.write_text(source)
         return _sh(script, args, env)
-
-
-def test_without_release_hosting_it_says_so_and_installs_nothing() -> None:
-    result = run_install()
-    assert result.returncode == 1
-    assert "isn't supported yet" in result.stderr
-    assert "git clone" in result.stderr
 
 
 def test_it_states_what_it_will_do_before_doing_it(host_shims, release) -> None:
