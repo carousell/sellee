@@ -824,20 +824,83 @@ re-arming them errs toward reading more rather than less.
 
 ## Adding a marketplace
 
-1. **A registry entry** in `data/marketplaces.json`: `connector.type: "browser"`,
-   `status: "active"`, the `domains` map for its regions, and `urls` templates for
-   at least `inbox` and `thread`.
-1b. Nothing else: `sellee connect <market>` picks the new id up from the
-   adapter registry, and so does the healthcheck's per-market login line.
-2. **An adapter module** under `browser/markets/`, exporting the JS artifacts,
-   the composer defaults, the listing-id pattern and its system handles — then one
-   line in that package's `_ADAPTERS` registry.
-3. **Decide the submit mechanism.** Leave `chat_message_submit_js` empty unless
-   someone has decided that market's account can afford a page-dispatched
-   keystroke.
-4. **A publish recipe skill**, if the market should be publishable, pointed at by
-   the registry's `listing_flow`. Steps 2 and 4 together are what make the market
-   selectable in `crosslist_markets` — there is no separate switch to remember.
+**Connecting is one promise, not a menu.** A seller who switches a marketplace on
+is told Sellee will list to it, read its inbox, answer its buyers, and adopt what
+they already have listed there. So the unit of work is not "an adapter" — it is
+those four, and the two more that make them work.
+
+Facebook was the first marketplace added after this seam existed, and it arrived
+with an adapter, a registry entry and a place in the onboarding list while
+delivering none of the four. Nothing failed; it was simply connected to nothing.
+`tests/test_marketplace_surfaces.py` is what stops that happening again: it
+derives each surface from the artifact, template or skill that implements it, and
+a gap must be declared as a **subtractive waiver** naming the reason. A waiver can
+only ever say less than the code does, and it self-retires — closing the gap fails
+the build until the waiver is deleted.
+
+### The six surfaces
+
+| # | surface | what it needs |
+| --- | --- | --- |
+| 1 | offered at onboarding | registry entry (`connector.type: "browser"`, `status`, `domains`) + an adapter in `_ADAPTERS` |
+| 2 | connect / disconnect on `/sellee` | nothing beyond 1 |
+| 3 | listing to it | a recipe skill named by `listing_flow`, **or** publish selectors a driver fills |
+| 4 | adopting existing listings | `my_listings_js`, `listing_detail_js`, `urls.my_listings`, and a media grant (`media_hosts` or `media_host_suffixes`) |
+| 5 | inbox read + replies | `conversations_list_js`, `conversation_tail_js`, a `message_box` composer, `urls.inbox`, `urls.thread`, `listing_id_pattern`, and a way to name the listing a conversation is about |
+| 6 | signing back in | `login_js` — structurally guaranteed, a field with no default |
+
+Leave `chat_message_submit_js` empty unless someone has decided that market's
+account can afford a page-dispatched keystroke. Prefer a real send button.
+
+### What it actually costs — lessons, each one paid for
+
+- **Check the window first.** Facebook serves a different site below ~900px and
+  Carousell collapses at the same width. Three separate "the marketplace is
+  broken" conclusions here were the window. `chrome.ensure_window_width` makes it
+  structural, but verify layout at width *before* writing a selector.
+- **Read with the tab visible, and say which you had.** A hidden tab throttles
+  IntersectionObserver and rAF, so a lazy list silently stops loading and reports
+  no error: Facebook's listings page answered 5 of 19 in the background, and its
+  Marketplace folder would not open at all — a click timing out on an element that
+  was right there. Use `client.navigate_visible`, and have every artifact report
+  `document.visibilityState` so a hidden tab is diagnosable from `browser.blind`
+  rather than passing for a small inventory. This cost more time here than any
+  selector.
+- **Find the marketplace's own total, and check against it.** Carousell prints
+  "N Active" and Facebook "N active listings". A reader that cannot compare its
+  rows to a stated total cannot tell a partial render from a small inventory — and
+  that difference decides whether an ask-once survey closes on the truth.
+- **Prove a scroll actually scrolled.** Assert the count *grew*. Thirty-two scroll
+  passes here were no-ops against a bottom already reached. `window.scrollTo` does
+  not drive these pages; `scrollIntoView({block:'end'})` on the last row does.
+- **Read the page before querying it.** Dump `body.innerText` and a role census
+  first. Every negative finding here — "no listing id", "no status filter", "no
+  tally" — was the selector, not the page. The tally was in text already fetched
+  while the note saying there wasn't one was being written.
+- **Find the *scoped* list.** A marketplace's inbox may be a filtered view of a
+  general one. Facebook's is a folder inside Messenger with no URL of its own, and
+  reading the general list means reading the seller's private conversations. Prove
+  the scope positively — the folder's own heading — and fail closed when it is
+  absent, because an unopened folder otherwise answers as an empty inbox, and an
+  empty list is the one answer that permanently stops the asking.
+- **Settle thread identity early.** It decides whether the read lane's
+  navigate-by-URL model fits at all. Facebook's scoped inbox page has no thread
+  ids; the Messenger folder has both id and listing on every row.
+- **Some things only a real click will do.** Facebook's folder ignores a click
+  dispatched from the page. Where that happens, the artifact *marks* the control
+  and the lane clicks the mark — `inbox_folder_js` + `inbox_folder_target`.
+- **Liveness is the dangerous one.** Carousell has JSON-LD `SoldOut`; Facebook has
+  nothing equivalent. A reader that cannot prove a listing is live must fail
+  closed, because the failure is relisting something already sold.
+- **One thing on two marketplaces is one thing.** A seller cross-listing by hand
+  has one desk, not two. `reconcile.items_for_same_listing` merges on whole
+  normalized title and refuses anything ambiguous — the costs are not symmetric,
+  since a missed merge is a visible duplicate while a wrong merge has a buyer on
+  another object's floor.
+- **Capture, never guess.** Every artifact written from memory here was wrong. The
+  first Facebook inbox reader looked for `/marketplace/t/` links on a page with
+  none, and its composer was pinned to a URL pattern that never matches, so every
+  send failed closed before a word was typed.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.
