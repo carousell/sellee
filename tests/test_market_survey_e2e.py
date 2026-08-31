@@ -10,6 +10,7 @@ If adoption ever stops producing exactly the rows those lanes key on, this is wh
 
 from __future__ import annotations
 
+import pytest
 from tests.test_browser_inbox import StubClient as InboxStub
 from tests.test_browser_inbox import _conv
 from tests.test_browser_inbox import _deps as _inbox_deps
@@ -24,6 +25,12 @@ _MARKET = "carousell"
 # The survey's own listing id, and the URL an adopted item ends up recording.
 _LISTING_ID = "111"
 _LISTING_URL = f"https://www.carousell.sg/p/teak-lamp-{_LISTING_ID}/"
+
+
+@pytest.fixture(autouse=True)
+def _one_market(carousell_only):
+    """Carousell alone: these script one market's artifacts, and a lane tick drives every connected
+    market, so leaving Facebook on would read a marketplace no stub here was taught."""
 
 
 def _adopt_one(store, bus, monkeypatch):
@@ -64,7 +71,7 @@ def test_the_fan_out_holds_an_adopted_item_until_its_rail_listing_exists(
     from tests.conftest import seed_setting
 
     row = _adopt_one(store, bus, monkeypatch)
-    seed_setting(store, "crosslist_markets", [_MARKET])
+    seed_setting(store, "connected_markets", [_MARKET])
     deps = crosslist.CrosslistDeps(
         store=store,
         bus=bus,

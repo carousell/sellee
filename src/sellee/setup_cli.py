@@ -580,7 +580,7 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
 
     # The setting first: it is what the seller opted into, and it holds even if a sign-in is
     # interrupted — the fan-out re-checks the login every time it publishes anyway.
-    if settings_cli.set_setting(port, token, "crosslist_markets", json.dumps(picked)) != 0:
+    if settings_cli.set_setting(port, token, "connected_markets", json.dumps(picked)) != 0:
         ui.warn("Those marketplaces could not be recorded — carousell.ai only for now.")
         return
 

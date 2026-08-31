@@ -545,7 +545,7 @@ def test_picking_a_marketplace_records_the_setting_then_signs_in(world, monkeypa
 
     # The opt-in is recorded before the sign-in, so an interrupted sign-in still leaves the
     # seller's choice standing.
-    assert world.calls["settings"] == {"crosslist_markets": '["carousell"]'}
+    assert world.calls["settings"] == {"connected_markets": '["carousell"]'}
     assert world.calls["markets"] == ["carousell"]
 
 

@@ -153,12 +153,31 @@ def store(bus):
     """A Store over the same freshly-migrated sellee.db the bus fixture created. Quiet hours are
     seeded off so a pacing-gated tool isn't blocked by the wall-clock hour a test runs in (quiet
     hours moved from a config knob to a setting); a settings-behavior test that needs the registry
-    default or a specific window builds its own store or re-seeds."""
+    default or a specific window builds its own store or re-seeds.
+
+    Both browser marketplaces are seeded connected for the same class of reason: every lane, send
+    and door that touches one reads `connected_markets` at its own decision point, so the default
+    store is a seller who has connected what the agent can drive. A test about the gate itself
+    re-seeds it empty; a *lane* test scripting only one market's artifacts takes
+    `carousell_only`."""
     from sellee.store import Store
 
     st = Store(Database(bus.store.db.path.parent / "sellee.db"))
     seed_setting(st, "quiet_hours", [0, 0])
+    seed_setting(st, "connected_markets", ["carousell", "fb"])
     return st
+
+
+@pytest.fixture
+def carousell_only(store):
+    """Just Carousell connected, for a lane test that would otherwise also drive Facebook.
+
+    The default fixture connects both because most tests key off one or the other by name; a test
+    that runs a *lane* gets every connected market, so one scripting only Carousell's artifacts says
+    so here rather than by teaching its stub a second market it is not about.
+    """
+    seed_setting(store, "connected_markets", ["carousell"])
+    return store
 
 
 @pytest.fixture

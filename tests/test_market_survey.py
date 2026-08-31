@@ -57,6 +57,12 @@ def _detail(**overrides):
     return detail
 
 
+@pytest.fixture(autouse=True)
+def _one_market(carousell_only):
+    """Carousell alone: these script one market's artifacts, and a lane tick drives every connected
+    market, so leaving Facebook on would read a marketplace no stub here was taught."""
+
+
 class StubClient:
     """A browser answering the survey artifacts from a script, recording where it was sent.
 
@@ -878,7 +884,7 @@ def test_a_partial_listings_read_never_closes_the_survey(store, bus) -> None:
 def test_the_ask_never_offers_to_relist_somewhere_it_already_is(store, bus) -> None:
     """A seller whose enabled marketplaces include the one being surveyed must not be told their
     Carousell listings will be put on Carousell."""
-    seed_setting(store, "crosslist_markets", [_MARKET])
+    seed_setting(store, "connected_markets", [_MARKET])
     _found(store, bus)
 
     text = store.list_queued_notices()[0]["text"]

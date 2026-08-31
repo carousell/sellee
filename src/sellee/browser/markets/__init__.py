@@ -136,6 +136,30 @@ def can_survey(market: str, region: str | None = None) -> bool:
     return marketplaces.market_url(market, "my_listings", region) is not None
 
 
+def drivable_markets() -> list:
+    """Every browser market we have an adapter for, in registry order — regardless of seller.
+
+    The region-free half of the connection question, and the one a *pure* settings parser is allowed
+    to ask: whether a marketplace is one this code can drive at all is a fact about the code. Where
+    a given seller can be is `connectable_markets`.
+
+    Deliberately weaker than `supported_markets`, which also demands a publish recipe. Connecting is
+    what turns on reading an inbox and answering buyers, and a marketplace can be readable long
+    before anything can list to it — gating the connection on a recipe would make "answer my buyers
+    here" wait on a feature it does not need.
+    """
+    return [market for market in marketplaces.browser_markets() if market in _ADAPTERS]
+
+
+def connectable_markets(region: str | None = None) -> list:
+    """The browser markets *this seller* can connect: one we can drive, on a site where they are."""
+    return [
+        market
+        for market in drivable_markets()
+        if marketplaces.resolve_domain(market, region) is not None
+    ]
+
+
 def publishable_markets(region: str | None = None) -> list:
     """The browser markets *this seller* can be listed on: one we can drive, that has a site where
     they are. A marketplace with no regional site for them has nowhere to put the listing, so it is

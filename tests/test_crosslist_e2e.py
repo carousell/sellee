@@ -1,6 +1,6 @@
 """The fan-out, end to end (claude, the rail and the Bot API all faked):
 
-The channel flow lists an item on carousell.ai and the seller approves `crosslist_markets`
+The channel flow lists an item on carousell.ai and the seller approves `connected_markets`
 through the settings door. The lane notices the item is missing from Carousell and queues a
 browser publish; a fake harness process drives the real MCP endpoint with its per-pass token and
 records the live URL the way a real publish reports its result; the next tick reports it, and the
@@ -177,7 +177,7 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
 
     # The seller asks for Carousell; the approval ask reaches the phone; the door applies it.
     out = dispatch(
-        "propose_setting_change", {"key": "crosslist_markets", "raw_value": ["carousell"]}, ctx
+        "propose_setting_change", {"key": "connected_markets", "raw_value": ["carousell"]}, ctx
     )
     assert out["status"] == "held"
     with FakeTelegramAPI() as api:
@@ -221,7 +221,7 @@ def test_a_failed_fan_out_is_one_notice_and_no_second_attempt(
     server = wired
     store.set_seller_config_section("basics", {"region": "SG"})
     _bind(store)
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
 

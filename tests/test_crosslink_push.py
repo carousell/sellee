@@ -303,7 +303,7 @@ def test_quiet_hours_do_not_hold_the_push(store, bus) -> None:
 
 
 def test_the_push_needs_no_crosslist_setting(store, bus) -> None:
-    """Eligibility derives from where the item actually is, never from crosslist_markets — an
+    """Eligibility derives from where the item actually is, never from connected_markets — an
     attended publish outside the fan-out still earns the link."""
     item = _item(store, {"carousell-ai": _RAIL_URL, "carousell": _CAROUSELL_URL})
     rail = FakeRail()

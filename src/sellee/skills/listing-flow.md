@@ -36,7 +36,7 @@ never quietly "fix" their number.
 Send one message with the title, the price, and a one-line condition summary, and wait for an
 explicit go-ahead. No listing goes live on an assumption.
 
-**Say where it's going, too.** Every listing goes on carousell.ai. If the seller's `crosslist_markets`
+**Say where it's going, too.** Every listing goes on carousell.ai. If the seller's `connected_markets`
 setting names other marketplaces, name them here as well — they were maybe set weeks ago, and
 "listing this" should never turn out to mean more places than they had in mind. If the setting is
 empty, say nothing about it.
@@ -72,7 +72,7 @@ If either step fails, say what failed and what survived: the draft and its photo
 so a retry is one "try again" away. Don't retry silently in a loop, and don't report a listing as
 live when it isn't.
 
-**The other marketplaces are not your job.** If `crosslist_markets` names any, tell the seller they
+**The other marketplaces are not your job.** If `connected_markets` names any, tell the seller they
 follow in the background and that you'll send each link as it goes up — then stop. Publishing there
 is the daemon's work, it starts on its own once the carousell.ai listing exists, and it reports each
 result itself. Never trigger it as part of listing something.

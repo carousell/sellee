@@ -243,7 +243,7 @@ def _signin_markets(store) -> list:
     for the seller to type into.
     """
     signable = set(market_adapters.supported_markets())
-    return [market for market in settings.get(store, "crosslist_markets") if market in signable]
+    return [market for market in settings.get(store, "connected_markets") if market in signable]
 
 
 def _connect_button(store, market, mode: str) -> tuple:

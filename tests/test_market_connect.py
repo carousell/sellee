@@ -186,7 +186,7 @@ def test_connect_and_the_buttons_are_answered_without_a_pass(store) -> None:
 
 
 def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
@@ -203,7 +203,7 @@ def test_connect_with_several_switched_on_asks_which(store, bus, monkeypatch) ->
     this is the branch that has to already work when the next adapter lands.
     """
     monkeypatch.setattr(fastpaths.market_adapters, "supported_markets", lambda: ["carousell", "fb"])
-    seed_setting(store, "crosslist_markets", ["carousell", "fb"])
+    seed_setting(store, "connected_markets", ["carousell", "fb"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
@@ -216,7 +216,7 @@ def test_connect_with_several_switched_on_asks_which(store, bus, monkeypatch) ->
 
 
 def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
-    seed_setting(store, "crosslist_markets", [])
+    seed_setting(store, "connected_markets", [])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
@@ -228,7 +228,7 @@ def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
 def test_connect_never_offers_carousell_ai(store, bus) -> None:
     """carousell.ai is reached with an API key, so there is no window to open and nothing for the
     seller to type into."""
-    seed_setting(store, "crosslist_markets", ["carousell-ai", "carousell"])
+    seed_setting(store, "connected_markets", ["carousell-ai", "carousell"])
 
     _text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 

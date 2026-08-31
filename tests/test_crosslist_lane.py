@@ -60,7 +60,7 @@ def _midnight() -> float:
 def enabled(store):
     """A seller in SG who has asked for Carousell, with one item live on the rail."""
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
     return store.get_item(item["id"])
@@ -95,7 +95,7 @@ def test_an_item_not_on_the_rail_yet_is_not_queued(store, bus) -> None:
     """Rail-first is a precondition, not an instruction: with no carousell.ai listing there is
     nothing to fan out from."""
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     store.create_item(title="Teak lamp", list_price=80.0)
 
     assert crosslist.enqueue_next(_deps(store, bus)) is None
@@ -107,6 +107,9 @@ def test_an_item_already_on_the_market_is_not_queued(store, bus, enabled) -> Non
 
 
 def test_nothing_is_queued_with_the_setting_at_its_default(store, bus) -> None:
+    # Back to the registry default — the shared store fixture seeds a connected market, since
+    # almost every other test needs one, and this is the test about having none.
+    seed_setting(store, "connected_markets", [])
     store.set_seller_config_section("basics", {"region": "SG"})
     item = store.create_item(title="Teak lamp", list_price=80.0)
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
@@ -335,11 +338,12 @@ def test_enabling_a_market_picks_up_items_listed_before(store, bus) -> None:
     """Nothing special-cases the backlog: eligibility is a query, so items published long before the
     setting existed qualify the moment it is turned on."""
     store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", [])  # not turned on yet — that is the point here
     old = store.create_item(title="Teak lamp", list_price=80.0)
     store.record_listing_url(old["id"], "carousell-ai", _RAIL_URL)
     assert crosslist.enqueue_next(_deps(store, bus)) is None
 
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     assert crosslist.enqueue_next(_deps(store, bus))
 
 
@@ -352,7 +356,7 @@ def test_the_listing_flow_names_the_destinations_without_claiming_the_fan_out() 
     from sellee import skills
 
     recipe = skills.load("listing-flow")
-    assert "crosslist_markets" in recipe
+    assert "connected_markets" in recipe
     assert "not your job" in recipe
     assert "background" in recipe
     assert "Never trigger it as part of listing something" in recipe
@@ -371,12 +375,12 @@ def test_the_listing_flow_points_a_retry_at_the_tool() -> None:
 def test_the_channel_pass_can_see_the_setting_it_is_told_to_name(store, bus, enabled) -> None:
     """Naming the destinations requires knowing them: the settings block carries the value."""
     block = settings.prompt_block(store)
-    assert "crosslist_markets" in block
+    assert "connected_markets" in block
     assert "Carousell" in block
 
 
 def test_settings_read_filters_to_publishable_markets(store, bus, enabled) -> None:
     """A stale id in the stored value is not an eligible publish."""
-    seed_setting(store, "crosslist_markets", ["carousell", "fb"])
+    seed_setting(store, "connected_markets", ["carousell", "fb"])
     assert settings.publish_markets(store) == ["carousell"]
     assert [market for _, market in crosslist.pending_pairs(_deps(store, bus))] == ["carousell"]

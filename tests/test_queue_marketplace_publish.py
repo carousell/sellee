@@ -23,7 +23,7 @@ _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
 def enabled(store):
     """A seller in SG with Carousell turned on, and one item live on the rail."""
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
     return store.get_item(item["id"])
@@ -145,7 +145,7 @@ def test_a_stale_market_the_sellers_region_lost_is_refused(make_ctx, store, enab
 def test_an_item_not_on_the_rail_is_refused(make_ctx, store) -> None:
     """Rail-first, the same precondition the lane's eligibility rests on."""
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
 
     with pytest.raises(ToolError, match="not published on carousell.ai"):
