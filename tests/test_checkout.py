@@ -262,6 +262,14 @@ def test_signin_link_on_the_wrong_path_is_rejected(make_ctx, store) -> None:
         _signin(make_ctx, FakeSigninRail(url="https://www.carousell.ai/u/chat"))
 
 
+def test_signin_link_needs_a_path_boundary_after_signin(make_ctx, store) -> None:
+    """`/signin` must end there or continue past a `?` or `/` — `/signinfoo` is not it."""
+    with pytest.raises(ToolError, match="sign-in base"):
+        _signin(make_ctx, FakeSigninRail(url="https://www.carousell.ai/signinfoo?promote=tok"))
+    bare = FakeSigninRail(url="https://www.carousell.ai/signin")
+    assert _signin(make_ctx, bare) == {"signin_url": "https://www.carousell.ai/signin"}
+
+
 def test_already_a_seller_is_a_success_that_routes_to_checkout(make_ctx, store) -> None:
     rail = FakeSigninRail(error=RailToolError("already a seller"))
     result = _signin(make_ctx, rail)

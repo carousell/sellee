@@ -205,7 +205,10 @@ def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
         raise ToolError(str(exc)) from exc
 
     url = (minted.get("promotion_url") or "").strip()
-    if not url.startswith(_signin_base(ctx)):
+    base = _signin_base(ctx)
+    # `/signin` must end there or be followed by a real boundary — a bare prefix match would
+    # also accept a same-origin `/signinfoo`.
+    if url != base and not url.startswith((base + "?", base + "/")):
         # fail closed: this URL hands over the seller's account, so an unexpected host is never
         # forwarded — the last thing to pass through unvalidated
         raise ToolError("sign-in link did not come from the expected carousell.ai sign-in base")
