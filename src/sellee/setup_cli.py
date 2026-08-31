@@ -554,25 +554,38 @@ def _provision_rail(ui: Ui, region) -> None:
 def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     """Offer the marketplaces this seller could list on, and sign in to the ones they pick.
 
-    This step *is* the opt-in to cross-listing: what they choose here becomes the setting the
-    fan-out reads. carousell.ai is never in the list — it is the rail every listing goes on, with
-    nothing to sign in to.
+    This step *is* the opt-in: what they choose here becomes the setting every lane reads.
+    carousell.ai is never in the list — it is the rail every listing goes on, with nothing to sign
+    in to.
+
+    Offered on `connectable_markets` rather than on `publishable_markets`, because connecting a
+    marketplace promises more than posting to it: Sellee also reads that inbox, answers its buyers,
+    and adopts what the seller already has listed there. A market we can drive but cannot yet
+    publish to is worth connecting for the other three, and gating the offer on publishing hid
+    Facebook from every seller — including US sellers, for whom it is the only marketplace there
+    is, Carousell running no US site.
+
+    A missing region no longer skips the step either. It skipped it entirely, which was right when
+    every marketplace resolved through a regional site and wrong as soon as one served everywhere.
     """
-    if args.skip_markets or not region:
+    if args.skip_markets:
         return
-    available = market_adapters.publishable_markets(region)
+    available = market_adapters.connectable_markets(region)
     ui.step("Other marketplaces")
     if not available:
         ui.say("none available in this region yet — carousell.ai only")
         return
 
-    ui.say("Listings can also be cross-posted to the marketplaces below. Sign-in happens in")
-    ui.say("Sellee's own Chrome window; it never signs in on your behalf. Skipping is fine —")
-    ui.say("add them later with `sellee connect <name>`.")
+    ui.say("Sellee can also work the marketplaces below: list to them, read their inbox, answer")
+    ui.say("buyers, and pick up what you already have listed. Sign-in happens in Sellee's own")
+    ui.say("Chrome window; it never signs in on your behalf. Skipping is fine — add them later")
+    ui.say("with `sellee connect <name>`.")
     names = [marketplaces.display_name(market) for market in available]
     picked = [
         available[index]
-        for index in ui.multiselect("Which marketplaces should Sellee list on?", names, lead=False)
+        for index in ui.multiselect(
+            "Which marketplaces should Sellee work for you?", names, lead=False
+        )
     ]
     if not picked:
         ui.say("carousell.ai only — change this any time from the /sellee menu")

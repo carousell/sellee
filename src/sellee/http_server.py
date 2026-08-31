@@ -802,7 +802,9 @@ class _Handler(BaseHTTPRequestHandler):
 
         adapter = market_adapters.get_adapter(market) if isinstance(market, str) else None
         if adapter is None:
-            supported = ", ".join(market_adapters.supported_markets()) or "(none)"
+            # What can be signed in to, which is what this door does — not what can be published
+            # to, which would leave a market off its own error message.
+            supported = ", ".join(market_adapters.drivable_markets()) or "(none)"
             self._send_json(
                 400, {"error": f"no marketplace {market!r} to sign in to — supported: {supported}"}
             )

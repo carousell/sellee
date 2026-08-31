@@ -204,10 +204,13 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the bind DM (default: 300 interactive, 120 piped)",
     )
     # One per marketplace we can actually drive, so `connect --help` lists what exists rather
-    # than accepting any word and failing at the door.
+    # than accepting any word and failing at the door. Driving is the right test, not publishing:
+    # signing in is what this command does, and a market whose publish recipe is still to come is
+    # signed in to exactly the same way. Asking `supported_markets` here made onboarding print
+    # `sellee connect fb` as its own next step and then exit 2 on it.
     from sellee.browser import markets as _markets
 
-    for market in _markets.supported_markets():
+    for market in _markets.drivable_markets():
         consub.add_parser(market, help=f"sign in to {market} in the agent's browser")
 
     settings_cmd = sub.add_parser("settings", help="view and change seller settings")
