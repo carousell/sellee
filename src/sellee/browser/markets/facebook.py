@@ -114,6 +114,21 @@ CONVERSATIONS_LIST_JS = """async () => {
       const r = a.getBoundingClientRect();
       return r.width > 0 && r.height > 0 && r.left >= 0;
     });
+  // The folder loads a screenful at a time, so a plain read answers with the most recent handful
+  // and looks exactly like a seller with a handful of buyers: the first live run of this read 9 of
+  // 19, and the ten it did not see were ten buyers nobody would have answered. `window.scrollTo`
+  // does not drive this list — bringing the last row into view does.
+  const loadAll = async () => {
+    let previous = -1;
+    let settled = 0;
+    for (let pass = 0; pass < 30 && settled < 3; pass++) {
+      const found = rows();
+      if (found.length === previous) settled++;
+      else { settled = 0; previous = found.length; }
+      if (found.length) found[found.length - 1].scrollIntoView({ block: 'end' });
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  };
   const read = () => {
     if (!folderOpen()) return null;
     const out = [];
@@ -142,6 +157,10 @@ CONVERSATIONS_LIST_JS = """async () => {
   let result = read();
   while (Date.now() < deadline && result === null) {
     await new Promise((r) => setTimeout(r, 250));
+    result = read();
+  }
+  if (result !== null) {
+    await loadAll();
     result = read();
   }
   if (result === null) {

@@ -167,7 +167,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         log.warning("no recorded inbox URL for %s — skipping", market)
         return
 
-    client.navigate(inbox_url)
+    client.navigate_visible(inbox_url)
     login = client.evaluate(adapter.login_js) or {}
     state = login.get("state")
     if state == "logged_out":
@@ -349,7 +349,7 @@ def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, re
     if url is None:
         return row
     try:
-        client.navigate(url)
+        client.navigate_visible(url)
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
@@ -519,7 +519,7 @@ def _read_thread(
     if url is None:
         log.warning("no recorded thread URL template for %s", market)
         return None
-    client.navigate(url)
+    client.navigate_visible(url)
     raw = client.evaluate(adapter.conversation_tail_js)
     unreadable = reconcile.unreadable_reason(raw)
     if unreadable is not None:

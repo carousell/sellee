@@ -150,7 +150,7 @@ def _follow_to_listings(client, adapter, current: str) -> bool:
     target = answer.get("url")
     if not target:
         return False
-    client.navigate(urljoin(current, str(target)))
+    client.navigate_visible(urljoin(current, str(target)))
     return True
 
 
@@ -160,7 +160,7 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
     with client.exclusive():
-        client.navigate(url)
+        client.navigate_visible(url)
         login = client.evaluate(adapter.login_js) or {}
         if login.get("state") != "logged_in":
             # Signed out again. The read lane owns that notice; a second voice about a survey the

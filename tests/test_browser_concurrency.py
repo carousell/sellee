@@ -38,6 +38,10 @@ class SlowClient:
         with self.lock:
             self.log.append(entry)
 
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
+
     def navigate(self, url):
         self._record(("navigate", url))
         self.url = url

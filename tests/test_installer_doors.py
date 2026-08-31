@@ -55,6 +55,10 @@ class FakeBrowser:
 
         return _Held()
 
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
+
     def navigate(self, url):
         self.visited.append(url)
         self.on_our_tab = True
