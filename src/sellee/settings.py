@@ -700,7 +700,7 @@ def _render_crosslist_markets(value: object) -> str:
     return ", ".join(marketplaces.display_name(market) for market in value)
 
 
-def crosslist_markets(store) -> list:
+def publish_markets(store) -> list:
     """The external marketplaces the seller has enabled, filtered to the ones still publishable.
 
     The filter matters after the fact: a stored market can stop being publishable — an adapter

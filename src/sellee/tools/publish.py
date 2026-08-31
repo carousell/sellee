@@ -210,7 +210,7 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
 
     # Enabling a marketplace is an approval-gated settings change, because it lets the agent post
     # publicly as the seller. A publish here rides on that approval rather than standing in for it.
-    if market not in settings.crosslist_markets(ctx.store):
+    if market not in settings.publish_markets(ctx.store):
         raise ToolError(f"{market!r} is not an enabled marketplace")
 
     urls = item["listing_urls"]

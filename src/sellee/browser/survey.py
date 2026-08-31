@@ -233,7 +233,7 @@ def relist_targets(store, market: str) -> str:
     rail = marketplaces.display_name(marketplaces.RAIL)
     others = [
         marketplaces.display_name(enabled)
-        for enabled in settings.crosslist_markets(store)
+        for enabled in settings.publish_markets(store)
         if enabled not in (marketplaces.RAIL, market)
     ]
     if not others:

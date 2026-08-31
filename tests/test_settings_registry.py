@@ -100,14 +100,14 @@ def test_crosslist_helper_drops_a_no_longer_publishable_value(fresh_store, monke
 
     seed_setting(fresh_store, "crosslist_markets", ["carousell"])
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
-    assert settings.crosslist_markets(fresh_store) == ["carousell"]
+    assert settings.publish_markets(fresh_store) == ["carousell"]
 
     fresh_store.set_seller_config_section("basics", {"region": "US"})
-    assert settings.crosslist_markets(fresh_store) == []
+    assert settings.publish_markets(fresh_store) == []
 
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
-    assert settings.crosslist_markets(fresh_store) == []
+    assert settings.publish_markets(fresh_store) == []
 
 
 def test_check_for_seller_refuses_before_a_region_is_known(fresh_store) -> None:

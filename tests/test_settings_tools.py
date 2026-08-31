@@ -145,7 +145,7 @@ def test_crosslist_applies_through_the_door(make_ctx, store, bus) -> None:
         {"kind": "action", "payload": {"choice": settings.CB_APPROVE, "ref": out["change_id"]}},
     )
     assert "Applied" in reply
-    assert settings.crosslist_markets(store) == ["carousell"]
+    assert settings.publish_markets(store) == ["carousell"]
 
 
 # --- tier membership --------------------------------------------------------------------------

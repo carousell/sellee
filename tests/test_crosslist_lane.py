@@ -378,5 +378,5 @@ def test_the_channel_pass_can_see_the_setting_it_is_told_to_name(store, bus, ena
 def test_settings_read_filters_to_publishable_markets(store, bus, enabled) -> None:
     """A stale id in the stored value is not an eligible publish."""
     seed_setting(store, "crosslist_markets", ["carousell", "fb"])
-    assert settings.crosslist_markets(store) == ["carousell"]
+    assert settings.publish_markets(store) == ["carousell"]
     assert [market for _, market in crosslist.pending_pairs(_deps(store, bus))] == ["carousell"]

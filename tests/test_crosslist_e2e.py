@@ -188,7 +188,7 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
         bus,
         {"kind": "action", "payload": {"choice": settings.CB_APPROVE, "ref": out["change_id"]}},
     )
-    assert settings.crosslist_markets(store) == ["carousell"]
+    assert settings.publish_markets(store) == ["carousell"]
 
     # The lane notices the gap and queues the browser publish.
     _lane(store, bus)

@@ -124,7 +124,7 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
     makes it backfill: an item listed long before this existed qualifies, and a recorded URL — or a
     single settled attempt — stops it qualifying forever.
     """
-    markets = settings.crosslist_markets(deps.store)
+    markets = settings.publish_markets(deps.store)
     if not markets:
         return []
 

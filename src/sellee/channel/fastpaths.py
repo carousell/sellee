@@ -236,7 +236,7 @@ def _signin_markets(store) -> list:
     """The marketplaces `/connect` can offer: the ones the seller switched on that the agent has a
     browser adapter for.
 
-    The seller's raw setting, not `settings.crosslist_markets` — that one filters to what is
+    The seller's raw setting, not `settings.publish_markets` — that one filters to what is
     *publishable*, which is a different question. A market can be readable long before it can be
     listed to, and being signed out of it stops the read lane either way. carousell.ai is excluded
     by the same filter: it is reached with an API key, so there is no window to open and nothing

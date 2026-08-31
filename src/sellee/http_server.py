@@ -776,7 +776,7 @@ class _Handler(BaseHTTPRequestHandler):
 
         if self._attended_body() is None:
             return
-        enabled = settings.crosslist_markets(self._app.store)
+        enabled = settings.publish_markets(self._app.store)
         # The *reason* travels with the answer: "Chrome isn't running" and "a pass is using the
         # browser" both stop a probe, but a reader told the first while watching Chrome run a
         # publish learns to distrust the report.

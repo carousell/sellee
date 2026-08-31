@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(gh pr *)",
+      "Bash(git fetch *)",
+      "Bash(git add *)",
+      "Bash(git commit -m 'docs: open the README with the setup banner and a features overview *)"
+    ]
+  }
+}
