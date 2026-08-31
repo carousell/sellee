@@ -9,12 +9,11 @@ close returns a structured below_floor error carrying no value, a floorless belo
 no_floor (ask the seller), and an unpublished item returns not_published naming the publish tool —
 the legacy self-heal (inline create-then-checkout) is deliberately not ported.
 
-`carousell_ai_create_signin_link` is its remedy, and lives here because the gate and the way out of
-it read together: the rail refuses to mint a checkout link for an account that has never been signed
-into, and that refusal is mapped to guidance pointing at the sign-in tool. The sign-in URL grants
-ownership of the seller's account, so it is a seller-channel tool only — deliberately invisible to
-the buyer-facing reply tier, whose refusal wording therefore tells it to escalate instead and does
-not name a tool it cannot call.
+`carousell_ai_create_signin_link` is the wall's way out: the rail refuses to mint checkout links
+for an account that has never been signed into, and the refusal maps to guidance naming this tool.
+The sign-in URL grants ownership of the seller's account, so the tool is seller-channel only —
+invisible to the buyer-facing reply tier, whose refusal wording says escalate instead and never
+names a tool it cannot call.
 """
 
 from __future__ import annotations
@@ -41,10 +40,10 @@ from sellee.tools.registry import (
 
 _MARKET = "carousell-ai"
 
-# The rail ships a bare refusal for a guest account — no code, no URL, deliberately (the sign-in URL
-# must never ride on a buyer-facing error path). This clause is the stable part of that copy; if it
-# ever drifts, the mapping below stops firing and the raw rail text surfaces as before, which itself
-# says the seller must sign in. Degraded, never wrong.
+# The rail deliberately ships a bare refusal for a guest account — no error code to match on (a
+# sign-in URL must never ride a buyer-facing error path). This clause is the stable part of that
+# copy; if it drifts, the mapping below stops firing and the raw rail text surfaces as before —
+# degraded (it still says the seller must sign in), never wrong.
 _GUEST_GATE_CLAUSE = "belongs to a guest account"
 _ALREADY_SIGNED_IN_CLAUSE = "already a seller"
 
@@ -90,9 +89,8 @@ def _rail(ctx: ToolContext):
 
 
 def _guest_gate_guidance(ctx: ToolContext) -> str:
-    """The remedy, worded for the tier that hit the wall. Naming the sign-in tool to a tier that
-    cannot see it would send the model at an unknown tool; the reply tier gets the escalate route
-    instead, and is told not to mention the seller's account to the buyer."""
+    """The remedy, worded per tier: naming the sign-in tool to a tier that cannot see it would
+    send the model at an unknown tool, so the reply tier gets the escalate route instead."""
     if ctx.session.tier == TIER_PASS_REPLY:
         return _GUEST_GATE_REPLY_GUIDANCE
     return _GUEST_GATE_SELLER_GUIDANCE
@@ -194,8 +192,7 @@ def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
         minted = rail.create_promotion_url()
     except RailToolError as exc:
         if _ALREADY_SIGNED_IN_CLAUSE in str(exc):
-            # Not a failure: the account no longer needs the link. Reported as a result so the
-            # model routes straight to the checkout link instead of re-minting.
+            # a result, not an error — an error here would read as failure and invite re-mint loops
             return {
                 "already_signed_in": True,
                 "note": "the seller has already signed in — create the checkout link now",
@@ -206,11 +203,9 @@ def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
 
     url = (minted.get("promotion_url") or "").strip()
     base = _signin_base(ctx)
-    # `/signin` must end there or be followed by a real boundary — a bare prefix match would
-    # also accept a same-origin `/signinfoo`.
+    # fail closed — this URL hands over the seller's account. Exact base or a real `?`/`/`
+    # boundary; a bare prefix match would also accept a same-origin `/signinfoo`.
     if url != base and not url.startswith((base + "?", base + "/")):
-        # fail closed: this URL hands over the seller's account, so an unexpected host is never
-        # forwarded — the last thing to pass through unvalidated
         raise ToolError("sign-in link did not come from the expected carousell.ai sign-in base")
     return {"signin_url": url}
 

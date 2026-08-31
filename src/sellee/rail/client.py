@@ -206,13 +206,10 @@ class RailClient:
         return {"checkout_url": url}
 
     def create_promotion_url(self) -> dict:
-        """Mint the seller's one-time sign-in link (the rail calls it a promotion). Takes no
-        arguments — the account is the one the API key belongs to. Returns {promotion_url}; raises
-        RailToolError if the rail returns no URL (we never fabricate one).
-
-        An account that has already signed in comes back as RailToolError("already a seller"),
-        which propagates: what that means is the caller's call, not the transport's.
-        """
+        """Mint the seller's one-time sign-in link (the rail's "promotion") for the account the
+        API key belongs to. Returns {promotion_url}; raises RailToolError when the rail returns no
+        URL (we never fabricate one). An already-signed-in account surfaces as
+        RailToolError("already a seller") — interpreting that is the caller's job."""
         result = self.call_tool("create_promotion_url", {})
         url = result.get("promotion_url")
         if not url:
