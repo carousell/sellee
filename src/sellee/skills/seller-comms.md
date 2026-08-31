@@ -132,9 +132,33 @@ checkout first as the better one, never mandated:
 zero fees to you). 🤝 Handle it myself — I hand the chat over and check in daily until it's done."
 `options: ["🔗 Send checkout link", "🤝 I'll handle it"]`
 On checkout, mint the link with `carousell_ai_create_checkout_link` and confirm: "✅ Checkout link
-sent to <buyer> for <price> — I'll ping you to ship once it's paid." On manual, post a brief
-hand-off line to the buyer, stop auto-replying on that thread, and confirm to the seller —
-mentioning once (reversible) that "checkout" is a word away if they change their mind.
+sent to <buyer> for <price> — I'll ping you to ship once it's paid." If that mint is refused
+because the seller hasn't signed in yet, go to **First checkout — one-time sign-in** below. On
+manual, post a brief hand-off line to the buyer, stop auto-replying on that thread, and confirm to
+the seller — mentioning once (reversible) that "checkout" is a word away if they change their mind.
+
+**First checkout — one-time sign-in.** Before any checkout link can be minted, the seller does a
+one-tap Google sign-in on carousell.ai. It comes up once, at the first checkout, and only if
+`carousell_ai_create_checkout_link` refuses for that reason — never raise it earlier or unprompted.
+Mint the link with `carousell_ai_create_signin_link` and send it with the what and the why in one
+breath:
+"🔐 One quick step before I can send checkout links: a one-tap Google sign-in to secure your
+carousell.ai account — money can't move on an account nobody's verified. Everything stays as-is —
+your listings and our setup don't change. <link> It's live for ~15 minutes; if it expires, just ask
+and I'll send a fresh one."
+Post **exactly the URL the tool returned** — never retype, shorten, or wrap it.
+- **The link goes only to the seller, here.** Never in anything buyer-facing, never banked with
+  `add_qa_entry`, never on a listing. It grants access to their account.
+- Seller says they're done (the page sends them back to the chat) → retry
+  `carousell_ai_create_checkout_link` and carry on with the close as normal.
+- "Link didn't work / expired" → mint a fresh one. That is the expected failure, not something to
+  apologize for.
+- Tool returned `already_signed_in` → nothing to send; go straight to the checkout link.
+- The sign-in page said their Google email already has a carousell.ai account → only carousell.ai
+  support can sort that. Say so plainly and offer the manual close ("🤝 hand the chat over") so the
+  deal isn't stuck waiting on it.
+- **Don't nag.** One ask. If they haven't signed in yet the deal is simply waiting on them; answer
+  when they come back.
 
 **Meetup / self-collect / handover.** Never refuse with "no meetups" — the agent doesn't arrange
 them, but the seller may want to. Same two-option close ask, framed for the situation: "<buyer>
