@@ -213,6 +213,36 @@ def new_rows(tail, recorded, *, now: float) -> list:
     return out
 
 
+def items_for_same_listing(title: str, items, market: str) -> list:
+    """Which of our items are already the thing this marketplace listing is, listed elsewhere.
+
+    A seller who has one desk on two marketplaces has one desk. Adopting the second listing as its
+    own item would give them two — two carousell.ai listings for one thing, two floors, and buyers
+    from the two markets negotiating against different rows for the same object.
+
+    There is no id that spans marketplaces, so the only evidence available is the title, and this is
+    deliberately strict about it. The costs are not symmetric: failing to merge leaves a duplicate
+    the seller can see and delete, while merging wrongly puts two different objects behind one item
+    and has a Facebook buyer haggling over a Carousell desk's floor. So it matches on the whole
+    normalized title and never a part of one — "Monster Open-Ear Clip" and "Monster Open Ear Hook"
+    are two real products in one real inventory, and a looser rule would fuse them.
+
+    Returns every candidate rather than choosing, exactly as `matching_items` does, so the caller
+    can refuse an ambiguous merge instead of guessing at one. An item that already holds a listing
+    on *this* market is not a candidate at all: whatever it is, it is not this listing moved from
+    somewhere else, and a seller with two same-titled listings on one marketplace has two of them.
+    """
+    wanted = normalize(title)
+    if not wanted:
+        return []
+    return [
+        item["id"]
+        for item in items
+        if normalize(item.get("title") or "") == wanted
+        and not (item.get("listing_urls") or {}).get(market)
+    ]
+
+
 def matching_items(product_id: str | None, items, market: str, pattern: str) -> list:
     """Which of our items a conversation is about, by the marketplace's listing id.
 

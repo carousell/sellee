@@ -131,6 +131,34 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         _fail(deps, row, f"{len(existing)} items already claim this listing")
         return
 
+    # The same thing, already adopted from another marketplace. One desk on Carousell and Facebook
+    # is one desk: it becomes one item carrying both listing URLs, so buyers from either market land
+    # on the same row and carousell.ai gets it once. `rail_owed` is false whenever the twin already
+    # has a rail listing, which is what stops the second copy.
+    twins = reconcile.items_for_same_listing(row["title"], deps.store.list_items(), market)
+    if len(twins) == 1:
+        item = deps.store.get_item(twins[0])
+        owed = relist and not (item or {}).get("listing_urls", {}).get(marketplaces.RAIL)
+        deps.store.adopt_discovered_listing(
+            market, listing_id, item_id=twins[0], url=row["url"], rail_owed=owed
+        )
+        deps.bus.publish(
+            "survey.adopted",
+            {
+                "market": market,
+                "listing_id": listing_id,
+                "item_id": twins[0],
+                "linked": True,
+                "same_as": "title",
+            },
+        )
+        return
+    if twins:
+        # Several items share this title, so which one this listing *is* cannot be settled from the
+        # page. Left for the seller rather than merged into whichever came first.
+        _fail(deps, row, f"{len(twins)} items already have this title on another marketplace")
+        return
+
     client = deps.browser_factory()
     with client.exclusive():
         client.navigate(row["url"])

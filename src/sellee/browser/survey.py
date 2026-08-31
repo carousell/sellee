@@ -222,10 +222,15 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
 
 
 def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) -> list:
-    """Drop the listings we already hold: an item recording this URL, or an earlier look's row.
+    """Drop the listings we already hold: an item recording this URL, an earlier look's row, or the
+    same thing already managed from another marketplace.
 
     Everything the agent published itself is on that page too; re-adopting it would make a second
-    item for one listing.
+    item for one listing. And a seller who cross-lists by hand has the same desk on two
+    marketplaces — asking "want me to manage this desk?" a second time, about a desk already being
+    managed, reads as though the first answer was lost. The adopt phase still checks for itself,
+    because these two run minutes apart and the seller answers in between; this is about what the
+    question says.
     """
     items = deps.store.list_items()
     known = {row["listing_id"] for row in deps.store.list_discovered_listings(market)}
@@ -235,6 +240,8 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
         if not listing_id or listing_id in known:
             continue
         if reconcile.matching_items(listing_id, items, market, adapter.listing_id_pattern):
+            continue
+        if reconcile.items_for_same_listing(row.get("title") or "", items, market):
             continue
         fresh.append(row)
     return fresh

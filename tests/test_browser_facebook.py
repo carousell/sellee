@@ -400,3 +400,157 @@ def test_a_market_whose_listings_page_is_an_address_takes_no_hop(
     survey.discover_phase(_survey_deps(store, bus, client))
 
     assert client.navigations == ["https://www.carousell.sg/manage-listings/"]
+
+
+# --- one thing on two marketplaces ---------------------------------------------------------------
+
+
+def _managed_fb_listing(store, listing_id="222", title="White Study Desk"):
+    """An accepted Facebook listing waiting to be adopted, as a yes on the survey leaves it."""
+    store.record_survey_result(
+        "fb",
+        [
+            {
+                "listing_id": listing_id,
+                "url": f"https://www.facebook.com/marketplace/item/{listing_id}/",
+                "title": title,
+                "price": 65.0,
+                "price_text": "SGD65",
+            }
+        ],
+    )
+    store.decide_discovered_listings("fb", decision="manage", manage="relist")
+
+
+def _twin(store, *, rail=True, title="White Study Desk"):
+    """The same thing, already managed from Carousell."""
+    item = store.create_item(title=title, list_price=65.0, currency="SGD")
+    store.record_listing_url(item["id"], "carousell", "https://www.carousell.sg/p/desk-1/")
+    if rail:
+        store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/l/desk")
+    return item
+
+
+def _merge_deps(store, bus):
+    """Adoption deps whose browser would raise: a merge is settled from rows alone, and touching
+    the marketplace to decide it would be a bug worth failing on."""
+    from sellee.browser import survey
+
+    def no_browser():
+        raise AssertionError("a merge must be decided without reading the marketplace")
+
+    return survey.SurveyDeps(store=store, bus=bus, config=Config(), browser_factory=no_browser)
+
+
+def test_the_same_thing_on_two_marketplaces_becomes_one_item(store, bus) -> None:
+    """A seller who cross-lists by hand has one desk, not two. The Facebook copy of a desk already
+    managed on Carousell links to it rather than making a second item — two items would mean two
+    carousell.ai listings, two floors, and buyers from each market on a different row."""
+    from sellee.browser import adopt
+
+    item = _twin(store)
+    _managed_fb_listing(store)
+
+    adopt.adopt_phase(_merge_deps(store, bus))
+
+    assert [i["id"] for i in store.list_items()] == [item["id"]], "a second item was created"
+    merged = store.get_item(item["id"])
+    assert merged["listing_urls"]["fb"] == "https://www.facebook.com/marketplace/item/222/"
+    assert merged["listing_urls"]["carousell"] == "https://www.carousell.sg/p/desk-1/"
+
+
+def test_a_merged_listing_is_not_published_to_the_rail_a_second_time(store, bus) -> None:
+    """The point of merging: the twin already has its carousell.ai listing, so this owes none."""
+    from sellee.browser import adopt
+
+    _twin(store)
+    _managed_fb_listing(store)
+
+    adopt.adopt_phase(_merge_deps(store, bus))
+
+    assert store.listings_owed_rail_publish() == []
+
+
+def test_merging_does_not_swallow_a_rail_publish_that_is_still_owed(store, bus) -> None:
+    """An item the seller had answered-only, matched from a second marketplace they asked to
+    relist, is owed its carousell.ai listing — once."""
+    from sellee.browser import adopt
+
+    _twin(store, rail=False)
+    _managed_fb_listing(store)
+
+    adopt.adopt_phase(_merge_deps(store, bus))
+
+    assert [r["listing_id"] for r in store.listings_owed_rail_publish()] == ["222"]
+
+
+def test_two_items_sharing_a_title_are_never_merged_into_either(store, bus) -> None:
+    """Which one this listing is cannot be settled from a title alone, and merging into whichever
+    came first would put a buyer on the wrong floor. Left for the seller."""
+    from sellee.browser import adopt
+
+    for suffix in ("a", "b"):
+        it = store.create_item(title="White Study Desk", list_price=65.0, currency="SGD")
+        store.record_listing_url(
+            it["id"], "carousell", f"https://www.carousell.sg/p/desk-{suffix}/"
+        )
+    _managed_fb_listing(store)
+
+    adopt.adopt_phase(_merge_deps(store, bus))
+
+    assert len(store.list_items()) == 2, "a third item was created"
+    assert store.list_discovered_listings("fb")[0]["status"] == "failed"
+
+
+def test_the_survey_does_not_ask_again_about_a_thing_already_managed(store, bus) -> None:
+    """Asking "want me to manage this desk?" about a desk already being managed reads as though
+    the first answer was lost."""
+    from sellee.browser import survey
+
+    _twin(store)
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    client = SurveyStub(
+        listings={
+            "listings": [
+                {
+                    "listing_id": "222",
+                    "url": "https://www.facebook.com/marketplace/item/222/",
+                    "title": "White Study Desk",
+                    "price": 65.0,
+                    "price_text": "SGD65",
+                }
+            ],
+            "active_count": 1,
+        }
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    assert store.list_discovered_listings("fb") == []
+
+
+def test_a_near_miss_title_is_two_different_products() -> None:
+    """One real inventory holds both of these. Anything looser than whole-title equality fuses
+    them, and then a buyer for the hooks negotiates over the clips."""
+    from sellee.browser import reconcile
+
+    items = [
+        {"id": "a", "title": "Monster Open-Ear Clip Wireless Earbuds", "listing_urls": {}},
+        {"id": "b", "title": "Monster Open Ear Hook Wireless Earbuds", "listing_urls": {}},
+    ]
+
+    assert reconcile.items_for_same_listing(
+        "Monster Open-Ear Clip Wireless Earbuds", items, "fb"
+    ) == ["a"]
+    assert reconcile.items_for_same_listing("Monster Earbuds", items, "fb") == []
+
+
+def test_an_item_already_listed_on_this_market_is_not_a_twin() -> None:
+    """Two same-titled listings on ONE marketplace are two of the thing, not one seen twice."""
+    from sellee.browser import reconcile
+
+    items = [{"id": "a", "title": "IKEA Elloven", "listing_urls": {"fb": "https://fb/1"}}]
+
+    assert reconcile.items_for_same_listing("IKEA Elloven", items, "fb") == []
+    assert reconcile.items_for_same_listing("IKEA Elloven", items, "carousell") == ["a"]
