@@ -10,6 +10,7 @@ registry entry, not edits threaded through the layer — the same split `channel
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from sellee import marketplaces
 from sellee.browser.markets import carousell, facebook
@@ -76,6 +77,21 @@ class MarketAdapter:
     # answering `{url}` for the survey to follow before reading `my_listings_js`. Empty for a market
     # whose `urls.my_listings` is already the page.
     my_listings_entry_js: str = ""
+    # Publishing by driving the form rather than by a recipe a model reads. All four move together:
+    # a market has them or it has a `listing_flow`, and `supported_markets` asks for either.
+    #
+    # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
+    # what the form holds, for the check before anything is pressed; `publish_options_js(wanted)`
+    # marks one dropdown option; `publish_result_js` names the listing that was made.
+    publish_fields_js: str = ""
+    publish_readback_js: str = ""
+    publish_result_js: str = ""
+    publish_target: Callable[[str], str] = lambda step: ""
+    publish_options_js: Callable[[str], str] = lambda wanted: ""
+    # Where a driver files a listing when nothing better is known. Choosing a category from a title
+    # is judgement, and judgement is the listing flow's job, not a driver's — so this is the honest
+    # catch-all rather than a guess, and a market names its own.
+    publish_default_category: str = ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -109,6 +125,12 @@ FACEBOOK = MarketAdapter(
     my_listings_js=facebook.MY_LISTINGS_JS,
     listing_detail_js=facebook.LISTING_DETAIL_JS,
     my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
+    publish_fields_js=facebook.PUBLISH_FIELDS_JS,
+    publish_readback_js=facebook.PUBLISH_READBACK_JS,
+    publish_result_js=facebook.PUBLISH_RESULT_JS,
+    publish_target=facebook.publish_target,
+    publish_options_js=facebook.options_js,
+    publish_default_category=facebook.DEFAULT_CATEGORY,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
@@ -150,8 +172,19 @@ def supported_markets() -> list:
     return [
         market
         for market in marketplaces.browser_markets()
-        if market in _ADAPTERS and marketplaces.listing_flow(market)
+        if market in _ADAPTERS and _has_a_publish_path(market)
     ]
+
+
+def _has_a_publish_path(market: str) -> bool:
+    """Whether anything at all knows how to put a listing on this marketplace.
+
+    Two ways, and they are equal citizens: a recipe skill a publish pass reads, or the publish
+    selectors `browser/publisher.py` drives. Asked of the code either way, never of a flag — a
+    market that has neither cannot be published to whatever the registry says.
+    """
+    adapter = _ADAPTERS.get(market)
+    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish_fields_js))
 
 
 def surveyable_markets(region: str | None = None) -> list:

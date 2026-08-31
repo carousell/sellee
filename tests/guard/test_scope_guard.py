@@ -39,6 +39,11 @@ _ID_PARAMS = {"item_id": "item", "thread_id": "thread", "want_id": "want"}
 # Keyed by parameter, never by accessor alone: an accessor-wide exemption also blesses whatever id
 # that accessor grows next, which is the shape of gap this whole file exists to catch.
 _UNGUARDED_BY_DESIGN = {
+    ("record_driven_publish", "item_id"): (
+        "daemon-only: the fan-out lane writes it after driving a marketplace's own create form, "
+        "which is work no pass does — a driven market never spawns one — and no pass tier carries "
+        "a tool that reaches it"
+    ),
     ("set_crosslink_pushed", "item_id"): (
         "daemon-only: the crosslink lane writes it after the rail accepts a push, and no pass "
         "tier carries a tool that reaches it"

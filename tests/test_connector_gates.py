@@ -365,11 +365,12 @@ def test_a_market_with_no_site_for_this_seller_is_refused_with_the_reason(store,
 
 def test_connected_is_the_sellers_intent_and_publishable_is_the_narrower_question(store) -> None:
     """The two readers answer different questions and must not collapse into one. A market with no
-    publish recipe is worked — its inbox read, its buyers answered — but never listed to."""
-    seed_setting(store, "connected_markets", [_MARKET, "fb"])
+    way to publish at all is still worked — its inbox read, its buyers answered — but never listed
+    to; `mercari` is a registry entry with no adapter, which is the narrow case."""
+    seed_setting(store, "connected_markets", [_MARKET, "mercari"])
 
-    assert settings.connected_markets(store) == [_MARKET, "fb"]
-    assert settings.publish_markets(store) == [_MARKET]  # fb ships no recipe
+    assert settings.connected_markets(store) == [_MARKET, "mercari"]
+    assert settings.publish_markets(store) == [_MARKET]
 
 
 def test_a_withdrawn_adapter_does_not_silently_vanish_from_the_sellers_list(

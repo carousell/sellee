@@ -836,7 +836,9 @@ delivering none of the four. Nothing failed; it was simply connected to nothing.
 derives each surface from the artifact, template or skill that implements it, and
 a gap must be declared as a **subtractive waiver** naming the reason. A waiver can
 only ever say less than the code does, and it self-retires — closing the gap fails
-the build until the waiver is deleted.
+the build until the waiver is deleted. That is not hypothetical: Facebook shipped
+with a `publish` waiver, the driver landed, and the build stayed red until the
+waiver was removed.
 
 ### The six surfaces
 
@@ -844,7 +846,7 @@ the build until the waiver is deleted.
 | --- | --- | --- |
 | 1 | offered at onboarding | registry entry (`connector.type: "browser"`, `status`, `domains`) + an adapter in `_ADAPTERS` |
 | 2 | connect / disconnect on `/sellee` | nothing beyond 1 |
-| 3 | listing to it | a recipe skill named by `listing_flow`, **or** publish selectors a driver fills |
+| 3 | listing to it | a recipe skill named by `listing_flow`, **or** the publish artifacts `browser/publisher.py` drives (`publish_fields_js`, `publish_readback_js`, `publish_result_js`, `publish_target`, `publish_options_js`) plus `urls.sell` |
 | 4 | adopting existing listings | `my_listings_js`, `listing_detail_js`, `urls.my_listings`, and a media grant (`media_hosts` or `media_host_suffixes`) |
 | 5 | inbox read + replies | `conversations_list_js`, `conversation_tail_js`, a `message_box` composer, `urls.inbox`, `urls.thread`, `listing_id_pattern`, and a way to name the listing a conversation is about |
 | 6 | signing back in | `login_js` — structurally guaranteed, a field with no default |
@@ -901,6 +903,23 @@ account can afford a page-dispatched keystroke. Prefer a real send button.
   first Facebook inbox reader looked for `/marketplace/t/` links on a page with
   none, and its composer was pinned to a URL pattern that never matches, so every
   send failed closed before a word was typed.
+- **A publish commits something the seller cannot take back**, so it carries the
+  same bracket as a send: `PublishNotAttempted` means nothing exists and the caller
+  should try again, `PublishUnverified` means one may exist and it must never be
+  re-driven. Getting that classification wrong is expensive in both directions —
+  the first live run reported a greyed-out Next as "may have gone through", which
+  would have retired an item forever over a missing photograph.
+- **Read the form back before pressing anything.** It is the last moment a mistake
+  is free. After Publish, a truncated title is a live listing the seller has to
+  find and fix.
+- **Never leave a paid promotion switched on.** Facebook's "Boost listing after
+  publish" ships off and is one stray click from not being. It is read, not
+  assumed, and a boost that will not turn off refuses the publish outright.
+- **Confirm the listing from a page that actually names it.** Facebook redirects
+  after publishing to its selling page, whose cards carry no id at all — so the
+  publish is confirmed against the seller's own listings instead. Matching on a
+  title is acceptable *here* and nowhere else: the listing already exists either
+  way, and the only question is whether we can name it.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.

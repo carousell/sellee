@@ -493,6 +493,198 @@ LISTING_DETAIL_JS = """async () => {
   return result;
 }""".replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
 
+# --- publishing ----------------------------------------------------------------------------------
+
+# The attribute the publish artifacts stamp on each control, and the selector built from it. The
+# create form's fields carry no label, no name and no stable id — Facebook renders a floating label
+# as a sibling and generates ids per render (`_r_1u_`) — so a field is identifiable only by the text
+# next to it, which CSS cannot express. The artifact finds them and marks them; the driver acts on
+# the marks.
+PUBLISH_MARK_ATTR = "data-sellee-publish"
+
+
+def publish_target(step: str) -> str:
+    """The selector for one marked publish control."""
+    return f"[{PUBLISH_MARK_ATTR}='{step}']"
+
+
+# Mark every control the publish driver needs, and say which were found.
+#
+# Answers `{marked: [...], missing: [...], boost_on, width, visible}`. The driver refuses to type
+# anything until the fields it must fill are all present, so a form that has changed shape fails
+# before it can publish a listing with the price in the title — the two text inputs are
+# indistinguishable except by the label beside them, and they are adjacent.
+PUBLISH_FIELDS_JS = f"""() => {{
+  const MARK = '{PUBLISH_MARK_ATTR}';
+  // The floating label Facebook renders around a field. Deliberately the *nearest* short text: the
+  // form is a stack of labelled boxes, so the first ancestor carrying a short string is this
+  // field's own label and not the section heading above it.
+  const labelOf = (el) => {{
+    for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {{
+      const t = (n.innerText || '').trim();
+      if (t && t.length < 60) return t.split('\\n')[0].trim();
+    }}
+    return '';
+  }};
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }};
+  const mark = (el, step) => {{ if (el) el.setAttribute(MARK, step); return !!el; }};
+  const byLabel = (selector, wanted) =>
+    Array.from(document.querySelectorAll(selector)).filter(visible)
+      .find((el) => labelOf(el) === wanted) || null;
+  const button = (re) =>
+    Array.from(document.querySelectorAll('[role="button"],button')).filter(visible)
+      .find((el) => re.test((el.getAttribute('aria-label') || el.innerText || '').trim()))
+    || null;
+
+  const found = {{
+    title: mark(byLabel('input[type="text"]', 'Title'), 'title'),
+    price: mark(byLabel('input[type="text"]', 'Price'), 'price'),
+    category: mark(byLabel('label[role="combobox"]', 'Category'), 'category'),
+    condition: mark(byLabel('label[role="combobox"]', 'Condition'), 'condition'),
+    description: mark(byLabel('textarea', 'Description'), 'description'),
+    photos: mark(document.querySelector('input[type="file"]'), 'photos'),
+    // The control that opens the file chooser. Marked separately from the input itself because the
+    // upload only works while a chooser is actually open — the browser server refuses a file
+    // handed to it otherwise — so the driver has to press this first.
+    add_photos: mark(button(/^Add photos/), 'add_photos'),
+    more: mark(button(/^More details/), 'more'),
+    next: mark(button(/^Next$/), 'next'),
+    publish: mark(button(/^Publish$/), 'publish'),
+  }};
+  // Paid promotion, which must never be left on: it spends the seller's money, and it is a switch
+  // that ships default-off but is one stray click from not being.
+  const boost = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+    .find((el) => /Boost listing/i.test(el.getAttribute('aria-label') || ''));
+  mark(boost, 'boost');
+  // Whether the form will actually accept what it has. Facebook greys Next out until every field
+  // it requires is filled — a photograph among them — and clicking a disabled button submits
+  // nothing at all. Reported so the driver can tell "the form is not ready" from "the publish may
+  // have gone through", which is the difference between trying again and never trying again.
+  const enabled = (step) => {{
+    const el = document.querySelector('[' + MARK + "='" + step + "']");
+    return !!el && el.getAttribute('aria-disabled') !== 'true';
+  }};
+  return {{
+    marked: Object.keys(found).filter((k) => found[k]),
+    missing: Object.keys(found).filter((k) => !found[k]),
+    next_enabled: enabled('next'),
+    publish_enabled: enabled('publish'),
+    boost_on: !!(boost && boost.checked),
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
+# What one field holds now, for the read-back before publishing. The driver compares this against
+# what it meant to type: a marketplace form that silently truncated a title, or dropped a price
+# because the field wanted a different format, must not become a live listing nobody checked.
+PUBLISH_READBACK_JS = f"""() => {{
+  const value = (step) => {{
+    const el = document.querySelector("[{PUBLISH_MARK_ATTR}='" + step + "']");
+    if (!el) return null;
+    if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el.value;
+    // A chosen dropdown renders as its own label above the value ("Category\\nFurniture"), so the
+    // value is the last line — comparing the whole thing would never match what we picked.
+    const lines = (el.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
+    return lines.length ? lines[lines.length - 1] : '';
+  }};
+  return {{
+    title: value('title'),
+    price: value('price'),
+    description: value('description'),
+    condition: value('condition'),
+    category: value('category'),
+  }};
+}}"""
+
+# The options of an open dropdown, marked so one can be clicked.
+#
+# The two dropdowns on this form are not the same widget. Condition opens a `role="option"` list;
+# Category opens a panel of `role="button"` rows, which is also what the form's own Next and Save
+# draft buttons are — so the menu is found structurally, by taking the largest group of short-text
+# clickable rows sharing a parent. That is the same shape as Carousell's "the pane holding the most
+# bubbles", and for the same reason: it survives a layout nobody told us about.
+_PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
+  const MARK = '{PUBLISH_MARK_ATTR}';
+  const MIN_MENU = 4;
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 40 && r.height > 12;
+  }};
+  // A row's own label. Facebook hangs a subtitle under some of them ("Household" over "Shipping
+  // available"), and the subtitle is not part of the name.
+  const label = (el) => ((el.innerText || '').trim().split('\\n')[0] || '').trim();
+  const rows = Array.from(document.querySelectorAll('[role="option"],[role="menuitem"]'))
+    .filter(visible);
+  let options = rows;
+  if (!options.length) {{
+    // A menu is a column: its rows share a left edge, where the form's own buttons are scattered
+    // across the page. Grouping by parent does not work — Facebook wraps each row in its own div.
+    const columns = new Map();
+    Array.from(document.querySelectorAll('[role="button"]')).filter(visible).forEach((el) => {{
+      const text = label(el);
+      if (!text || text.length > 40) return;
+      const left = Math.round(el.getBoundingClientRect().left);
+      if (!columns.has(left)) columns.set(left, []);
+      columns.get(left).push(el);
+    }});
+    let best = [];
+    columns.forEach((members) => {{ if (members.length > best.length) best = members; }});
+    options = best.length >= MIN_MENU ? best : [];
+    options.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
+  }}
+  const texts = options.map(label);
+  const want = String(__WANTED__ || '').trim().toLowerCase();
+  // Exact first, then a prefix — Facebook's own wording wins over ours, and a listing must never be
+  // filed under a category that merely contains the word we were looking for.
+  let at = texts.findIndex((t) => t.toLowerCase() === want);
+  if (at < 0) at = texts.findIndex((t) => t.toLowerCase().startsWith(want));
+  if (at < 0) return {{ chosen: null, options: texts.slice(0, 40) }};
+  options[at].setAttribute(MARK, 'option');
+  return {{ chosen: texts[at], options: texts.slice(0, 40) }};
+}}"""
+
+
+def options_js(wanted: str) -> str:
+    """The option-picking artifact, with the wanted text baked in.
+
+    `browser_evaluate` passes one argument and it is the located element, so a value we choose
+    cannot be handed over at call time — it is substituted here instead, as a JS literal, the same
+    way Carousell injects its listing-id pattern.
+    """
+    return _PUBLISH_OPTIONS_TEMPLATE.replace("__WANTED__", json.dumps(str(wanted or "")))
+
+
+# Where the listing ended up, read after the publish settles. A publish that cannot be shown to have
+# produced a listing is reported as unverified rather than as done — the same fail-closed rule the
+# send bracket uses, and for the same reason: nobody can tell from the outside.
+PUBLISH_RESULT_JS = """() => {
+  const link = document.querySelector('a[href*="/marketplace/item/"]');
+  const id = link
+    ? ((link.getAttribute('href') || '').match(/\\/marketplace\\/item\\/(\\d+)/) || [])[1]
+    : null;
+  return {
+    listing_id: id || null,
+    url: location.href,
+    text: ((document.body && document.body.innerText) || '').slice(0, 400),
+  };
+}"""
+
+# Facebook's own condition wording, which the dropdown offers verbatim. Anything we hold that is not
+# one of these is mapped by the driver, and an item with no usable condition does not publish: the
+# field is required, and guessing "New" for a used thing is a lie told to a buyer.
+CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
+
+# Where a driven listing is filed when nothing has chosen better. Facebook requires a category and
+# offers about twenty; picking the right one from a title is judgement, which belongs to the listing
+# flow rather than to a driver, so this is its own catch-all rather than a guess that could file a
+# desk under Vehicles. It is Facebook's own word, and it is one of the options the menu offers.
+DEFAULT_CATEGORY = "Miscellaneous"
+
+
 # The reply composer, as shipped defaults under the heal cache.
 #
 # `page_url_pattern` is the conversation URL, not the marketplace inbox: a send happens on

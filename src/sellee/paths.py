@@ -174,6 +174,18 @@ def browser_output_dir() -> Path:
     return state_dir() / "browser-output"
 
 
+def publish_staging_dir() -> Path:
+    """Where a driven publish puts the photographs it is about to upload.
+
+    Under `browser_output_dir` deliberately, and not merely for tidiness: that directory is the
+    browser server's `--output-dir`, which is what makes it one of the few paths the server will
+    read a file from at all. A photograph anywhere else — the media store, a temp directory — is
+    refused as outside the allowed roots, so a driven publish that staged elsewhere could never
+    attach a picture, and Facebook will not accept a listing without one.
+    """
+    return browser_output_dir() / "publish"
+
+
 def passes_dir() -> Path:
     """Ephemeral per-pass workspaces, swept on pass end.
 

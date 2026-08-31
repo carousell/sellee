@@ -36,6 +36,30 @@ class PassesMixin:
             )
         return pass_id
 
+    def record_driven_publish(self, item_id: str, market: str, *, status: str) -> str:
+        """Ledger one publish that a driver did itself, without a pass ever being queued.
+
+        A driven market spawns no model pass, so it would otherwise leave no trace — and the
+        fan-out's entire memory of what it has tried is this table. Without a row, a publish that
+        may have gone through would be retried on the next tick, and the seller would end up with
+        two listings for one item.
+
+        Written already terminal: nothing is going to run it, and a `queued` row would be claimed by
+        the pass runner and told to publish something that is already published.
+        """
+        if status not in _PASS_TERMINAL:
+            raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
+        pass_id = _new_id("pass")
+        payload = {"item_id": item_id, "market": market, "origin": "driver"}
+        now = _now()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO passes (pass_id, type, payload, status, requested_ts, started_ts, "
+                "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 1)",
+                (pass_id, json.dumps(payload, sort_keys=True), status, now, now, now),
+            )
+        return pass_id
+
     def claim_queued_pass(self) -> ClaimedPass | None:
         """Claim the oldest queued pass, stamping it running in the same transaction so two
         claimers never take the same row. Returns None when the queue is empty."""

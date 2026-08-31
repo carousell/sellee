@@ -428,7 +428,7 @@ def test_enqueue_pass_refuses_a_market_it_cannot_publish_to(server, store, bus) 
     """A mistyped market used to spawn a real pass told to publish in a browser it never got, with
     no recipe. The caller is still on the other end of this request, so they hear it here."""
     store.set_seller_config_section("basics", {"region": "SG"})
-    for market in ("carousel", "fb", "ebay"):
+    for market in ("carousel", "mercari", "ebay"):
         status, body = _request(
             server,
             "POST",

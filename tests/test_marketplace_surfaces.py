@@ -25,13 +25,10 @@ from sellee.browser import markets as market_adapters
 
 # A gap someone has looked at and decided to ship without, with the reason. Delete the entry when
 # the gap closes — this test fails while a waiver describes a surface that now works.
-WAIVERS = {
-    ("fb", "publish"): (
-        "Facebook's create form is a multi-step wizard and has no publish recipe or driver yet. "
-        "Everything else a connection promises works, and a US seller has no other marketplace at "
-        "all — Carousell runs no US site — so it is offered without this rather than withheld."
-    ),
-}
+#
+# Empty today, and it got there the way it is supposed to: Facebook shipped with a `publish` waiver,
+# the driver landed, and the self-retirement test below failed until the waiver was deleted.
+WAIVERS: dict = {}
 
 
 def _a_region_it_serves(market: str) -> str | None:
@@ -62,8 +59,10 @@ def _surfaces(market: str) -> dict:
     return {
         # 1 + 2 — offered at onboarding, and switchable on the /sellee card.
         "offer": market in market_adapters.connectable_markets(_a_region_it_serves(market)),
-        # 3 — listing to it: a recipe the model follows, or selectors a driver fills.
-        "publish": bool(marketplaces.listing_flow(market)),
+        # 3 — listing to it: a recipe the model follows, or selectors a driver fills. Asked of
+        # `supported_markets` rather than restated, so the guard cannot drift from the reader every
+        # other caller uses.
+        "publish": market in market_adapters.supported_markets(),
         # 4 — picking up what the seller already has listed there.
         "adopt": bool(
             adapter.my_listings_js and adapter.listing_detail_js and urls.get("my_listings")

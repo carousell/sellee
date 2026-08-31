@@ -37,6 +37,8 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
+from sellee.browser import markets as market_adapters
+from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.passes import DEFAULT_PUBLISH_MARKET
@@ -168,6 +170,14 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
     if not _browser_ready(deps, market):
         return None
 
+    if publisher.can_drive(market):
+        # A market whose form we drive ourselves never spawns a pass: the work is deterministic —
+        # fill the fields, pick two dropdowns, press Publish — and a model reading a recipe to do it
+        # costs about $1.54 a listing and is only as repeatable as its reading. The two paths
+        # coexist; which one a market takes is read off whether it has publish selectors.
+        _drive_publish(deps, item, market)
+        return None
+
     pass_id = deps.store.enqueue_pass(
         "publish", {"item_id": item["id"], "market": market, "origin": ORIGIN}
     )
@@ -177,6 +187,77 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
         pass_id=pass_id,
     )
     return pass_id
+
+
+def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
+    """Put one item on a marketplace by driving its form, and record what happened.
+
+    The whole outcome is decided by which exception comes back, which is why the driver has two.
+    `PublishNotAttempted` means nothing was created and the pair stays eligible for the next tick.
+    `PublishUnverified` means a listing may exist, so the pair is *retired* rather than retried —
+    the seller having one listing we cannot see is recoverable; two is not.
+
+    A publish that reports a listing id records the URL, which is what takes the pair out of
+    `pending_pairs` for good and lets a buyer writing about it be joined to this item.
+    """
+    region = deps.store.seller_region()
+    create_url = marketplaces.market_url(market, "sell", region)
+    adapter = market_adapters.get_adapter(market)
+    if create_url is None or adapter is None:
+        return
+    # Staged where the browser server is allowed to read from: the media store is outside its roots,
+    # and a marketplace that requires a photograph refuses a listing without one.
+    photos = publisher.stage_photos(item["id"], item.get("photos") or [])
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            outcome = publisher.publish(
+                client,
+                adapter,
+                item,
+                create_url=create_url,
+                photos=photos,
+                listings_url=marketplaces.market_url(market, "my_listings", region),
+            )
+    except publisher.PublishNotAttempted as exc:
+        # Nothing exists. Left eligible: the next tick tries again.
+        deps.bus.publish(
+            "crosslist.not_attempted",
+            {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
+        )
+        return
+    except publisher.PublishUnverified as exc:
+        # Something may exist. Never re-driven.
+        deps.store.record_driven_publish(item["id"], market, status="error")
+        deps.bus.publish(
+            "crosslist.unverified",
+            {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
+        )
+        return
+    except BrowserUnavailable as exc:
+        deps.bus.publish("browser.unavailable", {"reason": str(exc)})
+        return
+    finally:
+        # Copies, so dropping them costs nothing and leaving them would grow the state tree one
+        # listing at a time. The item's own photographs are untouched in the media store.
+        publisher.clear_staged(item["id"])
+
+    deps.store.record_driven_publish(
+        item["id"], market, status="done" if outcome.verified else "error"
+    )
+    if outcome.verified and outcome.url:
+        deps.store.record_listing_url(item["id"], market, outcome.url)
+    deps.bus.publish(
+        "crosslist.published",
+        {
+            "item_id": item["id"],
+            "market": market,
+            "listing_id": outcome.listing_id,
+            "url": outcome.url,
+            "verified": outcome.verified,
+            "reason": outcome.reason,
+        },
+    )
 
 
 def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
