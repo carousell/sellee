@@ -759,23 +759,22 @@ DEFAULT_CATEGORY = "Miscellaneous"
 # `/messages/t/<id>/`, and an earlier version of this pinned it to `/marketplace/t/` — a path that
 # does not exist — so every send failed closed before a word was typed.
 #
-# Unlike Carousell there IS a send control to click, and it is only present once the composer holds
-# text: the button at the end of the composer row is "Send a like" on an empty box and "Press enter
-# to send" on a full one. Clicking it costs the seller nothing — no window focus taken, no
-# `isTrusted: false` event on their account — which is why this market has no submit JS.
+# There IS a send control here, and it is deliberately not used. The button at the end of the
+# composer row is "Send a like" on an empty box and "Press enter to send" on a full one — and
+# clicking it times out. It sits in a composer the page repaints as it types, so Playwright resolves
+# the element and then waits forever for it to hold still: verified in production, twice on one
+# buyer's thread, with the send reported as a browser error and the reply never delivered.
+#
+# Its own label says what to do instead. With the composer focused from the typing, a real Enter is
+# the send — which is the sink's third path, costs the agent's own window coming forward, and is
+# machinery that already works. A send that reliably happens is worth more than one that saves a
+# window raise and does not.
 COMPOSER_DEFAULTS = (
     {
         "step": "message_box",
         "strategy": "css",
         "query": '[role="textbox"][contenteditable="true"]',
         "action_kind": "type",
-        "page_url_pattern": "/messages/t/",
-    },
-    {
-        "step": "send_button",
-        "strategy": "css",
-        "query": '[aria-label="Press enter to send"]',
-        "action_kind": "click",
         "page_url_pattern": "/messages/t/",
     },
 )
