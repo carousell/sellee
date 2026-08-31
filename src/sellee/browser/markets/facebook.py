@@ -210,13 +210,56 @@ PRODUCT_ID_JS = """() => {
 # Returns a list of bubbles, or `{error, logs, width, height, visible}` when no message log could be
 # found — which the caller must treat as a failed read, never as a conversation with nothing in it.
 # Async for the same reason Carousell's is: the messages arrive after the load event.
-CONVERSATION_TAIL_JS = """async () => {
+
+# Whether one line of the log is Facebook's furniture rather than something somebody said.
+#
+# Its own function because it is the piece here worth testing directly, the way Carousell's price
+# parser is: every rule in it was written from a line that really appeared in a real thread, and the
+# cost of getting one wrong runs both ways — a rule too loose journals Facebook's words as the
+# buyer's, and one too tight deletes something they actually said.
+#
+# The timestamp rule shows why the second half matters. Facebook stamps a separator between runs of
+# messages, and an obvious `\\d{1,2}:\\d{2}` would eat a buyer who answers "8:30pm" to "what time?".
+# So a month or a weekday is required, which every real separator has and a bare time does not.
+CHROME_LINE_JS = r"""(text) => {
+  const line = String(text || '').trim();
   const RECEIPTS = /^(sent|sending|delivered|seen|message sent|read|enter to send)$/i;
   const NOTICES = new RegExp(
     '(started this chat|waiting for your response|send a quick response' +
+      '|tap a response to send|you can now rate each other|people may rate one another' +
       '|you sent an attachment|view buyer profile)',
     'i'
   );
+  // Built from strings rather than regex literals, so every backslash is doubled: inside a JS
+  // string '\d' is not an escape and collapses to a bare 'd', which silently turns the whole
+  // pattern into one that matches the letter instead of a digit.
+  const DAY = '(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*';
+  const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \\d{1,2}(?:, \\d{4})?';
+  const TIMESTAMP = new RegExp(
+    '^(?:' + DAY + '|' + MONTH + '),? \\d{1,2}:\\d{2}\\s?(?:am|pm)?$', 'i'
+  );
+  return RECEIPTS.test(line) || NOTICES.test(line) || TIMESTAMP.test(line);
+}"""
+_CONVERSATION_TAIL_TEMPLATE = """async () => {
+  const isChromeLine = __IS_CHROME__;
+  // Text the seller could click is never text the buyer sent. This is the guard the whole read
+  // turns on, and it is Carousell's rule for the same reason: Facebook renders quick-reply
+  // suggestions inside the message log — "Yes, are you interested?", "Sorry, it's not available."
+  // — and they are indistinguishable from a real message by text, position or shape. Read as
+  // buyer messages, as they were on 2026-09-01, the agent negotiates against words nobody said:
+  // Gerry's thread reported the buyer as having written "Sorry, it's not available."
+  //
+  // The same rule drops the other clickable furniture in a live thread — a "Rate <buyer>" prompt,
+  // and the link-preview card Facebook renders under a checkout link we sent, whose title and host
+  // would otherwise be journaled as two more messages. Verified against real threads in both
+  // directions: every genuine message, ours and theirs, carries no pointer and no button.
+  const clickable = (el, root) => {
+    for (let n = el, i = 0; n && n !== root && i < 8; n = n.parentElement, i++) {
+      if (n.getAttribute('role') === 'button') return true;
+      if (getComputedStyle(n).cursor === 'pointer') return true;
+    }
+    return false;
+  };
   const logs = () =>
     Array.from(document.querySelectorAll('[role="log"]')).filter((el) => {
       const r = el.getBoundingClientRect();
@@ -243,9 +286,10 @@ CONVERSATION_TAIL_JS = """async () => {
       for (let i = 0; i < inner.length; i++) {
         if ((inner[i].innerText || '').trim() === text) return;
       }
-      if (RECEIPTS.test(text) || NOTICES.test(text)) return;
+      if (isChromeLine(text)) return;
       if (counterpart && text === counterpart) return;
       if (title && text.indexOf(title) === 0) return;
+      if (clickable(el, log)) return;
       const r = el.getBoundingClientRect();
       if (r.width === 0 || r.height === 0) return;
       const fromLeft = r.left - lr.left;
@@ -275,6 +319,8 @@ CONVERSATION_TAIL_JS = """async () => {
   }
   return result;
 }"""
+
+CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS)
 
 # Is the seller logged in? Three-state, and it must never answer logged_out on thin evidence: a
 # false logged_out tells a signed-in seller to re-authenticate and stops their market.
