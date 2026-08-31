@@ -306,3 +306,85 @@ def test_gather_status_channel_adapter_none_when_unbound(store, xdg_tmp, monkeyp
     status = supervisor.gather_status()
     assert status.channel_bound is False
     assert status.channel_adapter is None
+
+
+# --- what "running" is allowed to mean -----------------------------------------------------------
+
+
+def _status(**kw):
+    from sellee.supervisor import Status
+
+    base = dict(
+        label="com.sellee.agent",
+        mode="login-start",
+        registered=True,
+        heartbeat_age_sec=1.0,
+        recent_events=[],
+        channel_bound=True,
+        channel_adapter="telegram",
+        paused=False,
+        queued_notices=0,
+        process_alive=True,
+    )
+    base.update(kw)
+    return Status(**base)
+
+
+def _state_line(capsys, monkeypatch, st) -> str:
+    from sellee import supervisor
+
+    monkeypatch.setattr(supervisor, "gather_status", lambda **kw: st)
+    supervisor.status()
+    return [ln for ln in capsys.readouterr().out.splitlines() if ln.startswith("state:")][0]
+
+
+def test_a_registered_job_with_no_process_is_not_called_running(capsys, monkeypatch) -> None:
+    """A clean stop leaves the job registered and nothing running. Reported as "running", that is
+    how a dead daemon goes unnoticed — a seller taps Resume in chat, nothing is there to receive
+    it, and the button neither works nor says anything."""
+    line = _state_line(capsys, monkeypatch, _status(process_alive=False))
+
+    assert "NOT running" in line
+    assert "sellee daemon start" in line
+
+
+def test_a_process_that_has_stopped_ticking_is_not_called_running(capsys, monkeypatch) -> None:
+    """Alive and wedged is a different thing from stopped, and wants a different answer from
+    whoever is reading."""
+    from sellee import supervisor
+
+    line = _state_line(
+        capsys,
+        monkeypatch,
+        _status(heartbeat_age_sec=supervisor._WEDGED_AFTER_SEC + 60),
+    )
+
+    assert "not ticking" in line
+
+
+def test_a_live_ticking_daemon_is_running(capsys, monkeypatch) -> None:
+    assert _state_line(capsys, monkeypatch, _status()) == "state:     running"
+
+
+def test_pause_and_resume_reach_the_store_without_the_daemon(xdg_tmp, monkeypatch) -> None:
+    """The door that exists for the case the chat button cannot cover: a tap only arrives if
+    something is alive to receive it, and the one control whose whole job is getting out of a stuck
+    state must not need the stuck thing to be working."""
+    from sellee import cli, migrations, paths
+    from sellee.db import Database
+    from sellee.store import Store
+
+    paths.ensure_state_dirs()
+    data = Database(paths.data_dir() / "sellee.db")
+    migrations.run_startup_migrations(
+        data_db=data,
+        events_db=Database(paths.events_db()),
+        backups_dir=paths.state_dir() / "backups",
+        backups_keep=2,
+    )
+
+    assert cli.main(["sellee", "pause"]) == 0
+    assert Store(Database(paths.data_dir() / "sellee.db")).is_paused() is True
+
+    assert cli.main(["sellee", "resume"]) == 0
+    assert Store(Database(paths.data_dir() / "sellee.db")).is_paused() is False

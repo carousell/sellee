@@ -172,6 +172,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prun.add_argument("--follow", action="store_true", help="tail the pass's events until it ends")
 
+    # Pause and resume from a terminal, without the chat channel in the path. The buttons in chat
+    # are the everyday door, and they can only work while something is there to receive a tap — so
+    # the one control whose whole job is getting out of a stuck state has a door that needs nothing
+    # running at all. It writes the flag the lanes read at use, so it takes effect on the next tick
+    # whenever the daemon comes up.
+    sub.add_parser("pause", help="stop the agent acting (same flag as the chat button)")
+    sub.add_parser("resume", help="let the agent act again (works with the daemon down)")
+
     sub.add_parser("chat", help="talk to Sellee in this terminal")
 
     harness = sub.add_parser("harness", help="harness configuration")
@@ -241,6 +249,33 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _set_paused(paused: bool) -> int:
+    """Set the pause flag straight on the store, with nothing else in the way.
+
+    Deliberately not routed through the daemon's control port. That port is served by the very
+    process this command exists to work around: a seller whose agent has stopped answering taps a
+    Resume button that only arrives if something is alive to receive it, and if nothing is, the
+    button does nothing and says nothing. The flag is read at use by every lane, so writing it here
+    takes effect on the next tick whenever the daemon comes back.
+    """
+    from sellee import paths
+    from sellee.db import Database
+    from sellee.store import Store
+
+    store = Store(Database(paths.data_dir() / "sellee.db"))
+    store.set_paused(paused, source="cli")
+    print("paused" if paused else "resumed")
+    if not paused:
+        from sellee import supervisor
+
+        st = supervisor.gather_status()
+        if not st.process_alive:
+            # Resuming a daemon that is not running is a flag nobody will read. Say so, rather than
+            # printing "resumed" and leaving the seller to wonder why nothing happened.
+            print("note: the daemon is not running — start it with `sellee daemon start`")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
@@ -264,6 +299,9 @@ def main(argv: list[str] | None = None) -> int:
         from sellee.installer import update as update_cli
 
         return update_cli.run(args)
+
+    if args.command in ("pause", "resume"):
+        return _set_paused(args.command == "pause")
 
     if args.command == "uninstall":
         from sellee import uninstall_cli
