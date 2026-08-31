@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import settings
+from sellee import marketplaces, settings
 from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
 from sellee.store import StoreError
@@ -66,6 +66,29 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     thread = ctx.store.get_thread(params["thread_id"])
     if thread is None:
         raise ToolError(f"no thread with id {params['thread_id']!r}")
+    # The marketplace this thread lives on, read at the moment of sending. A reply pass can be
+    # composed against a connected market and reach here after the seller has disconnected it, and
+    # the whole promise of that switch is that it stops work already in flight — a message going out
+    # on their account afterwards is the one outcome that would make it worthless. Refused up here
+    # with the pause, before any reserve or intent, so nothing is recorded and nothing is left for
+    # the stale sweep to escalate.
+    #
+    # Sell threads only, and the rail never. `connected_markets` is the seller's list of the
+    # marketplaces we sell *for* them on — it is what the read lane, the survey and the fan-out all
+    # key off. A buy thread is them approaching someone else's listing, which that switch has never
+    # governed and has no door to turn on, so gating it here would stop buying on a setting that
+    # never claimed to be about it. The rail is where every listing lives, connected or not.
+    if (
+        thread["side"] == "sell"
+        and thread["market"] != marketplaces.RAIL
+        and thread["market"] not in settings.connected_markets(ctx.store)
+    ):
+        return {
+            "status": "not_connected",
+            "delivered": _NOT,
+            "thread_id": params["thread_id"],
+            "market": thread["market"],
+        }
     if _refused(thread["side"], thread["status"], kind):
         raise ToolError(
             f"thread is {thread['status']!r} — not eligible for a {kind} "

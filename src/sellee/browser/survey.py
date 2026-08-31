@@ -96,12 +96,23 @@ def survey_lane(deps: SurveyDeps) -> None:
 def discover_phase(deps: SurveyDeps) -> None:
     """Serve every market still owed a look at what the seller already has listed."""
     region = deps.store.seller_region()
+    connected = settings.connected_markets(deps.store)
     for request in deps.store.pending_market_surveys():
         market = request["market"]
         if not market_adapters.can_survey(market, region):
-            # No later tick could serve this — abandon rather than retry.
+            # An adapter withdrawn, or a seller whose region this marketplace has no site for.
+            # No later tick could serve this, so it stops being owed rather than being retried.
+            # Checked ahead of the connection below because it is the permanent condition of the
+            # two: a market nothing could ever survey should retire whether or not it is connected,
+            # where being disconnected is a state the seller can reverse in one tap.
             deps.store.abandon_market_survey(market)
             deps.bus.publish("survey.abandoned", {"market": market, "reason": "not_surveyable"})
+            continue
+        if market not in connected:
+            # Disconnected since the look was owed. Left owed rather than abandoned: abandoning is
+            # for "no later tick could ever serve this", and reconnecting is precisely a later tick
+            # that can — a seller who turns a market off and back on should find the question about
+            # their existing listings still waiting, not silently retired while it was off.
             continue
         try:
             _survey(deps, market, region)

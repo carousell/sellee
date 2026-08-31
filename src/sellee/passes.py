@@ -144,16 +144,25 @@ def staged_photo_names(item_id: str, market: str, store) -> tuple:
     )
 
 
-def _publish_market_error(market: str, region: str | None) -> str | None:
-    """Why this market cannot be published to, or None when it can."""
+def _publish_market_error(market: str, store) -> str | None:
+    """Why this market cannot be published to, or None when it can.
+
+    Two different questions, and a pass needs both answered yes. *Can* we publish there is
+    capability — an adapter, a recipe, a site in this seller's region. *Should* we is the seller's
+    connection, read here at the moment the pass would run: a publish queued before they
+    disconnected a marketplace must not still post to it, and this validator is the one gate every
+    door and the runner itself share.
+    """
     if market == DEFAULT_PUBLISH_MARKET:
         return None
     if marketplaces.get_marketplace(market) is None:
         return f"no marketplace {market!r} in the registry"
-    publishable = market_adapters.publishable_markets(region)
+    publishable = market_adapters.publishable_markets(store.seller_region())
     if market not in publishable:
         supported = ", ".join(publishable) or "none"
         return f"cannot publish to {market!r} (publishable here: {supported})"
+    if market not in settings.connected_markets(store):
+        return f"{market!r} isn't connected — turn it back on and ask me again"
     return None
 
 
@@ -169,7 +178,7 @@ def validate_payload(pass_type: str, payload: dict, store) -> None:
     if pass_type == "publish":
         if not payload.get("item_id"):
             raise PassPayloadError("no item_id in payload")
-        reason = _publish_market_error(publish_market(payload), store.seller_region())
+        reason = _publish_market_error(publish_market(payload), store)
         if reason:
             raise PassPayloadError(reason)
 

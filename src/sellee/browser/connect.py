@@ -154,6 +154,7 @@ def connect_lane(deps: ConnectDeps) -> None:
     signed out"), which is an answer. The only thing that leaves a row pending is the browser being
     unavailable *for a reason that passes*: a pass driving the tab. Anything else is reported.
     """
+    connected = settings.connected_markets(deps.store)
     for request in deps.store.pending_market_connects():
         market = request["market"]
         adapter = market_adapters.get_adapter(market)
@@ -162,6 +163,13 @@ def connect_lane(deps: ConnectDeps) -> None:
             # registry entry. Clear it — retrying would never start working.
             deps.store.clear_market_connect_request(market)
             deps.store.queue_notice(NO_ADAPTER_NOTICE.format(market=market))
+            continue
+        if market not in connected:
+            # The row is durable and the tap that wrote it may be old, so the market can have been
+            # disconnected in between. Opening a sign-in window for a marketplace the seller has
+            # since turned off is the clearest way to look like the switch did nothing. Cleared
+            # rather than left pending: nothing about waiting would make this servable.
+            deps.store.clear_market_connect_request(market)
             continue
         if inbox.browser_pass_running(deps.store):
             # A pass mid-drive owns the tab. Navigating it now would pull the page out from under

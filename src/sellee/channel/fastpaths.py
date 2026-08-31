@@ -108,6 +108,10 @@ CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
 )
 CONNECT_UNKNOWN = "I don't sell on {market}, so there's nothing for me to open."
+CONNECT_DISCONNECTED = (
+    "{name} isn't connected any more, so there's nothing for me to sign in to. Turn it back on "
+    "from /sellee and I'll open it."
+)
 SURVEY_UNKNOWN = "I don't have a list of listings for that marketplace any more."
 
 # Watch mode, both ways. The on side says where the window is for the same reason every other
@@ -249,10 +253,18 @@ def _signin_markets(store) -> list:
 def _connect_button(store, market, mode: str) -> tuple:
     """A tap on Sign in on desktop / Check again. The market rides in the callback ref, so this
     never has to guess which one they meant — even months later, from a button in the
-    scrollback."""
-    if not market or market not in market_adapters.supported_markets():
+    scrollback.
+
+    Two ways that tap can be stale, and they want different answers: an adapter withdrawn since
+    (nothing to open, ever), and a market the seller has disconnected since (nothing to open *now*).
+    The second says so, because "I don't sell there" would be wrong about a marketplace they can put
+    back with one tap.
+    """
+    if not market or market not in market_adapters.connectable_markets(store.seller_region()):
         # A stale button, for a market whose adapter has since been withdrawn.
         return CONNECT_UNKNOWN.format(market=market or "that marketplace"), None
+    if market not in settings.connected_markets(store):
+        return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
     return _request(store, market, mode)
 
 

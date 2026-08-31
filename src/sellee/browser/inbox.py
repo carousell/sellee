@@ -131,7 +131,10 @@ def inbox_lane(deps: InboxDeps) -> None:
         return
 
     region = seller_region(deps.store)
-    for market in marketplaces.browser_markets():
+    # Read at use, every tick: the markets the seller has connected, never every market we happen to
+    # have an adapter for. A marketplace they have not connected — or have just removed — is not one
+    # to open, probe, or tell them they are signed out of.
+    for market in settings.connected_markets(deps.store):
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
             continue  # a registry entry with no adapter yet is not a market we can read

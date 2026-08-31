@@ -67,6 +67,13 @@ def adopt_phase(deps) -> None:
     if row is None:
         return
     market, listing_id = row["market"], row["listing_id"]
+    if market not in settings.connected_markets(deps.store):
+        # Disconnected after the seller accepted these listings. Adopting one now would read their
+        # marketplace and create an item for a market they have switched off — so the row is left
+        # exactly as it is, still accepted, and reconnecting resumes it. Deliberately not `_fail`:
+        # nothing about this listing went wrong, and spending an attempt on it would retire a
+        # perfectly good row after three ticks with the market off.
+        return
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
         # Retired here rather than filtered out of the query: a row whose last attempt committed
         # but whose retirement did not would be unreachable forever, holding up the batch summary.
