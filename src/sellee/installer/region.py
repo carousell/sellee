@@ -73,7 +73,10 @@ def system_timezone() -> str:
     so the two disagree and the file is the one that is wrong.
 
     Otherwise where /etc/localtime points, rather than `time.tzname`, which gives an abbreviation
-    ("+08") that names no zone and cannot be stored or looked up.
+    ("+08") that names no zone and cannot be stored or looked up. Either way the answer is checked
+    against the zone database before it is handed back: the whole point of this function is to
+    produce a name that can be stored and looked up later, and a name that resolves to nothing is
+    worse than admitting the machine said nothing.
     """
     named = os.environ.get("TZ", "").strip().lstrip(":")
     if named and _zone_exists(named):
@@ -82,9 +85,29 @@ def system_timezone() -> str:
         resolved = os.path.realpath("/etc/localtime")
     except OSError:
         return ""
-    marker = "/zoneinfo/"
-    index = resolved.find(marker)
-    return resolved[index + len(marker) :] if index >= 0 else ""
+    zone = _zone_from_path(resolved)
+    return zone if _zone_exists(zone) else ""
+
+
+def _zone_from_path(resolved: str) -> str:
+    """The zone name inside a path to a compiled zone file, or "" when there is none.
+
+    The database directory is not always called `zoneinfo`. macOS points /etc/localtime through
+    /var/db/timezone/zoneinfo at /usr/share/zoneinfo.default, so looking for the literal
+    "/zoneinfo/" matched nothing on every Mac — and a machine that reports no zone is a machine
+    setup cannot propose a region for, so it asks instead, with an empty timezone field and only
+    "e.g. Asia/Singapore" to go on. That is where "gmt8+" comes from.
+
+    Read from the right, so a path with a directory of its own called `zoneinfo` further up
+    cannot claim the rest of it. Matching the prefix rather than the exact names keeps the next
+    variant of this from being another silent empty answer; the caller checks the result against
+    the database anyway, so being liberal here costs nothing.
+    """
+    parts = resolved.split("/")
+    for index in range(len(parts) - 2, -1, -1):
+        if parts[index].startswith("zoneinfo"):
+            return "/".join(parts[index + 1 :])
+    return ""
 
 
 def _zone_exists(name: str) -> bool:

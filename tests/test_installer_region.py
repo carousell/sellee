@@ -73,3 +73,40 @@ def test_a_tz_that_names_no_zone_falls_back_to_the_machine(monkeypatch) -> None:
 
 def test_render_reads_as_the_confirmation_it_is_used_for() -> None:
     assert region.render(region.guess("Asia/Singapore")) == "SG · SGD · Asia/Singapore"
+
+
+def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:
+    """macOS points /etc/localtime through /var/db/timezone/zoneinfo at zoneinfo.default, so
+    looking for a literal "/zoneinfo/" found nothing on every Mac: no guess, no proposal, and a
+    country question followed by an empty timezone field. That is where "gmt8+" was typed."""
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(
+        region.os.path, "realpath", lambda _: "/usr/share/zoneinfo.default/Asia/Singapore"
+    )
+    assert region.system_timezone() == "Asia/Singapore"
+    assert region.guess() == {"region": "SG", "currency": "SGD", "timezone": "Asia/Singapore"}
+
+
+def test_the_plain_zoneinfo_layout_still_reads(monkeypatch) -> None:
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(
+        region.os.path, "realpath", lambda _: "/usr/share/zoneinfo/America/New_York"
+    )
+    assert region.system_timezone() == "America/New_York"
+
+
+def test_a_localtime_path_naming_no_zone_reports_nothing(monkeypatch) -> None:
+    """Widened matching must not turn a path we cannot read into a confident wrong answer."""
+    monkeypatch.delenv("TZ", raising=False)
+    for resolved in ("/etc/localtime", "/usr/share/zoneinfo/Nowhere/Fake", "/var/db/zoneinfo"):
+        monkeypatch.setattr(region.os.path, "realpath", lambda _, r=resolved: r)
+        assert region.system_timezone() == "", resolved
+
+
+def test_the_zone_name_is_read_from_the_last_database_directory(monkeypatch) -> None:
+    """A home directory of one's own called `zoneinfo` cannot claim the rest of the path."""
+    monkeypatch.delenv("TZ", raising=False)
+    monkeypatch.setattr(
+        region.os.path, "realpath", lambda _: "/home/zoneinfo/share/zoneinfo/Asia/Singapore"
+    )
+    assert region.system_timezone() == "Asia/Singapore"
