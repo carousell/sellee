@@ -15,6 +15,7 @@ from tests.conftest import seed_setting
 from sellee.browser import blindness, inbox
 from sellee.browser.client import BrowserToolError
 from sellee.browser.markets import facebook as fb_market
+from sellee.channel import fastpaths
 from sellee.config import Config
 
 _THREAD = "https://www.facebook.com/messages/t/99/"
@@ -1006,16 +1007,64 @@ def test_a_new_unplaceable_buyer_is_reported_even_after_the_first(store, bus, se
     assert "2 people are messaging you" in texts[1]
 
 
-def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
-    """The notice re-arms when the set empties, so the next unplaceable buyer is announced."""
+def test_a_buyer_who_drops_out_of_one_read_is_not_announced_again(store, bus, seeded) -> None:
+    """The set a sweep sees describes one read of the marketplace's list, not the seller's inbox:
+    the list is a window onto the folder, so the same person can vanish from a sweep and be back
+    in the next. Keyed on the set, that round trip announced them twice."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     inbox.inbox_lane(deps)
 
-    client.conversations = []  # everyone placed, or gone
+    client.conversations = []
     inbox.inbox_lane(deps)
     client.conversations = [_conv()]
     inbox.inbox_lane(deps)
+
+    assert len(_notice_texts(store)) == 1
+
+
+def test_a_restart_does_not_announce_everyone_over_again(store, bus, seeded) -> None:
+    """What the seller has been told is durable, so it outlives the process that told them."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    inbox.inbox_lane(_deps(store, bus, client))
+    inbox.inbox_lane(_deps(store, bus, client))  # a fresh InboxDeps is a restarted daemon
+
+    assert len(_notice_texts(store)) == 1
+
+
+def test_the_notice_offers_both_ways_out(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], product_id=None)
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    controls = store.list_queued_notices()[0]["controls"]
+    assert controls == [
+        ["Leave them alone", f"fb:{fastpaths.CB_UNPLACEABLE_LEAVE}"],
+        ["Look at my listings again", f"fb:{fastpaths.CB_SURVEY_REOPEN}"],
+    ]
+
+
+def test_leave_them_alone_is_the_end_of_it(store, bus, seeded) -> None:
+    """The seller's answer had nowhere to land before, so saying it changed nothing and the notice
+    kept arriving. It survives a restart and a buyer we have never seen before."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    store.mute_unplaceable("fb")
+    client.conversations = [_conv(), _conv(thread_id="100", handle="Muhd")]
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert len(_notice_texts(store)) == 1  # the first one, and nothing since
+
+
+def test_a_fresh_look_at_the_listings_re_opens_the_question(store, bus, seeded) -> None:
+    """The way back the notice offers. Whatever is still unplaceable after a new look is worth
+    saying once more — including to a seller who had said to leave them alone."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    inbox.inbox_lane(_deps(store, bus, client))
+    store.mute_unplaceable("fb")
+
+    store.reopen_market_survey("fb")
+    inbox.inbox_lane(_deps(store, bus, client))
 
     assert len(_notice_texts(store)) == 2
 

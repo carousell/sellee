@@ -283,3 +283,53 @@ def test_skip_cta_tap_is_idempotent(store, bus, xdg_tmp) -> None:
         p.tick()
         assert len(api.outbox) == 2  # re-acked, harmless
     assert store.count_pending_inbox() == 0
+
+
+# --- the two ways out of the unplaceable-conversations notice ------------------------------------
+
+
+def _unplaceable_tap(store, bus, market, token):
+    event = {"kind": "action", "payload": {"ref": market, "choice": token}}
+    assert fastpaths.is_fast_path(event)
+    return fastpaths.handle_fast_path(store, bus, event)
+
+
+def test_leaving_those_chats_alone_is_recorded_not_just_acknowledged(store, bus) -> None:
+    """Their answer had nowhere to land before, so saying it changed nothing and the notice kept
+    arriving."""
+    text, controls = _unplaceable_tap(store, bus, "fb", fastpaths.CB_UNPLACEABLE_LEAVE)
+
+    assert store.unplaceable_muted("fb") is True
+    assert "Facebook Marketplace" in text
+    assert controls is None
+
+
+def test_leaving_them_alone_says_what_is_unaffected(store, bus) -> None:
+    """A seller who only sees "done" cannot tell this from switching the marketplace off."""
+    text, _ = _unplaceable_tap(store, bus, "fb", fastpaths.CB_UNPLACEABLE_LEAVE)
+    assert "listings I do manage are unaffected" in text
+
+
+def test_a_tap_from_the_scrollback_months_later_still_means_what_it_says(store, bus) -> None:
+    _unplaceable_tap(store, bus, "fb", fastpaths.CB_UNPLACEABLE_LEAVE)
+    _unplaceable_tap(store, bus, "fb", fastpaths.CB_UNPLACEABLE_LEAVE)
+    assert store.unplaceable_muted("fb") is True
+
+
+def test_looking_at_the_listings_again_actually_reopens_the_survey(store, bus) -> None:
+    """The old look-again token rode CB_SURVEY_YES, whose handler re-acks rather than reopens for
+    any market holding an adopted listing — on a working install it was a button that did nothing.
+    """
+    store.set_seller_config_section("basics", {"region": "SG"})
+    store.record_survey_result("fb", [])
+    store.mute_unplaceable("fb")
+
+    _unplaceable_tap(store, bus, "fb", fastpaths.CB_SURVEY_REOPEN)
+
+    assert store.unplaceable_muted("fb") is False
+    assert store.get_market_survey("fb")["state"] == "due"
+
+
+def test_a_marketplace_we_do_not_know_is_answered_rather_than_acted_on(store, bus) -> None:
+    text, _ = _unplaceable_tap(store, bus, "nowhere", fastpaths.CB_UNPLACEABLE_LEAVE)
+    assert text == fastpaths.UNPLACEABLE_UNKNOWN

@@ -36,6 +36,20 @@ UNCONFIRMED_SEND_CONTEXT = (
     "conversation has not found it either. Nothing further goes to this buyer until this is "
     "settled, and the message is never re-sent without the seller's answer."
 )
+# The same ask, worded for the case where the machine never actually looked. Only the hard-grace
+# backstop can reach it, and claiming "even after re-checking the chat" there is a lie about work
+# nobody did — which is the whole of what makes the ask offensive to receive. Same buttons and same
+# kind, so an answer settles it identically and a later read still withdraws it.
+UNCHECKED_SEND_ASK = (
+    "I sent a reply to this buyer and haven't been able to open the conversation since, so I still "
+    "can't tell you whether it arrived — that's me not having looked, not the message being "
+    "missing. Could you open it in your app — is my message there?"
+)
+UNCHECKED_SEND_CONTEXT = (
+    "A send was accepted by the marketplace page but never read back, and every attempt to re-open "
+    "the conversation since has failed, so it has never been checked. Nothing further goes to this "
+    "buyer until this is settled, and the message is never re-sent without the seller's answer."
+)
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
@@ -414,6 +428,10 @@ class SendMixin:
         is the whole complaint this exists to answer. `hard_grace_sec` is the backstop for the case
         no amount of waiting fixes: a lane that cannot run at all, where the attempt count would
         stay at zero forever.
+
+        Which of the two it was decides the wording. An ask that says "even after re-checking the
+        chat" when nothing checked it is a claim about work nobody did, and it is what the seller
+        reads as the machine handing them its own job.
         """
         now = now if now is not None else _now()
         cutoff = now - grace_sec
@@ -421,12 +439,13 @@ class SendMixin:
         folded: list[dict] = []
         with self._db.transaction() as conn:
             stale = conn.execute(
-                "SELECT intent_id, thread_id FROM send_intents "
+                "SELECT intent_id, thread_id, verify_attempts FROM send_intents "
                 "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ? "
                 "AND (verify_attempts >= ? OR created_ts < ?)",
                 (cutoff, min_verify_attempts, hard_cutoff),
             ).fetchall()
             for row in stale:
+                looked = row["verify_attempts"] >= min_verify_attempts
                 conn.execute(
                     "UPDATE send_intents SET status = 'unconfirmed' WHERE intent_id = ?",
                     (row["intent_id"],),
@@ -434,9 +453,11 @@ class SendMixin:
                 esc_id, new = self._open_escalation_in_txn(
                     conn,
                     row["thread_id"],
-                    open_question=UNCONFIRMED_SEND_ASK,
+                    open_question=UNCONFIRMED_SEND_ASK if looked else UNCHECKED_SEND_ASK,
                     kind="unconfirmed_send",
-                    context_summary=UNCONFIRMED_SEND_CONTEXT,
+                    context_summary=(
+                        UNCONFIRMED_SEND_CONTEXT if looked else UNCHECKED_SEND_CONTEXT
+                    ),
                     options=list(UNCONFIRMED_SEND_OPTIONS),
                 )
                 folded.append(
@@ -445,6 +466,7 @@ class SendMixin:
                         "thread_id": row["thread_id"],
                         "escalation_id": esc_id,
                         "escalation_new": new,
+                        "looked": looked,
                     }
                 )
         return folded

@@ -8,6 +8,7 @@
     "create_item",
     "create_thread",
     "decide_discovered_listings",
+    "decide_unplaceable_conversations",
     "escalate",
     "get_catchup",
     "get_item",

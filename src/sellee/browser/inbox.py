@@ -56,11 +56,12 @@ LOGGED_OUT_NOTICE = (
 # one case where the lane could not drive Chrome at all.
 # Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
 # listings the seller made outside the agent, and calling that a fault would be a wrong guess
-# about their own marketplace. No buttons on purpose; see `_unplaceable_notice`.
+# about their own marketplace. Both ways out are on it as buttons now that both are real: see
+# `_report_unplaceable`.
 UNPLACEABLE_NOTICE = (
     "{count} {who} messaging you on {name} about listings I don't manage, so I'm leaving {them} "
     "alone rather than answering about the wrong thing. If any of those listings should be mine, "
-    "ask me to look at your {name} listings again and I'll offer to take them over."
+    "I can look at your {name} listings again and offer to take them over."
 )
 
 UNAVAILABLE_NOTICE = (
@@ -101,19 +102,6 @@ def _notify_once(deps: InboxDeps, key: str, text: str, controls: list | None = N
 
 def _clear_notice(deps: InboxDeps, key: str) -> None:
     deps.notified.pop(key, None)
-
-
-def _notify_on_change(deps: InboxDeps, key: str, signature: str, text: str) -> None:
-    """Queue when the condition's CONTENT changes, not merely the first time it holds.
-
-    `_notify_once` is the wrong shape for a condition that can grow: a bool cannot say that three
-    unplaceable buyers became four. `deps.notified` therefore holds two kinds of value — bools from
-    `_notify_once`, signatures from here — and nothing may compare values across the two helpers.
-    """
-    if deps.notified.get(key) == signature:
-        return
-    deps.notified[key] = signature
-    deps.store.queue_notice(text)
 
 
 def _unavailable(deps: InboxDeps, exc: BrowserUnavailable) -> None:
@@ -263,6 +251,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     tail_measured: dict = {}
     # Conversations we could not place, so the sweep can say so once.
     unplaceable: list = []
+    # Which conversations this tick already opened, so the chase below only pays for the ones the
+    # list never named.
+    visited: set = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -285,6 +276,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         elif not full_sweep and _can_skip(deps.store, adapter, thread, row):
             continue
         opened += 1
+        visited.add(thread_id)
         fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
         if fresh is None:
             unreadable += 1
@@ -292,6 +284,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             recorded += fresh
 
     _report_unplaceable(deps, market, unplaceable)
+    chased = _chase_unsettled(deps, client, adapter, market, region, unsettled, visited)
 
     deps.bus.publish(
         "browser.read",
@@ -305,6 +298,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             # How many of the opened threads were opened to chase a send of our own, so a tick spent
             # settling rather than reading is legible in the event stream.
             "settling": settling,
+            # And how many of those the list never mentioned, which is the measure of how much the
+            # list was hiding.
+            "chased": chased,
         },
     )
     # Only a read where every opened thread was legible counts as seeing the market. A conversation
@@ -478,30 +474,36 @@ def _can_skip(store, adapter, thread: dict, row: dict) -> bool:
 
 
 def _report_unplaceable(deps: InboxDeps, market: str, unplaceable: list) -> None:
-    """Tell the seller once that buyers are waiting in conversations we cannot place.
+    """Tell the seller about buyers waiting in conversations we cannot place — once each.
 
     `_unmatched` publishes an event per conversation and nothing else — right shape for a log,
-    wrong shape for a person. Keyed on the *set*, not the fact, so a fourth buyer arriving after
-    three were reported still says something while the same three swept every five minutes say
-    nothing more. Cleared when the set empties, so the next arrival is announced.
+    wrong shape for a person. What is said is the total, because twenty people waiting is the
+    useful number; when it is said turns on whether anyone here has never been mentioned.
+
+    Keying on the set of ids a sweep saw was the mistake. That set describes one read of the
+    marketplace's list rather than the seller's inbox: the list is a window onto the folder, so
+    consecutive sweeps return overlapping but different subsets, and each difference read as news.
+    In memory besides, so a restart announced all of them again.
+
+    Nothing is said at all once the seller has answered. Both ways out ride on the notice as
+    buttons, and both are real: the mute is durable, and the fresh look goes through the door that
+    actually reopens a survey rather than the one that re-acks it.
     """
-    key = f"unplaceable:{market}"
-    if not unplaceable:
-        _clear_notice(deps, key)
+    if not unplaceable or deps.store.unplaceable_muted(market):
         return
-    ids = sorted(set(unplaceable))
-    name = marketplaces.display_name(market)
-    count = len(ids)
-    _notify_on_change(
-        deps,
-        key,
-        ",".join(ids),
+    answer = deps.store.record_unplaceable(market, unplaceable)
+    if not answer["unreported"]:
+        return
+    count = answer["total"]
+    deps.store.queue_unplaceable_notice(
+        market,
         UNPLACEABLE_NOTICE.format(
             count=count,
-            name=name,
+            name=marketplaces.display_name(market),
             who="people are" if count > 1 else "person is",
             them="them" if count > 1 else "it",
         ),
+        controls=fastpaths.unplaceable_controls(market),
     )
 
 
@@ -616,6 +618,37 @@ def _settle_unsettled(deps: InboxDeps, thread_id: str, tail: list, unsettled: di
         else:
             deps.store.bump_verify_attempt(intent["intent_id"])
     return settled
+
+
+def _chase_unsettled(deps: InboxDeps, client, adapter, market, region, unsettled, visited) -> int:
+    """Open every conversation still holding a send we cannot account for, by its own URL.
+
+    The loop above reaches only what the marketplace's list named this tick, and a list is a window
+    onto the folder rather than the folder: Messenger unmounts rows far outside the viewport, so the
+    reader takes one pass at each end and never returns the middle. A thread sitting there was never
+    re-read, its `verify_attempts` stayed at zero, and the hour backstop — written for a lane that
+    cannot run at all — asked the seller to go and look at a conversation the machine had never
+    opened. Every market has a thread URL, so the answer does not have to be found in a list.
+
+    A conversation we cannot open here is deliberately NOT counted as blindness on this market. The
+    list read succeeded, so the market is visible; and a conversation the marketplace has deleted is
+    unreadable forever, which would otherwise hold the whole market blind for the life of the
+    install. `MAX_VERIFY_ATTEMPTS` cannot bound that, because an attempt is only recorded by a read
+    that succeeded and did not find the bubble.
+    """
+    chased = 0
+    for thread_id in sorted(unsettled):
+        if thread_id in visited:
+            continue
+        thread = deps.store.get_thread(thread_id)
+        if thread is None or thread["market"] != market:
+            continue
+        chased += 1
+        try:
+            _read_thread(deps, client, adapter, thread, region, None, unsettled)
+        except BrowserError as exc:
+            _unreadable(deps, market, thread_id, str(exc))
+    return chased
 
 
 def _unsettled_by_thread(store) -> dict:

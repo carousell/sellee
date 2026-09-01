@@ -565,12 +565,40 @@ def test_the_ask_the_seller_finally_sees_is_authored_in_code(store, bus, thread)
     intent = _reserve(store)
     with pytest.raises(sink.SendUnverified):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
-    intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0, hard_grace_sec=0)
+    store.bump_verify_attempt(intent)
+    store.bump_verify_attempt(intent)
+    folded = intent_sweep.run_stale_intent_sweep(bus=bus, store=store, grace_sec=0)
 
+    assert [entry["looked"] for entry in folded] == [True]
     escalation = store.list_open_escalations()[0]
     assert escalation["kind"] == "unconfirmed_send"
     assert escalation["open_question"] == send_store.UNCONFIRMED_SEND_ASK
     assert escalation["options"] == list(send_store.UNCONFIRMED_SEND_OPTIONS)
+
+
+def test_the_backstop_does_not_claim_a_chat_it_never_re_checked(store, bus, thread) -> None:
+    """Only the hard-grace backstop folds with the attempt count at zero, and "even after
+    re-checking the chat" there is a claim about work nobody did. Same kind and same buttons, so a
+    later read still withdraws it and an answer still settles it — only the sentence changes."""
+    from sellee import intent_sweep
+    from sellee.store import send as send_store
+
+    intent = _reserve(store)
+    with pytest.raises(sink.SendUnverified):
+        _sink(store, bus, StubClient(echo_on_send=False)).send(thread, "hi", "reply", intent)
+    folded = intent_sweep.run_stale_intent_sweep(
+        bus=bus, store=store, grace_sec=0, hard_grace_sec=0
+    )
+
+    assert [entry["looked"] for entry in folded] == [False]
+    escalation = store.list_open_escalations()[0]
+    assert escalation["kind"] == "unconfirmed_send"
+    assert escalation["open_question"] == send_store.UNCHECKED_SEND_ASK
+    assert escalation["options"] == list(send_store.UNCONFIRMED_SEND_OPTIONS)
+
+    # And the sentence is still the whole difference: finding the bubble takes it back off them.
+    assert store.settle_intent_from_read(intent) is not None
+    assert store.list_open_escalations() == []
 
 
 # --- settling an unconfirmed send off the page --------------------------------------------------

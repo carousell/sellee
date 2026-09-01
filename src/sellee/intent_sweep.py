@@ -10,7 +10,9 @@ Elapsed time is no longer enough on its own. The inbox lane re-reads every unset
 records the attempt, so the fold is gated on the machine having actually looked
 (`MIN_VERIFY_ATTEMPTS`) — the seller is the last resort, not the first. `HARD_GRACE_SEC` still folds
 regardless, for the one failure waiting cannot fix: a lane that never runs leaves the attempt count
-at zero forever, and an unconfirmed message to a real buyer cannot sit there indefinitely.
+at zero forever, and an unconfirmed message to a real buyer cannot sit there indefinitely. That
+fold gets its own wording: an ask claiming the chat was re-checked when nothing checked it is a
+claim about work nobody did, and it is the part the seller is right to object to.
 """
 
 from __future__ import annotations
@@ -43,7 +45,13 @@ def run_stale_intent_sweep(
     for entry in folded:
         bus.publish(
             "intent.unconfirmed",
-            {"intent_id": entry["intent_id"], "thread_id": entry["thread_id"]},
+            {
+                "intent_id": entry["intent_id"],
+                "thread_id": entry["thread_id"],
+                # Whether the machine had actually looked before it asked — the one field that says
+                # whether an ask on the seller's phone was earned or was a timeout wearing its coat.
+                "looked": entry["looked"],
+            },
         )
         if entry["escalation_new"]:
             bus.publish(
