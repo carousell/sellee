@@ -33,6 +33,61 @@ class FakePlatform(MacOSPlatform):
         return label in self.registered_labels
 
 
+# --- letting go of a job ---------------------------------------------------------------------
+
+
+def _late_release_launchctl(state, releases_after):
+    """A launchctl whose `bootout` returns before `print` stops answering — the real one."""
+    import subprocess as sp
+
+    def fake(self, *args):
+        if args[0] == "bootout":
+            state["booted_out"] = True
+        elif args[0] == "print":
+            state["prints"] += 1
+            gone = state["booted_out"] and state["prints"] > releases_after
+            return sp.CompletedProcess(args, 1 if gone else 0, "", "")
+        return sp.CompletedProcess(args, 0, "", "")
+
+    return fake
+
+
+def test_unregister_waits_for_launchctl_to_actually_let_go(monkeypatch) -> None:
+    """`bootout` is asynchronous, and nothing noticed until a `daemon stop` was followed straight
+    away by a `daemon start`: start asks `is_registered`, the half-torn-down job still answered
+    yes, so start printed "already running" and did nothing — and then the bootout finished. No
+    job, no process, and a heartbeat file fresh enough for `status` to call it running."""
+    from sellee.platform import macos as macos_mod
+
+    state = {"booted_out": False, "prints": 0}
+    monkeypatch.setattr(MacOSPlatform, "_launchctl", _late_release_launchctl(state, 3))
+    monkeypatch.setattr(macos_mod, "_BOOTOUT_POLL_SEC", 0.0)
+    platform = MacOSPlatform()
+
+    platform.unregister("com.sellee.agent")
+
+    # The contract this method states: it stays stopped until re-registered. A caller asking
+    # straight afterwards must get the truth.
+    assert not platform.is_registered("com.sellee.agent")
+
+
+def test_unregister_gives_up_rather_than_hanging(monkeypatch) -> None:
+    """A launchctl that never lets go must not wedge the command with no output. The next command
+    failing visibly is the better failure of the two."""
+    from sellee.platform import macos as macos_mod
+
+    state = {"booted_out": False, "prints": 0}
+    # Never releases, however many times it is asked.
+    monkeypatch.setattr(MacOSPlatform, "_launchctl", _late_release_launchctl(state, 10**9))
+    monkeypatch.setattr(macos_mod, "_BOOTOUT_POLL_SEC", 0.0)
+    monkeypatch.setattr(macos_mod, "_BOOTOUT_TIMEOUT_SEC", 0.05)
+    platform = MacOSPlatform()
+
+    platform.unregister("com.sellee.agent")  # returns rather than looping forever
+
+    assert platform.is_registered("com.sellee.agent")
+
+
 # --- pure render --------------------------------------------------------------------------
 
 
