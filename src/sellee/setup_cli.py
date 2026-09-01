@@ -40,8 +40,8 @@ from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
 from sellee.installer import update as update_mod
 from sellee.installer.ui import Abort, Ui
-from sellee.store import HOLD_SETUP
 from sellee.platform import get_platform
+from sellee.store import HOLD_SETUP
 
 # How long the daemon gets to write its first heartbeat after being started. Startup is
 # migrations plus a bind, so seconds; this is the "something is wrong" boundary, not a target.

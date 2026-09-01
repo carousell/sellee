@@ -52,8 +52,10 @@ def test_a_question_nobody_can_answer_yet_is_shown_but_not_swallowed(make_ctx, s
     36 listings stayed pending, no item existed to join a buyer to, and every Facebook
     conversation read as `unknown_listing` while the agent reported itself healthy.
     """
-    store.queue_notice("I found 20 things you're already selling on Facebook Marketplace",
-                       controls=[["Yes, manage them", "fb:adoptyes"], ["No thanks", "fb:adoptno"]])
+    store.queue_notice(
+        "I found 20 things you're already selling on Facebook Marketplace",
+        controls=[["Yes, manage them", "fb:adoptyes"], ["No thanks", "fb:adoptno"]],
+    )
     ctx = make_ctx(TIER_ATTENDED)
 
     res = dispatch("get_catchup", {}, ctx)
