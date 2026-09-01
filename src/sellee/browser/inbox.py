@@ -263,6 +263,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     tail_measured: dict = {}
     # Conversations we could not place, so the sweep can say so once.
     unplaceable: list = []
+    # Which conversations this tick already opened, so the chase below only pays for the ones the
+    # list never named.
+    visited: set = set()
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -285,6 +288,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         elif not full_sweep and _can_skip(deps.store, adapter, thread, row):
             continue
         opened += 1
+        visited.add(thread_id)
         fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
         if fresh is None:
             unreadable += 1
@@ -292,6 +296,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             recorded += fresh
 
     _report_unplaceable(deps, market, unplaceable)
+    chased = _chase_unsettled(deps, client, adapter, market, region, unsettled, visited)
 
     deps.bus.publish(
         "browser.read",
@@ -305,6 +310,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             # How many of the opened threads were opened to chase a send of our own, so a tick spent
             # settling rather than reading is legible in the event stream.
             "settling": settling,
+            # And how many of those the list never mentioned, which is the measure of how much the
+            # list was hiding.
+            "chased": chased,
         },
     )
     # Only a read where every opened thread was legible counts as seeing the market. A conversation
@@ -616,6 +624,37 @@ def _settle_unsettled(deps: InboxDeps, thread_id: str, tail: list, unsettled: di
         else:
             deps.store.bump_verify_attempt(intent["intent_id"])
     return settled
+
+
+def _chase_unsettled(deps: InboxDeps, client, adapter, market, region, unsettled, visited) -> int:
+    """Open every conversation still holding a send we cannot account for, by its own URL.
+
+    The loop above reaches only what the marketplace's list named this tick, and a list is a window
+    onto the folder rather than the folder: Messenger unmounts rows far outside the viewport, so the
+    reader takes one pass at each end and never returns the middle. A thread sitting there was never
+    re-read, its `verify_attempts` stayed at zero, and the hour backstop — written for a lane that
+    cannot run at all — asked the seller to go and look at a conversation the machine had never
+    opened. Every market has a thread URL, so the answer does not have to be found in a list.
+
+    A conversation we cannot open here is deliberately NOT counted as blindness on this market. The
+    list read succeeded, so the market is visible; and a conversation the marketplace has deleted is
+    unreadable forever, which would otherwise hold the whole market blind for the life of the
+    install. `MAX_VERIFY_ATTEMPTS` cannot bound that, because an attempt is only recorded by a read
+    that succeeded and did not find the bubble.
+    """
+    chased = 0
+    for thread_id in sorted(unsettled):
+        if thread_id in visited:
+            continue
+        thread = deps.store.get_thread(thread_id)
+        if thread is None or thread["market"] != market:
+            continue
+        chased += 1
+        try:
+            _read_thread(deps, client, adapter, thread, region, None, unsettled)
+        except BrowserError as exc:
+            _unreadable(deps, market, thread_id, str(exc))
+    return chased
 
 
 def _unsettled_by_thread(store) -> dict:

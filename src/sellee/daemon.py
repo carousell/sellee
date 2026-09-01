@@ -526,6 +526,7 @@ def run_daemon(*, once: bool) -> int:
             bus=bus,
             region=inbox.seller_region(store),
             on_drive=lambda: browser_window.raise_if_watching(cfg, store),
+            verify_window_sec=cfg.send_verify_window_sec,
         )
 
     def context_factory(session):

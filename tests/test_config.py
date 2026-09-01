@@ -241,6 +241,8 @@ def test_invalid_pacing_and_negotiation_values_are_rejected(xdg_tmp, obj) -> Non
         {"inbox_full_sweep_every": 0},
         {"inbox_full_sweep_every": 1.5},
         {"browser_blind_after": 0},
+        {"send_verify_window_sec": -1},
+        {"send_verify_window_sec": "20"},
         {"chrome_bin": ""},
         {"chrome_bin": "   "},
         {"chrome_bin": 5},
@@ -268,6 +270,7 @@ def test_browser_knobs_round_trip(xdg_tmp) -> None:
             "inbox_read_interval_sec": 120,
             "inbox_full_sweep_every": 1,
             "browser_blind_after": 5,
+            "send_verify_window_sec": 45,
             "chrome_bin": " /opt/chrome/chrome ",
         }
     )
@@ -278,6 +281,7 @@ def test_browser_knobs_round_trip(xdg_tmp) -> None:
     assert cfg.inbox_read_interval_sec == 120.0
     assert cfg.inbox_full_sweep_every == 1  # 1 disables the skip gate, a supported posture
     assert cfg.browser_blind_after == 5
+    assert cfg.send_verify_window_sec == 45.0
 
 
 def test_a_null_playwright_command_means_resolve_npx_at_spawn(xdg_tmp) -> None:
