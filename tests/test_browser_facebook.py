@@ -930,6 +930,22 @@ def test_the_listing_banner_is_polled_rather_than_glanced_at() -> None:
     assert "setTimeout" in fb_market.PRODUCT_ID_JS, "nothing waits for the banner"
 
 
+def test_the_folder_is_read_from_both_ends() -> None:
+    """`loadAll` finishes at the OLDEST row, and Messenger unmounts rows far outside the viewport,
+    so a read taken there is a window onto the bottom of the list. Live on 2026-09-01 that returned
+    a steady 25 rows for hours while the folder held 50: the two newest conversations, both showing
+    a new-message dot, were never in it, and every thread the agent held was nine weeks old.
+
+    Asserted on the source because the suite stubs this artifact by identity and never runs it —
+    the behaviour itself is covered by driving the reader over a virtualised DOM, which needs a
+    browser. What is checked here is that the read still happens from both ends at all.
+    """
+    js = fb_market.CONVERSATIONS_LIST_JS
+    assert "scrollToTop" in js, "the read never returns to the newest end"
+    assert js.index("loadAll()") < js.index("scrollToTop()"), "it must load first, then go back up"
+    assert "merge(" in js, "two reads are taken but only one is used"
+
+
 # --- asking once, rather than every five minutes ---------------------------------------------
 
 

@@ -184,6 +184,42 @@ CONVERSATIONS_LIST_JS = """async () => {
     );
     return field || document.querySelector('[role="dialog"]') ? 'verify' : '';
   };
+  // Back up to the newest end. `loadAll` finishes at the OLDEST row, and Messenger unmounts rows
+  // far outside the viewport — so a read taken there is a window onto the bottom of the list with
+  // the most recent conversations missing from the DOM entirely. Live on 2026-09-01: two buyers
+  // sitting at the top of the folder, both showing a new-message dot, in a read that returned 25
+  // rows and neither of them. Every conversation the agent held was nine weeks old.
+  const scrollToTop = async () => {
+    let previous = null;
+    let settled = 0;
+    for (let pass = 0; pass < 30 && settled < 3; pass++) {
+      const found = rows();
+      if (!found.length) break;
+      if (found[0] === previous) settled++;
+      else { settled = 0; previous = found[0]; }
+      found[0].scrollIntoView({ block: 'start' });
+      await new Promise((r) => setTimeout(r, 400));
+    }
+  };
+  // One read is one window onto the list, never the whole of it. Two reads from opposite ends,
+  // merged on the conversation id, is the whole of it — and the top read goes first because the
+  // folder is newest-first and that is the order the caller should see.
+  const merge = (top, bottom) => {
+    const parts = [top, bottom].filter((r) => r && Array.isArray(r.conversations));
+    if (!parts.length) return null;
+    const seen = {};
+    const out = [];
+    let skipped = 0;
+    parts.forEach((part) => {
+      skipped += part.skipped || 0;
+      part.conversations.forEach((row) => {
+        if (seen[row.thread_id]) return;
+        seen[row.thread_id] = true;
+        out.push(row);
+      });
+    });
+    return { conversations: out, skipped: skipped };
+  };
   // The folder paints after the click returns, so the first look can still be the personal inbox.
   const deadline = Date.now() + 5000;
   let result = read();
@@ -193,7 +229,9 @@ CONVERSATIONS_LIST_JS = """async () => {
   }
   if (result !== null) {
     await loadAll();
-    result = read();
+    const bottom = read();
+    await scrollToTop();
+    result = merge(read(), bottom);
   }
   if (result === null) {
     return {
