@@ -299,7 +299,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             settling += 1
         elif thread["status"] not in _ACTIVE_STATUSES:
             continue
-        elif not full_sweep and _can_skip(deps.store, thread, row):
+        elif not full_sweep and _can_skip(deps.store, adapter, thread, row):
             continue
         opened += 1
         fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
@@ -485,13 +485,34 @@ def _thread_key(market: str, native_id) -> str | None:
     return f"{market}:{native_id}"
 
 
-def _can_skip(store, thread: dict, row: dict) -> bool:
+def _nothing_to_read(adapter, row: dict) -> bool:
+    """Whether the marketplace itself says this row holds nothing readable.
+
+    Facebook writes "Message unavailable" into the preview of a conversation whose messages have
+    been withdrawn, or whose sender's account is gone. That is an answer, not a failure, and the
+    difference matters twice over: such a conversation is not worth opening, and an empty read of
+    one is not evidence that we have gone blind on the market.
+    """
+    pattern = getattr(adapter, "empty_preview_pattern", "")
+    if not pattern:
+        return False
+    return bool(re.search(pattern, str(row.get("last_message") or ""), re.IGNORECASE))
+
+
+def _can_skip(store, adapter, thread: dict, row: dict) -> bool:
     """Whether the conversation list still shows the message we already stored last.
 
     Only ever used to avoid opening a thread. Anything unread, anything whose last message we do not
     already have, and any thread we have never read is opened — the gate errs toward the read, and
     the periodic full sweep opens everything regardless.
+
+    A row the marketplace says holds nothing readable is the exception, and it is skipped even
+    unread: there is no message behind it to become stale, so opening it can only ever find the
+    same nothing. Left out, such a thread stores no message, so it can never satisfy the test
+    below, so it is opened on every sweep for the life of the install.
     """
+    if _nothing_to_read(adapter, row):
+        return True
     if row.get("unread"):
         return False
     messages = store.get_thread_messages(thread["thread_id"], limit=1)
@@ -710,6 +731,11 @@ def _read_thread(
         # messages for cannot legitimately read as empty. Neither can one the list just told us has
         # a latest message. Either way the page changed shape under the reader — report that rather
         # than let it pass for "the buyer said nothing new".
+        if _nothing_to_read(adapter, row or {}):
+            # The marketplace's own account of the row: there is nothing here. An empty read is
+            # the right answer, so it must not be counted as a market we cannot see — one such
+            # conversation otherwise holds a whole market's blind counter open indefinitely.
+            return 0
         if stored or (row or {}).get("last_message"):
             _unreadable(
                 deps,

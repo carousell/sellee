@@ -40,6 +40,18 @@ LISTING_ID_PATTERN = r"/marketplace/item/(\d+)"
 # the Marketplace folder, so nothing here has to recognise them and nothing opens them.
 SYSTEM_HANDLES = frozenset({"facebook", "marketplace", "meta business support", "meta ai"})
 
+# What Facebook puts in the row when a message has been withdrawn, or the account that sent it is
+# gone: the preview reads "Message unavailable", and the log holds bubbles with an avatar, a hover
+# toolbar and no text at all.
+#
+# Seen live on 2026-09-01. The tail read of such a conversation is correct to come back empty — and
+# the lane called that blindness, because an empty tail on a row that claims a latest message means
+# the page changed shape under the reader. Here it does not: the row's own preview is the
+# marketplace saying there is nothing to show. One conversation in that state marked the whole
+# Facebook market unreadable for hours, and was re-opened every five minutes forever, because a
+# thread with no stored messages can never become skippable.
+EMPTY_PREVIEW_PATTERN = r"^\s*message unavailable\b"
+
 # The attribute `INBOX_FOLDER_JS` stamps on the folder control, and the selector the caller clicks.
 # One constant so the marking and the clicking cannot drift apart.
 FOLDER_MARK_ATTR = "data-sellee-inbox-folder"

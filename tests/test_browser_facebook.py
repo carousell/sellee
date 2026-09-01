@@ -1063,3 +1063,60 @@ def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
     inbox.inbox_lane(deps)
 
     assert len(_notice_texts(store)) == 2
+
+
+# --- a message the marketplace itself says is gone ---------------------------------------------
+
+
+def _adopted_thread(store, bus, seeded):
+    """One sweep that adopts the conversation, so a thread exists to be re-read."""
+    client = StubClient(conversations=[_conv()], tails={"99": [{"text": "hi", "side": "in"}]})
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+    assert store.get_thread("fb:99") is not None
+    return deps, client
+
+
+def test_a_conversation_facebook_says_is_unavailable_is_not_opened_again(
+    store, bus, seeded
+) -> None:
+    """Facebook writes "Message unavailable" into the preview of a conversation whose messages
+    have been withdrawn. There is nothing behind it to go stale, so opening it can only ever find
+    the same nothing — and a thread that stores no message can never satisfy `_can_skip`, so it
+    was opened on every sweep for the life of the install."""
+    deps, client = _adopted_thread(store, bus, seeded)
+    before = len(client.navigations)
+
+    client.conversations = [_conv(last_message="Message unavailable")]
+    inbox.inbox_lane(deps)
+
+    assert len(client.navigations) == before + 1, "only the inbox itself should have been opened"
+
+
+def test_an_unavailable_conversation_does_not_mark_the_market_blind(store, bus, seeded) -> None:
+    """The reader is right to come back empty; calling that blindness let one dead conversation
+    hold a whole market's blind counter open and told the seller their inbox was unreadable."""
+    client = StubClient(
+        conversations=[_conv(last_message="Message unavailable")],
+        tails={"99": []},
+    )
+    deps = _deps(store, bus, client)
+    deps.config = Config(inbox_full_sweep_every=1)  # open it anyway, as a full sweep does
+
+    inbox.inbox_lane(deps)
+
+    assert not _kinds(bus, "browser.unreadable")
+    assert not _kinds(bus, "browser.blind")
+
+
+def test_an_ordinary_empty_read_is_still_blindness(store, bus, seeded) -> None:
+    """The exception is only for a marketplace saying so. A conversation the list says has a
+    latest message, whose log reads empty, is still the page changing shape under the reader."""
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client)
+    deps.config = Config(inbox_full_sweep_every=1)
+
+    inbox.inbox_lane(deps)
+
+    reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
+    assert any("read as empty" in r for r in reasons)

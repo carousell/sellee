@@ -96,6 +96,11 @@ class MarketAdapter:
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
     system_handles: frozenset = field(default_factory=frozenset)
+    # A row preview meaning "the marketplace itself says there is nothing here to read" — matched
+    # case-insensitively against the list row's preview. Without it, a conversation whose messages
+    # the marketplace has withdrawn is indistinguishable from one our own reader failed on, and the
+    # two want opposite answers: one is nothing to do, the other is a market going unread.
+    empty_preview_pattern: str = ""
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -137,6 +142,7 @@ FACEBOOK = MarketAdapter(
     product_id_js=facebook.PRODUCT_ID_JS,
     composer=tuple(Selector(**row) for row in facebook.COMPOSER_DEFAULTS),
     system_handles=facebook.SYSTEM_HANDLES,
+    empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
 )
 
 _ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
