@@ -992,3 +992,58 @@ def test_adopting_a_listing_makes_the_lane_ask_again(store, bus, seeded) -> None
 
     assert client.product_id_reads == 2
     assert store.get_thread("fb:99") is not None
+
+
+# --- saying so, rather than 372 events nobody reads -------------------------------------------
+
+
+def test_buyers_nobody_can_place_are_reported(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+
+    texts = _notice_texts(store)
+    assert len(texts) == 1
+    assert "1 person is messaging you on Facebook Marketplace" in texts[0]
+    assert "listings I don't manage" in texts[0]
+
+
+def test_the_same_buyers_are_not_reported_every_sweep(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert len(_notice_texts(store)) == 1
+
+
+def test_a_new_unplaceable_buyer_is_reported_even_after_the_first(store, bus, seeded) -> None:
+    """`_notify_once` would go quiet here, and that is the failure this notice exists to end — one
+    layer up. Three buyers nobody can place becoming four has to say something."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+
+    client.conversations = [_conv(), _conv(thread_id="100", handle="Muhd")]
+    inbox.inbox_lane(deps)
+
+    texts = _notice_texts(store)
+    assert len(texts) == 2
+    assert "2 people are messaging you" in texts[1]
+
+
+def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
+    """Cleared when the set empties, the way the blind notice clears — so the next unplaceable
+    buyer is announced rather than swallowed by a signature that outlived its condition."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+
+    client.conversations = []  # everyone placed, or gone
+    inbox.inbox_lane(deps)
+    client.conversations = [_conv()]
+    inbox.inbox_lane(deps)
+
+    assert len(_notice_texts(store)) == 2

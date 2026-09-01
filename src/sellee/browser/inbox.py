@@ -56,6 +56,16 @@ LOGGED_OUT_NOTICE = (
 # — the market stayed dead until they happened to sit down at it. The button hands the same job to
 # the connect lane; the CLI is still there, and browser/connect.py names it in the one case where
 # it is the remaining option (the lane could not drive Chrome at all).
+# Buyers are waiting in conversations we cannot place. Claims only what is evidenced — that these
+# conversations exist and are about listings we do not manage — because that is all we know: most
+# are listings the seller made outside the agent, and calling that a fault would be a wrong guess
+# about their own marketplace. Carries no buttons on purpose; see `_unplaceable_notice`.
+UNPLACEABLE_NOTICE = (
+    "{count} {who} messaging you on {name} about listings I don't manage, so I'm leaving {them} "
+    "alone rather than answering about the wrong thing. If any of those listings should be mine, "
+    "ask me to look at your {name} listings again and I'll offer to take them over."
+)
+
 UNAVAILABLE_NOTICE = (
     "I can't drive the browser at the moment, so browser marketplaces are paused. "
     "The carousell.ai side is unaffected. Details: {reason}"
@@ -94,6 +104,24 @@ def _notify_once(deps: InboxDeps, key: str, text: str, controls: list | None = N
 
 def _clear_notice(deps: InboxDeps, key: str) -> None:
     deps.notified.pop(key, None)
+
+
+def _notify_on_change(deps: InboxDeps, key: str, signature: str, text: str) -> None:
+    """Queue when the condition's CONTENT changes, not merely the first time it holds.
+
+    `_notify_once` is the wrong shape for a condition that can grow. It stores a bool, so once it
+    has fired, the condition getting *worse* is silent until the daemon restarts — three buyers
+    nobody can place becoming four says nothing, which is the same silence this notice exists to
+    end, one layer up.
+
+    So `deps.notified` holds two kinds of value now: a bool from `_notify_once`, and a signature
+    string from here. Both existing readers test it truthily, and a signature is never empty when
+    stored, so they keep working — but nothing may start comparing values across the two helpers.
+    """
+    if deps.notified.get(key) == signature:
+        return
+    deps.notified[key] = signature
+    deps.store.queue_notice(text)
 
 
 def _unavailable(deps: InboxDeps, exc: BrowserUnavailable) -> None:
@@ -249,6 +277,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # The last abstaining tail read's own measurements, so the market's blind notice can name a
     # window that is too narrow rather than blaming the marketplace for it.
     tail_measured: dict = {}
+    # Conversations we could not place, gathered so the sweep can say so once rather than 372
+    # times into an event stream nobody reads.
+    unplaceable: list = []
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -259,7 +290,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         thread = known.get(thread_id)
         if thread is None:
             row = _with_product_id(deps, client, adapter, market, thread_id, row, region)
-            if _adopt(deps, market, adapter, thread_id, row, handle, items):
+            if _adopt(deps, market, adapter, thread_id, row, handle, items, unplaceable):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
                 continue
@@ -276,6 +307,8 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             unreadable += 1
         else:
             recorded += fresh
+
+    _report_unplaceable(deps, market, unplaceable)
 
     deps.bus.publish(
         "browser.read",
@@ -467,6 +500,38 @@ def _can_skip(store, thread: dict, row: dict) -> bool:
     return reconcile.preview_matches(row.get("last_message") or "", messages[-1]["text"])
 
 
+def _report_unplaceable(deps: InboxDeps, market: str, unplaceable: list) -> None:
+    """Tell the seller once that buyers are waiting in conversations we cannot place.
+
+    `_unmatched` publishes an event per conversation and nothing else, which is the right shape for
+    a log and the wrong one for a person: on a real install it produced 372 `browser.unmatched`
+    events in an afternoon while a buyer went unanswered and the healthcheck read "All good".
+
+    Keyed on the *set*, not on the fact, so a fourth unplaceable buyer arriving after three were
+    already reported still says something — and so the same three, swept every five minutes, say
+    nothing more. Cleared when the set empties, the way the blind notice clears, so the next one to
+    appear is announced rather than swallowed by a signature that outlived its condition.
+    """
+    key = f"unplaceable:{market}"
+    if not unplaceable:
+        _clear_notice(deps, key)
+        return
+    ids = sorted(set(unplaceable))
+    name = marketplaces.display_name(market)
+    count = len(ids)
+    _notify_on_change(
+        deps,
+        key,
+        ",".join(ids),
+        UNPLACEABLE_NOTICE.format(
+            count=count,
+            name=name,
+            who="people are" if count > 1 else "person is",
+            them="them" if count > 1 else "it",
+        ),
+    )
+
+
 def _unmatched(deps: InboxDeps, market: str, thread_id: str, reason: str) -> None:
     deps.bus.publish(
         "browser.unmatched", {"market": market, "thread_id": thread_id, "reason": reason}
@@ -488,7 +553,16 @@ def _unreadable(deps: InboxDeps, market: str, thread_id: str, reason: str) -> No
     )
 
 
-def _adopt(deps: InboxDeps, market: str, adapter, thread_id: str, row: dict, handle: str, items):
+def _adopt(
+    deps: InboxDeps,
+    market: str,
+    adapter,
+    thread_id: str,
+    row: dict,
+    handle: str,
+    items,
+    unplaceable: list | None = None,
+):
     """Create a thread for a buyer writing about one of our listings for the first time.
 
     Three things have to hold: the buyer approached us (`received` — not an offer we made), the
@@ -511,6 +585,10 @@ def _adopt(deps: InboxDeps, market: str, adapter, thread_id: str, row: dict, han
         return False
     if len(matches) != 1:
         _unmatched(deps, market, thread_id, "unknown_listing" if not matches else "two_items")
+        if unplaceable is not None and not matches:
+            # Only `unknown_listing`. `two_items` is a data problem with its own event, and the
+            # refusals above are correct behaviour rather than a buyer left waiting.
+            unplaceable.append(thread_id)
         return False
     item_id = matches[0]
     try:
