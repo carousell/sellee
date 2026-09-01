@@ -1,27 +1,21 @@
 """Facebook's browser contract: the Marketplace folder, the message read, the composer, the login
 probe.
 
-Two facts about this marketplace shape everything below, and both cost a day each to find.
+Two facts shape everything below.
 
 **The seller's marketplace conversations are a folder inside Messenger, and the folder has no URL.**
-`/marketplace/inbox/` looks like the right page and is not: it renders the rows scoped correctly but
-carries no thread identity at all — no link, no id, no data attribute — and clicking a row opens the
-conversation in place without changing `location`. Messenger's own `/messages/` carries the identity
-on every row and is scoped to the wrong thing: it is the seller's personal inbox, e2ee chats
-included. The one view that has both is a *folder* of Messenger, reached by clicking a row in the
-chat rail, at no address of its own. So the list read here is: open `/messages/`, click that row,
-and read what replaces the personal list.
+`/marketplace/inbox/` renders rows scoped correctly but carries no thread identity; `/messages/`
+carries identity but is the seller's personal inbox, e2ee chats included. The one view with both
+is a folder of Messenger reached by clicking a row in the chat rail. So the list read here is:
+open `/messages/`, click that row, read what replaces the personal list.
 
-**The folder only opens for a trusted click.** A click dispatched from the page does nothing —
-the control listens for the real event — which is why `INBOX_FOLDER_JS` only *marks* the row and
-the caller does the clicking through the browser. That split is the whole reason the adapter carries
-a marking artifact and a target rather than a single "open the inbox" script.
+**The folder only opens for a trusted click.** A click dispatched from the page does nothing, so
+`INBOX_FOLDER_JS` only *marks* the row and the caller clicks through the browser — which is why
+the adapter carries a marking artifact and a target rather than one "open the inbox" script.
 
 Everything here is written against the desktop layout, which Facebook serves only above roughly
-900px. Below that the folder is not reachable at all and the conversation list carries no thread
-identity — see `blindness.MIN_USABLE_WIDTH_PX`, which the browser lane now enforces on every
-acquisition. Selectors are class-agnostic throughout: Facebook ships hashed class names that churn
-on every deploy, so nothing here matches one.
+900px (see `blindness.MIN_USABLE_WIDTH_PX`). Selectors are class-agnostic throughout: Facebook's
+hashed class names churn on every deploy.
 """
 
 from __future__ import annotations
@@ -40,16 +34,9 @@ LISTING_ID_PATTERN = r"/marketplace/item/(\d+)"
 # the Marketplace folder, so nothing here has to recognise them and nothing opens them.
 SYSTEM_HANDLES = frozenset({"facebook", "marketplace", "meta business support", "meta ai"})
 
-# What Facebook puts in the row when a message has been withdrawn, or the account that sent it is
-# gone: the preview reads "Message unavailable", and the log holds bubbles with an avatar, a hover
-# toolbar and no text at all.
-#
-# Seen live on 2026-09-01. The tail read of such a conversation is correct to come back empty — and
-# the lane called that blindness, because an empty tail on a row that claims a latest message means
-# the page changed shape under the reader. Here it does not: the row's own preview is the
-# marketplace saying there is nothing to show. One conversation in that state marked the whole
-# Facebook market unreadable for hours, and was re-opened every five minutes forever, because a
-# thread with no stored messages can never become skippable.
+# What Facebook puts in the row when a message has been withdrawn, or the sender's account is gone.
+# The row's own preview saying "nothing to show" is an answer, not a page that changed shape: an
+# empty tail on such a row must not be counted as blindness, and the row is never worth opening.
 EMPTY_PREVIEW_PATTERN = r"^\s*message unavailable\b"
 
 # The attribute `INBOX_FOLDER_JS` stamps on the folder control, and the selector the caller clicks.
@@ -57,20 +44,15 @@ EMPTY_PREVIEW_PATTERN = r"^\s*message unavailable\b"
 FOLDER_MARK_ATTR = "data-sellee-inbox-folder"
 INBOX_FOLDER_TARGET = f"[{FOLDER_MARK_ATTR}='1']"
 
-# Mark the control that opens the Marketplace folder, for the caller to click for real.
-#
-# It is located by what it is rather than by where it sits: a row in the chat rail, of row height,
-# whose whole label is "Marketplace" and an age. It carries no href, no aria-label and no id — there
-# is nothing more specific to match, and matching a hashed class would break on the next deploy.
-#
-# Answers `{marked, candidates, width, visible}`. The measurements travel because a miss here is
-# indistinguishable, from the outside, from a marketplace that has changed shape — and the usual
-# cause is neither: it is a window too narrow for the rail to render.
+# Mark the control that opens the Marketplace folder, for the caller to click for real. Located by
+# what it is — a rail row whose whole label is "Marketplace" and an age; it carries no href, no
+# aria-label, no id. Answers `{marked, candidates, width, visible}`; the measurements travel
+# because the usual miss is a window too narrow for the rail to render, not a marketplace that
+# changed shape.
 INBOX_FOLDER_JS = f"""() => {{
   const RAIL_EDGE = 500;
   // Whether the folder is already open, by the same heading the list artifact proves itself with.
-  // The control's own `aria-pressed` is NOT this: it reads "true" while the rail still says
-  // "Chats", so trusting it would have us skip an activation that never happened.
+  // The control's `aria-pressed` reads "true" while the rail still says "Chats".
   const alreadyOpen = Array.from(document.querySelectorAll('h1')).some((el) => {{
     const r = el.getBoundingClientRect();
     return r.left < 400 && r.width > 0 && (el.innerText || '').trim() === 'Marketplace';
@@ -98,32 +80,25 @@ INBOX_FOLDER_JS = f"""() => {{
 
 # The conversations in the Marketplace folder.
 #
-# Read after the caller has opened the folder, and it proves that for itself before answering: the
-# rail's heading is "Chats" on the personal inbox and "Marketplace" in the folder, so a read that
-# cannot see the second reports a failure rather than a list. That check is the whole safety of this
-# artifact. Without it an unopened folder answers with the personal inbox, whose rows name no
-# listing, and every one of them would be reported as a conversation about nothing — or, on a seller
-# whose personal rows happen to be filtered out, as an empty marketplace inbox, which is the one
-# answer that permanently stops the asking.
+# Proves the folder is open before answering: the rail heading is "Chats" on the personal inbox and
+# "Marketplace" in the folder, and without that check an unopened folder would answer with the
+# personal inbox — whose rows name no listing, or may read as an empty marketplace inbox, which is
+# the one answer that permanently stops the asking.
 #
-# Scope is belt and braces: opening the folder slides the personal list off-canvas rather than
-# unmounting it, so its rows are still in the DOM at a negative x. Only on-screen rows are read.
+# Opening the folder slides the personal list off-canvas rather than unmounting it, so only
+# on-screen rows are read. Identity and counterpart come from the row's `aria-label` ("Group chat:
+# <buyer> · <listing>") rather than scraped text, so a preview containing " · " cannot be mistaken
+# for the separator.
 #
-# Identity and counterpart come from the row's own `aria-label` — "Group chat: <buyer> · <listing>",
-# Facebook's phrasing for a marketplace thread — rather than from scraped text, so a preview
-# containing " · " cannot be mistaken for the separator. A row that does not carry that shape is
-# skipped and counted, never guessed at.
-#
-# `product_id` is deliberately null. The folder names the listing by title only, and a title is not
-# something to match an item on; the id is read from the opened conversation instead. `unread` is 0
-# for the same reason — the folder marks unread rows in a way that has not been captured, and a
-# guess would suppress reads. Both are safe defaults: `_can_skip` errs toward opening, and the
-# periodic full sweep opens everything regardless.
+# `product_id` is null on purpose: the folder names the listing by title only, and a title is never
+# matched on — the id is read from the opened conversation. `unread` is 0 because the folder's
+# unread marker has not been captured and a guess would suppress reads; `_can_skip` errs toward
+# opening and the full sweep opens everything regardless.
 CONVERSATIONS_LIST_JS = """async () => {
   const RAIL_EDGE = 400;
   const SEPARATOR = ' \\u00b7 ';
-  // The folder's own heading, which is what proves the folder is open. Scoped to the rail: the
-  // right-hand pane shows the word "Marketplace" on the listing banner of every open conversation.
+  // The folder's own heading. Scoped to the rail: the right-hand pane shows the word
+  // "Marketplace" on the listing banner of every open conversation.
   const folderOpen = () =>
     Array.from(document.querySelectorAll('h1')).some((el) => {
       const r = el.getBoundingClientRect();
@@ -135,9 +110,8 @@ CONVERSATIONS_LIST_JS = """async () => {
       return r.width > 0 && r.height > 0 && r.left >= 0;
     });
   // The folder loads a screenful at a time, so a plain read answers with the most recent handful
-  // and looks exactly like a seller with a handful of buyers: the first live run of this read 9 of
-  // 19, and the ten it did not see were ten buyers nobody would have answered. `window.scrollTo`
-  // does not drive this list — bringing the last row into view does.
+  // and looks exactly like a seller with a handful of buyers. `window.scrollTo` does not drive
+  // this list — bringing the last row into view does.
   const loadAll = async () => {
     let previous = -1;
     let settled = 0;
@@ -173,13 +147,10 @@ CONVERSATIONS_LIST_JS = """async () => {
     return { conversations: out, skipped: skipped };
   };
   // Facebook can put a wall in front of the messages rather than refusing us: a PIN prompt for
-  // encrypted chats, or a "confirm it's you" interstitial. The folder never opens, so from the lane
-  // it is indistinguishable from Facebook declining to hand over the list — and the seller gets
-  // told to check a login that is working perfectly. It is a question addressed to them.
-  //
-  // Deliberately hard to trigger: a phrase AND a prompt-shaped element. The words alone appear in
-  // buyers' own messages, and a false verify sends someone to enter a PIN nobody asked them for,
-  // which is worse than the silence it replaces.
+  // encrypted chats, or a "confirm it's you" interstitial. From the lane it is indistinguishable
+  // from Facebook declining to hand over the list, and the seller would be told to check a login
+  // that is working perfectly. Deliberately hard to trigger — a phrase AND a prompt-shaped
+  // element — because the words alone appear in buyers' own messages.
   const verifyWall = () => {
     const text = (document.body.innerText || '').toLowerCase();
     const asks = [
@@ -196,11 +167,9 @@ CONVERSATIONS_LIST_JS = """async () => {
     );
     return field || document.querySelector('[role="dialog"]') ? 'verify' : '';
   };
-  // Back up to the newest end. `loadAll` finishes at the OLDEST row, and Messenger unmounts rows
-  // far outside the viewport — so a read taken there is a window onto the bottom of the list with
-  // the most recent conversations missing from the DOM entirely. Live on 2026-09-01: two buyers
-  // sitting at the top of the folder, both showing a new-message dot, in a read that returned 25
-  // rows and neither of them. Every conversation the agent held was nine weeks old.
+  // Back up to the newest end: `loadAll` finishes at the OLDEST row, and Messenger unmounts rows
+  // far outside the viewport, so a read taken there is missing the most recent conversations
+  // entirely.
   const scrollToTop = async () => {
     let previous = null;
     let settled = 0;
@@ -213,9 +182,9 @@ CONVERSATIONS_LIST_JS = """async () => {
       await new Promise((r) => setTimeout(r, 400));
     }
   };
-  // One read is one window onto the list, never the whole of it. Two reads from opposite ends,
-  // merged on the conversation id, is the whole of it — and the top read goes first because the
-  // folder is newest-first and that is the order the caller should see.
+  // One read is one window onto the list, never the whole of it: two reads from opposite ends,
+  // merged on the conversation id. The top read goes first — the folder is newest-first, and that
+  // is the order the caller should see.
   const merge = (top, bottom) => {
     const parts = [top, bottom].filter((r) => r && Array.isArray(r.conversations));
     if (!parts.length) return null;
@@ -260,8 +229,8 @@ CONVERSATIONS_LIST_JS = """async () => {
 # Which listing the open conversation is about.
 #
 # Facebook puts the item on a banner above the message log, as a real link, and that link is the
-# only place in the whole flow where the conversation and the listing id appear together. Read once,
-# when a conversation is first seen, and from then on the thread carries the item.
+# only place where the conversation and the listing id appear together. Read once, when a
+# conversation is first seen; from then on the thread carries the item.
 PRODUCT_ID_JS = """async () => {
   const read = () => {
     const link = document.querySelector('a[href*="/marketplace/item/"]');
@@ -269,11 +238,8 @@ PRODUCT_ID_JS = """async () => {
     const id = ((link.getAttribute('href') || '').match(/\\/marketplace\\/item\\/(\\d+)/) || [])[1];
     return id || null;
   };
-  // Polled, like every other read here, and for a reason that cost a real buyer. The banner is
-  // fetched after the load event, so a synchronous look at a freshly navigated tab finds no link
-  // at all — and a missing id is `unknown_listing`, which is silence. Gerry's conversation went
-  // unanswered for days on exactly this: the id was there a second later, every time it was asked
-  // for by hand, and never there at the instant the lane asked.
+  // Polled: the banner is fetched after the load event, so a synchronous look at a freshly
+  // navigated tab finds no link — and a missing id is `unknown_listing`, which is silence.
   const deadline = Date.now() + 8000;
   let id = read();
   while (Date.now() < deadline && id === null) {
@@ -285,51 +251,48 @@ PRODUCT_ID_JS = """async () => {
 
 # Read the trailing message bubbles of the open conversation.
 #
-# Direction comes from GEOMETRY, exactly as Carousell's does: within the message log an outbound
-# bubble hugs the right edge and an inbound one hugs the left. Captured live — a buyer's message at
-# left 440 of a log starting at 376, ours right-aligned at 1538 of a log ending at 1584.
+# Direction comes from GEOMETRY, as Carousell's does: an outbound bubble hugs the right edge of the
+# log, an inbound one the left. Message text lives in `[dir="auto"]` nodes, which Facebook nests —
+# the same string on a node and its child — so innermost nodes are kept. What remains is filtered
+# against the chrome that reads like a short message: the banner title, send receipts, the "started
+# this chat" notice, and Facebook's quick-reply suggestions, which are the dangerous ones — read as
+# a message, "Yes, are you interested?" would have the agent answering itself.
 #
-# The message text lives in `[dir="auto"]` nodes, which Facebook nests: the same string appears on a
-# node and again on its child, so anything containing a descendant with identical text is dropped
-# and the innermost node kept. What remains is filtered against the chrome that reads exactly like a
-# short message — the banner title, the send receipts, the "started this chat" notice, and
-# Facebook's own quick-reply suggestions, which are the dangerous ones: "Yes, are you interested?"
-# is indistinguishable from something a person typed, and recording one would have the agent
-# answering itself.
+# The counterpart's name is the one lossy rule here: a name label is not distinguishable from a
+# one-word message except by being exactly the name (taken from the log's own `aria-label`). A
+# buyer whose whole message is their own name is skipped — one message, against mis-reading a
+# label in every conversation.
 #
-# The counterpart's name is dropped too, and that needs saying because it is the one lossy rule
-# here: Facebook labels each run of bubbles with the sender's name, and a name label is not
-# distinguishable from a one-word message by shape or position — only by being exactly the name.
-# It is taken from the log's own `aria-label` ("Messages in conversation titled <buyer> ·
-# <listing>") rather than assumed. A buyer whose whole message is their own name is read as a
-# label and skipped; that costs one message, against reading a label as one in every conversation.
-#
-# Returns a list of bubbles, or `{error, logs, width, height, visible}` when no message log could be
-# found — which the caller must treat as a failed read, never as a conversation with nothing in it.
-# Async for the same reason Carousell's is: the messages arrive after the load event.
+# Returns a list of bubbles, or `{error, logs, width, height, visible}` when no message log could
+# be found — a failed read, never a conversation with nothing in it.
 
 # Whether one line of the log is Facebook's furniture rather than something somebody said.
 #
-# Its own function because it is the piece here worth testing directly, the way Carousell's price
-# parser is: every rule in it was written from a line that really appeared in a real thread, and the
-# cost of getting one wrong runs both ways — a rule too loose journals Facebook's words as the
-# buyer's, and one too tight deletes something they actually said.
-#
-# The timestamp rule shows why the second half matters. Facebook stamps a separator between runs of
-# messages, and an obvious `\\d{1,2}:\\d{2}` would eat a buyer who answers "8:30pm" to "what time?".
-# So a month or a weekday is required, which every real separator has and a bare time does not.
+# Its own function because it is worth testing directly: every rule in it was written from a line
+# that appeared in a real thread, and the cost of getting one wrong runs both ways — too loose
+# journals Facebook's words as the buyer's, too tight deletes something they said. The timestamp
+# rule needs a month or weekday, not just a time, or it eats a buyer answering "8:30pm".
 CHROME_LINE_JS = r"""(text) => {
   const line = String(text || '').trim();
-  const RECEIPTS = /^(sent|sending|delivered|seen|message sent|read|enter to send)$/i;
+  // Anchored exact forms, plus the relative receipts Facebook writes under a bubble ("Sent 5m
+  // ago"), which change on every read — the shape that makes a settled conversation look like it
+  // keeps speaking.
+  const RECEIPT_WORDS = 'sent|sending|delivered|seen|read';
+  const RECEIPTS = new RegExp(
+    '^(?:' + RECEIPT_WORDS + '|message sent|enter to send)$' +
+      // The relative form needs a DURATION after the word, not merely an "ago" somewhere: without
+      // that, "seen it going for $30 not long ago" is a buyer's message we would have deleted.
+      '|^(?:' + RECEIPT_WORDS + ')\\s+\\d+\\s*[a-z]{0,7}\\s+ago$',
+    'i'
+  );
   const NOTICES = new RegExp(
     '(started this chat|waiting for your response|send a quick response' +
       '|tap a response to send|you can now rate each other|people may rate one another' +
       '|you sent an attachment|view buyer profile)',
     'i'
   );
-  // Built from strings rather than regex literals, so every backslash is doubled: inside a JS
-  // string '\d' is not an escape and collapses to a bare 'd', which silently turns the whole
-  // pattern into one that matches the letter instead of a digit.
+  // Built from strings rather than regex literals so every backslash is doubled: inside a JS
+  // string '\d' collapses to a bare 'd', which silently breaks the pattern.
   const DAY = '(?:mon|tue|wed|thu|fri|sat|sun)[a-z]*';
   const MONTH = '(?:jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]* \\d{1,2}(?:, \\d{4})?';
   const TIMESTAMP = new RegExp(
@@ -339,17 +302,11 @@ CHROME_LINE_JS = r"""(text) => {
 }"""
 _CONVERSATION_TAIL_TEMPLATE = """async () => {
   const isChromeLine = __IS_CHROME__;
-  // Text the seller could click is never text the buyer sent. This is the guard the whole read
-  // turns on, and it is Carousell's rule for the same reason: Facebook renders quick-reply
+  // Text the seller could click is never text the buyer sent. Facebook renders quick-reply
   // suggestions inside the message log — "Yes, are you interested?", "Sorry, it's not available."
-  // — and they are indistinguishable from a real message by text, position or shape. Read as
-  // buyer messages, as they were on 2026-09-01, the agent negotiates against words nobody said:
-  // Gerry's thread reported the buyer as having written "Sorry, it's not available."
-  //
-  // The same rule drops the other clickable furniture in a live thread — a "Rate <buyer>" prompt,
-  // and the link-preview card Facebook renders under a checkout link we sent, whose title and host
-  // would otherwise be journaled as two more messages. Verified against real threads in both
-  // directions: every genuine message, ours and theirs, carries no pointer and no button.
+  // — indistinguishable from a real message by text, position or shape; read as buyer messages,
+  // the agent negotiates against words nobody said. The same rule drops the other clickable
+  // furniture: a "Rate <buyer>" prompt, and link-preview cards.
   const clickable = (el, root) => {
     for (let n = el, i = 0; n && n !== root && i < 8; n = n.parentElement, i++) {
       if (n.getAttribute('role') === 'button') return true;
@@ -420,12 +377,9 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
 CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS)
 
 # Is the seller logged in? Three-state, and it must never answer logged_out on thin evidence: a
-# false logged_out tells a signed-in seller to re-authenticate and stops their market.
-#
-# Only the password field proves logged_out — Facebook renders its login form on every page it
-# refuses — and only a control that exists solely for a signed-in account proves logged_in. A
-# logged-out visitor gets the marketplace nav too, so that is deliberately not the marker; the chat
-# rail is.
+# false logged_out tells a signed-in seller to re-authenticate and stops their market. Only the
+# password field proves logged_out; only a signed-in-only control (the chat rail) proves logged_in —
+# a logged-out visitor gets the marketplace nav too, so that is deliberately not the marker.
 LOGIN_JS = """() => {
   try {
     if (document.querySelector('input[name="pass"], input[type="password"]')) {
@@ -446,16 +400,14 @@ LOGIN_JS = """() => {
 
 # Where the seller's own listings actually are.
 #
-# `/marketplace/you/selling` looks like the page and is not: its cards carry the title, the price
-# and a per-card "In stock", but no listing id anywhere — no link, no data attribute — so nothing
-# read there can be joined to a conversation or recorded as a listing URL. The seller's public
-# Marketplace profile carries the same listings as real `/marketplace/item/<id>` links, and it is
-# reached from the selling page by a link whose href holds the seller's own account id. That id is
-# a fact about *them*, not about Facebook, so it is not in the registry and not stored: it is read
-# from the page each time, which costs one hop and nothing else.
+# `/marketplace/you/selling` cards carry no listing id anywhere, so nothing read there can be
+# joined to a conversation. The seller's public Marketplace profile carries the same listings as
+# real `/marketplace/item/<id>` links, reached from the selling page by a link whose href holds
+# the seller's account id — a fact about them, not about Facebook, so it is read from the page
+# each time rather than stored.
 #
-# Answers `{url}` — the address to read the listings from — or `{url: null}` when the link is not
-# there, which the caller reports rather than reading the wrong page.
+# Answers `{url}`, or `{url: null}` when the link is not there, which the caller reports rather
+# than reading the wrong page.
 MY_LISTINGS_ENTRY_JS = """() => {
   const link = document.querySelector('a[href*="/marketplace/profile/"]');
   const href = link ? link.getAttribute('href') : null;
@@ -469,12 +421,11 @@ MY_LISTINGS_ENTRY_JS = """() => {
 _MY_LISTINGS_TEMPLATE = """async () => {
   const LISTING_HREF = new RegExp(__LISTING_ID_RE__);
   const parsePrice = __PARSE_PRICE__;
-  // The seller's own listings, and nothing else on the page. Their profile renders under a heading
-  // that names them ("Jerry Neo's listings"), and Facebook interleaves a "Today's picks" grid of
-  // OTHER people's listings down the same page — at overlapping vertical positions, so neither the
-  // heading's offset nor a column band separates them. The first ancestor of that heading which
-  // holds any listing link is the seller's grid and holds only it, which is the one rule here that
-  // matters: read the wrong container and the survey offers to relist strangers' items.
+  // The seller's own listings, and nothing else. Their profile renders under a heading that
+  // names them, and Facebook interleaves a "Today's picks" grid of OTHER people's listings down
+  // the same page at overlapping positions. The first ancestor of the heading that holds any
+  // listing link is the seller's grid and holds only it — read the wrong container and the survey
+  // offers to relist strangers' items.
   const scope = () => {
     const heading = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
       .find((el) => /listings$/i.test((el.innerText || '').trim()));
@@ -504,7 +455,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
     };
   }
   // The page's own count of what is live — the only thing that can tell a partial render from a
-  // small inventory, and what stops an ask-once survey closing on 12 of 17.
+  // small inventory.
   const bodyText = (document.body && document.body.innerText) || '';
   const active = Number((bodyText.match(/(\\d+)\\s+active listings?/i) || [])[1]) || 0;
 
@@ -525,9 +476,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   const listings = [];
   let dropped = 0;
   cards(root).forEach((a, id) => {
-    // A card reads price, title, location — one line each. The title is taken by position rather
-    // than by guessing which line is not a price, because a listing may legitimately be titled
-    // something that parses as one.
+    // Title by position: a listing may legitimately be titled something that parses as a price.
     const lines = (a.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
     const priceText = lines[0] || '';
     const title = lines[1] || '';
@@ -547,8 +496,8 @@ _MY_LISTINGS_TEMPLATE = """async () => {
     active_count: active,
     dropped: dropped,
     unreadable: dropped,
-    // Never report a partial grid as the seller's whole inventory. The tally is the page's own
-    // statement of how many are live; short of it, this read did not finish.
+    // Never report a partial grid as the whole inventory: short of the page's own tally, this
+    // read did not finish.
     truncated: active > 0 && listings.length + dropped < active,
     visible: document.visibilityState === 'visible',
   };
@@ -560,29 +509,22 @@ MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
 
 # One listing's own page, read at adoption time.
 #
-# There is no JSON-LD — Facebook publishes none for a marketplace item — so this is DOM work, and
-# that makes liveness the dangerous field. `active` is true ONLY on a positive in-stock marker: a
-# reader that cannot prove a listing is live must say it is not, because the cost of the other
-# mistake is relisting something the seller already sold.
-#
-# The item's own block is located by the title rather than by position: navigating to an item URL
-# renders the marketplace's whole chrome — nav, categories, notifications — around a panel, and
-# `document.body.innerText` begins with all of it.
-#
-# Photographs are taken only from images Facebook labels "Product photo of …". The page also
-# carries a grid of similar listings from other sellers at the same CDN hosts, and their pictures
-# are indistinguishable from the item's own by host, size or position.
+# There is no JSON-LD for a marketplace item, so this is DOM work — and liveness is the dangerous
+# field: `active` is true ONLY on a positive in-stock marker, because the cost of the other mistake
+# is relisting something the seller already sold. The item's own block is located by the
+# "Condition" label rather than position: an item URL renders the marketplace's whole chrome around
+# a panel. Photographs are taken only from images Facebook labels "Product photo of …" — the page
+# also carries a grid of similar listings from other sellers at the same CDN hosts.
 LISTING_DETAIL_JS = """async () => {
   const parsePrice = __PARSE_PRICE__;
   // Facebook's own section labels inside the panel. Walking up stops at the first ancestor whose
-  // opening line is NOT one of these, which is the ancestor whose opening line is the title.
+  // opening line is NOT one of these — that ancestor's opening line is the title.
   const SECTIONS = ['Details', 'Condition', 'Description', 'Seller information'];
   // The panel's own footer, which sits where a description would be when there is not one.
   const TRAILER = /Location is approximate|^See (more|less)$|^Edit$|^Message$/i;
   const read = () => {
-    // Anchored on the "Condition" label rather than on the title, because the title cannot be
-    // recognised without already knowing it: navigating to an item renders the marketplace's whole
-    // chrome around the panel, and the biggest heading on the page is the word "Marketplace".
+    // Anchored on "Condition" rather than the title, because the title cannot be recognised
+    // without already knowing it: the biggest heading on an item page is the word "Marketplace".
     const anchor = Array.from(document.querySelectorAll('span,div')).find(
       (el) => el.children.length === 0 && (el.innerText || '').trim() === 'Condition'
     );
@@ -605,17 +547,17 @@ LISTING_DETAIL_JS = """async () => {
       .filter((i) => /^Product photo of /i.test(i.getAttribute('alt') || ''))
       .map((i) => i.src || '')
       .filter(Boolean);
-    // Liveness, and the whole reason this fails closed. "In stock" is Facebook's own words on a
-    // live listing; a sold one says so instead, and anything we cannot read says nothing.
+    // Liveness, and the whole reason this fails closed: "In stock" is Facebook's own words on a
+    // live listing, and anything we cannot read says nothing.
     const body = (panel.innerText || '');
     const live = /\\bIn stock\\b/i.test(body);
     const sold = /\\b(Sold|Out of stock|Pending|no longer available)\\b/i.test(body);
     return {
       active: live && !sold,
       title: title,
-      // The line under the condition value, when there is one. A listing with no description at
-      // all runs straight on to the panel's footer, so that footer is named and refused rather
-      // than being adopted as the seller's own words.
+      // The line under the condition value, when there is one; a description-less listing runs
+      // straight on to the footer, which is named and refused rather than adopted as the
+      // seller's own words.
       description: conditionAt >= 0 && !TRAILER.test(lines[conditionAt + 2] || '')
         ? (lines[conditionAt + 2] || '')
         : '',
@@ -639,10 +581,9 @@ LISTING_DETAIL_JS = """async () => {
 # --- publishing ----------------------------------------------------------------------------------
 
 # The attribute the publish artifacts stamp on each control, and the selector built from it. The
-# create form's fields carry no label, no name and no stable id — Facebook renders a floating label
-# as a sibling and generates ids per render (`_r_1u_`) — so a field is identifiable only by the text
-# next to it, which CSS cannot express. The artifact finds them and marks them; the driver acts on
-# the marks.
+# create form's fields carry no label, no name and no stable id — a field is identifiable only by
+# the text next to it, which CSS cannot express. The artifact finds and marks them; the driver
+# acts on the marks.
 PUBLISH_MARK_ATTR = "data-sellee-publish"
 
 
@@ -654,14 +595,13 @@ def publish_target(step: str) -> str:
 # Mark every control the publish driver needs, and say which were found.
 #
 # Answers `{marked: [...], missing: [...], boost_on, width, visible}`. The driver refuses to type
-# anything until the fields it must fill are all present, so a form that has changed shape fails
-# before it can publish a listing with the price in the title — the two text inputs are
-# indistinguishable except by the label beside them, and they are adjacent.
+# anything until the fields it must fill are all present: the two text inputs are
+# indistinguishable except by the label beside them, so a partly-recognised form could put the
+# price in the title.
 PUBLISH_FIELDS_JS = f"""() => {{
   const MARK = '{PUBLISH_MARK_ATTR}';
-  // The floating label Facebook renders around a field. Deliberately the *nearest* short text: the
-  // form is a stack of labelled boxes, so the first ancestor carrying a short string is this
-  // field's own label and not the section heading above it.
+  // The floating label Facebook renders around a field: the nearest short text, which on a stack
+  // of labelled boxes is this field's own label and not the section heading above it.
   const labelOf = (el) => {{
     for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {{
       const t = (n.innerText || '').trim();
@@ -689,23 +629,21 @@ PUBLISH_FIELDS_JS = f"""() => {{
     condition: mark(byLabel('label[role="combobox"]', 'Condition'), 'condition'),
     description: mark(byLabel('textarea', 'Description'), 'description'),
     photos: mark(document.querySelector('input[type="file"]'), 'photos'),
-    // The control that opens the file chooser. Marked separately from the input itself because the
-    // upload only works while a chooser is actually open — the browser server refuses a file
-    // handed to it otherwise — so the driver has to press this first.
+    // The control that opens the file chooser, marked separately from the input: the upload only
+    // works while a chooser is open, so the driver has to press this first.
     add_photos: mark(button(/^Add photos/), 'add_photos'),
     more: mark(button(/^More details/), 'more'),
     next: mark(button(/^Next$/), 'next'),
     publish: mark(button(/^Publish$/), 'publish'),
   }};
-  // Paid promotion, which must never be left on: it spends the seller's money, and it is a switch
-  // that ships default-off but is one stray click from not being.
+  // Paid promotion: a switch that ships default-off but is one stray click from not being, and
+  // it spends the seller's money.
   const boost = Array.from(document.querySelectorAll('input[type="checkbox"]'))
     .find((el) => /Boost listing/i.test(el.getAttribute('aria-label') || ''));
   mark(boost, 'boost');
-  // Whether the form will actually accept what it has. Facebook greys Next out until every field
-  // it requires is filled — a photograph among them — and clicking a disabled button submits
-  // nothing at all. Reported so the driver can tell "the form is not ready" from "the publish may
-  // have gone through", which is the difference between trying again and never trying again.
+  // Whether the form will accept what it has. Facebook greys Next out until every required field
+  // is filled, and clicking a disabled button submits nothing — the difference between "the form
+  // is not ready" (try again) and "the publish may have gone through" (never again).
   const enabled = (step) => {{
     const el = document.querySelector('[' + MARK + "='" + step + "']");
     return !!el && el.getAttribute('aria-disabled') !== 'true';
@@ -721,16 +659,15 @@ PUBLISH_FIELDS_JS = f"""() => {{
   }};
 }}"""
 
-# What one field holds now, for the read-back before publishing. The driver compares this against
-# what it meant to type: a marketplace form that silently truncated a title, or dropped a price
-# because the field wanted a different format, must not become a live listing nobody checked.
+# What one field holds now, for the read-back before publishing: a form that silently truncated a
+# title, or dropped a price, must not become a live listing nobody checked.
 PUBLISH_READBACK_JS = f"""() => {{
   const value = (step) => {{
     const el = document.querySelector("[{PUBLISH_MARK_ATTR}='" + step + "']");
     if (!el) return null;
     if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA') return el.value;
     // A chosen dropdown renders as its own label above the value ("Category\\nFurniture"), so the
-    // value is the last line — comparing the whole thing would never match what we picked.
+    // value is the last line.
     const lines = (el.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
     return lines.length ? lines[lines.length - 1] : '';
   }};
@@ -745,11 +682,11 @@ PUBLISH_READBACK_JS = f"""() => {{
 
 # The options of an open dropdown, marked so one can be clicked.
 #
-# The two dropdowns on this form are not the same widget. Condition opens a `role="option"` list;
-# Category opens a panel of `role="button"` rows, which is also what the form's own Next and Save
-# draft buttons are — so the menu is found structurally, by taking the largest group of short-text
-# clickable rows sharing a parent. That is the same shape as Carousell's "the pane holding the most
-# bubbles", and for the same reason: it survives a layout nobody told us about.
+# The two dropdowns are not the same widget. Condition opens a `role="option"` list; Category
+# opens a panel of `role="button"` rows — also what the form's own buttons are — so the menu is
+# found structurally, as the largest column of short-text clickable rows. Same shape as
+# Carousell's "the pane holding the most bubbles", for the same reason: it survives a layout
+# nobody told us about.
 _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
   const MARK = '{PUBLISH_MARK_ATTR}';
   const MIN_MENU = 4;
@@ -757,15 +694,14 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
     const r = el.getBoundingClientRect();
     return r.width > 40 && r.height > 12;
   }};
-  // A row's own label. Facebook hangs a subtitle under some of them ("Household" over "Shipping
-  // available"), and the subtitle is not part of the name.
+  // A row's own label; Facebook hangs a subtitle under some rows, and it is not part of the name.
   const label = (el) => ((el.innerText || '').trim().split('\\n')[0] || '').trim();
   const rows = Array.from(document.querySelectorAll('[role="option"],[role="menuitem"]'))
     .filter(visible);
   let options = rows;
   if (!options.length) {{
     // A menu is a column: its rows share a left edge, where the form's own buttons are scattered
-    // across the page. Grouping by parent does not work — Facebook wraps each row in its own div.
+    // across the page. Grouping by parent does not work — each row is wrapped in its own div.
     const columns = new Map();
     Array.from(document.querySelectorAll('[role="button"]')).filter(visible).forEach((el) => {{
       const text = label(el);
@@ -781,8 +717,8 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
   }}
   const texts = options.map(label);
   const want = String(__WANTED__ || '').trim().toLowerCase();
-  // Exact first, then a prefix — Facebook's own wording wins over ours, and a listing must never be
-  // filed under a category that merely contains the word we were looking for.
+  // Exact first, then a prefix — a listing must never be filed under a category that merely
+  // contains the word we were looking for.
   let at = texts.findIndex((t) => t.toLowerCase() === want);
   if (at < 0) at = texts.findIndex((t) => t.toLowerCase().startsWith(want));
   if (at < 0) return {{ chosen: null, options: texts.slice(0, 40) }};
@@ -794,16 +730,15 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
 def options_js(wanted: str) -> str:
     """The option-picking artifact, with the wanted text baked in.
 
-    `browser_evaluate` passes one argument and it is the located element, so a value we choose
-    cannot be handed over at call time — it is substituted here instead, as a JS literal, the same
-    way Carousell injects its listing-id pattern.
+    `browser_evaluate` passes one argument and it is the located element, so a value we choose is
+    substituted here as a JS literal — the same way Carousell injects its listing-id pattern.
     """
     return _PUBLISH_OPTIONS_TEMPLATE.replace("__WANTED__", json.dumps(str(wanted or "")))
 
 
-# Where the listing ended up, read after the publish settles. A publish that cannot be shown to have
-# produced a listing is reported as unverified rather than as done — the same fail-closed rule the
-# send bracket uses, and for the same reason: nobody can tell from the outside.
+# Where the listing ended up, read after the publish settles. A publish that cannot be shown to
+# have produced a listing is reported as unverified rather than done — the send bracket's rule,
+# for the same reason: nobody can tell from the outside.
 PUBLISH_RESULT_JS = """() => {
   const link = document.querySelector('a[href*="/marketplace/item/"]');
   const id = link
@@ -816,34 +751,26 @@ PUBLISH_RESULT_JS = """() => {
   };
 }"""
 
-# Facebook's own condition wording, which the dropdown offers verbatim. Anything we hold that is not
-# one of these is mapped by the driver, and an item with no usable condition does not publish: the
-# field is required, and guessing "New" for a used thing is a lie told to a buyer.
+# Facebook's own condition wording, offered verbatim by the dropdown. Anything else is mapped by
+# the driver; an item with no usable condition does not publish, because guessing "New" for a used
+# thing is a lie told to a buyer.
 CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
 
-# Where a driven listing is filed when nothing has chosen better. Facebook requires a category and
-# offers about twenty; picking the right one from a title is judgement, which belongs to the listing
-# flow rather than to a driver, so this is its own catch-all rather than a guess that could file a
-# desk under Vehicles. It is Facebook's own word, and it is one of the options the menu offers.
+# Where a driven listing is filed when nothing has chosen better. Picking the right category from
+# a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own
+# catch-all word, and one of the menu's options.
 DEFAULT_CATEGORY = "Miscellaneous"
 
 
 # The reply composer, as shipped defaults under the heal cache.
 #
 # `page_url_pattern` is the conversation URL, not the marketplace inbox: a send happens on
-# `/messages/t/<id>/`, and an earlier version of this pinned it to `/marketplace/t/` — a path that
-# does not exist — so every send failed closed before a word was typed.
+# `/messages/t/<id>/`.
 #
-# There IS a send control here, and it is deliberately not used. The button at the end of the
-# composer row is "Send a like" on an empty box and "Press enter to send" on a full one — and
-# clicking it times out. It sits in a composer the page repaints as it types, so Playwright resolves
-# the element and then waits forever for it to hold still: verified in production, twice on one
-# buyer's thread, with the send reported as a browser error and the reply never delivered.
-#
-# Its own label says what to do instead. With the composer focused from the typing, a real Enter is
-# the send — which is the sink's third path, costs the agent's own window coming forward, and is
-# machinery that already works. A send that reliably happens is worth more than one that saves a
-# window raise and does not.
+# There IS a send control here, and it is deliberately not used: the button at the end of the
+# composer row sits in a composer the page repaints as it types, so a click resolves the element
+# and then times out waiting for it to hold still. Its own label says what to do instead — with
+# the composer focused from the typing, a real Enter is the send, on machinery that already works.
 COMPOSER_DEFAULTS = (
     {
         "step": "message_box",

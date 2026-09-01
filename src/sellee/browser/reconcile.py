@@ -50,17 +50,47 @@ def normalize(text: str) -> str:
 _TRUNCATION_FLOOR = 200
 
 
+# Characters a marketplace's renderer need not hand back the way we sent them. Facebook draws an
+# emoji as an element whose innerText is a line break, so a reply carrying one reads back with a
+# newline where the character was and the read-back check concludes our own message never arrived.
+_UNRENDERED = re.compile(
+    "[\U0001f000-\U0001faff"  # the emoji blocks proper
+    "\u2190-\u21ff"  # arrows
+    "\u2600-\u27bf"  # miscellaneous symbols and dingbats
+    "\u2b00-\u2bff"  # miscellaneous symbols and arrows
+    "\ufe0f\u200d]"  # variation selector, zero-width joiner
+)
+
+
 def same_text(left: str, right: str) -> bool:
     """Whether two message texts are the same message, tolerating one being a truncated read of
-    the other."""
+    the other, or drawn differently by the marketplace that rendered it."""
     return _same_normalized(normalize(left), normalize(right))
 
 
 def _same_normalized(a: str, b: str) -> bool:
+    if _same_or_truncated(a, b):
+        return True
+    # The same message, differently drawn — tried second because it discards real characters and
+    # must not be what decides two genuinely different messages are one.
+    left, right = _as_drawn(a), _as_drawn(b)
+    if not left or not right:
+        return False
+    return _same_or_truncated(left, right)
+
+
+def _same_or_truncated(a: str, b: str) -> bool:
     if a == b:
         return True
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
     return len(shorter) >= _TRUNCATION_FLOOR and longer.startswith(shorter)
+
+
+def _as_drawn(text: str) -> str:
+    """`text` without the characters a renderer may drop or redraw — and without spacing, because a
+    dropped character may or may not leave a gap behind, so only what survives both can be
+    compared."""
+    return _UNRENDERED.sub("", text).replace(" ", "")
 
 
 def contains_outbound(tail, text: str) -> bool:
@@ -214,9 +244,7 @@ def new_rows(tail, recorded, *, now: float) -> list:
 
 
 # Trailing qualifiers a seller adds on one marketplace and not the other: a parenthetical or
-# bracketed aside, or an attribution tail. Real pairs from one real inventory —
-# "If Anyone Builds It, Everyone Dies (Yudkowsky & Soares)" against "... by Yudkowsky & Soares",
-# and "Koss Porta Pro ... (used, with case)" against "Koss PortaPro ... (ComfortZone Headband)".
+# bracketed aside, or an attribution tail.
 _QUALIFIER_RE = re.compile(r"\s*[\(\[].*?[\)\]]\s*|\s+(?:by|-|–|—)\s+.*$")
 _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 
@@ -224,15 +252,9 @@ _NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
 def same_thing_loosely(left: str, right: str) -> bool:
     """Whether two titles are plausibly the same object, worded differently.
 
-    Used ONLY to withhold or to refuse — never to merge — and that asymmetry is the whole design.
-    The two decisions have opposite costs. Merging two rows into one item is destructive if wrong:
-    one floor for two objects, and a buyer on each haggling over the other's. Deciding "the seller
-    already has this here, so do not post" is cheap if wrong: one item not cross-listed, which they
-    can ask for in a sentence — against posting on their account after we told them we would not.
-
-    So `items_for_same_listing` stays exact and this is allowed to be generous. It still separates
-    the things that must stay separate: "Monster Open-Ear Clip Wireless Earbuds" and "Monster Open
-    Ear Hook Wireless Earbuds" differ in the stem, not in a qualifier, and remain two products.
+    Used only to withhold or refuse, never to merge: a wrong merge puts two objects behind one item
+    and one floor, while a wrong withhold only leaves something un-cross-listed, which the seller
+    can ask for. This is why `items_for_same_listing` stays exact and this may be generous.
     """
     return bool(_loose_key(left)) and _loose_key(left) == _loose_key(right)
 
@@ -245,27 +267,11 @@ def _loose_key(title: str) -> str:
 def items_for_same_listing(title: str, items, market: str, sold=()) -> list:
     """Which of our items are already the thing this marketplace listing is, listed elsewhere.
 
-    A seller who has one desk on two marketplaces has one desk. Adopting the second listing as its
-    own item would give them two — two carousell.ai listings for one thing, two floors, and buyers
-    from the two markets negotiating against different rows for the same object.
-
-    There is no id that spans marketplaces, so the only evidence available is the title, and this is
-    deliberately strict about it. The costs are not symmetric: failing to merge leaves a duplicate
-    the seller can see and delete, while merging wrongly puts two different objects behind one item
-    and has a Facebook buyer haggling over a Carousell desk's floor. So it matches on the whole
-    normalized title and never a part of one — "Monster Open-Ear Clip" and "Monster Open Ear Hook"
-    are two real products in one real inventory, and a looser rule would fuse them.
-
-    Returns every candidate rather than choosing, exactly as `matching_items` does, so the caller
-    can refuse an ambiguous merge instead of guessing at one. An item that already holds a listing
-    on *this* market is not a candidate at all: whatever it is, it is not this listing moved from
-    somewhere else, and a seller with two same-titled listings on one marketplace has two of them.
-
-    `sold` are the ids of items that have been sold, and passing them is not optional in spirit: a
-    sold item is still an ordinary row, so without this a seller who sold one of two identical
-    chairs has the sold one matched to the live listing of the other. The listing's URL lands on the
-    closed sale, the listing never enters the ask, and from then on `negotiate.decide` answers every
-    buyer on it with "it's sold" — the sale lost, and no notice anywhere saying why.
+    No id spans marketplaces, so the title is the only evidence, and it is matched exactly and in
+    whole: a wrong merge puts two objects behind one item, while a missed match only leaves a
+    duplicate the seller can delete. Returns every candidate so the caller can refuse an ambiguous
+    merge. Items already holding a listing on this market are not candidates, and neither are sold
+    items: a listing URL landed on a closed sale would have every buyer on it answered "it's sold".
     """
     wanted = normalize(title)
     if not wanted:

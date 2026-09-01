@@ -77,6 +77,35 @@ def test_texts_match_exactly_or_as_a_long_truncation() -> None:
     assert not same_text("short", "short" + " padding" * 40)
 
 
+# --- a message the marketplace drew differently ---------------------------------------------
+
+
+def test_an_emoji_the_page_did_not_give_back_is_still_the_same_message() -> None:
+    """The send check reads its own message back off the page. Facebook draws an emoji as an
+    element whose innerText is a line break, so a reply carrying one comes back with a newline
+    where the character was — and comparing the two said the message had never arrived.
+
+    Live on 2026-09-01: one buyer was sent the same reply three times, every emoji-bearing send in
+    the install was unconfirmed and every emoji-free one committed, and the seller was then asked
+    to check by hand whether the message the buyer had received three times had arrived.
+    """
+    sent = "Hi Humberto! Yes, it's still available at $15 \U0001f60a Keen to grab it?"
+    # The three ways a renderer can hand it back: as a break, as a gap, as nothing at all.
+    assert same_text(sent, "Hi Humberto! Yes, it's still available at $15 \n Keen to grab it?")
+    assert same_text(sent, "Hi Humberto! Yes, it's still available at $15 Keen to grab it?")
+    assert same_text(sent, "Hi Humberto! Yes, it's still available at $15Keen to grab it?")
+    assert same_text(sent, sent)
+
+
+def test_dropping_what_the_renderer_ate_does_not_merge_different_messages() -> None:
+    """The tolerance discards real characters, so it must never be what decides two genuinely
+    different messages are one — a wrong yes here commits an intent against a message we never
+    sent, and stops the retry that would have sent it."""
+    assert not same_text("Yes, $15 \U0001f60a", "No, $25 \U0001f60a")
+    assert not same_text("\U0001f60a", "\U0001f44d")
+    assert not same_text("", "anything")
+
+
 # --- idempotency --------------------------------------------------------------------------------
 
 
