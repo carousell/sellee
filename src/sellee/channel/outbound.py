@@ -15,7 +15,7 @@ import time
 from datetime import datetime
 
 from sellee import prompt_data, settings
-from sellee.channel import fastpaths
+from sellee.channel import fastpaths, refs
 from sellee.engines import pacing
 
 log = logging.getLogger(__name__)
@@ -56,8 +56,8 @@ FIRST_LISTING_NUDGE_INTERVAL_SEC = 3600.0
 # and a health check all read exactly as they would if every buyer had been answered. On 2026-08-29
 # two buyers waited from 03:14 with no reply and no word to the seller.
 BUYER_WAITING_TEXT = (
-    "Heads up: {handle} has been waiting {minutes} minutes for a reply about {title} and I "
-    "haven't been able to send one. You may want to answer them in the app."
+    "Heads up{about}: they've been waiting {minutes} minutes for a reply and I haven't been able "
+    "to send one. You may want to answer them in the app."
 )
 BUYER_WAITING_REF = "buyer-waiting"
 # Long enough that an ordinary reply in flight is never reported — a pass takes seconds and the
@@ -159,17 +159,15 @@ def escalation_notifier(store):
 
 
 def _about(store, esc) -> str:
-    """Which listing this decision is about, named from the row rather than from the question.
+    """Which conversation this decision is about, named from the row rather than the question.
 
-    The question may not name the item; the escalation's thread always does. Left off when the
-    question already names the item or there is no item to name.
+    The question may name none of it; the escalation's thread names all three. Whatever the
+    question already says is left off field by field, so nothing is said twice.
     """
-    thread = store.get_thread(esc["thread_id"]) if esc.get("thread_id") else None
-    item = store.get_item(thread["item_id"]) if thread and thread.get("item_id") else None
-    title = (item or {}).get("title") or ""
-    if not title or title.lower() in (esc.get("open_question") or "").lower():
-        return ""
-    return f" — {title}"
+    reference = refs.thread_reference(
+        store, esc.get("thread_id"), unless_named_in=esc.get("open_question") or ""
+    )
+    return f" — {reference}" if reference else ""
 
 
 def queue_welcome(store) -> None:
@@ -238,13 +236,11 @@ def buyer_waiting_notice(*, store, now=None) -> None:
 
 
 def _buyer_waiting_text(store, row: dict, waiting_sec: float) -> str:
-    """The seller-facing line. The handle is marketplace-sourced and the title is seller-authored;
-    both are collapsed to one line, because a newline in either would stage a second message the
-    agent never wrote."""
-    thread = store.get_thread(row["thread_id"])
-    item = store.get_item(row["item_id"]) if row["item_id"] else None
+    """The seller-facing line. Which marketplace, which buyer and which listing come from the
+    thread, flattened there — the handle and title are marketplace-sourced, and a newline in
+    either would stage a second message the agent never wrote."""
+    reference = refs.thread_reference(store, row["thread_id"])
     return BUYER_WAITING_TEXT.format(
-        handle=prompt_data.one_line(thread["counterpart_handle"] if thread else "a buyer"),
+        about=f" — {reference}" if reference else "",
         minutes=int(waiting_sec // 60),
-        title=prompt_data.one_line(item["title"]) if item else "one of your listings",
     )

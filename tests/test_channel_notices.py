@@ -250,9 +250,10 @@ def test_a_paused_agent_reports_nothing(store, bus, xdg_tmp) -> None:
     assert _texts(store) == []
 
 
-def test_an_escalation_names_the_listing_it_is_about(make_ctx, store, bus) -> None:
-    """A question that forgets the item produces a notice nobody can act on; the thread carries
-    the item, so the name never depends on the model remembering."""
+def test_an_escalation_names_the_conversation_it_is_about(make_ctx, store, bus) -> None:
+    """A question that forgets which chat it is about produces a notice nobody can act on. The
+    thread carries the marketplace, the buyer and the item, so none of the three depends on the
+    model remembering — and a seller with two marketplaces open needs all three to find it."""
     bus.subscribe(outbound.escalation_notifier(store))
     item = store.create_item(title="IKEA Elloven monitor stand", list_price=15.0, currency="SGD")
     store.create_thread(
@@ -273,15 +274,39 @@ def test_an_escalation_names_the_listing_it_is_about(make_ctx, store, bus) -> No
     )
 
     text = _texts(store)[0]
-    assert "IKEA Elloven monitor stand" in text
-    assert text.startswith("Needs your call — IKEA Elloven monitor stand:")
+    assert text.startswith("Needs your call — Carousell · emline · IKEA Elloven monitor stand:")
 
 
-def test_a_question_that_already_names_the_item_is_not_doubled(make_ctx, store, bus) -> None:
+def test_only_the_part_a_question_already_names_is_dropped(make_ctx, store, bus) -> None:
+    """Per field, not all-or-nothing. The old rule threw the whole reference away because the
+    title appeared, which is how an ask naming the buyer and the item still never said which
+    marketplace it was on."""
     bus.subscribe(outbound.escalation_notifier(store))
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
     store.create_thread(
         thread_id="carousell:t8",
+        side="sell",
+        market="carousell",
+        counterpart_handle="bex",
+        item_id=item["id"],
+    )
+
+    dispatch(
+        "escalate",
+        {"thread_id": "carousell:t8", "open_question": "bex offered $70 for the Teak lamp?"},
+        make_ctx(TIER_ATTENDED),
+    )
+
+    assert _texts(store)[0] == "Needs your call — Carousell: bex offered $70 for the Teak lamp?"
+
+
+def test_a_short_handle_the_question_does_not_name_survives(make_ctx, store, bus) -> None:
+    """The suppression matches whole runs. A one-letter handle is inside almost any sentence, and
+    a bare substring test would drop the buyer from exactly the asks that never name them."""
+    bus.subscribe(outbound.escalation_notifier(store))
+    item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    store.create_thread(
+        thread_id="carousell:t7",
         side="sell",
         market="carousell",
         counterpart_handle="b",
@@ -290,8 +315,8 @@ def test_a_question_that_already_names_the_item_is_not_doubled(make_ctx, store, 
 
     dispatch(
         "escalate",
-        {"thread_id": "carousell:t8", "open_question": "Accept $70 for the Teak lamp?"},
+        {"thread_id": "carousell:t7", "open_question": "Accept $70 for the Teak lamp?"},
         make_ctx(TIER_ATTENDED),
     )
 
-    assert _texts(store)[0] == "Needs your call: Accept $70 for the Teak lamp?"
+    assert _texts(store)[0] == "Needs your call — Carousell · b: Accept $70 for the Teak lamp?"

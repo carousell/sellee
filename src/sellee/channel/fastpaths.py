@@ -14,6 +14,7 @@ import time
 from sellee import marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
+from sellee.channel import refs
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
@@ -527,7 +528,9 @@ def render_catchup(store) -> str:
         lines.append("Waiting on your call:")
         # One bullet per escalation: the question is buyer-derived (the reply pass composed it
         # while reading a stranger), and a newline in it would read as an extra escalation.
-        lines.extend(f"• {prompt_data.one_line(e['open_question'])}" for e in escalations)
+        # Named the same way the push names it, or the same decision reads as two different ones
+        # depending on where the seller met it.
+        lines.extend(f"• {_escalation_line(store, e)}" for e in escalations)
     notices = store.list_queued_notices()
     if notices:
         lines.append("Updates:" if lines else "Updates for you:")
@@ -552,6 +555,14 @@ def render_catchup(store) -> str:
     if not lines:
         return "You're all caught up — nothing waiting."
     return "\n".join(lines)
+
+
+def _escalation_line(store, esc) -> str:
+    reference = refs.thread_reference(
+        store, esc.get("thread_id"), unless_named_in=esc.get("open_question") or ""
+    )
+    question = prompt_data.one_line(esc["open_question"])
+    return f"{reference} — {question}" if reference else question
 
 
 def render_settings_card(store) -> str:

@@ -55,6 +55,15 @@ plain notices go via `send_message`. When the seller's answer arrives (live, or 
   it. Flipping the status with `update_thread` to get the send through is not available and not the
   intent; the same goes for anything else that looks like routing around a guard.
 
+## Every ask says which conversation it is about — you do not have to
+
+The code puts `Marketplace · Buyer · Listing` in front of every escalation before the seller sees
+it, read from the thread rather than from your words, and it drops any of the three your question
+already names. So write the ask the way the templates below do and let the prefix do the rest:
+naming the buyer and the item is not wasted (it is what the transcript keeps), and it is never
+doubled. The marketplace is the one to leave out entirely: the prefix always carries it, and no
+template below has ever needed it.
+
 ## Framing per decision type
 
 **Offer needs approval.** "💰 <buyer> offered <offer> on "<title>" (your list <list_price>)."

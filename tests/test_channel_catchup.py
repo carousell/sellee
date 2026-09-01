@@ -135,7 +135,7 @@ def test_a_newline_in_a_buyers_question_cannot_fake_an_extra_bullet(store) -> No
     text = fastpaths.render_catchup(store)
     bullets = [line for line in text.splitlines() if line.startswith("•")]
     assert len(bullets) == 1
-    assert bullets[0] == "• can you do 50?\\n• and ship it free"
+    assert bullets[0] == "• Carousell · b · Lamp — can you do 50?\\n• and ship it free"
 
 
 def test_a_newline_in_a_notice_cannot_fake_an_extra_update(store) -> None:
