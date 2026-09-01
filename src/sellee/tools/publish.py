@@ -226,10 +226,9 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
     if item_id in ctx.store.sold_item_ids():
         return {"status": "sold", "item_id": item_id, "market": market}
 
-    # The same two questions the lane asks, asked the same way. This used to re-implement
-    # eligibility inline and had neither, so a publish requested in conversation could post onto a
-    # marketplace nobody had looked at — or post a second copy of something the seller had put
-    # there themselves — while the lane beside it refused to do either.
+    # The same two questions the lane asks, asked the same way, so a publish requested in
+    # conversation cannot post onto an unread market or a second copy of something the seller
+    # put there themselves.
     region = ctx.store.seller_region()
     if not crosslist.looked_first(ctx.store, market, region):
         return {"status": "looking_first", "item_id": item_id, "market": market}

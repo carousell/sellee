@@ -529,14 +529,9 @@ def _ask_basics(ui: Ui):
 def _ask_timezone(ui: Ui, region: str) -> str:
     """Ask for the timezone until the answer is one that can be stored, or until it is skipped.
 
-    Every other prompt in setup re-asks an answer it cannot use. This one sent it to the daemon
-    instead, so a typo ended the install — with the country already chosen, nothing written, and
-    an error naming a route the seller never typed. Checked here against the same rule the write
-    door applies, and the question comes back with the reason and an example.
-
-    Enter with no default still skips it. The zone is a convenience — it is what quiet hours and
-    the clock check read — and a seller who cannot name their own zone is better served by a
-    finished install than by a question with no way past it.
+    Checked against the same rule the write door applies, so a typo is re-asked here with the
+    reason and an example rather than failing later. An empty answer still skips: the zone is a
+    convenience, and a seller who cannot name theirs is better served by a finished install.
     """
     default = region_guess.default_zone(region)
     example = (region_guess.zones_for(region) or ["Asia/Singapore"])[0]
@@ -584,15 +579,12 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     carousell.ai is never in the list — it is the rail every listing goes on, with nothing to sign
     in to.
 
-    Offered on `connectable_markets` rather than on `publishable_markets`, because connecting a
-    marketplace promises more than posting to it: Sellee also reads that inbox, answers its buyers,
-    and adopts what the seller already has listed there. A market we can drive but cannot yet
-    publish to is worth connecting for the other three, and gating the offer on publishing hid
-    Facebook from every seller — including US sellers, for whom it is the only marketplace there
-    is, Carousell running no US site.
+    Offered on `connectable_markets` rather than on `publishable_markets`: connecting also means
+    reading that market's inbox, answering its buyers, and adopting what is already listed there,
+    so a market we can drive but cannot yet publish to is still worth connecting.
 
-    A missing region no longer skips the step either. It skipped it entirely, which was right when
-    every marketplace resolved through a regional site and wrong as soon as one served everywhere.
+    A missing region does not skip the step — a marketplace can serve everywhere rather than
+    through a regional site.
     """
     if args.skip_markets:
         return
@@ -623,18 +615,15 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
         ui.warn("Those marketplaces could not be recorded — carousell.ai only for now.")
         return
 
-    # Claimed for the whole phase, not per sign-in. Recording a connection earns that market a look
-    # at what the seller already has listed, and the survey lane serves it within a minute — down
-    # the one shared tab the seller is signing in to the *next* marketplace on. That is exactly what
-    # happened: Facebook's listings page loaded over a half-typed Carousell login, once a minute.
-    # Each sign-in holds the tab for itself, but only a claim spanning all of them closes the gap
-    # between one finishing and the next one opening.
+    # Claimed for the whole phase, not per sign-in: the survey lane will look at a newly connected
+    # market's listings within a minute, down the one shared tab the seller is signing in to the
+    # next marketplace on. Only a claim spanning all the sign-ins closes that gap.
     _hold_browser(port, token, "signing in to marketplaces")
     try:
         _sign_in_markets(ui, port, token, picked)
     finally:
-        # Released even on a Ctrl-C, so the seller who abandons setup does not leave the agent
-        # waiting out the full deadline before it looks at anything.
+        # Released even on a Ctrl-C, so an abandoned setup does not leave the agent waiting out
+        # the full hold deadline.
         _release_browser(port, token)
 
 
@@ -646,12 +635,8 @@ def _sign_in_markets(ui: Ui, port: int, token: str, picked: list) -> None:
 
 
 def _hold_browser(port: int, token: str, reason: str) -> None:
-    """Ask the daemon to keep its lanes off the shared tab. Never fatal.
-
-    A failure here costs the seller the bug this exists to prevent, which is bad — but stopping an
-    install over it is worse, and the sign-ins themselves each still hold the tab for their own
-    duration.
-    """
+    """Ask the daemon to keep its lanes off the shared tab. Never fatal — stopping an install
+    over it is worse, and each sign-in still holds the tab for its own duration."""
     try:
         control.post(port, token, "/control/browser-hold", {"holder": HOLD_SETUP, "reason": reason})
     except control.DaemonUnreachable:

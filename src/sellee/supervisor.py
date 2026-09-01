@@ -219,9 +219,8 @@ class Status:
     channel_adapter: str | None
     paused: bool
     queued_notices: int
-    # Whether a daemon process is actually alive. `registered` only says the supervisor holds a job
-    # definition, which stays true across a clean stop — so on its own it reports "running" about a
-    # machine where nothing is running. Last, because everything above it is required.
+    # Whether a daemon process is actually alive — `registered` stays true across a clean stop.
+    # Last, because everything above it is required (this field has a default).
     process_alive: bool = False
 
 
@@ -327,9 +326,8 @@ def _status(*, label: str, mode: str, registered: bool, hb_age, alive: bool = Fa
     )
 
 
-# A daemon that has not written a heartbeat in this long is alive but not working — a wedged loop
-# rather than a stopped one. The two want different answers from whoever is reading the status, so
-# they are not both called "running".
+# Past this heartbeat age a daemon is alive but not working — a wedged loop, not a stopped one,
+# and the status line should not call both "running".
 _WEDGED_AFTER_SEC = 180.0
 
 
@@ -340,9 +338,7 @@ def _wedged(age: float | None) -> bool:
 def status(*, label: str | None = None, platform: Platform | None = None) -> int:
     st = gather_status(label=label, platform=platform)
     if st.registered and not st.process_alive:
-        # The supervisor holds the job and nothing is running it. A clean stop leaves exactly this
-        # — and it used to read as "running", which is how a dead daemon went unnoticed while a
-        # seller tapped a button nothing was there to receive.
+        # The supervisor holds the job and nothing is running it — what a clean stop leaves.
         state = "registered but NOT running — sellee daemon start"
     elif st.registered and _wedged(st.heartbeat_age_sec):
         state = f"running but not ticking — last heartbeat {st.heartbeat_age_sec:.0f}s ago"

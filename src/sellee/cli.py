@@ -172,11 +172,9 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prun.add_argument("--follow", action="store_true", help="tail the pass's events until it ends")
 
-    # Pause and resume from a terminal, without the chat channel in the path. The buttons in chat
-    # are the everyday door, and they can only work while something is there to receive a tap — so
-    # the one control whose whole job is getting out of a stuck state has a door that needs nothing
-    # running at all. It writes the flag the lanes read at use, so it takes effect on the next tick
-    # whenever the daemon comes up.
+    # Pause and resume from a terminal: the chat buttons need something alive to receive the tap,
+    # so the way out of a dead-agent state cannot go through them. Writes the flag the lanes read
+    # at use.
     sub.add_parser("pause", help="stop the agent acting (same flag as the chat button)")
     sub.add_parser("resume", help="let the agent act again (works with the daemon down)")
 
@@ -214,8 +212,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # One per marketplace we can actually drive, so `connect --help` lists what exists rather
     # than accepting any word and failing at the door. Driving is the right test, not publishing:
     # signing in is what this command does, and a market whose publish recipe is still to come is
-    # signed in to exactly the same way. Asking `supported_markets` here made onboarding print
-    # `sellee connect fb` as its own next step and then exit 2 on it.
+    # signed in to the same way.
     from sellee.browser import markets as _markets
 
     for market in _markets.drivable_markets():
@@ -252,11 +249,9 @@ def _build_parser() -> argparse.ArgumentParser:
 def _set_paused(paused: bool) -> int:
     """Set the pause flag straight on the store, with nothing else in the way.
 
-    Deliberately not routed through the daemon's control port. That port is served by the very
-    process this command exists to work around: a seller whose agent has stopped answering taps a
-    Resume button that only arrives if something is alive to receive it, and if nothing is, the
-    button does nothing and says nothing. The flag is read at use by every lane, so writing it here
-    takes effect on the next tick whenever the daemon comes back.
+    Deliberately not routed through the daemon's control port — that port is served by the very
+    process this command exists to work around. The flag is read at use, so it takes effect on the
+    next tick whenever the daemon comes back.
     """
     from sellee import paths
     from sellee.db import Database
@@ -270,8 +265,7 @@ def _set_paused(paused: bool) -> int:
 
         st = supervisor.gather_status()
         if not st.process_alive:
-            # Resuming a daemon that is not running is a flag nobody will read. Say so, rather than
-            # printing "resumed" and leaving the seller to wonder why nothing happened.
+            # A flag nobody will read until the daemon starts — say so rather than implying it took.
             print("note: the daemon is not running — start it with `sellee daemon start`")
     return 0
 

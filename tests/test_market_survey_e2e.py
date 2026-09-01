@@ -29,8 +29,8 @@ _LISTING_URL = f"https://www.carousell.sg/p/teak-lamp-{_LISTING_ID}/"
 
 @pytest.fixture(autouse=True)
 def _one_market(carousell_only):
-    """Carousell alone: these script one market's artifacts, and a lane tick drives every connected
-    market, so leaving Facebook on would read a marketplace no stub here was taught."""
+    """Carousell alone — a lane tick drives every connected market, and these script Carousell's
+    artifacts only."""
 
 
 def _adopt_one(store, bus, monkeypatch):

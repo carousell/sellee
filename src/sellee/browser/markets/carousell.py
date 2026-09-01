@@ -289,9 +289,8 @@ LOGIN_JS = """() => {
 # empty list means "you have nothing listed" — the answer that stops the asking — so a page that
 # would not parse must never arrive as that answer.
 #
-# A price is read from rendered text, and reading one is not Carousell-specific — it moved to
-# `jslib` when Facebook's reader needed the same thing. Re-exported here because it is tested by
-# name, and because a market's module is where a reader looks for what its artifacts are made of.
+# A price is read from rendered text; the definition is not Carousell-specific and lives in
+# `jslib`. Re-exported because it is tested by name from a market's module.
 PARSE_PRICE_JS = jslib.PARSE_PRICE_JS
 
 _MY_LISTINGS_TEMPLATE = """async () => {

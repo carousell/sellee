@@ -68,11 +68,9 @@ def adopt_phase(deps) -> None:
         return
     market, listing_id = row["market"], row["listing_id"]
     if market not in settings.connected_markets(deps.store):
-        # Disconnected after the seller accepted these listings. Adopting one now would read their
-        # marketplace and create an item for a market they have switched off — so the row is left
-        # exactly as it is, still accepted, and reconnecting resumes it. Deliberately not `_fail`:
-        # nothing about this listing went wrong, and spending an attempt on it would retire a
-        # perfectly good row after three ticks with the market off.
+        # Disconnected after the seller accepted these listings. The row is left as it is, still
+        # accepted; reconnecting resumes it. Not `_fail`: an attempt would retire a good row
+        # while the market is off.
         return
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
         # Retired here rather than filtered out of the query: a row whose last attempt committed
@@ -107,9 +105,9 @@ def adopt_phase(deps) -> None:
         _summarise_if_drained(deps, market)
 
 
-# What a marketplace prints instead of a currency code, and what it means. Only symbols that are
-# unambiguous on their own are here: a bare "$" is not one — it is USD, SGD, AUD, CAD and more —
-# which is exactly why the seller's own recorded currency is the fallback rather than a guess.
+# What a marketplace prints instead of a currency code, and what it means. Only unambiguous
+# symbols: a bare "$" is USD, SGD, AUD and more, which is why the seller's recorded currency is
+# the fallback rather than a guess.
 _CURRENCY_SYMBOLS = {
     "RM": "MYR",
     "NT$": "TWD",
@@ -129,21 +127,15 @@ _CURRENCY_SYMBOLS = {
 def _currency_for(store, detail: dict) -> str:
     """Which currency a listing's price is in.
 
-    The reader answers this when the page prints a code, and marketplaces mostly do not: Facebook
-    renders "S$65" for this seller's account and "$65" for a US one. The reader used to scrape
-    `/[A-Z]{3}/` out of the price text, which matches "SGD65" and nothing else — so adoption failed
-    terminally with "no usable price" for every seller whose marketplace shows a symbol, including
-    every US seller, who has no other marketplace at all because Carousell runs no US site.
-
-    So the code is preferred, a known unambiguous symbol comes next, and the seller's own recorded
-    currency is the fallback. That last one is not a guess: the price is on their own listing, on
-    their own account, in the country they told us they sell in.
+    Most marketplaces print a symbol, not a code ("S$65"), so: the code when the page gives one,
+    then a known unambiguous symbol, then the seller's recorded currency — not a guess, since the
+    price is on their own listing in the country they told us they sell in.
     """
     said = str(detail.get("currency") or "").strip().upper()
     if len(said) == 3 and said.isalpha():
         return said
     text = str(detail.get("price_text") or "")
-    # Longest first, so "S$" and "HK$" are not shadowed by a bare "$" ever being added here.
+    # Longest first, so "S$" and "HK$" are never shadowed by a shorter symbol.
     for symbol in sorted(_CURRENCY_SYMBOLS, key=len, reverse=True):
         if symbol in text:
             return _CURRENCY_SYMBOLS[symbol]
@@ -175,10 +167,9 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         _fail(deps, row, f"{len(existing)} items already claim this listing")
         return
 
-    # The same thing, already adopted from another marketplace. One desk on Carousell and Facebook
-    # is one desk: it becomes one item carrying both listing URLs, so buyers from either market land
-    # on the same row and carousell.ai gets it once. `rail_owed` is false whenever the twin already
-    # has a rail listing, which is what stops the second copy.
+    # The same thing, already adopted from another marketplace: one desk on two markets is one
+    # item carrying both listing URLs, so buyers from either land on the same row. `rail_owed` is
+    # false whenever the twin already has a rail listing — that is what stops the second copy.
     twins = reconcile.items_for_same_listing(
         row["title"], deps.store.list_items(), market, deps.store.sold_item_ids()
     )
@@ -205,11 +196,10 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         _fail(deps, row, f"{len(twins)} items already have this title on another marketplace")
         return
 
-    # No exact twin, but something that is plausibly the same object worded differently — the
-    # seller's "… (Yudkowsky & Soares)" against our "… by Yudkowsky & Soares". Adopting would make a
-    # second item for one book, and then a second rail listing for it, and then fan the first one
-    # out to the marketplace this listing is already on. Refused rather than merged: the loose rule
-    # is good enough to withhold on and never good enough to fuse two rows with.
+    # No exact twin, but something plausibly the same object worded differently. Refused rather
+    # than merged: the loose rule is good enough to withhold on and never good enough to fuse two
+    # rows with — merging would make a second rail listing and then fan out onto the marketplace
+    # this listing is already on.
     close = [
         candidate["id"]
         for candidate in deps.store.list_items()

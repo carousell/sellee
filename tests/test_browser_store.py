@@ -393,8 +393,8 @@ def test_a_hold_makes_the_browser_busy_and_releasing_frees_it(store) -> None:
 
 
 def test_re_claiming_renews_rather_than_stacking(store) -> None:
-    """The installer takes one hold across a whole marketplace phase and renews it per sign-in.
-    A second row per market would leave the last one outliving the phase by a full TTL."""
+    """The installer takes one hold and renews it; a second row would outlive the phase by a
+    full TTL."""
     store.hold_browser("setup", "signing in to marketplaces", 900.0)
     store.hold_browser("setup", "signing in to marketplaces", 900.0)
     store.release_browser_hold("setup")
@@ -407,8 +407,8 @@ def test_an_expired_hold_reads_as_free(store) -> None:
 
 
 def test_holders_release_independently(store) -> None:
-    """A sign-in finishing inside an install must not hand the tab back: the phase around it is
-    still going, and the next marketplace is about to open in that same tab."""
+    """A sign-in finishing inside an install must not hand the tab back; the next marketplace
+    opens in it."""
     store.hold_browser("setup", "signing in to marketplaces", 900.0)
     store.hold_browser("signin", "signing in to fb", 900.0)
     store.release_browser_hold("signin")
@@ -433,8 +433,8 @@ def test_a_lookup_is_remembered_and_read_back(store) -> None:
 
 
 def test_finding_nothing_is_remembered_too(store) -> None:
-    """The case that was costing the most: a conversation about a listing we do not manage was
-    re-opened every five minutes forever to re-derive the same nothing."""
+    """Remembering "none of ours" stops the conversation being re-opened every sweep to
+    re-derive the same nothing."""
     store.record_thread_listing("fb:2", "fb", "", "Kettle␟is this still up?")
     assert store.thread_listing_lookup("fb:2") == {
         "product_id": "",
@@ -449,8 +449,8 @@ def test_looking_again_replaces_rather_than_duplicates(store) -> None:
 
 
 def test_adopting_a_listing_forgets_that_markets_lookups(store) -> None:
-    """A new item can turn "none of ours" into a match, so the answers we remembered are no longer
-    answers. Same transaction as the adoption, so the item never exists behind a stale cache."""
+    """A new item can turn "none of ours" into a match, so remembered answers stop being answers;
+    same transaction as the adoption."""
     store.record_thread_listing("fb:4", "fb", "", "a␟b")
     store.record_thread_listing("carousell:5", "carousell", "", "c␟d")
     store.record_survey_result(

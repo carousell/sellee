@@ -251,10 +251,8 @@ def test_a_paused_agent_reports_nothing(store, bus, xdg_tmp) -> None:
 
 
 def test_an_escalation_names_the_listing_it_is_about(make_ctx, store, bus) -> None:
-    """The question is whatever the model wrote, and one that forgets the item produces a notice
-    nobody can act on — "No floor is set yet for this item" is unanswerable across eighteen
-    listings. The row carries the thread and the thread carries the item, so the name is always
-    available and never depends on the model remembering."""
+    """A question that forgets the item produces a notice nobody can act on; the thread carries
+    the item, so the name never depends on the model remembering."""
     bus.subscribe(outbound.escalation_notifier(store))
     item = store.create_item(title="IKEA Elloven monitor stand", list_price=15.0, currency="SGD")
     store.create_thread(

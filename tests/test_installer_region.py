@@ -76,9 +76,8 @@ def test_render_reads_as_the_confirmation_it_is_used_for() -> None:
 
 
 def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:
-    """macOS points /etc/localtime through /var/db/timezone/zoneinfo at zoneinfo.default, so
-    looking for a literal "/zoneinfo/" found nothing on every Mac: no guess, no proposal, and a
-    country question followed by an empty timezone field. That is where "gmt8+" was typed."""
+    """macOS points /etc/localtime at zoneinfo.default, so looking for a literal "/zoneinfo/"
+    found nothing on every Mac."""
     monkeypatch.delenv("TZ", raising=False)
     monkeypatch.setattr(
         region.os.path, "realpath", lambda _: "/usr/share/zoneinfo.default/Asia/Singapore"
@@ -119,8 +118,7 @@ def test_zones_for_is_the_reverse_of_the_lookup() -> None:
 
 
 def test_a_silent_machine_still_proposes_the_zone_of_a_one_zone_country() -> None:
-    # The prompt that produced "gmt8+" was empty because the machine said nothing. Singapore has
-    # exactly one zone, so there was never anything to ask.
+    # A one-zone country leaves nothing to ask, even when the machine says nothing.
     assert region.default_zone("SG", "") == "Asia/Singapore"
 
 
@@ -130,8 +128,8 @@ def test_a_country_with_several_zones_proposes_none() -> None:
 
 
 def test_the_machines_own_zone_beats_the_country_default() -> None:
-    """The stored zone is read back as a claim about this machine — the clock check compares it
-    against this process's clock — so where the seller *is* wins over where they sell."""
+    """The stored zone is a claim about this machine — the clock check compares it against this
+    process's clock — so where the seller *is* wins over where they sell."""
     assert region.default_zone("SG", "Asia/Kuala_Lumpur") == "Asia/Kuala_Lumpur"
     assert region.default_zone("US", "America/Denver") == "America/Denver"
 
@@ -145,8 +143,8 @@ def test_zone_error_names_what_is_wrong_and_passes_what_is_right() -> None:
 
 
 def test_zone_error_is_never_stricter_than_the_write_door() -> None:
-    """Setup checks locally so a typo re-asks instead of ending the install; the door stays the
-    authority, and a local check that refused what the door accepts would be a wall."""
+    """Setup checks locally so a typo re-asks; the door stays the authority, so a local check
+    must not refuse what it accepts."""
     from sellee.tools.seller import BasicsError, validate_basics
 
     for name in ("Asia/Singapore", "America/New_York", "gmt8+", "UTC+8", "../../etc/passwd"):

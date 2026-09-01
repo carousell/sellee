@@ -21,12 +21,8 @@ _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
 
 @pytest.fixture
 def enabled(store):
-    """A seller in SG with Carousell turned on, and one item live on the rail.
-
-    Carousell has already been looked at, and found nothing. The tool asks the same two questions
-    the lane does — has this marketplace been read, and does the seller already have this there —
-    so a test about what it *queues* has to be past them. Both are tested on their own below.
-    """
+    """A seller in SG with Carousell turned on, one item live on the rail, past the look and
+    already-there gates: a test about what it *queues* has to be past both."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     store.record_survey_result("carousell", [])
@@ -225,8 +221,8 @@ def _unlooked(store):
 
 
 def test_the_tool_will_not_publish_to_a_market_nobody_has_looked_at(store, make_ctx) -> None:
-    """It re-implemented eligibility inline and had neither guard, so a publish asked for in
-    conversation could post onto a marketplace the lane beside it was refusing to touch."""
+    """A publish asked for in conversation must not post onto a marketplace the lane beside it
+    refuses to touch."""
     item = _unlooked(store)
 
     out = dispatch(

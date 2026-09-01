@@ -33,10 +33,9 @@ def _deps(store, bus, browser_factory=None, rail_factory=None, **overrides):
         browser_factory=browser_factory if browser_factory is not None else lambda: object(),
         # And no rail key, so the push phase skips — these tests are about the lane's decisions.
         rail_factory=rail_factory if rail_factory is not None else _no_rail,
-        # Real time, because the retry cooldown compares this clock against the `finished_ts` the
-        # store writes with its own. A fixed fake hour here reads as many hours past every attempt
-        # and quietly turns the cooldown off. Quiet hours no longer gate this lane, so the fake
-        # midday it used to need is gone; the tests that are *about* an hour pass their own.
+        # Real time, because the retry cooldown compares this clock against the store-written
+        # `finished_ts`; a fixed fake hour quietly turns the cooldown off. Tests about a specific
+        # hour pass their own.
     )
 
 
@@ -60,12 +59,8 @@ def _midnight() -> float:
 
 @pytest.fixture
 def enabled(store):
-    """A seller in SG who has asked for Carousell, with one item live on the rail.
-
-    Carousell has already been looked at, and found nothing: the fan-out will not publish to a
-    marketplace it has never read, so every test about *what it publishes* has to be past that gate.
-    The gate itself is tested on its own, further down.
-    """
+    """A seller in SG who has asked for Carousell, one item live on the rail, and past the
+    look-before-listing gate: the fan-out will not publish to a marketplace it has never read."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     store.record_survey_result("carousell", [])
@@ -75,8 +70,7 @@ def enabled(store):
 
 
 def _queued(store):
-    # Projected: the index also carries `finished_ts`, which is None for a queued row and is the
-    # retry clock's business rather than these tests'.
+    # Projected: `finished_ts` is the retry clock's business, not these tests'.
     return [
         {k: v for k, v in row.items() if k != "finished_ts"}
         for row in store.publish_pass_index()
@@ -121,8 +115,7 @@ def test_an_item_already_on_the_market_is_not_queued(store, bus, enabled) -> Non
 
 
 def test_nothing_is_queued_with_the_setting_at_its_default(store, bus) -> None:
-    # Back to the registry default — the shared store fixture seeds a connected market, since
-    # almost every other test needs one, and this is the test about having none.
+    # Back to the registry default — the shared store fixture seeds a connected market.
     seed_setting(store, "connected_markets", [])
     store.set_seller_config_section("basics", {"region": "SG"})
     item = store.create_item(title="Teak lamp", list_price=80.0)
@@ -165,8 +158,7 @@ def _later(seconds: float):
 
 @pytest.mark.parametrize("status,cls", [("done", "ok"), ("error", "error"), ("error", "timeout")])
 def test_a_settled_attempt_is_not_retried_immediately(store, bus, enabled, status, cls) -> None:
-    """The lane ticks every thirty seconds. Retrying on the next one is not a retry, it is the same
-    attempt again against a condition nothing has had time to change."""
+    """Retrying on the next tick is not a retry — nothing has had time to change."""
     pass_id = crosslist.enqueue_next(_deps(store, bus))
     store.finish_pass(pass_id, status=status, rc=1, cls=cls, summary=cls)
 
@@ -175,9 +167,8 @@ def test_a_settled_attempt_is_not_retried_immediately(store, bus, enabled, statu
 
 @pytest.mark.parametrize("status,cls", [("done", "ok"), ("error", "error"), ("error", "timeout")])
 def test_a_publish_that_left_no_listing_is_retried_later(store, bus, enabled, status, cls) -> None:
-    """A listing that did not appear is not something a seller should have to notice and ask for.
-    `done` counts too: the pass exited cleanly and recorded no URL, which is the shape the real
-    failure took — the seller's book reported success and was never on the marketplace."""
+    """A listing that did not appear is not something a seller should have to notice and ask for;
+    `done` with no recorded URL counts too."""
     pass_id = crosslist.enqueue_next(_deps(store, bus))
     store.finish_pass(pass_id, status=status, rc=1, cls=cls, summary=cls)
 
@@ -188,8 +179,7 @@ def test_a_publish_that_left_no_listing_is_retried_later(store, bus, enabled, st
 
 
 def test_retries_run_out(store, bus, enabled) -> None:
-    """Bounded, because the failure is often the kind no retry can fix — a page mid-redesign, a
-    marketplace refusing the account."""
+    """Bounded, because the failure is often one no retry can fix."""
     for _ in range(crosslist.PUBLISH_MAX_ATTEMPTS):
         deps = _deps(store, bus)
         deps.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC * 100)
@@ -236,10 +226,8 @@ def test_a_paused_agent_queues_nothing(store, bus, enabled) -> None:
 
 
 def test_listing_is_not_held_by_quiet_hours(store, bus, enabled) -> None:
-    """Listing used to wait for morning, on the reasoning that a burst starting at 4am is a pattern
-    nobody sells like. But a listing sits there until someone looks at it, so the hour it went up is
-    not something a buyer ever sees — unlike a nudge, which lands in their notifications at that
-    hour and is still held."""
+    """A listing sits there until someone looks at it, so the hour it went up is not something a
+    buyer sees — unlike a nudge, which is still held."""
     seed_setting(store, "quiet_hours", [2300, 800])
 
     deps = crosslist.CrosslistDeps(
@@ -338,8 +326,8 @@ def _burn_attempts(store, bus, status="done", cls="ok"):
 
 
 def test_a_failure_still_being_retried_is_not_announced(store, bus, enabled) -> None:
-    """Three "I couldn't list your desk" messages for one desk that is about to appear is noise
-    that trains a seller to ignore the notice that matters."""
+    """Repeated "couldn't list" notices for a desk about to appear train the seller to ignore the
+    one that matters."""
     pass_id = crosslist.enqueue_next(_deps(store, bus))
     store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
 
@@ -469,10 +457,8 @@ def _rail_item(store, title="Teak lamp"):
 
 
 def test_nothing_is_published_to_a_marketplace_we_have_never_read(store, bus) -> None:
-    """The whole reason this gate exists. On the first tick after Facebook became publishable the
-    seller had fourteen items on the rail and none of them recording a Facebook URL — and thirteen
-    were already on their Facebook, posted by hand, which nothing in the store knew. Fanning out
-    then would have posted all thirteen a second time."""
+    """Fanning out before reading the marketplace would repost listings the seller already put
+    there by hand, which nothing in the store knows about."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     _rail_item(store)
@@ -482,8 +468,8 @@ def test_nothing_is_published_to_a_marketplace_we_have_never_read(store, bus) ->
 
 
 def test_the_lane_asks_for_the_look_it_is_waiting_on(store, bus) -> None:
-    """Waiting on another lane to request the survey would make the ordering depend on which ran
-    first. It asks itself, and the request is insert-only, so it is a no-op once one exists."""
+    """The lane asks for the survey itself; the request is insert-only, so it is a no-op once one
+    exists."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     _rail_item(store)
@@ -524,9 +510,8 @@ def test_an_item_the_seller_already_has_there_is_not_listed_again(store, bus) ->
 
 
 def test_a_listing_the_seller_declined_to_manage_still_stops_a_second_copy(store, bus) -> None:
-    """The case item URLs cannot cover. Say no to managing a listing and it is still on their
-    marketplace, while the item still looks absent from it — so a fan-out keyed on `listing_urls`
-    would post a second copy of the very thing they told us to leave alone."""
+    """A declined listing is still on their marketplace while the item looks absent from it, so the
+    fan-out must not post a second copy."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     _rail_item(store, title="Teak lamp")
@@ -548,8 +533,8 @@ def test_a_listing_the_seller_declined_to_manage_still_stops_a_second_copy(store
 
 
 def test_something_the_seller_does_not_have_there_is_still_listed(store, bus) -> None:
-    """The gate must not become a blanket refusal: a survey that found other things still leaves
-    this item missing from that marketplace, which is exactly what the fan-out is for."""
+    """The gate must not become a blanket refusal; an item missing from that marketplace is what
+    the fan-out is for."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     item = _rail_item(store, title="Dyson HushJet Mini Cool Fan")
@@ -571,8 +556,7 @@ def test_something_the_seller_does_not_have_there_is_still_listed(store, bus) ->
 
 
 def test_a_marketplace_nothing_can_survey_is_not_held_back(store, bus, monkeypatch) -> None:
-    """There is no look to wait for, and blocking on one that can never come would mean never
-    publishing there at all."""
+    """Blocking on a look that can never come would mean never publishing there at all."""
     monkeypatch.setattr(crosslist.market_adapters, "can_survey", lambda market, region=None: False)
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
@@ -582,9 +566,8 @@ def test_a_marketplace_nothing_can_survey_is_not_held_back(store, bus, monkeypat
 
 
 def test_a_driven_publish_is_reported_to_the_seller(store, bus, enabled, monkeypatch) -> None:
-    """A driven market spawns no pass, and the ledger row it writes instead was marked as owing no
-    report — so a listing went live with nobody told, which is the one failure the fan-out's
-    reporting exists to prevent."""
+    """A driven market spawns no pass; its ledger row must still be reported, or a listing goes
+    live with nobody told."""
     pass_id = store.record_driven_publish(
         enabled["id"], "carousell", status="done", origin=crosslist.ORIGIN
     )
@@ -609,9 +592,8 @@ def test_a_driven_publish_that_recorded_no_url_is_reported_once_it_gives_up(
 
 
 def test_an_abandoned_survey_does_not_open_the_gate(store, bus) -> None:
-    """`abandoned` means five looks in a row could not be served, so we know LESS about that
-    marketplace than when we started — and it is exactly the state where the title set is empty.
-    Treating it as "looked" opens the gate at the moment we can least afford it."""
+    """An abandoned survey means we know less than when we started; treating it as "looked" opens
+    the gate at the worst moment."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     _rail_item(store)
@@ -621,9 +603,8 @@ def test_an_abandoned_survey_does_not_open_the_gate(store, bus) -> None:
 
 
 def test_the_fan_out_waits_while_the_seller_is_still_being_asked(store, bus) -> None:
-    """The window where the two halves disagree. The title match is whole-string, so a listing the
-    seller worded differently from our item is not caught by it — but it IS in the ask, and a yes
-    records its URL and settles it. Publishing first posts the copy the ask exists to prevent."""
+    """The title match is whole-string, so a differently worded listing is only caught by the ask;
+    publishing first posts the copy the ask exists to prevent."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     _rail_item(store, title="If Anyone Builds It, Everyone Dies by Yudkowsky & Soares")
@@ -644,8 +625,7 @@ def test_the_fan_out_waits_while_the_seller_is_still_being_asked(store, bus) -> 
 
 
 def test_answering_the_ask_releases_the_fan_out(store, bus) -> None:
-    """The hold is temporary. Once nothing is outstanding the lane proceeds — here the seller said
-    no, so the listing stays theirs and only the exact-title guard applies."""
+    """The hold is temporary: once nothing is outstanding the lane proceeds."""
     store.set_seller_config_section("basics", {"region": "SG"})
     seed_setting(store, "connected_markets", ["carousell"])
     item = _rail_item(store, title="Dyson HushJet Mini Cool Fan")
@@ -670,10 +650,9 @@ def test_answering_the_ask_releases_the_fan_out(store, bus) -> None:
 
 # --- driving a publish ourselves ----------------------------------------------------------------
 #
-# `_drive_publish` had no coverage at all, which is how both of the defects below shipped. What is
-# held here is one invariant above everything: NOTHING may leave that function without a ledger row
-# unless the pair is genuinely still worth trying, because the row is the only thing standing
-# between a failed publish and a duplicate one.
+# One invariant above all: nothing may leave `_drive_publish` without a ledger row unless the pair
+# is genuinely still worth trying — the row is what stands between a failed publish and a
+# duplicate one.
 
 
 class _HeldClient:
@@ -719,8 +698,8 @@ def _ledger(store):
 
 
 def test_a_terminal_refusal_spends_the_shot_rather_than_looping(store, bus, monkeypatch) -> None:
-    """The lane always takes the first eligible pair, so a refusal that can never succeed re-drove
-    the same item every thirty seconds forever while everything else queued behind it."""
+    """The lane always takes the first eligible pair, so a refusal that can never succeed would
+    re-drive the same item forever."""
     from sellee.browser import publisher
 
     item = _driving(
@@ -739,8 +718,7 @@ def test_a_terminal_refusal_spends_the_shot_rather_than_looping(store, bus, monk
 
 
 def test_a_transient_refusal_is_retried_but_not_forever(store, bus, monkeypatch) -> None:
-    """ "Retryable" with no bound is the same forever-loop by another name: a browser that will not
-    settle looks transient on every single attempt."""
+    """ "Retryable" with no bound is the same forever-loop by another name."""
     from sellee.browser import publisher
 
     _driving(
@@ -780,9 +758,8 @@ def test_an_unverified_publish_is_never_driven_twice(store, bus, monkeypatch) ->
 
 
 def test_an_unexpected_browser_error_is_treated_as_maybe_published(store, bus, monkeypatch) -> None:
-    """The driver is supposed to answer in its own two exceptions. If a bare one escapes we cannot
-    know which side of the commit it came from, so it is treated as the dangerous side — this is
-    exactly what leaked before, leaving no row and duplicating on the next tick."""
+    """A bare error escaping the driver could come from either side of the commit, so it is treated
+    as the dangerous side."""
     from sellee.browser.client import BrowserToolError
 
     _driving(store, bus, monkeypatch, raises=BrowserToolError("chrome went away"))

@@ -32,9 +32,9 @@ log = logging.getLogger(__name__)
 def _needs_the_foreground(adapter) -> bool:
     """Whether committing this market's send takes the seller's window.
 
-    Only the real key press does — it reaches nothing but the active tab. A send button is clicked
+    Only a real key press does — it reaches nothing but the active tab. A send button is clicked
     through the browser and a dispatched keystroke never leaves the page, so neither needs the tab
-    in front, and taking it anyway would spend the cost this ordering exists to avoid.
+    in front.
     """
     return (
         adapter.composer_step(market_adapters.SEND_BUTTON) is None
@@ -159,22 +159,15 @@ class BrowserReplySink:
     def _commit(self, adapter, market: str, box) -> bool:
         """Send what the composer holds, the way this market's adapter says to.
 
-        Three ways, in the order of what they cost the seller:
+        Three ways, cheapest for the seller first: a send button clicked for real through the
+        browser (no window focus, no automation signature), the adapter's own submit JS dispatched
+        on the page (an `isTrusted: false` event on the seller's account), and a real Enter key,
+        which lands only on the active tab. Only the second can report that the page accepted the
+        send; the other two assume it landed and leave the read-back to judge.
 
-        1. **A send button**, clicked for real through the browser. Best where a marketplace has
-           one: no window focus is taken, and the click carries no automation signature.
-        2. **The adapter's own submit JS**, dispatched on the page. Costs an `isTrusted: false`
-           event on the seller's account, which is a per-market decision someone has taken.
-        3. **A real Enter key**, which reaches only the active tab — so it pulls the seller's
-           window in front of whatever they were doing.
-
-        Answers whether the page accepted it. Only the second can actually report that; a click and
-        a key press cannot, so both assume it landed and leave the read-back to judge.
-
-        The button is located here rather than beside the message box because a send control is
-        typically inert until the composer holds text. Still before the commit, so a miss raises
-        `SendNotAttempted` with nothing delivered — the same fail-closed guarantee as every other
-        step above this line.
+        The button is located here because a send control is typically inert until the composer
+        holds text — still before the commit, so a miss raises `SendNotAttempted` with nothing
+        delivered.
         """
         if adapter.composer_step(_SEND_BUTTON) is not None:
             button = self._locate(market, adapter, _SEND_BUTTON)

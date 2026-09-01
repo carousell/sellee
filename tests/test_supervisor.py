@@ -53,10 +53,8 @@ def _late_release_launchctl(state, releases_after):
 
 
 def test_unregister_waits_for_launchctl_to_actually_let_go(monkeypatch) -> None:
-    """`bootout` is asynchronous, and nothing noticed until a `daemon stop` was followed straight
-    away by a `daemon start`: start asks `is_registered`, the half-torn-down job still answered
-    yes, so start printed "already running" and did nothing — and then the bootout finished. No
-    job, no process, and a heartbeat file fresh enough for `status` to call it running."""
+    """`bootout` is asynchronous, and `is_registered` must not answer yes until it has landed — a
+    start asked straight afterwards would print "already running" and do nothing."""
     from sellee.platform import macos as macos_mod
 
     state = {"booted_out": False, "prints": 0}
@@ -66,14 +64,11 @@ def test_unregister_waits_for_launchctl_to_actually_let_go(monkeypatch) -> None:
 
     platform.unregister("com.sellee.agent")
 
-    # The contract this method states: it stays stopped until re-registered. A caller asking
-    # straight afterwards must get the truth.
     assert not platform.is_registered("com.sellee.agent")
 
 
 def test_unregister_gives_up_rather_than_hanging(monkeypatch) -> None:
-    """A launchctl that never lets go must not wedge the command with no output. The next command
-    failing visibly is the better failure of the two."""
+    """A launchctl that never lets go must not wedge the command with no output."""
     from sellee.platform import macos as macos_mod
 
     state = {"booted_out": False, "prints": 0}
@@ -104,10 +99,8 @@ def test_plist_render_matches_golden() -> None:
 
 
 def test_the_plist_pins_the_xdg_overrides_the_installer_ran_under(xdg_tmp) -> None:
-    # launchd hands the job its own environment, not the installing shell's. Without these
-    # pinned, an install under XDG overrides provisions state in one world and boots a daemon
-    # that resolves every root in another — the daemon comes up healthy and heartbeats where
-    # nobody is looking.
+    # launchd hands the job its own environment, not the installing shell's; without these
+    # pinned, an install under XDG overrides provisions one world and boots a daemon in another.
     fake = FakePlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0
 
@@ -119,8 +112,7 @@ def test_the_plist_pins_the_xdg_overrides_the_installer_ran_under(xdg_tmp) -> No
 
 
 def test_the_job_runs_on_the_installs_own_venv_interpreter(xdg_tmp, tree) -> None:
-    # The daemon needs the dependencies, and a supervised job inherits no shell — so the
-    # definition has to name the venv's interpreter rather than whatever ran the installer.
+    # A supervised job inherits no shell, so the definition must name the venv's interpreter.
     materialize.install_version(tree, "1.0.0")
     interpreter = paths.venv_python(paths.current())
 
@@ -133,8 +125,7 @@ def test_the_job_runs_on_the_installs_own_venv_interpreter(xdg_tmp, tree) -> Non
 
 
 def test_the_job_names_the_interpreter_through_current_not_a_version(xdg_tmp, tree) -> None:
-    # Named through the swap point, so the definition does not go stale the moment a version is
-    # replaced underneath it — and so an update's re-register writes the same path back.
+    # Named through the swap point so the definition does not go stale when a version is replaced.
     materialize.install_version(tree, "1.0.0")
     named = str(supervisor.job_interpreter())
     assert named.startswith(str(paths.current()))
@@ -142,14 +133,14 @@ def test_the_job_names_the_interpreter_through_current_not_a_version(xdg_tmp, tr
 
 
 def test_a_checkout_without_a_venv_still_gets_a_startable_job(xdg_tmp) -> None:
-    # `./setup --dev` before a bootstrap: naming an interpreter that does not exist would give a
-    # job that fails to start with nothing saying why.
+    # `./setup --dev` before a bootstrap: a nonexistent interpreter would give a job that fails
+    # to start with nothing saying why.
     assert supervisor.job_interpreter() == Path(os.path.realpath(sys.executable))
 
 
 def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) -> None:
-    # A supervised job's PATH holds none of a version manager's directories, so `npx` — and so the
-    # whole browser layer — is unreachable unless the installer's answer is carried here.
+    # A supervised job's PATH holds none of a version manager's directories, so `npx` is
+    # unreachable unless the installer's answer is carried here.
     config.merge_into_file({"node_bin_dir": "/opt/node-versions/v22/bin"})
     fake = FakePlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0
@@ -160,8 +151,7 @@ def test_the_plist_puts_the_recorded_node_directory_on_the_jobs_path(xdg_tmp) ->
 
 
 def test_a_multi_directory_fragment_reaches_the_jobs_path_whole(xdg_tmp) -> None:
-    # On a machine where `node` and `npx` live apart, the recorded value is already a PATH
-    # fragment; the job needs every entry, not the first one.
+    # Where `node` and `npx` live apart, the recorded value is already a PATH fragment.
     config.merge_into_file({"node_bin_dir": "/opt/node/bin:/usr/local/npm-global/bin"})
     assert supervisor.install(mode="manual", platform=FakePlatform()) == 0
 
@@ -173,8 +163,7 @@ def test_a_multi_directory_fragment_reaches_the_jobs_path_whole(xdg_tmp) -> None
 
 
 def test_no_recorded_node_directory_leaves_the_jobs_path_alone(xdg_tmp) -> None:
-    # Nothing recorded means nothing known: naming a PATH here would replace the default with a
-    # guess, and a daemon started from a shell already has the right one.
+    # Nothing recorded means nothing known; a daemon started from a shell already has a PATH.
     fake = FakePlatform()
     assert supervisor.install(mode="manual", platform=fake) == 0
 
@@ -280,9 +269,8 @@ def test_label_override_is_recorded_and_used(xdg_tmp) -> None:
 
 
 def test_install_leaves_an_existing_versioned_current_alone(xdg_tmp) -> None:
-    # `update` swaps current to the new version and then re-runs `daemon install` to re-render
-    # the plist. If install re-pointed current at the tree its own code lives in, the update
-    # would silently undo its own swap.
+    # `update` swaps current and then re-runs `daemon install`; re-pointing current here would
+    # undo that swap.
     fake = FakePlatform()
     version = paths.versions_dir() / "9.9.9"
     (version / "bin").mkdir(parents=True)
@@ -313,8 +301,8 @@ def test_install_refuses_a_real_directory_at_current(xdg_tmp) -> None:
 
 
 def test_a_containers_status_comes_from_the_process_not_from_a_job(container, xdg_tmp) -> None:
-    """Docker is the supervisor here, so `launchctl print` has no counterpart. The instance lock
-    names the live holder, which is the same question asked of the thing that can answer it."""
+    """Docker is the supervisor here, so the instance lock answers in place of `launchctl
+    print`."""
     import os
 
     paths.ensure_state_dirs()
@@ -333,8 +321,8 @@ def test_a_container_whose_worker_died_reads_as_stopped(container, xdg_tmp) -> N
 
 
 def test_a_container_status_never_resolves_a_host_platform(container, xdg_tmp, monkeypatch) -> None:
-    """get_platform() would hand back a ContainerPlatform that refuses every supervisor question,
-    so the branch has to come first rather than be caught afterwards."""
+    """The container branch must come before the platform seam is resolved, not be caught
+    afterwards."""
 
     def explode():
         raise AssertionError("the platform seam was resolved in container mode")
@@ -394,9 +382,8 @@ def _state_line(capsys, monkeypatch, st) -> str:
 
 
 def test_a_registered_job_with_no_process_is_not_called_running(capsys, monkeypatch) -> None:
-    """A clean stop leaves the job registered and nothing running. Reported as "running", that is
-    how a dead daemon goes unnoticed — a seller taps Resume in chat, nothing is there to receive
-    it, and the button neither works nor says anything."""
+    """A clean stop leaves the job registered; reporting that as "running" is how a dead daemon
+    goes unnoticed."""
     line = _state_line(capsys, monkeypatch, _status(process_alive=False))
 
     assert "NOT running" in line
@@ -404,8 +391,7 @@ def test_a_registered_job_with_no_process_is_not_called_running(capsys, monkeypa
 
 
 def test_a_process_that_has_stopped_ticking_is_not_called_running(capsys, monkeypatch) -> None:
-    """Alive and wedged is a different thing from stopped, and wants a different answer from
-    whoever is reading."""
+    """Alive and wedged is a different thing from stopped, and wants a different answer."""
     from sellee import supervisor
 
     line = _state_line(
@@ -422,9 +408,8 @@ def test_a_live_ticking_daemon_is_running(capsys, monkeypatch) -> None:
 
 
 def test_pause_and_resume_reach_the_store_without_the_daemon(xdg_tmp, monkeypatch) -> None:
-    """The door that exists for the case the chat button cannot cover: a tap only arrives if
-    something is alive to receive it, and the one control whose whole job is getting out of a stuck
-    state must not need the stuck thing to be working."""
+    """A tap only arrives if something is alive to receive it; the control for escaping a stuck
+    state must not need the stuck thing working."""
     from sellee import cli, migrations, paths
     from sellee.db import Database
     from sellee.store import Store

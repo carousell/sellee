@@ -711,8 +711,8 @@ class _Handler(BaseHTTPRequestHandler):
             # owns the tab. Navigating it now would pull the page out from under a half-filled
             # composer, and the seller asked to sign in, not to lose a listing.
             #
-            # Passes only, deliberately: a sign-in hold is *this* flow's own claim, and refusing on
-            # it would 409 the second marketplace of every install behind the first one's hold.
+            # Passes only: a sign-in hold is this flow's own claim, and refusing on it would 409
+            # every marketplace behind the first one's hold.
             self._send_json(
                 409, {"error": "browser_busy", "detail": "a pass is using the browser right now"}
             )
@@ -723,9 +723,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
         if state != "logged_in":
-            # They have a login screen in front of them now, and the next thing they do is type
-            # into it. Claimed here rather than by the caller because this is the navigation that
-            # put it there — a CLI that forgot to ask would leave the lanes free to navigate away.
+            # Claimed here, not by the caller: this navigation put the login screen up, and a CLI
+            # that forgot to ask would leave the lanes free to navigate away.
             self._app.store.hold_browser(
                 HOLD_SIGNIN, f"signing in to {adapter.market}", BROWSER_HOLD_TTL_SEC
             )
@@ -741,8 +740,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_browser_hold(self) -> None:
         """Claim the shared tab for a caller the daemon is not driving — a person signing in.
 
-        Renewable by calling again under the same holder; expires on its own so a CLI that is
-        closed mid-sign-in costs the agent a quarter of an hour, not the rest of the install.
+        Renewable by calling again under the same holder; expires on its own, so a CLI closed
+        mid-sign-in does not block the agent forever.
         """
         body = self._attended_body()
         if body is None:
@@ -797,9 +796,8 @@ class _Handler(BaseHTTPRequestHandler):
         the browser, which starts it — a status read that opens a window is not a status read),
         and a browser pass already driving the one tab we would navigate.
 
-        A sign-in hold is not one of them. This probe is how a sign-in *ends* — it is the holder's
-        own read, and refusing it on the holder's own claim would mean no sign-in could ever be
-        confirmed.
+        A sign-in hold is not one of them: this probe is how a sign-in ends, and refusing it on
+        the holder's own claim would mean no sign-in could ever be confirmed.
         """
         from sellee import config as config_module
         from sellee.browser import chrome
@@ -851,8 +849,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         adapter = market_adapters.get_adapter(market) if isinstance(market, str) else None
         if adapter is None:
-            # What can be signed in to, which is what this door does — not what can be published
-            # to, which would leave a market off its own error message.
+            # What can be signed in to (this door), not what can be published to — the latter
+            # would leave a market off its own error message.
             supported = ", ".join(market_adapters.drivable_markets()) or "(none)"
             self._send_json(
                 400, {"error": f"no marketplace {market!r} to sign in to — supported: {supported}"}

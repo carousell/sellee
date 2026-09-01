@@ -133,9 +133,8 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
         print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
         return 0
 
-    # From here a person is typing into a login screen and the daemon holds the tab for them (the
-    # connect route claimed it). Everything below releases it before returning, so the lanes are
-    # only ever waiting on a sign-in that is genuinely still happening.
+    # From here a person is typing into a login screen the connect route claimed a hold for; every
+    # path below releases it before returning.
 
     print(f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
     print(f"  {body.get('url', '')}")
@@ -155,12 +154,7 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
 
 
 def _release_browser(port: int, mcp_token: str, holder: str) -> None:
-    """Hand the shared tab back to the lanes. Never fatal, and never the reason a flow fails.
-
-    A hold that outlives its claimant expires on its own, so the worst a failure here costs is a
-    quarter of an hour of the agent staying politely out of the way — which is not worth turning a
-    completed sign-in into an error the seller has to interpret.
-    """
+    """Hand the shared tab back to the lanes. Never fatal: an unreleased hold expires on its own."""
     try:
         control.post(port, mcp_token, "/control/browser-release", {"holder": holder})
     except control.DaemonUnreachable:

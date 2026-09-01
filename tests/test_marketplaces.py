@@ -71,9 +71,8 @@ def test_supported_markets_is_the_adapter_registry() -> None:
 
 
 def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
-    """Two ways to put a listing up, and they are equal citizens: a recipe skill a pass reads, or
-    the publish selectors the driver fills. Withdrawing recipes leaves the driven market; taking
-    the adapters away leaves nothing, because both paths need one."""
+    """A recipe skill a pass reads, or the publish selectors the driver fills — both need an
+    adapter."""
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
     assert market_adapters.supported_markets() == ["fb"]
 
@@ -83,8 +82,8 @@ def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
 
 
 def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypatch) -> None:
-    """The capability is read off the code that implements it, so an adapter with neither is not
-    publishable however active its registry entry says it is."""
+    """The capability is read off the code that implements it: an adapter with neither is not
+    publishable."""
     stripped = dataclasses.replace(market_adapters.FACEBOOK, publish_fields_js="")
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {"fb": stripped})
@@ -93,8 +92,8 @@ def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypa
 
 
 def test_publishable_markets_follow_the_seller_region() -> None:
-    """Carousell runs no US site, so a US seller has nowhere to be listed *there* — but Facebook
-    serves everywhere, which is why it is the only marketplace a US seller has at all."""
+    """Carousell runs no US site, but Facebook serves everywhere, so a US seller still has one
+    marketplace."""
     assert market_adapters.publishable_markets("SG") == ["fb", "carousell"]
     assert market_adapters.publishable_markets("US") == ["fb"]
     assert market_adapters.publishable_markets(None) == ["fb"]

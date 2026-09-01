@@ -130,9 +130,8 @@ def test_events_db_recreated_after_deletion(tmp_path) -> None:
 
 
 def test_channel_adapter_column_takes_any_non_empty_name(tmp_path) -> None:
-    """The adapter column carries no enumerating CHECK, only a non-empty one: adding a third
-    provider is a code change (store.KNOWN_ADAPTERS), not another recreate-copy-swap of the whole
-    table — which is the only way SQLite can widen a CHECK."""
+    """The adapter column carries only a non-empty CHECK, not an enumeration: adding a third
+    provider stays a code change, not a table recreate."""
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
 
@@ -145,11 +144,9 @@ def test_channel_adapter_column_takes_any_non_empty_name(tmp_path) -> None:
 
 
 def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
-    """0010 recreates the channel table, so the singleton row has to survive the copy: a returning
-    seller's bound channel — cursor, greeting stamp and all — must not be reset by an upgrade.
-    Driven by applying the real migrations with 0010 withheld, binding a channel, then letting
-    0010 land on top of it. 0011 is withheld with it: it adds a column to the table 0010 recreates,
-    so applying them out of order would leave a schema no real install ever has."""
+    """0010 recreates the channel table, so the singleton row must survive the copy. 0011 is
+    withheld with it: it adds a column to the table 0010 recreates, so applying them out of order
+    would leave a schema no real install ever has."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
@@ -186,9 +183,8 @@ def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
 
 
 def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeypatch) -> None:
-    """A nonce armed before the TTL existed gets no expiry from the upgrade — the column is
-    nullable and NULL, which the store reads as already expired. Failing closed is the point: those
-    are the unbounded nonces the column was added to retire."""
+    """A nonce armed before the TTL existed upgrades to NULL, which the store reads as already
+    expired — failing closed is the point."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
@@ -219,11 +215,8 @@ def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeyp
 
 
 def _withhold(tmp_path, monkeypatch, prefix):
-    """Apply every shipped migration except the one under test, and answer where the real ones are.
-
-    The pattern the 0010/0011/0015 cases each spell out inline: bring a database up to the release
-    before a migration, arrange rows on it, then let that one migration land on top.
-    """
+    """Apply every shipped migration except the one under test, and answer where the real ones are:
+    bring a database up to the release before a migration, then let that one land on top."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
@@ -261,10 +254,8 @@ def _seed_read_thread(conn, thread_id="carousell:1", market="carousell", source=
 
 
 def test_0016_moves_the_setting_and_its_whole_ledger(tmp_path, monkeypatch) -> None:
-    """The ledger key has to move with the setting. `settings.decide` looks a change's spec up by
-    the stored key and answers "that setting no longer exists" on a miss — so a rename that touched
-    only the settings row would break Approve on a proposal still awaiting a tap, and Undo on one
-    already applied. Both statuses are checked, because Undo reads the applied row."""
+    """The ledger key has to move with the setting: `settings.decide` looks a change's spec up by
+    the stored key, so a rename that touched only the settings row would break Approve and Undo."""
     real_data, root = _withhold(tmp_path, monkeypatch, "0016")
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
@@ -296,9 +287,8 @@ def test_0016_moves_the_setting_and_its_whole_ledger(tmp_path, monkeypatch) -> N
 def test_0016_connects_a_market_that_was_being_read_with_the_setting_empty(
     tmp_path, monkeypatch
 ) -> None:
-    """The case the backfill exists for. Reading was never gated, so a seller can be having their
-    Carousell inbox read right now having never enabled cross-listing. Renaming alone would connect
-    them to nothing, the lane would stop, and buyers mid-conversation would go unanswered."""
+    """Reading was never gated by the setting, so a seller mid-conversation would be connected to
+    nothing by a plain rename."""
     real_data, root = _withhold(tmp_path, monkeypatch, "0016")
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
@@ -311,10 +301,8 @@ def test_0016_connects_a_market_that_was_being_read_with_the_setting_empty(
 
 
 def test_0016_unions_rather_than_replaces_a_cleared_list(tmp_path, monkeypatch) -> None:
-    """A seller who turned cross-listing off still has their inbox read, because that was never
-    what the setting controlled. The evidence is unioned into whatever they had rather than skipped
-    when a row exists: someone who really wants it off can turn it off again, where a seller
-    stranded mid-conversation has no way to even discover that is what happened."""
+    """A seller who turned cross-listing off still has their inbox read; the evidence is unioned
+    in, because someone who wants it off can turn it off again but a stranded seller cannot."""
     real_data, root = _withhold(tmp_path, monkeypatch, "0016")
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
@@ -340,10 +328,8 @@ def test_0016_unions_rather_than_replaces_a_cleared_list(tmp_path, monkeypatch) 
 def test_0016_backfills_only_from_markets_we_demonstrably_read(
     tmp_path, monkeypatch, market, source, why
 ) -> None:
-    """`create_thread` does not check its market against the registry, so a union over every
-    distinct `threads.market` would turn whatever is in that column into a connected marketplace.
-    The evidence is narrowed to a thread the read lane itself adopted, on the one adapter that has
-    ever shipped."""
+    """`create_thread` does not check its market against the registry, so the evidence is narrowed
+    to a thread the read lane itself adopted."""
     real_data, root = _withhold(tmp_path, monkeypatch, "0016")
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
@@ -356,10 +342,8 @@ def test_0016_backfills_only_from_markets_we_demonstrably_read(
 
 
 def test_0015_starts_existing_rows_unchecked_and_unrestorable(tmp_path, monkeypatch) -> None:
-    """An intent and a thread that predate the self-settling loop must upgrade to the safe reading:
-    verify_attempts 0 means "no lane has looked yet" (so the sweep's ceiling still covers it), and a
-    NULL escalated_from_status means "we do not know what to restore" rather than a guessed
-    `active`, which on an `agreed` thread would re-open a closed deal."""
+    """verify_attempts 0 means "no lane has looked yet", and a NULL escalated_from_status means
+    "do not know what to restore" — a guessed `active` would re-open a closed deal."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)

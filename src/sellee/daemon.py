@@ -283,13 +283,10 @@ def recycle_browser_client(bus, holder: dict, reason: str, *, now) -> None:
 def _widen_window(bus, port: int) -> None:
     """Keep the agent's Chrome wide enough for marketplaces to serve their desktop layout.
 
-    Run on every acquisition rather than once at launch: `--restore-last-session` brings back
-    whatever width the window last had, so a window narrowed once stays narrow across restarts.
-
-    Never fatal. A window we cannot widen is a read that may still succeed, and if it then fails the
-    reader's own measurements promote it to `CAUSE_VIEWPORT`, which tells the seller the one thing
-    they can act on. Publishing the event only when a resize was actually needed keeps the steady
-    state silent.
+    Run on every acquisition, not once at launch: `--restore-last-session` restores the last width.
+    Never fatal — a too-narrow window is a read that may still succeed, and a real failure is
+    promoted to `CAUSE_VIEWPORT` by the reader's own measurements. The event fires only when a
+    resize was needed, so the steady state stays silent.
     """
     try:
         width = chrome.ensure_window_width(port, blindness.MIN_USABLE_WIDTH_PX)

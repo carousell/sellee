@@ -20,17 +20,14 @@ CONNECT_MODE_OPEN = "open"
 CONNECT_MODE_PROBE = "probe"
 CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 
-# Who may claim the one shared tab, named here so the daemon and the CLIs that release a hold are
-# spelling the same string. Two of them, released independently: a single sign-in, and an
-# installer's whole marketplace phase — which outlives every sign-in inside it, and is what keeps
-# the lanes out of the gap between one market finishing and the next one opening.
+# Who may claim the one shared tab, named here so the daemon and the CLIs that release a hold
+# spell the same string. Two holds, released independently: a single sign-in, and an installer's
+# whole marketplace phase, which outlives every sign-in inside it.
 HOLD_SIGNIN = "signin"
 HOLD_SETUP = "setup"
 
-# How long a claim survives unrenewed. The claimant is a CLI blocked on a person, so this is not
-# how long a sign-in takes — it is how long the agent stays out of the way for a seller who
-# wandered off, closed the terminal, or Ctrl-C'd. Long enough to find a password, short enough that
-# a dead CLI is not a permanent outage.
+# How long a claim survives unrenewed — for a seller who wandered off or closed the terminal.
+# Long enough to find a password, short enough that a dead CLI is not a permanent outage.
 BROWSER_HOLD_TTL_SEC = 900.0
 
 
@@ -133,12 +130,10 @@ class BrowserMixin:
         return {"product_id": rows[0]["product_id"], "row_key": rows[0]["row_key"]}
 
     def clear_thread_listings(self, market: str) -> int:
-        """Forget this market's lookups, so the next sweep asks again. Returns how many went.
+        """Forget this market's lookups, positives and negatives, so the next sweep asks again.
 
-        Deliberately wholesale — positives as well as negatives. Narrower would mean working out
-        which conversations a newly adopted listing could possibly have changed the answer for,
-        and the failure direction here is safe either way: the cost of forgetting too much is a
-        page load, where the cost of forgetting too little is a buyer nobody answers.
+        Wholesale on purpose: forgetting too much costs a page load, forgetting too little costs
+        a buyer nobody answers.
         """
         with self._db.transaction() as conn:
             return conn.execute(

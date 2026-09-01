@@ -147,11 +147,9 @@ def staged_photo_names(item_id: str, market: str, store) -> tuple:
 def _publish_market_error(market: str, store) -> str | None:
     """Why this market cannot be published to, or None when it can.
 
-    Two different questions, and a pass needs both answered yes. *Can* we publish there is
-    capability — an adapter, a recipe, a site in this seller's region. *Should* we is the seller's
-    connection, read here at the moment the pass would run: a publish queued before they
-    disconnected a marketplace must not still post to it, and this validator is the one gate every
-    door and the runner itself share.
+    Two questions: capability (an adapter, a recipe, a site in this seller's region) and the
+    seller's connection, read at the moment the pass would run — a publish queued before a
+    disconnect must not still post.
     """
     if market == DEFAULT_PUBLISH_MARKET:
         return None

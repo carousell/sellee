@@ -51,15 +51,12 @@ LOGGED_OUT_NOTICE = (
     "Your {name} session is signed out, so I've stopped reading that market. Tap below and I'll "
     "open the sign-in page in my Chrome for you — I never sign in for you."
 )
-# The notice is read on a phone, so the way out of it has to be reachable from one. It used to
-# name `sellee connect <market>` at a shell, which is on a desktop the seller may be nowhere near
-# — the market stayed dead until they happened to sit down at it. The button hands the same job to
-# the connect lane; the CLI is still there, and browser/connect.py names it in the one case where
-# it is the remaining option (the lane could not drive Chrome at all).
-# Buyers are waiting in conversations we cannot place. Claims only what is evidenced — that these
-# conversations exist and are about listings we do not manage — because that is all we know: most
-# are listings the seller made outside the agent, and calling that a fault would be a wrong guess
-# about their own marketplace. Carries no buttons on purpose; see `_unplaceable_notice`.
+# The notice is read on a phone, so the way out of it has to be reachable from one: the button
+# hands the job to the connect lane. The CLI still exists, and browser/connect.py names it in the
+# one case where the lane could not drive Chrome at all.
+# Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
+# listings the seller made outside the agent, and calling that a fault would be a wrong guess
+# about their own marketplace. No buttons on purpose; see `_unplaceable_notice`.
 UNPLACEABLE_NOTICE = (
     "{count} {who} messaging you on {name} about listings I don't manage, so I'm leaving {them} "
     "alone rather than answering about the wrong thing. If any of those listings should be mine, "
@@ -109,14 +106,9 @@ def _clear_notice(deps: InboxDeps, key: str) -> None:
 def _notify_on_change(deps: InboxDeps, key: str, signature: str, text: str) -> None:
     """Queue when the condition's CONTENT changes, not merely the first time it holds.
 
-    `_notify_once` is the wrong shape for a condition that can grow. It stores a bool, so once it
-    has fired, the condition getting *worse* is silent until the daemon restarts — three buyers
-    nobody can place becoming four says nothing, which is the same silence this notice exists to
-    end, one layer up.
-
-    So `deps.notified` holds two kinds of value now: a bool from `_notify_once`, and a signature
-    string from here. Both existing readers test it truthily, and a signature is never empty when
-    stored, so they keep working — but nothing may start comparing values across the two helpers.
+    `_notify_once` is the wrong shape for a condition that can grow: a bool cannot say that three
+    unplaceable buyers became four. `deps.notified` therefore holds two kinds of value — bools from
+    `_notify_once`, signatures from here — and nothing may compare values across the two helpers.
     """
     if deps.notified.get(key) == signature:
         return
@@ -150,10 +142,8 @@ def browser_pass_running(store) -> bool:
 def browser_busy(store) -> str:
     """Why nothing may navigate the shared tab right now, or "" when it is free.
 
-    The question every lane actually wants. `browser_pass_running` answers only half of it, and
-    for a long time that was the whole of it — a pass was the only thing that drove Chrome. It is
-    not: a seller signing in is holding the same one tab, with no pass anywhere, and a lane that
-    asked only about passes navigated straight over them.
+    `browser_pass_running` answers only half the question: a seller signing in holds the same one
+    tab with no pass anywhere, and a lane that asked only about passes navigated straight over them.
     """
     if browser_pass_running(store):
         return "a pass is using the browser"
@@ -173,9 +163,8 @@ def inbox_lane(deps: InboxDeps) -> None:
         return
 
     region = seller_region(deps.store)
-    # Read at use, every tick: the markets the seller has connected, never every market we happen to
-    # have an adapter for. A marketplace they have not connected — or have just removed — is not one
-    # to open, probe, or tell them they are signed out of.
+    # Read at use: only the markets the seller has connected. One they have not connected — or
+    # have removed — is not one to open, probe, or tell them they are signed out of.
     for market in settings.connected_markets(deps.store):
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
@@ -236,15 +225,10 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
 
     answer = client.evaluate(adapter.conversations_list_js)
     if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
-        # The list came back as a failure rather than as content. Unlike a DOM read that finds
-        # nothing, this cannot be mistaken for an empty inbox, so it is reported as what it is.
-        #
-        # Whatever else the artifact measured travels with it. A reader that cannot find the
-        # conversations is the one moment its own view of the page is worth having — how many
-        # candidate elements it saw, how wide the viewport was, whether the tab was even visible —
-        # and this used to keep only the sentence. That cost a real diagnosis: Facebook reported
-        # "no conversation rows on the inbox page" for hours while the count that would have said
-        # whether the page had any rows at all was computed and thrown away on every tick.
+        # The list came back as a failure rather than content; unlike a DOM read that finds
+        # nothing, this cannot be mistaken for an empty inbox. Everything the artifact measured
+        # travels with it — candidate element counts, viewport width, tab visibility — which is
+        # exactly what a "cannot find the conversations" report needs to be diagnosable.
         reason = (answer or {}).get("error") if isinstance(answer, dict) else "unreadable"
         measured = (
             {k: v for k, v in answer.items() if k != "error"} if isinstance(answer, dict) else {}
@@ -274,11 +258,10 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     recorded = 0
     unreadable = 0
     settling = 0
-    # The last abstaining tail read's own measurements, so the market's blind notice can name a
-    # window that is too narrow rather than blaming the marketplace for it.
+    # The last abstaining tail read's own measurements, so the blind notice can name a window
+    # that is too narrow rather than blaming the marketplace.
     tail_measured: dict = {}
-    # Conversations we could not place, gathered so the sweep can say so once rather than 372
-    # times into an event stream nobody reads.
+    # Conversations we could not place, so the sweep can say so once.
     unplaceable: list = []
     for row in rows:
         if not isinstance(row, dict):
@@ -352,26 +335,22 @@ _FOCUS_JS = "(el) => { el.focus(); return document.activeElement === el; }"
 def _open_inbox_folder(client, adapter) -> None:
     """Open the marketplace's own folder inside a general messages app, where it has no URL.
 
-    Facebook's marketplace conversations are a folder of Messenger that no address reaches: the
-    inbox URL lands on the seller's personal chats, and the folder opens only when its row in the
-    rail is clicked. The control ignores a click dispatched from the page — it listens for the real
-    event — so the adapter only marks it and the click is made through the browser.
+    Facebook's marketplace conversations are a Messenger folder no address reaches: it opens only
+    when its rail row is clicked, and the control ignores a page-dispatched click, so the adapter
+    marks it and the click is made through the browser.
 
-    Nothing here fails a read, and nothing here decides whether the folder actually opened. A market
-    with no folder has none to open, and a folder that could not be found leaves the reader on the
-    general list, where the list artifact refuses to answer at all because it proves the folder is
-    open before reporting conversations. That refusal is a counted blindness carrying the reader's
-    own measurements, which is a better account of what went wrong than an exception from here — and
-    it is what stops an unopened folder being read as a marketplace inbox with nothing in it.
+    Nothing here fails a read or decides whether the folder opened. A folder that could not be
+    found leaves the reader on the general list, where the list artifact refuses to answer — that
+    refusal is a counted blindness, and it is what stops an unopened folder reading as an empty
+    inbox.
     """
     if not adapter.inbox_folder_js or not adapter.inbox_folder_target:
         return
     try:
         marked = client.evaluate(adapter.inbox_folder_js) or {}
         if marked.get("already_open"):
-            # Activating an open folder is at best wasted and at worst a toggle back to the general
-            # list. The artifact answers this from the rail's own heading rather than from the
-            # control's `aria-pressed`, which reads "true" while the folder is shut.
+            # Answered from the rail's own heading, not the control's `aria-pressed`, which
+            # reads "true" while the folder is shut.
             return
         if not marked.get("marked"):
             log.warning("no %s inbox folder control on the page: %s", adapter.market, marked)
@@ -384,19 +363,10 @@ def _open_inbox_folder(client, adapter) -> None:
 def _activate(client, adapter) -> None:
     """Press the marked control, by focus and a real Enter.
 
-    Not a click, and that is the whole point. The control lives in a list the marketplace re-renders
-    continuously — Messenger's chat rail repaints as conversations tick over — so a click never
-    finds the node still enough to act on and times out on its stability check while resolving the
-    element perfectly well. In production that meant five consecutive blind ticks: the folder never
-    opened, the reader stayed on the seller's personal inbox, and it refused to read that, correctly
-    and uselessly.
-
-    Focus plus a key event asks nothing about stability, and it is still a real event — which the
-    folder requires, since a click dispatched from the page does nothing at all. The control is
-    `tabindex="0" role="button"`, so Enter activates it exactly as it would for anyone using a
-    keyboard.
-
-    The click is kept as a fallback for a market whose control cannot take focus.
+    Not a click: the control lives in a rail the marketplace re-renders continuously, so a click
+    resolves the element and then times out waiting for it to sit still. Focus plus a key event
+    asks nothing about stability and is still the real event the control requires. The click stays
+    as a fallback for a control that cannot take focus.
     """
     focused = client.evaluate(
         _FOCUS_JS, target=adapter.inbox_folder_target, element="the marketplace inbox folder"
@@ -422,9 +392,8 @@ _ROW_CLOCK_RE = re.compile(
 def _row_key(row: dict) -> str:
     """What this row said, in a form that only changes when the conversation does.
 
-    The comparison key behind the lookup cache. Title and last message, with the trailing clock
-    stripped: a preview whose "2m" becomes "1h" is the same message, and treating it as a change
-    would re-open the conversation on every sweep — which is the cost the cache exists to remove.
+    The comparison key behind the lookup cache: title and last message with the trailing clock
+    token stripped, so a preview whose "2m" becomes "1h" is the same message.
     """
     title = str(row.get("title") or "").strip()
     preview = _ROW_CLOCK_RE.sub("", str(row.get("last_message") or "").strip()).strip()
@@ -437,23 +406,15 @@ def _with_product_id(
     """Fill in which listing a conversation is about, for a market that names it only inside the
     conversation itself.
 
-    Facebook's folder rows carry the listing's *title* and not its id, and a title is not something
-    to match an item on — `reconcile.matching_items` joins on the id or refuses, which is what stops
-    a conversation being attached to the wrong item and negotiated against the wrong floor. The id
-    is on a banner inside the open conversation, so it is read there, once, before the thread is
-    adopted.
+    Facebook's folder rows carry the listing's title, not its id, and a title is never matched on —
+    `reconcile.matching_items` joins on the id or refuses, which is what stops a conversation being
+    attached to the wrong item. The id is on the banner inside the conversation, read there once
+    and remembered whether or not it matched, so a conversation about a listing we do not manage is
+    not re-opened every sweep. A cached answer is trusted only while the row still says what it
+    said (`_row_key`), so a conversation that gains or changes its listing re-opens.
 
-    Once, now, rather than once per sweep. The answer is remembered whether or not it matched
-    anything: a conversation about a listing the seller does not manage was re-opened every five
-    minutes forever to re-derive the same nothing, at a page load each time. A cached answer is
-    trusted only while the row still says what it said — `_row_key` — so a conversation that gains
-    a listing, or moves to a different one after a relist, re-opens on the next sweep.
-
-    Answers a new row rather than filling the caller's in place, and answers it unchanged whenever
-    there is nothing to add: a market whose list already carries the id, a row that has one, or a
-    conversation whose banner would not answer. An unresolved id is not an error here — it becomes
-    an `unknown_listing` in `_adopt`, which is the event that already explains why a buyer is going
-    unanswered.
+    Answers a new row, unchanged whenever there is nothing to add. An unresolved id is not an
+    error here; it becomes an `unknown_listing` in `_adopt`.
     """
     if not adapter.product_id_js or row.get("product_id"):
         return row
@@ -470,8 +431,8 @@ def _with_product_id(
         client.navigate_visible(url)
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
-        # Not remembered: a read that failed is not an answer, and storing it would turn one bad
-        # navigation into a conversation nobody looks at again until its preview changes.
+        # Not remembered: a failed read is not an answer, and caching it would hide the
+        # conversation until its preview changed.
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
         return row
     product_id = str(answer.get("product_id") or "")
@@ -488,10 +449,9 @@ def _thread_key(market: str, native_id) -> str | None:
 def _nothing_to_read(adapter, row: dict) -> bool:
     """Whether the marketplace itself says this row holds nothing readable.
 
-    Facebook writes "Message unavailable" into the preview of a conversation whose messages have
-    been withdrawn, or whose sender's account is gone. That is an answer, not a failure, and the
-    difference matters twice over: such a conversation is not worth opening, and an empty read of
-    one is not evidence that we have gone blind on the market.
+    Facebook writes "Message unavailable" into the preview of a conversation whose messages were
+    withdrawn or whose sender's account is gone. An answer, not a failure: such a row is not worth
+    opening, and an empty read of one is not evidence of blindness.
     """
     pattern = getattr(adapter, "empty_preview_pattern", "")
     if not pattern:
@@ -502,14 +462,10 @@ def _nothing_to_read(adapter, row: dict) -> bool:
 def _can_skip(store, adapter, thread: dict, row: dict) -> bool:
     """Whether the conversation list still shows the message we already stored last.
 
-    Only ever used to avoid opening a thread. Anything unread, anything whose last message we do not
-    already have, and any thread we have never read is opened — the gate errs toward the read, and
-    the periodic full sweep opens everything regardless.
-
-    A row the marketplace says holds nothing readable is the exception, and it is skipped even
-    unread: there is no message behind it to become stale, so opening it can only ever find the
-    same nothing. Left out, such a thread stores no message, so it can never satisfy the test
-    below, so it is opened on every sweep for the life of the install.
+    Only ever used to avoid opening a thread. Anything unread, unknown, or whose preview we do not
+    hold is opened; the full sweep opens everything regardless. A row the marketplace says holds
+    nothing readable is skipped even unread — there is no message behind it to go stale, and left
+    in it would be opened every sweep for the life of the install.
     """
     if _nothing_to_read(adapter, row):
         return True
@@ -524,14 +480,10 @@ def _can_skip(store, adapter, thread: dict, row: dict) -> bool:
 def _report_unplaceable(deps: InboxDeps, market: str, unplaceable: list) -> None:
     """Tell the seller once that buyers are waiting in conversations we cannot place.
 
-    `_unmatched` publishes an event per conversation and nothing else, which is the right shape for
-    a log and the wrong one for a person: on a real install it produced 372 `browser.unmatched`
-    events in an afternoon while a buyer went unanswered and the healthcheck read "All good".
-
-    Keyed on the *set*, not on the fact, so a fourth unplaceable buyer arriving after three were
-    already reported still says something — and so the same three, swept every five minutes, say
-    nothing more. Cleared when the set empties, the way the blind notice clears, so the next one to
-    appear is announced rather than swallowed by a signature that outlived its condition.
+    `_unmatched` publishes an event per conversation and nothing else — right shape for a log,
+    wrong shape for a person. Keyed on the *set*, not the fact, so a fourth buyer arriving after
+    three were reported still says something while the same three swept every five minutes say
+    nothing more. Cleared when the set empties, so the next arrival is announced.
     """
     key = f"unplaceable:{market}"
     if not unplaceable:
@@ -560,14 +512,8 @@ def _unmatched(deps: InboxDeps, market: str, thread_id: str, reason: str) -> Non
 
 
 def _unreadable(deps: InboxDeps, market: str, thread_id: str, reason: str) -> None:
-    """Say which conversation could not be read, and which of the ways it failed.
-
-    `_read_thread` answers None for three different things — the reader found no message list, the
-    list read as empty for a conversation that is not, and the inbox claims unread content the tail
-    does not hold — and the caller only ever counted them. So a market reporting "3 conversation(s)
-    unreadable" every tick for a day was undiagnosable from the log: the count says how many, never
-    which or why, and the three causes want three different fixes.
-    """
+    """Say which conversation could not be read, and which of the ways it failed — a count alone
+    was undiagnosable, and the three causes want three different fixes."""
     deps.bus.publish(
         "browser.unreadable",
         {"market": market, "thread_id": thread_id, "reason": reason[:200]},
@@ -710,15 +656,11 @@ def _read_thread(
     raw = client.evaluate(adapter.conversation_tail_js)
     unreadable = reconcile.unreadable_reason(raw)
     if unreadable is not None:
-        # Carry what the reader measured up to the market's blind count. The tail artifact reports
-        # the window it was looking at precisely so a layout we cannot parse is distinguishable from
-        # a marketplace that changed shape — and dropping it here is what made the 2026-08-29 outage
-        # take a day to explain.
+        # Carry the reader's measurements up to the market's blind count: they are what tells a
+        # layout we cannot parse from a marketplace that changed shape.
         if measured_out is not None and isinstance(raw, dict):
             measured_out.update({k: v for k, v in raw.items() if k != "error"})
-        # The reader could not find the message list. An empty tail would claim the conversation is
-        # over; this says we could not see it — and now says why, which is the difference between a
-        # marketplace that changed shape and a window too narrow to render the one we know.
+        # No message list found — not an empty tail, which would claim the conversation is over.
         _unreadable(deps, market, thread["thread_id"], unreadable)
         return None
     tail = reconcile.classify_tail(raw)
@@ -727,14 +669,11 @@ def _read_thread(
     just_settled = _settle_unsettled(deps, thread["thread_id"], tail, unsettled or {})
     stored = deps.store.get_thread_messages(thread["thread_id"], limit=None)
     if not tail:
-        # A thread exists because somebody wrote in it, so a conversation we have already recorded
-        # messages for cannot legitimately read as empty. Neither can one the list just told us has
-        # a latest message. Either way the page changed shape under the reader — report that rather
-        # than let it pass for "the buyer said nothing new".
+        # A recorded conversation, or one the list says has a latest message, cannot legitimately
+        # read as empty — report that rather than let it pass for "nothing new".
         if _nothing_to_read(adapter, row or {}):
-            # The marketplace's own account of the row: there is nothing here. An empty read is
-            # the right answer, so it must not be counted as a market we cannot see — one such
-            # conversation otherwise holds a whole market's blind counter open indefinitely.
+            # The marketplace itself says there is nothing here: the right answer, not blindness,
+            # and counting it would hold a market's blind counter open forever.
             return 0
         if stored or (row or {}).get("last_message"):
             _unreadable(
@@ -809,10 +748,8 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
 
 
 # How long the lane waits after a reply pass that sent nothing. The pacing pre-gate predicts the
-# refusals we know about; this is the backstop for the ones nobody has diagnosed yet, and it is a
-# flat cooldown rather than exponential backoff on purpose — the job is to turn a 28-second respawn
-# loop into a 5-minute one, which is cheap enough to wait out and slow enough to notice, without
-# inventing per-thread retry state the eligibility rows deliberately do not carry.
+# refusals we know about; this flat cooldown is the backstop for the rest — slow enough to break a
+# respawn loop, cheap enough to wait out.
 NO_SEND_COOLDOWN_SEC = 300.0
 
 
@@ -907,10 +844,8 @@ def _count_blind(
     failures = deps.blind.get(market, 0) + 1
     deps.blind[market] = failures
     deps.blind_since.setdefault(market, deps.now())
-    # What the reader measured can change which cause this is. A window too narrow for the
-    # marketplace to lay its page out is indistinguishable, from here, from the marketplace refusing
-    # us — and it is the only one of the two the seller can do anything about, so the measurement is
-    # what promotes it rather than the lane guessing.
+    # The measurements can promote the cause: a window too narrow to lay the page out looks,
+    # from here, like the marketplace refusing us, and it is the one of the two the seller can fix.
     cause = blindness.cause_for(cause, measured)
     payload = {k: v for k, v in (measured or {}).items() if isinstance(k, str)}
     payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})

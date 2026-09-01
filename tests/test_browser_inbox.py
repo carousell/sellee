@@ -75,8 +75,7 @@ class StubClient:
             return {"state": self.login}
         if function == carousell_market.CONVERSATIONS_LIST_JS:
             if self.error is not None:
-                # A reader that gives up says what it saw as well as that it failed, so the stub
-                # can carry those extra fields the way a real artifact does.
+                # A real artifact carries measurements alongside the error; the stub can too.
                 return {"error": self.error, **self.measured}
             return {"conversations": list(self.conversations)}
         if function == carousell_market.CONVERSATION_TAIL_JS:
@@ -108,9 +107,8 @@ def _deps(store, bus, client, **overrides):
 
 @pytest.fixture(autouse=True)
 def _one_market(carousell_only):
-    """This file scripts Carousell's artifacts and nothing else, so the seller here has connected
-    only Carousell. A lane tick drives every connected market, so leaving Facebook on would have
-    each of these reading a marketplace its stub was never taught."""
+    """Only Carousell connected — a lane tick drives every connected market, and this file scripts
+    Carousell's artifacts only."""
 
 
 @pytest.fixture
@@ -486,8 +484,7 @@ def test_a_failed_conversation_list_is_counted_not_treated_as_empty(store, bus, 
 
 def test_what_the_reader_measured_travels_with_the_failure(store, bus, seeded) -> None:
     """A reader that cannot find the conversations is the one moment its own view of the page is
-    worth having. Keeping only the sentence cost a real diagnosis: a market reported the same line
-    for hours while the counts that would have explained it were computed and thrown away."""
+    worth having; the measurements travel with the failure."""
     client = StubClient(
         error="no conversation rows on the inbox page",
         measured={"marketplace_links": 31, "thread_links": 0, "rows": 12, "still_loading": False},
@@ -502,8 +499,8 @@ def test_what_the_reader_measured_travels_with_the_failure(store, bus, seeded) -
 
 
 def test_a_reader_cannot_overwrite_the_fields_the_lane_owns(store, bus, seeded) -> None:
-    """The measurements are merged *under* the reserved keys. An artifact naming a field `market` or
-    `failures` must not be able to relabel whose read failed or how many times."""
+    """The measurements merge *under* the reserved keys: an artifact naming `market` or `failures`
+    must not relabel whose read failed."""
     client = StubClient(error="boom", measured={"market": "not-a-market", "failures": 99})
     inbox.inbox_lane(_deps(store, bus, client, browser_blind_after=9))
 
@@ -936,10 +933,8 @@ def test_a_blip_fixed_within_the_half_hour_is_not_worth_a_message(store, bus, se
 
 
 def test_a_window_too_narrow_is_named_as_such_not_blamed_on_the_market(store, bus, seeded) -> None:
-    """Twice now, from two marketplaces, at the same window size: a page laid out for a narrower
-    screen reads exactly like a marketplace refusing us. Told "it's Carousell that won't hand over
-    your conversations", nobody drags a window wider — so the reader's own measurement of the window
-    is what decides which sentence the seller gets."""
+    """A page laid out for a narrow window reads exactly like a marketplace refusing us; the
+    reader's own window measurement decides which sentence the seller gets."""
     client = StubClient(error="no conversation rows", measured={"width": 756})
     deps = _deps(store, bus, client, browser_blind_after=1)
 
@@ -952,9 +947,8 @@ def test_a_window_too_narrow_is_named_as_such_not_blamed_on_the_market(store, bu
 
 
 def test_a_pin_prompt_is_named_rather_than_blamed_on_the_market(store, bus, seeded) -> None:
-    """Facebook asked a seller for their Messenger PIN mid-install. The messages are not behind a
-    refusal, they are behind a question addressed to them — and the lane said nothing, because a
-    folder that never opens looks the same whatever is standing in front of it."""
+    """Messages behind a PIN prompt are behind a question addressed to the seller, not a refusal;
+    the measured `blocked` field says which."""
     client = StubClient(error="the Marketplace folder is not open", measured={"blocked": "verify"})
     deps = _deps(store, bus, client, browser_blind_after=1)
 
@@ -968,8 +962,8 @@ def test_a_pin_prompt_is_named_rather_than_blamed_on_the_market(store, bus, seed
 
 
 def test_a_pin_prompt_wins_over_a_narrow_window(store, bus, seeded) -> None:
-    """Both are the seller's to fix, and only one of them is what the page is for. Telling someone
-    staring at a PIN prompt to widen their window sends them to do the wrong thing."""
+    """Both are the seller's to fix, but only one is what the page is for; a PIN prompt must
+    win."""
     client = StubClient(
         error="the Marketplace folder is not open", measured={"blocked": "verify", "width": 756}
     )
@@ -982,8 +976,8 @@ def test_a_pin_prompt_wins_over_a_narrow_window(store, bus, seeded) -> None:
 
 
 def test_a_wide_window_still_blames_the_market(store, bus, seeded) -> None:
-    """The promotion only ever fires on a narrow window. Above the breakpoint a failed read has a
-    dozen other causes and this must not claim otherwise."""
+    """The promotion only ever fires on a narrow window; above the breakpoint the cause stays with
+    the market."""
     client = StubClient(error="HTTP 503", measured={"width": 1440})
     deps = _deps(store, bus, client, browser_blind_after=1)
 
@@ -1003,6 +997,6 @@ def test_a_reader_that_measured_nothing_is_left_alone(store, bus, seeded) -> Non
 
 
 def test_our_own_plumbing_failure_is_never_blamed_on_the_window(store, bus, seeded) -> None:
-    """A server that lost Chrome is not something the seller can drag away, however narrow the
-    window is. Only a cause about the market may be promoted."""
+    """A server that lost Chrome is not something the seller can drag away; only a market cause
+    may be promoted."""
     assert blindness.cause_for(blindness.CAUSE_PLUMBING, {"width": 400}) == blindness.CAUSE_PLUMBING

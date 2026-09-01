@@ -57,8 +57,7 @@ class StubClient:
         self.frontmost.append(url)
 
     def evaluate(self, function, **kwargs):
-        # Every market's login probe, because the lane serves each connected market on its own and
-        # this file is about that scheduling rather than about any one marketplace's DOM.
+        # Every market's login probe: this file is about the lane's scheduling, not one DOM.
         if function in {adapter.login_js for adapter in market_adapters.adapters()}:
             return {"state": self.login}
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
@@ -192,9 +191,8 @@ def test_connect_and_the_buttons_are_answered_without_a_pass(store) -> None:
 
 
 def test_connect_with_one_market_to_offer_just_opens_it(store, bus, monkeypatch) -> None:
-    """One connectable marketplace is not a choice, so it is not offered as one. Which markets are
-    connectable is pinned here rather than taken from the registry: the answer grows with every
-    adapter added, and this test is about the *one* case."""
+    """One connectable marketplace is not a choice, so it is not offered as one; the set is
+    pinned because the registry answer grows with every adapter."""
     monkeypatch.setattr(
         fastpaths.market_adapters, "connectable_markets", lambda region: ["carousell"]
     )
@@ -229,8 +227,8 @@ def test_connect_with_several_to_offer_asks_which(store, bus, monkeypatch) -> No
 
 
 def test_connect_with_no_marketplace_we_can_drive_says_so(store, bus, monkeypatch) -> None:
-    """Nothing *connectable*, which is a different thing from nothing switched on: with a market
-    available the command offers it, and only a seller we could open nothing for is told so."""
+    """Nothing connectable is a different thing from nothing switched on: only a seller we could
+    open nothing for is told so."""
     monkeypatch.setattr(fastpaths.market_adapters, "connectable_markets", lambda region: [])
     seed_setting(store, "connected_markets", [])
 
@@ -248,8 +246,8 @@ def test_connect_never_offers_carousell_ai(store, bus) -> None:
 
     _text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    # Asserted on the refs rather than on there being no picker at all: how many browser markets we
-    # can drive grows with every adapter, and none of that may ever put the rail among them.
+    # Asserted on the refs: the drivable set grows with every adapter, and none of that may put
+    # the rail among them.
     offered = [ref.split(":", 1)[0] for _label, ref in controls or []]
     assert "carousell-ai" not in offered
     assert "carousell" in offered

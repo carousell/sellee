@@ -66,22 +66,16 @@ def region_for_zone(zone: str):
 
 
 def zones_for(region: str) -> list:
-    """The zones this region is known by, in table order — the most populous first.
-
-    The reverse of `region_for_zone`, for the question setup asks when the machine gave no hint:
-    what to propose, and what a zone name for this country looks like.
-    """
+    """The zones this region is known by, in table order — the most populous first."""
     return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
 
 
 def default_zone(region: str, zone: str | None = None) -> str:
     """The timezone to propose once the country is known.
 
-    The machine's own zone first: it is where the seller actually is, and the clock check reads
-    the stored zone back as a claim about this machine, not about where they sell. Only when the
-    machine offers nothing does the country answer — and then only for a country with a single
-    zone, where there is nothing to ask. A country with several and a silent machine gets no
-    default; the question carries an example instead of a blank field.
+    The machine's zone first — the clock check reads the stored zone as a claim about this
+    machine, not about where they sell. Otherwise the country's zone, but only when the country
+    has exactly one; several means the question must be asked.
     """
     zone = system_timezone() if zone is None else zone
     if zone:
@@ -99,9 +93,7 @@ def system_timezone() -> str:
 
     Otherwise where /etc/localtime points, rather than `time.tzname`, which gives an abbreviation
     ("+08") that names no zone and cannot be stored or looked up. Either way the answer is checked
-    against the zone database before it is handed back: the whole point of this function is to
-    produce a name that can be stored and looked up later, and a name that resolves to nothing is
-    worse than admitting the machine said nothing.
+    against the zone database: a name that resolves to nothing is worse than none.
     """
     named = os.environ.get("TZ", "").strip().lstrip(":")
     if named and _zone_exists(named):
@@ -117,16 +109,10 @@ def system_timezone() -> str:
 def _zone_from_path(resolved: str) -> str:
     """The zone name inside a path to a compiled zone file, or "" when there is none.
 
-    The database directory is not always called `zoneinfo`. macOS points /etc/localtime through
-    /var/db/timezone/zoneinfo at /usr/share/zoneinfo.default, so looking for the literal
-    "/zoneinfo/" matched nothing on every Mac — and a machine that reports no zone is a machine
-    setup cannot propose a region for, so it asks instead, with an empty timezone field and only
-    "e.g. Asia/Singapore" to go on. That is where "gmt8+" comes from.
-
-    Read from the right, so a path with a directory of its own called `zoneinfo` further up
-    cannot claim the rest of it. Matching the prefix rather than the exact names keeps the next
-    variant of this from being another silent empty answer; the caller checks the result against
-    the database anyway, so being liberal here costs nothing.
+    The database directory is not always literally `zoneinfo` — macOS resolves /etc/localtime to
+    /usr/share/zoneinfo.default — so any directory whose name starts with `zoneinfo` counts. Read
+    from the right so an unrelated `zoneinfo` directory further up cannot claim the rest; the
+    caller checks the result against the zone database anyway.
     """
     parts = resolved.split("/")
     for index in range(len(parts) - 2, -1, -1):
@@ -150,11 +136,10 @@ def _zone_exists(name: str) -> bool:
 def zone_error(name: str) -> str:
     """Why this timezone cannot be stored, or "" when it can.
 
-    The rule `tools.seller.validate_basics` applies, brought within reach of the prompt: a typo
-    should re-ask the question it was typed into, not end the install four lines later with the
-    country already chosen and nothing written. That door stays the authority, so this must never
-    be stricter than it — which is why a machine with no zone database vouches for nothing here
-    too, rather than rejecting every name it cannot look up.
+    The same rule `tools.seller.validate_basics` applies, so a typo is re-asked at the prompt
+    rather than rejected at the write door. That door stays the authority, so this must never be
+    stricter — hence a machine with no zone database vouches for nothing rather than rejecting
+    every name.
     """
     import zoneinfo
 

@@ -15,11 +15,9 @@ from xml.sax.saxutils import escape
 
 from sellee.platform.base import Platform
 
-# How long `unregister` waits for launchctl to finish letting go of a job. `bootout` is
-# asynchronous, and a job that still answers `print` is a job a following `start` will decline to
-# start. Seconds, because this is teardown of a local process, not a network call — and bounded,
-# because a launchctl that will not release is better reported by the next command failing than by
-# this one hanging silently.
+# How long `unregister` waits for `bootout` to finish letting go of a job. It is asynchronous, and
+# a job that still answers `print` is a job a following `start` will decline to start. Bounded: a
+# launchctl that will not release is better reported by the next command failing than by hanging.
 _BOOTOUT_TIMEOUT_SEC = 10.0
 _BOOTOUT_POLL_SEC = 0.1
 
@@ -106,19 +104,11 @@ class MacOSPlatform(Platform):
     def unregister(self, label: str) -> None:
         """Take the job out, and do not return until launchctl agrees it is out.
 
-        `bootout` returns before the job is actually gone. Nothing here noticed until a
-        `daemon stop` was followed straight away by a `daemon start`: start asks
-        `is_registered`, the half-torn-down job still answered yes, so start printed "already
-        running" and did nothing — and then the bootout finished. Left with no job and no
-        process, on a machine whose heartbeat file was still fresh enough for `status` to report
-        it running for another half a minute.
-
-        Waited for here rather than in `supervisor.start`, because the contract this breaks is
-        this method's own — "it stays stopped until re-registered" — and every caller of it
-        (stop, uninstall, a re-install over an existing job, a mode flip) inherits the same race.
-
-        A deadline rather than a loop without one: if launchctl will not let go, the caller is
-        better off proceeding and failing visibly than hanging with no output.
+        `bootout` returns before the job is actually gone, and a job that still answers `print`
+        makes a following `start` decline ("already running") then find nothing left. The wait
+        belongs here, on the method whose contract it protects ("it stays stopped until
+        re-registered"), so every caller inherits it. Bounded by a deadline: if launchctl will
+        not let go, the caller is better off failing visibly than hanging.
         """
         self._launchctl("bootout", f"{self._domain()}/{label}")
         deadline = time.monotonic() + _BOOTOUT_TIMEOUT_SEC

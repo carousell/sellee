@@ -63,10 +63,8 @@ STALE_NOTICE = (
     "That list is out of date, so I'd rather not act on it — let me take a fresh look at what you "
     "have on {name} and I'll come back to you."
 )
-# Five looks in a row could not be served, so the market stops being asked about. Said out loud,
-# with the way back attached: nothing else ever revisits an abandoned survey, and the fan-out will
-# not publish to a marketplace it has never read — so silence here is a market that quietly stops
-# working with no explanation anywhere.
+# Said out loud because nothing else ever revisits an abandoned survey: silence here would be a
+# market that quietly stops working with no explanation anywhere.
 ABANDONED_NOTICE = (
     "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
     "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
@@ -111,19 +109,15 @@ def discover_phase(deps: SurveyDeps) -> None:
     for request in deps.store.pending_market_surveys():
         market = request["market"]
         if not market_adapters.can_survey(market, region):
-            # An adapter withdrawn, or a seller whose region this marketplace has no site for.
-            # No later tick could serve this, so it stops being owed rather than being retried.
-            # Checked ahead of the connection below because it is the permanent condition of the
-            # two: a market nothing could ever survey should retire whether or not it is connected,
-            # where being disconnected is a state the seller can reverse in one tap.
+            # Not surveyable by any later tick either — an adapter withdrawn, or no site in the
+            # seller's region — so it stops being owed rather than being retried. Checked before
+            # the connection test because it is the permanent condition of the two.
             deps.store.abandon_market_survey(market)
             deps.bus.publish("survey.abandoned", {"market": market, "reason": "not_surveyable"})
             continue
         if market not in connected:
-            # Disconnected since the look was owed. Left owed rather than abandoned: abandoning is
-            # for "no later tick could ever serve this", and reconnecting is precisely a later tick
-            # that can — a seller who turns a market off and back on should find the question about
-            # their existing listings still waiting, not silently retired while it was off.
+            # Disconnected since the look was owed — left owed rather than abandoned, because
+            # reconnecting is a later tick that can serve it.
             continue
         try:
             _survey(deps, market, region)
@@ -144,15 +138,11 @@ def _follow_to_listings(client, adapter, current: str) -> bool:
     """Take the one hop to the page a seller's listings are actually on, where it is not the one we
     navigated to.
 
-    Facebook's `/marketplace/you/selling` shows the listings and gives them no id, so nothing read
-    there could be recorded as a listing URL or joined to a conversation. The ids are on the
-    seller's public Marketplace profile, whose address contains their own account id — a fact about
-    them rather than about Facebook, so it is read off the page instead of being stored or guessed.
-
-    Answers whether the reader is somewhere it can read from: True for a market that needs no hop,
-    True once the hop is made, and False when the link was not there — which the caller reports as
-    an unserved survey rather than letting the listings artifact answer "nothing listed" from a page
-    that was never the right one.
+    Facebook's selling page gives listings no id; the ids are on the seller's public profile, whose
+    address contains their own account id and so is read off the page rather than stored. Answers
+    whether the reader is somewhere it can read from — False is reported as an unserved survey
+    rather than letting the artifact answer "nothing listed" from a page that was never the right
+    one.
     """
     if not adapter.my_listings_entry_js:
         return True
@@ -217,14 +207,9 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
         )
         return
     if answer.get("unreadable"):
-        # Some rows were on the page and would not parse — a free item, a price line that shifted.
-        # `truncated` does not catch this: both readers count a dropped row as read when they
-        # compute it, so 14 of 17 with 3 unparseable arrives here claiming to be complete.
-        #
-        # It matters because a row we could not read leaves no trace anywhere: not on an item, not
-        # in `discovered_listings`. The fan-out reads that absence as "the seller does not have this
-        # there" and posts a second copy of a listing they already have. So a partial look is not a
-        # look, and the ask waits for a page we can read all of.
+        # Rows that were on the page but would not parse. `truncated` does not catch this — a
+        # dropped row counts as read — and an unread row leaves no trace anywhere, which the
+        # fan-out reads as "not listed there" and answers by posting a duplicate.
         _unserved(
             deps,
             market,
@@ -251,11 +236,9 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
     same thing already managed from another marketplace.
 
     Everything the agent published itself is on that page too; re-adopting it would make a second
-    item for one listing. And a seller who cross-lists by hand has the same desk on two
-    marketplaces — asking "want me to manage this desk?" a second time, about a desk already being
-    managed, reads as though the first answer was lost. The adopt phase still checks for itself,
-    because these two run minutes apart and the seller answers in between; this is about what the
-    question says.
+    item for one listing, and asking again about a cross-listed thing already being managed reads
+    as though the first answer was lost. The adopt phase still checks for itself, because the
+    seller answers in between.
     """
     items = deps.store.list_items()
     sold = deps.store.sold_item_ids()
@@ -270,10 +253,9 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
         twins = reconcile.items_for_same_listing(row.get("title") or "", items, market, sold)
         if twins and _link_twin(deps, market, row, twins):
             continue
-        # Either nothing matched, or the match could not be written down. Both go into the ask,
-        # because the alternative is a listing that exists on the seller's marketplace and appears
-        # in none of our records — not on an item, not in `discovered_listings` — which is precisely
-        # the state the fan-out reads as "they do not have this there" and duplicates.
+        # Either nothing matched or the link could not be written down — both go into the ask,
+        # because a listing recorded nowhere is the absence the fan-out reads as "not listed there"
+        # and duplicates.
         fresh.append(row)
     return fresh
 
@@ -281,25 +263,15 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
 def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> bool:
     """Record that an item we already manage is also listed here.
 
-    Recognising the seller's own cross-listing and then writing nothing down was a hole with real
-    consequences. The listing was dropped from the ask — right, they are already being helped with
-    it — but the item went on carrying no URL for this marketplace, so everything downstream still
-    believed it was absent from here. The fan-out believed it hardest: on the first tick after
-    Facebook became publishable it found fourteen such items and would have posted thirteen of them
-    a second time, each a duplicate of the very listing the survey had just correctly recognised.
+    The URL is what was just read off the seller's own listings page — the same standard
+    `record_listing_url` asks of every caller — and it is what joins a buyer on this listing to
+    this item; without it, everything downstream still believes the item is absent from this
+    market. Only ever on a single match, exactly as adoption refuses an ambiguous merge: guessing
+    between two same-titled items would put a buyer on the wrong item's floor.
 
-    Writing the URL is not a new claim about the seller's intent. It is what we just read off their
-    own listings page, live, seconds ago — the same standard `record_listing_url` asks of every
-    other caller — and it is what lets a buyer writing about this listing be joined to this item.
-
-    Only ever on a single match, exactly as adoption refuses an ambiguous merge: with two items
-    sharing a title there is no way to tell from the page which one this listing is, and guessing
-    would put a buyer on the wrong item's floor.
-
-    Answers whether the link was written. A False sends the listing into the ask instead of dropping
-    it, which is the difference between "the seller decides" and "nobody has any record of it": a
-    row that is neither linked nor asked about exists on their marketplace and in none of our
-    tables, and the fan-out reads that as an absence and posts a second copy.
+    Answers whether the link was written. A False sends the listing into the ask rather than
+    dropping it, because a row neither linked nor asked about is recorded nowhere, and the fan-out
+    reads that as an absence and posts a second copy.
     """
     if len(twins) != 1:
         deps.bus.publish(

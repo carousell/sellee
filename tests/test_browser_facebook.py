@@ -1,12 +1,10 @@
 """Facebook's inbox read: opening a folder that has no URL, and finding the listing behind a
 conversation that only names it by title.
 
-Everything here is about the two things Facebook does that Carousell does not, because those are
-the two places the generic lane grew a seam. The artifacts themselves are stubbed — a selector is
-only ever proved against the live page — so what these tests hold is the wiring: that the folder is
-opened before the list is read, that a folder which did not open is reported as blindness rather
-than as an empty inbox, and that a conversation is never attached to an item on anything weaker than
-the listing id.
+The artifacts are stubbed — selectors are only proved against the live page — so what these
+tests hold is the wiring: the folder is opened before the list is read, a folder that did not
+open is blindness rather than an empty inbox, and a conversation is only ever attached to an
+item by listing id.
 """
 
 from __future__ import annotations
@@ -52,9 +50,8 @@ class StubClient:
         self.navigations: list = []
         self.clicks: list = []
         self.calls: list = []
-        # How many times the lane asked which listing a conversation is about. Counted apart from
-        # navigations because an adopted thread is navigated again to read its tail, and that is
-        # not the lane re-deriving something it already knew.
+        # Counted apart from navigations: an adopted thread is navigated again to read its tail,
+        # which is not the lane re-deriving the listing.
         self.product_id_reads = 0
         self.url = ""
 
@@ -89,8 +86,8 @@ class StubClient:
         return ""
 
     def evaluate(self, function, **kwargs):
-        # Dispatched on the adapter's own artifacts, so moving one shows up here as a missing case
-        # rather than as a substring match landing on the wrong branch.
+        # Dispatched on artifact identity, so a moved artifact surfaces as a missing case rather
+        # than a substring match landing on the wrong branch.
         if function == fb_market.LOGIN_JS:
             return {"state": self.login}
         if function == fb_market.INBOX_FOLDER_JS:
@@ -119,8 +116,7 @@ class StubClient:
 
 @pytest.fixture(autouse=True)
 def _fb_only(store):
-    """Just Facebook connected: a lane tick drives every connected market, and this file scripts
-    Facebook's artifacts and nothing else."""
+    """Just Facebook connected — a lane tick drives every connected market."""
     seed_setting(store, "connected_markets", ["fb"])
     return store
 
@@ -147,8 +143,8 @@ def _deps(store, bus, client):
 
 
 def _conv(**overrides):
-    """One conversation as the Marketplace folder reports it — note `product_id` is absent, which
-    is the whole point: the folder names the listing by title only."""
+    """One conversation as the Marketplace folder reports it; `product_id` is absent because the
+    folder names the listing by title only."""
     row = {
         "thread_id": "99",
         "handle": "Gerry",
@@ -169,9 +165,8 @@ def _kinds(bus, kind):
 
 
 def test_the_folder_is_opened_by_a_real_click_before_the_list_is_read(store, bus, seeded) -> None:
-    """The control ignores a click dispatched from the page, so the adapter marks it and the lane
-    clicks the mark for real — and it has to happen before the list read, or the list read answers
-    with the seller's personal inbox."""
+    """The folder is opened before the list is read, or the list read answers with the seller's
+    personal inbox."""
     client = StubClient(conversations=[_conv()])
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -184,8 +179,7 @@ def test_the_folder_is_opened_by_a_real_click_before_the_list_is_read(store, bus
 
 
 def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_only) -> None:
-    """Carousell's inbox is an address, so there is nothing to open. The seam must stay inert for
-    it rather than clicking at whatever happens to be on the page."""
+    """The seam stays inert for a market whose inbox is an address, not a folder."""
     from sellee.browser.markets import carousell as carousell_market
 
     class CarousellStub(StubClient):
@@ -206,8 +200,7 @@ def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_o
 def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
     store, bus, seeded
 ) -> None:
-    """A click that fails must not raise out of the lane. The list artifact proves the folder is
-    open for itself, so the honest failure comes from there, with its measurements attached."""
+    """A failed click must not raise; the list artifact reports the folder's state for itself."""
     client = StubClient(click_fails=True, list_error="the Marketplace folder is not open")
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -219,8 +212,8 @@ def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
 def test_a_folder_that_did_not_open_is_blindness_and_never_an_empty_inbox(
     store, bus, seeded
 ) -> None:
-    """The one answer that must never be guessed. An unopened folder leaves the personal inbox on
-    screen; reporting that as "no marketplace conversations" would strand every buyer silently."""
+    """An unopened folder leaves the personal inbox on screen and must never be reported as an
+    empty one."""
     client = StubClient(list_error="the Marketplace folder is not open")
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -229,15 +222,13 @@ def test_a_folder_that_did_not_open_is_blindness_and_never_an_empty_inbox(
     assert blind, "a refusing reader must count as blind"
     payload = blind[-1].payload
     assert payload["market"] == "fb"
-    # The reader measured a narrow window, so the cause names the window rather than the market —
-    # the only one of the four the seller can actually act on.
+    # The cause names the window rather than the market — the only one the seller can act on.
     assert payload["cause"] == blindness.CAUSE_VIEWPORT
     assert _kinds(bus, "browser.read") == []
 
 
 def test_an_unmarked_folder_control_does_not_stop_the_read(store, bus, seeded) -> None:
-    """Nothing is clicked when the mark found no control, and the lane carries on to let the list
-    artifact say what it can see."""
+    """An unmarked control means no click, and the read still reports for itself."""
     client = StubClient(folder_marked=False, list_error="the Marketplace folder is not open")
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -250,8 +241,7 @@ def test_an_unmarked_folder_control_does_not_stop_the_read(store, bus, seeded) -
 
 
 def test_the_listing_id_is_read_from_the_opened_conversation_and_adopts(store, bus, seeded) -> None:
-    """The folder names the listing by title; the id is on a banner inside the conversation. That
-    read is what lets the thread be joined to the item at all."""
+    """The folder names the listing by title; the id is on a banner inside the conversation."""
     client = StubClient(conversations=[_conv()], tails={"99": []})
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -266,8 +256,7 @@ def test_the_listing_id_is_read_from_the_opened_conversation_and_adopts(store, b
 def test_a_conversation_whose_listing_cannot_be_read_is_never_guessed_onto_an_item(
     store, bus, seeded
 ) -> None:
-    """A title is not something to match on. With no id the conversation is left alone and said to
-    be about an unknown listing — the event that explains why a buyer is going unanswered."""
+    """With no id the conversation is left alone and reported as an unknown listing."""
     client = StubClient(conversations=[_conv()], product_id=None)
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -278,8 +267,7 @@ def test_a_conversation_whose_listing_cannot_be_read_is_never_guessed_onto_an_it
 
 
 def test_a_listing_id_that_is_not_ours_does_not_adopt(store, bus, seeded) -> None:
-    """The banner answered, and it named a listing the seller did not publish through us — most
-    often one they made outside the agent."""
+    """A listing the seller did not publish through us does not adopt."""
     client = StubClient(conversations=[_conv()], product_id="1111111111")
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -289,8 +277,7 @@ def test_a_listing_id_that_is_not_ours_does_not_adopt(store, bus, seeded) -> Non
 
 
 def test_the_conversation_is_not_reopened_for_a_thread_we_already_know(store, bus, seeded) -> None:
-    """The id read costs a navigation, so it happens once — when the conversation is first seen —
-    and never again on a thread that already carries its item."""
+    """The id read costs a navigation, so it happens once per thread."""
     store.create_thread(
         thread_id="fb:99",
         side="sell",
@@ -307,8 +294,7 @@ def test_the_conversation_is_not_reopened_for_a_thread_we_already_know(store, bu
 
 
 def test_a_row_the_folder_reports_with_an_id_is_taken_at_its_word(store, bus, seeded) -> None:
-    """The seam is additive: a market whose list already carries the listing id must not pay for a
-    second navigation, and Facebook's own rows would too if they ever started carrying one."""
+    """A row already carrying the listing id must not pay for a second navigation."""
     client = StubClient(conversations=[_conv(product_id=_PRODUCT_ID)], tails={"99": []})
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -365,8 +351,8 @@ def _survey_deps(store, bus, client):
 
 
 def test_the_survey_follows_the_link_to_the_page_that_has_the_ids(store, bus) -> None:
-    """`/marketplace/you/selling` shows the listings and gives them no id, so a survey that read it
-    could record nothing. The ids are on the seller's own profile, one link away."""
+    """`/marketplace/you/selling` shows the listings but no ids; the ids are on the seller's
+    profile, one link away."""
     from sellee.browser import survey
 
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
@@ -382,8 +368,7 @@ def test_the_survey_follows_the_link_to_the_page_that_has_the_ids(store, bus) ->
 
 
 def test_a_missing_profile_link_is_an_unserved_survey_not_an_empty_one(store, bus) -> None:
-    """The ask-once guard closes on an empty list, so a page we never reached must never answer as
-    one — that would tell the seller we looked and found nothing listed."""
+    """A page we never reached must not close the survey as an empty one."""
     from sellee.browser import survey
 
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
@@ -400,7 +385,7 @@ def test_a_missing_profile_link_is_an_unserved_survey_not_an_empty_one(store, bu
 def test_a_market_whose_listings_page_is_an_address_takes_no_hop(
     store, bus, carousell_only
 ) -> None:
-    """Carousell's manage-listings page is the page. The hop must stay inert for it."""
+    """The hop stays inert when the listings page is the address itself."""
     from sellee.browser import survey
     from sellee.browser.markets import carousell as carousell_market
 
@@ -451,8 +436,7 @@ def _twin(store, *, rail=True, title="White Study Desk"):
 
 
 def _merge_deps(store, bus):
-    """Adoption deps whose browser would raise: a merge is settled from rows alone, and touching
-    the marketplace to decide it would be a bug worth failing on."""
+    """Adoption deps whose browser would raise: a merge is settled from rows alone."""
     from sellee.browser import survey
 
     def no_browser():
@@ -462,9 +446,8 @@ def _merge_deps(store, bus):
 
 
 def test_the_same_thing_on_two_marketplaces_becomes_one_item(store, bus) -> None:
-    """A seller who cross-lists by hand has one desk, not two. The Facebook copy of a desk already
-    managed on Carousell links to it rather than making a second item — two items would mean two
-    carousell.ai listings, two floors, and buyers from each market on a different row."""
+    """The Facebook copy of a thing already managed on Carousell links to it rather than making a
+    second item."""
     from sellee.browser import adopt
 
     item = _twin(store)
@@ -491,8 +474,7 @@ def test_a_merged_listing_is_not_published_to_the_rail_a_second_time(store, bus)
 
 
 def test_merging_does_not_swallow_a_rail_publish_that_is_still_owed(store, bus) -> None:
-    """An item the seller had answered-only, matched from a second marketplace they asked to
-    relist, is owed its carousell.ai listing — once."""
+    """An item still owed its rail listing stays owed after a merge — once."""
     from sellee.browser import adopt
 
     _twin(store, rail=False)
@@ -504,8 +486,7 @@ def test_merging_does_not_swallow_a_rail_publish_that_is_still_owed(store, bus) 
 
 
 def test_two_items_sharing_a_title_are_never_merged_into_either(store, bus) -> None:
-    """Which one this listing is cannot be settled from a title alone, and merging into whichever
-    came first would put a buyer on the wrong floor. Left for the seller."""
+    """A title alone cannot settle which item a listing is; leave it for the seller."""
     from sellee.browser import adopt
 
     for suffix in ("a", "b"):
@@ -522,8 +503,7 @@ def test_two_items_sharing_a_title_are_never_merged_into_either(store, bus) -> N
 
 
 def test_the_survey_does_not_ask_again_about_a_thing_already_managed(store, bus) -> None:
-    """Asking "want me to manage this desk?" about a desk already being managed reads as though
-    the first answer was lost."""
+    """Asking again about a thing already managed reads as though the first answer was lost."""
     from sellee.browser import survey
 
     _twin(store)
@@ -550,8 +530,7 @@ def test_the_survey_does_not_ask_again_about_a_thing_already_managed(store, bus)
 
 
 def test_a_near_miss_title_is_two_different_products() -> None:
-    """One real inventory holds both of these. Anything looser than whole-title equality fuses
-    them, and then a buyer for the hooks negotiates over the clips."""
+    """Near-miss titles are different products; only whole-title equality matches."""
     from sellee.browser import reconcile
 
     items = [
@@ -579,9 +558,8 @@ def test_an_item_already_listed_on_this_market_is_not_a_twin() -> None:
 
 
 def test_recognising_a_twin_records_the_url_on_the_item(store, bus) -> None:
-    """Recognising it and writing nothing down was a hole with real consequences: the listing left
-    the ask, but the item still carried no Facebook URL, so the fan-out believed it was absent from
-    Facebook and would have posted a second copy of the very listing just recognised."""
+    """A recognised twin must have its URL recorded, or the fan-out sees the item as absent from
+    Facebook and posts a second copy."""
     from sellee.browser import survey
 
     item = _twin(store)
@@ -646,8 +624,7 @@ def test_a_recognised_twin_is_not_published_again(store, bus) -> None:
 
 
 def test_two_items_with_one_title_are_linked_to_neither(store, bus) -> None:
-    """Same discipline as adoption: with two items sharing a title there is no telling from the
-    page which one this listing is, and guessing puts a buyer on the wrong item's floor."""
+    """With two items sharing a title there is no telling which one this listing is."""
     from sellee.browser import survey
 
     for suffix in ("a", "b"):
@@ -691,8 +668,7 @@ def test_two_items_with_one_title_are_linked_to_neither(store, bus) -> None:
         ({"currency": "", "price_text": "RM 1,200"}, {}, "MYR"),
         ({"currency": "", "price_text": "HK$40"}, {}, "HKD"),
         ({"currency": "", "price_text": "Rp1.500.000"}, {}, "IDR"),
-        # A bare "$" is USD, SGD, AUD and more — so the seller's own currency answers it, which is
-        # the case that matters most: a US seller has no other marketplace at all.
+        # A bare "$" is USD, SGD, AUD and more, so the seller's own currency answers it.
         ({"currency": "", "price_text": "$65"}, {"currency": "USD"}, "USD"),
         ({"currency": "", "price_text": "$65"}, {"currency": "SGD"}, "SGD"),
         # Nothing anywhere is still nothing — the caller refuses rather than inventing one.
@@ -702,8 +678,7 @@ def test_two_items_with_one_title_are_linked_to_neither(store, bus) -> None:
 def test_the_currency_is_resolved_from_the_page_then_the_seller(
     store, detail, basics, expected
 ) -> None:
-    """Scraping /[A-Z]{3}/ out of the price text matched "SGD65" and nothing else, so adoption
-    failed terminally with "no usable price" for every seller whose marketplace prints a symbol."""
+    """Symbols the marketplace prints must resolve too, not just three-letter codes."""
     from sellee.browser import adopt
 
     if basics:
@@ -713,8 +688,7 @@ def test_the_currency_is_resolved_from_the_page_then_the_seller(
 
 
 def test_a_us_seller_can_adopt_a_dollar_priced_listing(store, bus) -> None:
-    """The regression in one line: Facebook shows a US seller "$65", and before this they could
-    adopt nothing at all."""
+    """A bare "$" resolves to the seller's own currency."""
     from sellee.browser import adopt
 
     store.set_seller_config_section("basics", {"region": "US", "currency": "USD"})
@@ -726,8 +700,7 @@ def test_a_us_seller_can_adopt_a_dollar_priced_listing(store, bus) -> None:
 
 
 def test_a_near_miss_is_withheld_even_after_the_seller_declines(store, bus) -> None:
-    """The decline path was the hole. The seller is told "I'll leave your Facebook listings alone",
-    and on the next tick the fan-out posted a second copy of the very book they meant."""
+    """A declined near miss must still be withheld, or the fan-out posts a second copy."""
     from sellee import crosslist
     from sellee.browser import survey
 
@@ -772,8 +745,8 @@ def test_a_near_miss_is_withheld_even_after_the_seller_declines(store, bus) -> N
 
 
 def test_a_near_miss_is_refused_rather_than_adopted_as_a_second_item(store, bus) -> None:
-    """The accept path: adopting made a second item, then a second rail listing, and then fanned
-    the first one out to the marketplace this listing was already on."""
+    """Adopting a near miss would make a second item and fan the first out to the market the
+    listing is already on."""
     from sellee.browser import adopt
 
     item = store.create_item(
@@ -803,8 +776,7 @@ def test_a_near_miss_is_refused_rather_than_adopted_as_a_second_item(store, bus)
 
 
 def test_a_sold_item_never_captures_a_live_listing(store, bus) -> None:
-    """A seller sells one of two identical chairs. Matching the sold one to the live listing puts
-    its URL on a closed sale, and from then on every buyer on it is told "it's sold"."""
+    """A sold item capturing a live listing would tell every buyer on it "it's sold"."""
     from sellee.browser import reconcile
 
     sold_item = store.create_item(title="Herman Miller Aeron", list_price=500.0, currency="SGD")
@@ -821,8 +793,7 @@ def test_a_sold_item_never_captures_a_live_listing(store, bus) -> None:
 
 
 def test_an_unreadable_row_stops_the_survey_closing_as_complete(store, bus) -> None:
-    """Both readers count a dropped row as read when they compute `truncated`, so 14 of 17 with 3
-    unparseable arrives claiming to be complete — and the 3 leave no trace for the fan-out."""
+    """Unreadable rows must not count as read when the survey decides it is complete."""
     from sellee.browser import survey
 
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
@@ -851,8 +822,7 @@ def test_an_unreadable_row_stops_the_survey_closing_as_complete(store, bus) -> N
 
 
 def test_an_ambiguous_twin_is_asked_about_rather_than_dropped(store, bus) -> None:
-    """Dropped silently, it existed on the marketplace and in none of our tables — which the
-    fan-out reads as an absence and duplicates."""
+    """Dropped silently, the fan-out would read the listing as absent and duplicate it."""
     from sellee.browser import survey
 
     for suffix in ("a", "b"):
@@ -886,9 +856,8 @@ def test_an_ambiguous_twin_is_asked_about_rather_than_dropped(store, bus) -> Non
 
 
 def test_the_folder_is_opened_by_focus_and_a_real_key(store, bus, seeded) -> None:
-    """Not a click. The control sits in a list Messenger repaints continuously, so a click never
-    finds the node still enough to act on: it resolves the element and then times out on its
-    stability check. In production that was five consecutive blind ticks."""
+    """Not a click — the control sits in a list Messenger repaints continuously, so a click never
+    passes its stability check."""
     client = StubClient(conversations=[_conv()])
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -899,8 +868,7 @@ def test_the_folder_is_opened_by_focus_and_a_real_key(store, bus, seeded) -> Non
 
 
 def test_a_control_that_will_not_take_focus_falls_back_to_a_click(store, bus, seeded) -> None:
-    """Focus is the better route, not the only one — another marketplace's control may not be
-    focusable at all, and the old path still works there."""
+    """Focus is the better route, not the only one; a non-focusable control still gets clicked."""
     client = StubClient(conversations=[_conv()], focus_works=False)
 
     inbox.inbox_lane(_deps(store, bus, client))
@@ -910,8 +878,7 @@ def test_a_control_that_will_not_take_focus_falls_back_to_a_click(store, bus, se
 
 
 def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
-    """Activating an open folder is at best wasted and at worst a toggle back to the general list.
-    Answered from the rail's own heading — the control's `aria-pressed` reads "true" while the
+    """Openness is answered from the rail's own heading — `aria-pressed` reads "true" while the
     folder is shut, so trusting it would skip an activation that never happened."""
     client = StubClient(conversations=[_conv()], folder_already_open=True)
 
@@ -922,23 +889,17 @@ def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
 
 
 def test_the_listing_banner_is_polled_rather_than_glanced_at() -> None:
-    """The banner is fetched after the load event, so a synchronous look at a freshly navigated tab
-    finds no link — and a missing id is `unknown_listing`, which is silence. One conversation went
-    unanswered for days on exactly this: the id was there a second later every time it was asked
-    for by hand, and never there at the instant the lane asked."""
+    """The banner only appears after load, so a synchronous look finds no id — and a missing id is
+    `unknown_listing`, which is silence."""
     assert fb_market.PRODUCT_ID_JS.strip().startswith("async"), "a glance, not a read"
     assert "setTimeout" in fb_market.PRODUCT_ID_JS, "nothing waits for the banner"
 
 
 def test_the_folder_is_read_from_both_ends() -> None:
-    """`loadAll` finishes at the OLDEST row, and Messenger unmounts rows far outside the viewport,
-    so a read taken there is a window onto the bottom of the list. Live on 2026-09-01 that returned
-    a steady 25 rows for hours while the folder held 50: the two newest conversations, both showing
-    a new-message dot, were never in it, and every thread the agent held was nine weeks old.
+    """`loadAll` finishes at the OLDEST row and Messenger unmounts off-screen rows, so the read
+    must return to the top and merge both ends.
 
-    Asserted on the source because the suite stubs this artifact by identity and never runs it —
-    the behaviour itself is covered by driving the reader over a virtualised DOM, which needs a
-    browser. What is checked here is that the read still happens from both ends at all.
+    Asserted on the source because the suite stubs this artifact by identity and never runs it.
     """
     js = fb_market.CONVERSATIONS_LIST_JS
     assert "scrollToTop" in js, "the read never returns to the newest end"
@@ -946,7 +907,7 @@ def test_the_folder_is_read_from_both_ends() -> None:
     assert "merge(" in js, "two reads are taken but only one is used"
 
 
-# --- asking once, rather than every five minutes ---------------------------------------------
+# --- asking once, not every sweep ---------------------------------------------------------------
 
 
 def _notice_texts(store):
@@ -954,9 +915,7 @@ def _notice_texts(store):
 
 
 def test_a_conversation_we_could_not_place_is_not_reopened_next_sweep(store, bus, seeded) -> None:
-    """The churn this removes. Facebook names the listing only inside the conversation, so a
-    conversation about a listing the seller does not manage was opened every five minutes forever
-    to re-derive the same nothing — measured live at ~5.5s each, 25 of them, indefinitely."""
+    """An unplaceable conversation is opened once, not on every sweep."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
@@ -964,14 +923,12 @@ def test_a_conversation_we_could_not_place_is_not_reopened_next_sweep(store, bus
     inbox.inbox_lane(deps)
 
     assert client.product_id_reads == 1, "the conversation was opened twice"
-    # The adoption attempt still runs, and still says why it refused — that event is what the
-    # unplaceable report counts, so the cache must not silence it.
+    # The refusal event still fires each sweep; the unplaceable report counts on it.
     assert len(_kinds(bus, "browser.unmatched")) == 2
 
 
 def test_a_changed_row_asks_again(store, bus, seeded) -> None:
-    """A cached answer is trusted only while the row still says what it said. A new message may
-    mean a conversation that has moved to a listing we do manage."""
+    """A cached answer is trusted only while the row still says what it said."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
@@ -983,8 +940,7 @@ def test_a_changed_row_asks_again(store, bus, seeded) -> None:
 
 
 def test_a_ticking_clock_is_not_a_change(store, bus, seeded) -> None:
-    """The preview carries a relative time the clock keeps advancing. Treating "2m" becoming "1h"
-    as a new message would re-open the conversation every sweep — the whole cost being removed."""
+    """A relative time ticking over in the preview is not a new message."""
     client = StubClient(conversations=[_conv(last_message="Gerry: is this still available? 2m")])
     client.product_id = None
     deps = _deps(store, bus, client)
@@ -1010,7 +966,7 @@ def test_adopting_a_listing_makes_the_lane_ask_again(store, bus, seeded) -> None
     assert store.get_thread("fb:99") is not None
 
 
-# --- saying so, rather than 372 events nobody reads -------------------------------------------
+# --- saying so, once ---------------------------------------------------------------------------
 
 
 def test_buyers_nobody_can_place_are_reported(store, bus, seeded) -> None:
@@ -1036,8 +992,8 @@ def test_the_same_buyers_are_not_reported_every_sweep(store, bus, seeded) -> Non
 
 
 def test_a_new_unplaceable_buyer_is_reported_even_after_the_first(store, bus, seeded) -> None:
-    """`_notify_once` would go quiet here, and that is the failure this notice exists to end — one
-    layer up. Three buyers nobody can place becoming four has to say something."""
+    """A growing set of unplaceable buyers must be reported again, not swallowed by a once-only
+    notice."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     inbox.inbox_lane(deps)
@@ -1051,8 +1007,7 @@ def test_a_new_unplaceable_buyer_is_reported_even_after_the_first(store, bus, se
 
 
 def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
-    """Cleared when the set empties, the way the blind notice clears — so the next unplaceable
-    buyer is announced rather than swallowed by a signature that outlived its condition."""
+    """The notice re-arms when the set empties, so the next unplaceable buyer is announced."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     inbox.inbox_lane(deps)
@@ -1080,10 +1035,8 @@ def _adopted_thread(store, bus, seeded):
 def test_a_conversation_facebook_says_is_unavailable_is_not_opened_again(
     store, bus, seeded
 ) -> None:
-    """Facebook writes "Message unavailable" into the preview of a conversation whose messages
-    have been withdrawn. There is nothing behind it to go stale, so opening it can only ever find
-    the same nothing — and a thread that stores no message can never satisfy `_can_skip`, so it
-    was opened on every sweep for the life of the install."""
+    """A "Message unavailable" conversation has nothing behind it to go stale, so it is never
+    reopened."""
     deps, client = _adopted_thread(store, bus, seeded)
     before = len(client.navigations)
 
@@ -1094,8 +1047,7 @@ def test_a_conversation_facebook_says_is_unavailable_is_not_opened_again(
 
 
 def test_an_unavailable_conversation_does_not_mark_the_market_blind(store, bus, seeded) -> None:
-    """The reader is right to come back empty; calling that blindness let one dead conversation
-    hold a whole market's blind counter open and told the seller their inbox was unreadable."""
+    """Coming back empty from a withdrawn conversation is not blindness."""
     client = StubClient(
         conversations=[_conv(last_message="Message unavailable")],
         tails={"99": []},
@@ -1110,8 +1062,8 @@ def test_an_unavailable_conversation_does_not_mark_the_market_blind(store, bus, 
 
 
 def test_an_ordinary_empty_read_is_still_blindness(store, bus, seeded) -> None:
-    """The exception is only for a marketplace saying so. A conversation the list says has a
-    latest message, whose log reads empty, is still the page changing shape under the reader."""
+    """The exception is only for the marketplace saying so; any other empty read is still
+    blindness."""
     client = StubClient(conversations=[_conv()], tails={"99": []})
     deps = _deps(store, bus, client)
     deps.config = Config(inbox_full_sweep_every=1)

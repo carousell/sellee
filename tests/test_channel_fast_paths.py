@@ -136,9 +136,8 @@ def test_sellee_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     assert "where things stand" in msg["text"]
     assert "plain language" in msg["text"]  # the free-text invitation, not a numbered menu
     assert "Marketplaces I can work for you" in msg["text"]
-    # The control row is the three agent controls, then one connect/disconnect per marketplace —
-    # a flat spec the provider wraps, so the row grows with the marketplaces rather than being
-    # capped. Only the leading three are pinned here; the connector buttons have their own tests.
+    # The row is the three agent controls then one per marketplace; only the leading three are
+    # pinned — the connector buttons have their own tests.
     buttons = msg["reply_markup"]["inline_keyboard"][0]
     assert [b["callback_data"] for b in buttons][:3] == [
         CB_PAUSE,

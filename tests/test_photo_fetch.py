@@ -99,8 +99,8 @@ def test_a_host_under_an_allowed_suffix_is_allowed(host) -> None:
     ],
 )
 def test_a_suffix_match_is_anchored_on_a_dot(host) -> None:
-    """The reason `hosts` is an exact match at all. A naive `endswith` would wave the first of these
-    through — it does not end in ".fbcdn.net", and the leading dot is what makes it not."""
+    """A naive `endswith` would wave "fbcdn.net.evil.test" through; the leading dot is what
+    makes it not."""
     assert photo_fetch.allowed_url(f"https://{host}/a.jpg", [], [_SUFFIX]) is False
 
 

@@ -59,8 +59,8 @@ def _detail(**overrides):
 
 @pytest.fixture(autouse=True)
 def _one_market(carousell_only):
-    """Carousell alone: these script one market's artifacts, and a lane tick drives every connected
-    market, so leaving Facebook on would read a marketplace no stub here was taught."""
+    """Carousell alone — a lane tick drives every connected market, and these script Carousell's
+    artifacts only."""
 
 
 class StubClient:
@@ -264,10 +264,8 @@ def test_a_pass_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
 
 
 def test_a_sign_in_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
-    """The bug this lane shipped with. Signing in to Facebook earns Facebook a look at the
-    seller's listings; a minute later the lane served it down the one shared tab — while the
-    seller was part-way through typing their Carousell password into that same tab. There is no
-    pass anywhere in that story, which is why asking only about passes was not enough."""
+    """A sign-in hold defers the lane like a pass does — serving a survey down the shared tab
+    mid-password is the same offence, and no pass appears anywhere in that story."""
     _ready(store)
     store.request_market_survey(_MARKET)
     store.hold_browser("signin", "signing in to fb", 900.0)
@@ -280,9 +278,7 @@ def test_a_sign_in_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
 
 
 def test_a_hold_that_has_expired_does_not_defer_the_lane(store, bus) -> None:
-    """A CLI can be closed, killed or Ctrl-C'd with the seller mid-sign-in. A claim that outlived
-    its claimant must stop costing the agent anything — otherwise one abandoned install is a
-    permanently silent agent."""
+    """A claim that outlived its claimant must stop costing the agent anything."""
     _ready(store)
     store.request_market_survey(_MARKET)
     store.hold_browser("signin", "signing in to fb", ttl_sec=-1.0)
@@ -934,9 +930,8 @@ def test_the_ask_never_offers_to_relist_somewhere_it_already_is(store, bus) -> N
 
 
 def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) -> None:
-    """Abandonment set a state no lane picks up again, and said so only to the event log. The
-    market then quietly stopped being publishable — the fan-out will not post to a marketplace it
-    has never read — with no explanation anywhere and no door back."""
+    """Abandonment must reach the seller and leave a door back, or the market quietly stops being
+    publishable with no explanation anywhere."""
     _ready(store)
     store.request_market_survey(_MARKET)
     deps = _deps(store, bus, StubClient(login="logged_out"))
@@ -952,8 +947,8 @@ def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) 
 
 
 def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:
-    """The button has to reach a handler that does something. It rides the yes token, which already
-    reopens a survey for a market with nothing left to decide."""
+    """The button has to reach a handler; it rides the yes token, which already reopens a
+    survey."""
     _ready(store)
     store.request_market_survey(_MARKET)
     store.abandon_market_survey(_MARKET)

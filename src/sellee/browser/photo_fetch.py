@@ -51,17 +51,11 @@ class _NoRedirects(urllib.request.HTTPRedirectHandler):
 def allowed_url(url: str, hosts, suffixes=()) -> bool:
     """Whether `url` is an https URL on one of `hosts`, or under one of `suffixes`.
 
-    `hosts` is an exact match and nothing else. `suffixes` is a **dot-anchored** match — the host
-    must equal the suffix or sit directly under it — which is a different thing from the naive
-    substring suffix that would accept `media.karousell.com.evil.test`: that host does not end in
-    `.fbcdn.net`, and the leading dot is what makes it not. The same boundary
-    `engines.hosts.host_is_marketplace` uses.
-
-    Suffixes exist because some marketplaces cannot be enumerated: Facebook serves listing images
-    from `scontent-<pop><n>-<n>.xx.fbcdn.net`, which is generated per request. A registry that could
-    only list exact hosts would be a registry that could never allow them, so the choice is between
-    a bounded suffix and no photographs at all — and the bound is per marketplace, in data, so
-    granting one says nothing about any other.
+    `hosts` matches exactly. `suffixes` is dot-anchored — the host must equal the suffix or sit
+    directly under it, never a substring match — the same boundary
+    `engines.hosts.host_is_marketplace` uses. Suffixes exist because some marketplaces serve media
+    from per-request hostnames (Facebook's `scontent-*.fbcdn.net`) that cannot be enumerated ahead
+    of time.
     """
     if not url or (not hosts and not suffixes):
         return False

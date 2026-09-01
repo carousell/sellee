@@ -77,10 +77,8 @@ def media_hosts(market: str) -> list:
 def media_host_suffixes(market: str) -> list:
     """Domains a market's listing photographs may sit under, matched on a dot boundary.
 
-    The escape hatch for a marketplace whose image hosts are generated per request and so cannot be
-    enumerated the way `media_hosts` enumerates them. Data for the same reason: which domain a
-    marketplace serves images from is a fact about them, and granting one says nothing about any
-    other. An entry with neither this nor `media_hosts` fetches nothing.
+    For image hosts generated per request, which `media_hosts` cannot enumerate. An entry with
+    neither this nor `media_hosts` fetches nothing.
     """
     return list((get_marketplace(market) or {}).get("media_host_suffixes") or [])
 
@@ -144,10 +142,8 @@ def market_home(market: str, region: str | None = None) -> str | None:
 def has_regional_site(market: str, region: str | None = None) -> bool:
     """Whether this marketplace names a site for this region, rather than a catch-all.
 
-    The distinction a seller feels: a marketplace with a site in their own country is where their
-    buyers already are, and a global one is somewhere they also happen to be reachable. Read by the
-    connect offer to put the home marketplace first — `resolve_domain` deliberately collapses the
-    two (either way there is a site to drive), so the difference has to be asked for separately.
+    `resolve_domain` deliberately collapses the two (either way there is a site to drive), so the
+    connect offer asks for the difference to put the home marketplace first.
     """
     entry = get_marketplace(market)
     if entry is None:

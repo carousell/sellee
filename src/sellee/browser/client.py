@@ -609,20 +609,11 @@ class BrowserClient:
     def navigate_visible(self, url: str) -> None:
         """Navigate, and put our tab in front before anything reads the page.
 
-        A scripted read does run fine on a background tab — until the page only builds itself on a
-        visible one. Browsers throttle IntersectionObserver and requestAnimationFrame in a hidden
-        tab, and both are how a marketplace loads a long list, so the page quietly serves a fraction
-        of itself and reports no error at all: Facebook's listings page answers with 5 of 19
-        listings in the background and all 19 in front, and its Marketplace folder does not open
-        from a hidden tab at all — the click times out on an element that is right there.
-
-        Best-effort about the *coming forward*, not about the navigation: a window that will not
-        come forward must not fail a read that might still succeed, and every artifact reports
-        `visible` on the way out, so a read that then falls short says why in `browser.blind`
-        instead of looking like a marketplace that changed shape.
-
-        This is a tab select inside the agent's own dedicated Chrome, not a window raise and not the
-        seller's browser, so "a read tick never raises" still holds.
+        A hidden tab is throttled (IntersectionObserver, requestAnimationFrame), and marketplaces
+        build their lists that way — so a read on a background tab can be served a fraction of the
+        page and no error at all. Bringing the tab forward is best-effort: it must not fail a read
+        that might still succeed. This is a tab select inside the agent's own Chrome, not a window
+        raise, so a read tick never raises the seller's window.
         """
         self.navigate(url)
         try:
@@ -676,10 +667,10 @@ class BrowserClient:
         is what makes the failure so quiet: the text lands, the key that would commit it never
         arrives, and nothing reports an error.
 
-        Typing is not the only caller any more — see `navigate_visible`, which a read uses when the
-        page it is about to read only builds itself while visible. Nothing happens when the tab is
-        already active — the steady state on the agent's own Chrome — so its window comes forward at
-        most once rather than on every call.
+        Typing is not the only caller — `navigate_visible` also brings the tab forward, for pages
+        that only build themselves while visible. Nothing happens when the tab is already active —
+        the steady state on the agent's own Chrome — so its window comes forward at most once
+        rather than on every call.
 
         Selecting is by index, and an index is a position that renumbers whenever any tab opens or
         closes; worse, selecting repoints every later call at whatever was chosen. So the page is

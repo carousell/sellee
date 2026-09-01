@@ -120,9 +120,8 @@ def _no_rail():
 
 
 def _lane(store, bus) -> None:
-    # Real time: the retry cooldown compares this clock against the `finished_ts` the store writes
-    # with its own, so a fixed fake hour reads as hours past every attempt and turns it off. Quiet
-    # hours no longer gate this lane, which is what the fake midday was for.
+    # Real time: the retry cooldown compares this clock against the store-written `finished_ts`,
+    # so a fixed fake hour turns it off.
     crosslist.crosslist_lane(
         crosslist.CrosslistDeps(
             store=store,
@@ -161,8 +160,7 @@ def _drain(store, bus, api) -> list:
 
 
 def _queued(store):
-    # Projected: the index also carries `finished_ts`, which is None for a queued row and is the
-    # retry clock's business rather than these tests'.
+    # Projected: `finished_ts` is the retry clock's business, not these tests'.
     return [
         {k: v for k, v in row.items() if k != "finished_ts"}
         for row in store.publish_pass_index()
@@ -198,8 +196,8 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
     )
     assert settings.publish_markets(store) == ["carousell"]
 
-    # Before listing anywhere new, Sellee looks at what the seller already has there — otherwise it
-    # would post a second copy of everything they had listed by hand. Here it finds nothing.
+    # Before listing anywhere new the lane looks at what the seller already has there; here it
+    # finds nothing.
     store.record_survey_result("carousell", [])
 
     # The lane notices the gap and queues the browser publish.
@@ -245,9 +243,8 @@ def test_a_failed_fan_out_is_one_notice_and_no_second_attempt(
     passes.pass_lane(_pass_deps(server, bus, store, script))
     assert store.publish_pass_index()[0]["status"] == "error"
 
-    # Nothing is said yet: another go is coming, and three "I couldn't list your lamp" messages
-    # for one lamp that is about to appear is noise that trains a seller to ignore the notice that
-    # matters. Nor is the retry queued on this tick — the cooldown holds it.
+    # Nothing is said yet: another go is coming, and repeated "couldn't list" notices train the
+    # seller to ignore them. The cooldown holds the retry too.
     _lane(store, bus)
     with FakeTelegramAPI() as api:
         assert _drain(store, bus, api) == []

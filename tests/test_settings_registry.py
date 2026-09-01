@@ -122,9 +122,8 @@ def test_check_for_seller_says_so_when_nothing_at_all_is_available(
 
 
 def test_a_market_needing_a_region_is_refused_but_offers_one_that_does_not(fresh_store) -> None:
-    """A missing region is not a blanket refusal. Carousell enumerates regional sites and so cannot
-    resolve without one; Facebook serves everywhere and can, so the seller is pointed at what they
-    *can* have rather than being sent away to fill in a country first."""
+    """A missing region is not a blanket refusal: Facebook serves everywhere, so the seller is
+    pointed at what they *can* have."""
     with pytest.raises(settings.SettingError) as excinfo:
         settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
 
@@ -281,9 +280,8 @@ def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
 
 
 def test_card_lists_headline_at_default(fresh_store) -> None:
-    # connected_markets is absent by design: the card renders it as its own Connections block, with
-    # every marketplace and the buttons that switch them, so a value line here would say the same
-    # thing twice — the second time in a form the seller cannot act on.
+    # connected_markets is absent by design: the card renders it as its own Connections block,
+    # so a value line here would say it twice.
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
         "• Watch mode: off — I work in the background",
@@ -292,8 +290,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
 
 
 def test_a_setting_with_its_own_card_section_is_not_also_a_value_line(fresh_store) -> None:
-    """Even once it is changed from its default — the rule is about where it is rendered, not about
-    whether it is interesting, so a connected market must not reappear as a duplicate line."""
+    """Even once changed from its default — the rule is about where it is rendered."""
     seed_setting(fresh_store, "connected_markets", ["carousell"])
 
     assert not any("marketplace" in line.lower() for line in settings.card_lines(fresh_store))

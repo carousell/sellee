@@ -411,8 +411,7 @@ def _scam_thread(store, verdict="scam"):
 
 
 def test_a_reply_to_a_scam_message_is_refused_in_code(make_ctx, store) -> None:
-    """The daemon stamps a verdict on every inbound row, and until now it only ever reached the
-    prompt — so the whole defence was the model choosing to follow an instruction."""
+    """The verdict must be a gate in code, not only an instruction for the model to follow."""
     thread_id = _scam_thread(store)
 
     out = dispatch(
@@ -426,8 +425,8 @@ def test_a_reply_to_a_scam_message_is_refused_in_code(make_ctx, store) -> None:
 
 
 def test_an_ordinary_message_on_the_same_thread_still_sends(make_ctx, store) -> None:
-    """A thread can hold one scam attempt among ordinary messages; a blanket refusal would silence
-    the whole conversation."""
+    """A blanket refusal would silence a thread holding one scam attempt among ordinary
+    messages."""
     thread_id = _scam_thread(store)
     store.record_inbound(
         "carousell:7", msg_id="in|m2", text="is it still available?", ts=2.0, scam_verdict="clean"
@@ -443,8 +442,8 @@ def test_an_ordinary_message_on_the_same_thread_still_sends(make_ctx, store) -> 
 
 
 def test_a_merely_suspicious_message_is_not_refused(make_ctx, store) -> None:
-    """ "suspicious" is common enough that refusing on it would mute ordinary haggling. The prompt
-    carries it so the model can be careful; only "scam" is the seller's to answer."""
+    """ "suspicious" is common enough that refusing on it would mute ordinary haggling; only
+    "scam" is the seller's to answer."""
     thread_id = _scam_thread(store, verdict="suspicious")
 
     out = dispatch(

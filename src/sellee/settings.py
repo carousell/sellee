@@ -38,8 +38,7 @@ PROPOSAL_TTL_SEC = 24 * 3600
 # customization, not catalog size).
 #
 # connected_markets earns a place at its default because its default is "off" and nothing else on
-# the card would ever hint that other marketplaces are possible; a knob that shapes wording is
-# discoverable from the wording, but a market the seller has never been told about is not.
+# the card would ever hint that other marketplaces are possible.
 #
 # watch_browser earns its place for the same reason and one more: where the work happens is not
 # something any wording the agent produces could hint at, and the card carries the button that
@@ -48,8 +47,7 @@ CARD_HEADLINE = ("quiet_hours", "watch_browser")
 
 # Settings the card renders in a section of their own, and which `card_lines` therefore leaves out.
 # connected_markets is the only one: the Connections block lists every marketplace with its state
-# and carries the buttons that change it, which is strictly more than a value line can say — and
-# printing both would show the same fact twice, once in a form the seller cannot act on.
+# and the buttons that change it — printing both would show the same fact twice.
 CARD_OWN_SECTION = frozenset({"connected_markets"})
 
 # The door tokens. A callback carries the change id and one of these choices (the channel encodes it
@@ -635,19 +633,15 @@ register(
 
 # --- which marketplaces the agent works ------------------------------------------------------
 #
-# The marketplaces the seller has connected *besides* carousell.ai. The rail is not a member: it is
-# where every listing goes, guaranteed by the flow itself, so naming it here would only be a value
-# the validator has to special-case. Empty — the default — means carousell.ai alone, so an upgrade
-# changes nobody's behaviour.
+# The marketplaces the seller has connected *besides* carousell.ai. The rail is not a member —
+# every listing goes there by the flow itself. Empty (the default) means carousell.ai alone.
 #
-# This list is the switch for everything the agent does on a marketplace, not only publishing:
-# reading the inbox, answering buyers, looking at what the seller already has listed, signing in.
-# Every consumer reads it at its own decision point, so removing a market stops work that was
-# already queued rather than only work not yet started.
+# This list is the switch for everything the agent does on a marketplace — reading the inbox,
+# answering buyers, surveying, signing in — not only publishing. Every consumer reads it at its
+# own decision point, so removing a market stops work already queued.
 #
-# A market is accepted only if something can actually drive it (an adapter, on a site where the
-# seller is). Refusing at write time rather than skipping later keeps the failure where the seller
-# can see it: a setting naming a market nothing reads reads as a promise being kept.
+# A market is accepted only if something can actually drive it. Refusing at write time keeps the
+# failure where the seller can see it.
 
 
 def _market_names(markets) -> str:

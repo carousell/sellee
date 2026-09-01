@@ -234,19 +234,10 @@ def page_targets(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int |
 def ensure_window_width(port: int, minimum: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int:
     """Widen the agent's Chrome windows to at least `minimum` px, answering the narrowest seen.
 
-    Marketplaces serve a different site to a narrow window, and the difference is invisible from
-    inside: Carousell collapses to a single column below roughly 900px, which made every
-    conversation unreadable for 22 hours on a window the seller had sized to half their screen, and
-    Facebook serves a layout whose conversation list carries no thread identity at all.
-
-    `--window-size` at launch is not enough. With `--restore-last-session` and a persisted profile,
-    a window once dragged narrow comes back narrow forever, so this runs on every acquisition
-    rather than once. It is the agent's own dedicated profile, never the seller's everyday browser,
-    so there is nothing of theirs to resize.
-
-    Best-effort by design: a Chrome that will not answer, or a window that will not move, must never
-    stop a read. The caller logs and carries on, and `blindness.CAUSE_VIEWPORT` is the backstop that
-    tells the seller when a read then fails on a window we could not widen.
+    Marketplaces serve a layout we cannot read to a narrow window, and a persisted profile brings a
+    dragged-narrow window back narrow on every launch, so this runs on each acquisition rather than
+    once at start. Best-effort: a Chrome that will not answer, or a window that will not move, must
+    never fail a read.
 
     Answers the narrowest width observed (after any resize), or 0 when nothing could be measured.
     """

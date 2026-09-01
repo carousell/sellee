@@ -527,12 +527,10 @@ def test_a_timezone_outside_the_supported_countries_makes_no_guess(
 def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
     world, monkeypatch, capsys
 ) -> None:
-    """A typo in the one free-text field of setup used to be fatal: it went to the daemon, the
-    daemon refused it, and the install ended with the country already chosen and nothing written.
-    The question comes back instead, carrying the reason and the country's own zone."""
+    """A typo in the one free-text field re-asks instead of ending the install, carrying the
+    reason and the country's own zone."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
-    # country, a zone that does not exist, then Enter for the proposed one — and the tail: no
-    # marketplace, the window question defaulted, no chat channel.
+    # country, a zone that does not exist, Enter for the proposed one, then the defaults.
     _answer(monkeypatch, ["1", "gmt8+", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
@@ -550,8 +548,8 @@ def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
 def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
     world, monkeypatch, capsys
 ) -> None:
-    """The empty field is what the typo was typed into. Singapore has exactly one zone, so the
-    question has an answer already in it and Enter is enough."""
+    """Singapore has exactly one zone, so the question has an answer in it already and Enter is
+    enough."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     _answer(monkeypatch, ["1", "", "", "", ""])
 
@@ -576,12 +574,8 @@ def test_nothing_is_provisioned_without_a_region(world, monkeypatch) -> None:
 
 
 def _pick(market: str, region: str = "SG") -> str:
-    """What to type to choose one marketplace, found by name.
-
-    The offer is ordered by the registry, so a hard-coded "1" quietly becomes a different
-    marketplace the moment one is added ahead of it — which is exactly what happened when Facebook
-    landed, and these tests went on passing while asserting about the wrong market.
-    """
+    """What to type to choose one marketplace, found by name — the offer is registry-ordered, so
+    a hard-coded "1" quietly becomes a different marketplace when one lands ahead of it."""
     from sellee.browser import markets as market_adapters
 
     return str(market_adapters.connectable_markets(region).index(market) + 1)
@@ -618,9 +612,8 @@ def test_skip_markets_never_offers(world) -> None:
 def test_a_us_seller_is_offered_facebook_rather_than_told_there_is_nothing(
     world, monkeypatch, capsys
 ) -> None:
-    """Carousell runs no US site, so this used to be the "nothing available" case. Facebook serves
-    everywhere, which makes it the only marketplace a US seller can have — and it is the reason
-    gating the offer on publishing was wrong: it hid the one that was there."""
+    """Carousell runs no US site; Facebook serves everywhere, making it the one marketplace a US
+    seller can have."""
     # region confirmed, nothing picked, window question defaulted, no chat channel
     _answer(monkeypatch, ["y", "", "", ""])
 

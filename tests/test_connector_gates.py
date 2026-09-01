@@ -1,15 +1,9 @@
 """Removing a marketplace stops work already queued against it, not only work not yet started.
 
-`connected_markets` is the seller's switch for a marketplace, and the promise it makes is that
-turning it off stops the agent touching that market. That promise is only as good as its weakest
-consumer: durable rows written before the removal — a pending sign-in, an owed survey, an accepted
-listing, a queued publish, a composed reply — would each otherwise drive a market the seller has
-just switched off, because each of them was authorised at a different moment.
-
-So every one of them reads the setting at its own decision point, and this file is one case per
-consumer: arrange the work, remove the market, and assert nothing happens. The paired assertion is
-about *what is left behind* — a market a seller can turn back on has to resume, so a gate that
-threw the work away would be its own kind of broken.
+Durable rows written before the removal — a pending sign-in, an owed survey, an accepted listing,
+a queued publish, a composed reply — would each otherwise drive a market the seller has switched
+off. Every consumer reads the setting at its own decision point; this file is one case per
+consumer, and what is left behind must be resumable, since a market turned back on has to resume.
 """
 
 from __future__ import annotations
@@ -36,16 +30,13 @@ def _region(store):
 
 
 def _disconnect(store):
-    """The seller taps remove. The one thing every test here does between arranging and acting."""
+    """The seller taps remove."""
     seed_setting(store, "connected_markets", [])
 
 
 class StubClient:
-    """A browser that fails the test if a lane reaches it at all.
-
-    Every case below has been disconnected, so no lane has any business navigating: making that an
-    assertion rather than an absence is what stops a gate that merely reorders work from passing.
-    """
+    """A browser that fails the test if a lane reaches it at all — asserting the absence, not just
+    leaving it, is what stops a gate that merely reorders work from passing."""
 
     def __init__(self):
         self.navigations: list = []
@@ -81,9 +72,8 @@ class StubClient:
 
 
 def test_the_read_lane_skips_a_disconnected_market_entirely(store, bus) -> None:
-    """Not merely "reads nothing" — never opens the page. A probe is what produces the logged-out
-    notice, so a lane that navigated first and gated later would still be telling a seller to sign
-    in to a marketplace they have switched off."""
+    """Never opens the page, not merely "reads nothing" — a probe is what produces the logged-out
+    notice."""
     _disconnect(store)
     deps = inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
 
@@ -97,9 +87,8 @@ def test_the_read_lane_skips_a_disconnected_market_entirely(store, bus) -> None:
 
 
 def test_a_pending_sign_in_for_a_disconnected_market_is_dropped(store, bus) -> None:
-    """The row is durable and the tap that wrote it may be old, so the market can be disconnected in
-    between. Cleared rather than left pending: nothing about waiting would make it servable, and a
-    row that stayed would open a window the moment it was reconnected for an unrelated reason."""
+    """The market can be disconnected after the tap; the row is cleared rather than left to fire on
+    an unrelated reconnect."""
     store.request_market_connect(_MARKET, CONNECT_MODE_OPEN)
     _disconnect(store)
     deps = connect.ConnectDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
@@ -110,8 +99,7 @@ def test_a_pending_sign_in_for_a_disconnected_market_is_dropped(store, bus) -> N
 
 
 def test_a_stale_sign_in_button_says_the_market_is_off_rather_than_unknown(store, bus) -> None:
-    """The buttons live forever, so this tap is really a question about when it was tapped. "I don't
-    sell there" would be wrong about a marketplace one tap away from coming back."""
+    """A stale sign-in button must not claim the market is unknown — one tap brings it back."""
     _disconnect(store)
     text, _controls = fastpaths.handle_fast_path(
         store,
@@ -127,9 +115,7 @@ def test_a_stale_sign_in_button_says_the_market_is_off_rather_than_unknown(store
 
 
 def test_an_owed_survey_is_left_owed_rather_than_served_or_abandoned(store, bus) -> None:
-    """Owed, not abandoned. Abandoning is for "no later tick could ever serve this", and
-    reconnecting is precisely a later tick that can — a seller who turns a market off and back on
-    should find the question about their existing listings still waiting."""
+    """Reconnecting is a later tick that can serve it, so the question stays waiting."""
     store.request_market_survey(_MARKET)
     _disconnect(store)
 
@@ -141,8 +127,7 @@ def test_an_owed_survey_is_left_owed_rather_than_served_or_abandoned(store, bus)
 
 
 def test_an_accepted_listing_is_not_adopted_and_costs_no_attempt(store, bus) -> None:
-    """Nothing about this listing went wrong, so it must not spend one of its three attempts —
-    three ticks with the market off would otherwise retire a perfectly good row for good."""
+    """Nothing about this listing went wrong, so it must not spend one of its three attempts."""
     store.record_survey_result(
         _MARKET,
         [
@@ -171,8 +156,8 @@ def test_an_accepted_listing_is_not_adopted_and_costs_no_attempt(store, bus) -> 
 
 
 def test_a_queued_publish_for_a_disconnected_market_is_refused(store) -> None:
-    """The runner and every enqueue door share this validator, so gating here covers a publish that
-    was queued while the market was on and reaches the runner after it went off."""
+    """The runner and every enqueue door share this validator, so a publish queued while the market
+    was on is covered after it goes off."""
     item = store.create_item(title="Teak lamp", list_price=80.0)
     _disconnect(store)
 
@@ -181,8 +166,8 @@ def test_a_queued_publish_for_a_disconnected_market_is_refused(store) -> None:
 
 
 def test_a_publish_to_the_rail_is_never_gated(store) -> None:
-    """carousell.ai is where every listing goes, connected or not — it is not a member of this list
-    and must never be refused by it."""
+    """carousell.ai is where every listing goes, connected or not, and must never be refused by
+    this list."""
     item = store.create_item(title="Teak lamp", list_price=80.0)
     _disconnect(store)
 
@@ -204,9 +189,8 @@ def _sell_thread(store, market=_MARKET):
 
 
 def test_a_composed_reply_is_refused_with_nothing_recorded(make_ctx, store) -> None:
-    """The one outcome that would make the switch worthless is a message going out on the seller's
-    account after they turned the market off. Refused beside the pause check, before any reserve or
-    intent, so no pacing slot is spent and the stale sweep has nothing to escalate."""
+    """Refused before any reserve or intent, so no pacing slot is spent and the stale sweep has
+    nothing to escalate."""
     _sell_thread(store)
     store.record_inbound(f"{_MARKET}:1", msg_id="m1", text="still there?", ts=100.0)
     _disconnect(store)
@@ -224,8 +208,8 @@ def test_a_composed_reply_is_refused_with_nothing_recorded(make_ctx, store) -> N
 
 
 def test_reconnecting_lets_the_same_reply_through(make_ctx, store) -> None:
-    """The gate is a switch, not a tombstone: nothing about the refusal above may leave the thread
-    unable to be answered once the seller turns the market back on."""
+    """The gate is a switch, not a tombstone: the refusal must leave the thread answerable once
+    the market is back on."""
     _sell_thread(store)
     store.record_inbound(f"{_MARKET}:1", msg_id="m1", text="still there?", ts=100.0)
     _disconnect(store)
@@ -237,15 +221,13 @@ def test_reconnecting_lets_the_same_reply_through(make_ctx, store) -> None:
         "send_reply", {"thread_id": f"{_MARKET}:1", "text": "yes!", "in_msg_id": "m1"}, ctx
     )
 
-    # No sink is wired on this context, so a reply that passes every gate lands on the send path
-    # being absent — which is the proof it got past them.
+    # No sink is wired here, so reaching the missing send path is the proof it got past the gates.
     assert res["status"] == "no_send_path"
 
 
 def test_a_buy_thread_is_not_governed_by_the_sell_side_switch(make_ctx, store) -> None:
-    """`connected_markets` is the list of marketplaces we sell *for* the seller on. A buy thread is
-    them approaching someone else's listing, which that switch has never governed and has no door to
-    turn on — gating it here would stop buying on a setting that never claimed to be about it."""
+    """`connected_markets` governs where we sell for the seller; a buy thread is them approaching
+    someone else's listing."""
     want = store.create_want(query="thing")
     store.create_thread(
         thread_id="cl:9", side="buy", market="cl", counterpart_handle="s", want_id=want["want_id"]
@@ -266,9 +248,7 @@ def _card(store, bus):
 
 
 def test_the_card_lists_a_market_that_is_off_so_it_can_be_found(store, bus) -> None:
-    """A switch you can only see once it is on is not a switch anyone finds. The block is built
-    from every marketplace we *could* work, so one that is off is still listed, with the button
-    that turns it on."""
+    """A switch you can only see once it is on is not a switch anyone finds."""
     _disconnect(store)
 
     text, controls = _card(store, bus)
@@ -287,10 +267,8 @@ def test_a_connected_market_reads_as_on_and_offers_the_way_back(store, bus) -> N
 
 
 def test_connecting_from_the_card_applies_immediately_with_an_undo(store, bus) -> None:
-    """The approval gate on this setting exists to stop the *model* switching a marketplace on
-    unasked. An authenticated tap on the seller's own card has already given that signal, so it
-    applies through `set_now` — which still parses, still checks seller state, and still records the
-    prior value so the change is in the ledger with a working Undo."""
+    """An authenticated tap on the seller's own card is the approval the gate waits for, so it
+    applies through `set_now` — parsed, checked, and in the ledger with a working Undo."""
     _disconnect(store)
     text, _controls = fastpaths.handle_fast_path(
         store,
@@ -299,8 +277,8 @@ def test_connecting_from_the_card_applies_immediately_with_an_undo(store, bus) -
     )
 
     assert settings.connected_markets(store) == [_MARKET]
-    # Connecting opens the sign-in too: until the seller is signed in there is nothing to read, so
-    # a switch that left them to find the second step themselves would appear to do nothing.
+    # Connecting opens the sign-in too; leaving the seller to find that step would make the switch
+    # appear to do nothing.
     assert "sign in" in text
     assert store.pending_market_connects()[0]["market"] == _MARKET
     applied = [c for c in store.list_pending_changes() if c["key"] == "connected_markets"]
@@ -308,8 +286,7 @@ def test_connecting_from_the_card_applies_immediately_with_an_undo(store, bus) -
 
 
 def test_disconnecting_from_the_card_says_the_sign_in_survives(store, bus) -> None:
-    """The seller's cookies are untouched, and saying so is what makes the switch feel reversible
-    rather than destructive — the difference between "off for now" and "start over"."""
+    """The cookies are untouched, so the switch reads as reversible rather than destructive."""
     seed_setting(store, "connected_markets", [_MARKET])
     text, _controls = fastpaths.handle_fast_path(
         store,
@@ -331,9 +308,8 @@ def test_disconnecting_from_the_card_says_the_sign_in_survives(store, bus) -> No
 def test_a_stale_card_button_re_acks_rather_than_flipping(
     store, bus, choice_attr, seeded, expected
 ) -> None:
-    """These buttons live in the scrollback forever, so a tap that changes nothing is ordinary. It
-    must never toggle: a stale Connect on an already-connected market that flipped it off would be
-    the exact opposite of what the seller pressed."""
+    """These buttons live in the scrollback forever, so a stale tap must never toggle — a stale
+    Connect flipping a market off would be the opposite of what was pressed."""
     seed_setting(store, "connected_markets", seeded)
     text, _controls = fastpaths.handle_fast_path(
         store,
@@ -346,8 +322,8 @@ def test_a_stale_card_button_re_acks_rather_than_flipping(
 
 
 def test_a_market_with_no_site_for_this_seller_is_refused_with_the_reason(store, bus) -> None:
-    """`check_for_seller` still runs on this door. A US seller cannot be connected to Carousell,
-    which runs no US site, and the refusal is written for them."""
+    """`check_for_seller` still runs: a US seller cannot be connected to Carousell, which runs no
+    US site."""
     store.set_seller_config_section("basics", {"region": "US"})
     _disconnect(store)
     text, _controls = fastpaths.handle_fast_path(
@@ -364,9 +340,8 @@ def test_a_market_with_no_site_for_this_seller_is_refused_with_the_reason(store,
 
 
 def test_connected_is_the_sellers_intent_and_publishable_is_the_narrower_question(store) -> None:
-    """The two readers answer different questions and must not collapse into one. A market with no
-    way to publish at all is still worked — its inbox read, its buyers answered — but never listed
-    to; `mercari` is a registry entry with no adapter, which is the narrow case."""
+    """The two readers answer different questions: a market with no way to publish is still worked,
+    but never listed to."""
     seed_setting(store, "connected_markets", [_MARKET, "mercari"])
 
     assert settings.connected_markets(store) == [_MARKET, "mercari"]
@@ -376,9 +351,8 @@ def test_connected_is_the_sellers_intent_and_publishable_is_the_narrower_questio
 def test_a_withdrawn_adapter_does_not_silently_vanish_from_the_sellers_list(
     store, monkeypatch
 ) -> None:
-    """Intent is not filtered through current capability. Quietly dropping a market here would make
-    it disappear from the seller's own list of connected marketplaces after a release withdrew an
-    adapter, with nothing to tell them why — where the lane simply skipping it is legible."""
+    """Intent is not filtered through capability: a withdrawn adapter must not make the market
+    silently disappear from the seller's own list."""
     seed_setting(store, "connected_markets", [_MARKET])
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
 

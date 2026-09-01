@@ -251,10 +251,8 @@ def _midnight() -> float:
 
 
 def _lane_deps(store, bus, rail, now=_noon):
-    # Nothing connected, so a lane tick here is only the push phase. That is what these tests are
-    # about, and it is the sharper form of their own claim: the cross-link is earned by where the
-    # item actually is, never by the fan-out setting. Left connected, the tick would also try to
-    # publish, which needs a browser these tests have no reason to provide.
+    # Nothing connected, so a lane tick is only the push phase; connected, the tick would also
+    # try to publish, which needs a browser these tests have no reason to provide.
     seed_setting(store, "connected_markets", [])
     return crosslist.CrosslistDeps(
         store=store,

@@ -112,8 +112,7 @@ def test_get_settings_lists_registry(make_ctx) -> None:
 
 def test_propose_crosslist_without_a_region_is_refused(make_ctx) -> None:
     """check_for_seller is wired into the propose tool, not just callable: a value the parser
-    accepts can still be refused by who the seller is. Carousell enumerates its regional sites, so
-    with no region recorded there is none to post to."""
+    accepts can still be refused by who the seller is."""
     ctx = make_ctx(TIER_ATTENDED)
     with pytest.raises(ToolError, match="Carousell isn't available"):
         dispatch(

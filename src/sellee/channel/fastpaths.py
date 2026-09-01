@@ -42,10 +42,8 @@ CB_SURVEY_NO = "adoptno"
 # Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
 # button that carried the value would apply a stale one when tapped from the scrollback.
 CB_WATCH = "watch"
-# Connecting and disconnecting a marketplace, from the Connections block on the /sellee card. These
-# carry the market as the ref rather than being a toggle like CB_WATCH: the card lists several
-# markets at once, so a button has to say which one it means, and a toggle tapped from scrollback
-# could flip a market the seller was not looking at.
+# Connecting and disconnecting a marketplace, from the Connections block on the /sellee card. The
+# market rides in the ref, not a toggle: a scrollback tap must name the market it flips.
 CB_ADD_MARKET = "addmkt"
 CB_REMOVE_MARKET = "rmmkt"
 _FAST_PATH_CALLBACKS = frozenset(
@@ -79,9 +77,8 @@ CHECK_AGAIN_LABEL = "Check again"
 # has to explain that split in every conversation. The tools carry the finer answers.
 SURVEY_YES_LABEL = "Yes, manage them"
 SURVEY_NO_LABEL = "No thanks"
-# The way back from a look that could not be served. It rides the same token as the yes, because
-# the decision handler already reopens a survey for a market with nothing left to decide — this
-# only gives that path a label that means what it does here.
+# The way back from a look that could not be served — rides CB_SURVEY_YES, whose handler already
+# reopens a survey for a market with nothing left to decide.
 LOOK_AGAIN_LABEL = "Take another look"
 # The watch-mode toggle. Each label names what tapping *does*, not what is currently set — the card
 # line right above it carries the state, and a button that named the state would read as a claim.
@@ -106,8 +103,7 @@ def survey_controls(market: str) -> list:
 def look_again_controls(market: str) -> list:
     """The one-button spec on the notice that a market's listings could not be read.
 
-    Without it, abandonment is a dead end: the state is neither `due` nor `done`, so no lane picks
-    it up again, and the only door back is a button on a notice nobody was ever sent.
+    Without it the market is a dead end: neither `due` nor `done`, so no lane picks it up again.
     """
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
@@ -146,9 +142,8 @@ WATCH_ON_NOTICE = (
 )
 WATCH_OFF_NOTICE = "Watch mode off — I'll keep out of your way and work in the background."
 
-# Connecting a marketplace. The reply names the sign-in as the next step rather than assuming it,
-# because connecting is only half of it: the switch is on, and nothing can be read until the seller
-# is signed in on the desktop where my Chrome is.
+# Connecting a marketplace. The reply names sign-in as the next step: nothing can be read until the
+# seller is signed in at the desktop where my Chrome is.
 CONNECT_MARKET_LABEL = "Connect {name}"
 DISCONNECT_MARKET_LABEL = "Disconnect {name}"
 MARKET_ADDED_NOTICE = (
@@ -283,14 +278,9 @@ def _signin_markets(store) -> list:
     """The marketplaces `/connect` can offer: the ones the seller switched on that the agent has a
     browser adapter for.
 
-    Every marketplace we could drive for this seller, connected or not — not `connected_markets`.
-    "Sign me in to Facebook" is a perfectly ordinary thing to ask before Facebook is switched on,
-    and offering only what is already on makes the command useless for the one case it is most
-    wanted: setting a new marketplace up. Picking an unconnected one connects it on the way through,
-    which is what `_connect_command` builds the buttons for.
-
-    carousell.ai is excluded by the same filter that includes the rest: it is reached with an API
-    key, so there is no window to open and nothing for the seller to type into.
+    Every marketplace we could drive for this seller, connected or not — offering only what is
+    already on would make the command useless for setting a new marketplace up. carousell.ai is
+    excluded: it is reached with an API key, so there is no window to open.
     """
     return market_adapters.connectable_markets(store.seller_region())
 
@@ -300,10 +290,8 @@ def _connect_button(store, market, mode: str) -> tuple:
     never has to guess which one they meant — even months later, from a button in the
     scrollback.
 
-    Two ways that tap can be stale, and they want different answers: an adapter withdrawn since
-    (nothing to open, ever), and a market the seller has disconnected since (nothing to open *now*).
-    The second says so, because "I don't sell there" would be wrong about a marketplace they can put
-    back with one tap.
+    Two ways a tap can be stale: an adapter withdrawn since (nothing to open ever) and a market
+    disconnected since (nothing to open now) — only the first earns "I don't sell there".
     """
     if not market or market not in market_adapters.connectable_markets(store.seller_region()):
         # A stale button, for a market whose adapter has since been withdrawn.
@@ -316,14 +304,10 @@ def _connect_button(store, market, mode: str) -> tuple:
 def _market_button(store, bus, market, token: str) -> tuple:
     """A tap on Connect / Disconnect in the Connections block.
 
-    Applied immediately rather than proposed. The approval gate on this setting exists to stop the
-    *model* switching a marketplace on unasked; an authenticated tap on the seller's own card has
-    already given the signal that gate waits for — the same rule the watch toggle and the shell door
-    follow — so this goes through `set_now`, which still runs the registry parser and the
-    seller-state check and still records the prior value for Undo.
-
-    A tap that changes nothing re-acks. These buttons live in the scrollback forever, so a stale one
-    is ordinary rather than exceptional, and "already on" is the honest answer to it.
+    Applied immediately rather than proposed: an authenticated tap on the seller's own card is the
+    signal the approval gate waits for, so this goes through `set_now`, which still runs the parser
+    and seller-state check and still records the prior value for Undo. A tap that changes nothing
+    re-acks — these buttons live in the scrollback forever.
     """
     adding = token == CB_ADD_MARKET
     if not market:
@@ -343,14 +327,11 @@ def _market_button(store, bus, market, token: str) -> tuple:
             store, bus, key="connected_markets", raw_value=wanted, decided_via="button"
         )
     except settings.SettingError as exc:
-        # The registry or the seller-state check refused it — a region with no site for this
-        # market, most often. Its message is written for the seller, so it is the reply.
+        # The registry or the seller-state check refused it; its message is written for the seller.
         return str(exc), _control_spec(store)
     if adding:
-        # Switching a marketplace on and signing in to it are one intent: until the seller is signed
-        # in there is nothing to read, so a connect that left them to find the sign-in themselves
-        # would be a switch that appears to do nothing. Just the row — opening Chrome takes seconds
-        # to tens of seconds and this is the provider's receive loop; the connect lane serves it.
+        # On and signed-in are one intent — until the seller signs in there is nothing to read. Just
+        # the row: opening Chrome takes seconds and this is the provider's receive loop.
         store.request_market_connect(market, CONNECT_MODE_OPEN)
     template = MARKET_ADDED_NOTICE if adding else MARKET_REMOVED_NOTICE
     return template.format(name=name), _control_spec(store)
@@ -406,9 +387,8 @@ def _connect_command(store, bus) -> tuple:
     — so the market is resolved here. One candidate is unambiguous; several is a question, and
     asking it as buttons keeps the answer a tap rather than a spelling.
 
-    A marketplace the seller has not connected yet is offered too, and picking it switches it on as
-    well as opening it. Those are one intent — nobody asks to be signed in to a marketplace they
-    want left alone — so the button carries the add token and the add does both.
+    An unconnected market is offered too; picking it connects it as well as opening it — one
+    intent, carried by the add token.
     """
     markets = _signin_markets(store)
     if not markets:
@@ -465,8 +445,8 @@ def _watch_toggle(store, bus) -> tuple:
 def _control_spec(store) -> list:
     """The one control row as provider-neutral (label, token) buttons: a pause/resume toggle
     reflecting current state, a what-needs-me shortcut, the watch-mode toggle, and one connect or
-    disconnect button per marketplace. The provider renders it, wrapping onto as many rows as it
-    takes — which is why this stays a flat list however many marketplaces exist."""
+    disconnect button per marketplace. The provider wraps it onto as many rows as it takes, so this
+    stays a flat list."""
     toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
     watching = settings.get(store, window.WATCH_SETTING)
     watch = (WATCH_OFF_LABEL, CB_WATCH) if watching else (WATCH_ON_LABEL, CB_WATCH)
@@ -476,9 +456,8 @@ def _control_spec(store) -> list:
 def _connection_controls(store) -> list:
     """One button per marketplace we could work for this seller, each naming what tapping does.
 
-    Built from `connectable_markets` rather than from what is connected, because the whole point of
-    the block is that a market they have *not* connected is discoverable: a switch you can only see
-    once it is on is not a switch anyone finds.
+    Built from `connectable_markets`, not from what is connected, so an off market is discoverable
+    here.
     """
     connected = set(settings.connected_markets(store))
     controls = []
@@ -496,10 +475,8 @@ def _connection_controls(store) -> list:
 def _connections_lines(store) -> list:
     """The Connections block: every marketplace we could work, and whether it is on.
 
-    Says on or off and nothing about being signed in, because nothing here has evidence of that —
-    the login probe runs on the read lane, and a card that claimed "signed in" from a stale memory
-    would be wrong exactly when it matters. A seller who is off gets told by the read lane, which
-    owns that conversation.
+    Says nothing about being signed in — the login probe runs on the read lane, which owns that
+    conversation.
     """
     markets = market_adapters.connectable_markets(store.seller_region())
     if not markets:

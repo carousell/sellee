@@ -90,29 +90,21 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     if thread is None:
         raise ToolError(f"no thread with id {params['thread_id']!r}")
     if _answering_a_scam(ctx.store, params):
-        # The daemon scans every inbound message and stamps a verdict on the row, and until now
-        # that verdict only ever reached the *prompt* — so the whole defence was the model choosing
-        # to follow an instruction. It is a gate now, beside the pause and the disconnected-market
-        # refusal above, because those are the two other things that must hold whatever the model
-        # decides. The seller is the right party to answer a scam, not us.
+        # A gate, not prompt guidance: the seller is the right party to answer a scam, whatever
+        # the model decides.
         return {
             "status": "scam_held",
             "delivered": _NOT,
             "thread_id": params["thread_id"],
             "detail": "the message being answered was flagged as a scam — escalate to the seller",
         }
-    # The marketplace this thread lives on, read at the moment of sending. A reply pass can be
-    # composed against a connected market and reach here after the seller has disconnected it, and
-    # the whole promise of that switch is that it stops work already in flight — a message going out
-    # on their account afterwards is the one outcome that would make it worthless. Refused up here
-    # with the pause, before any reserve or intent, so nothing is recorded and nothing is left for
-    # the stale sweep to escalate.
+    # The market, read at the moment of sending: a reply composed against a connected market can
+    # reach here after the seller disconnected it, and stopping work already in flight is the
+    # whole promise of that switch. Refused with the pause, before any reserve or intent, so
+    # nothing is recorded and nothing is left for the stale sweep to escalate.
     #
-    # Sell threads only, and the rail never. `connected_markets` is the seller's list of the
-    # marketplaces we sell *for* them on — it is what the read lane, the survey and the fan-out all
-    # key off. A buy thread is them approaching someone else's listing, which that switch has never
-    # governed and has no door to turn on, so gating it here would stop buying on a setting that
-    # never claimed to be about it. The rail is where every listing lives, connected or not.
+    # Sell threads only, and the rail never: a buy thread approaches someone else's listing,
+    # which that switch has never governed, and the rail is where every listing lives.
     if (
         thread["side"] == "sell"
         and thread["market"] != marketplaces.RAIL

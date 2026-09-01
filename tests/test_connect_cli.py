@@ -464,9 +464,7 @@ def stub_market_daemon(monkeypatch):
             calls["probes"].append((route, body))
             return calls.get("probe_status", 200), {"state": calls["state"]}
         if route in ("/control/browser-hold", "/control/browser-release"):
-            # Claims on the shared tab, recorded apart from the navigations: a test about signing
-            # in should be able to say the lanes were let back in, without that showing up as
-            # another page the flow opened.
+            # Claims on the shared tab, recorded apart from the navigations.
             calls["holds"].append((route, body.get("holder")))
             return 200, {}
         calls["posts"].append((route, body))

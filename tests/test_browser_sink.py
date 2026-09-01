@@ -85,8 +85,8 @@ class StubClient:
             raise BrowserToolError(f"{name} refused")
         if name == "browser_type":
             self.typed = arguments["text"]
-        # Both trusted commits put the message on the page: a real key press, and a real click on a
-        # send control. The page's own handler is what renders the bubble either way.
+        # Both trusted commits — a real key press and a real click on a send control — make the
+        # page render the bubble.
         if (
             name in ("browser_press_key", "browser_click")
             and self.echo_on_send
@@ -334,11 +334,8 @@ _SEND_QUERY = "div[aria-label='Send']"
 
 @pytest.fixture
 def button_market(monkeypatch):
-    """A market whose composer has an addressable send control, so the send is a real click.
-
-    Neither of the other two paths' costs applies to it: no window is taken (a click needs no active
-    tab) and no `isTrusted: false` event is dispatched on the seller's account.
-    """
+    """A market whose composer has an addressable send control, so the send is a real click —
+    no window taken, no `isTrusted: false` event."""
     import dataclasses
 
     button = market_adapters.Selector(
@@ -358,8 +355,8 @@ def button_market(monkeypatch):
 
 
 def test_a_send_button_is_clicked_after_the_text_is_typed(store, bus, thread, button_market):
-    """Located after the type, not with the message box: a send control is typically inert until the
-    composer holds text, so resolving it earlier would find nothing on a page that is working."""
+    """Located after the type: a send control is typically inert until the composer holds
+    text."""
     client = StubClient(matches={"textarea": 1, _SEND_QUERY: 1})
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
 
@@ -370,8 +367,7 @@ def test_a_send_button_is_clicked_after_the_text_is_typed(store, bus, thread, bu
 
 
 def test_clicking_a_send_button_never_takes_the_sellers_window(store, bus, thread, button_market):
-    """The whole reason to prefer a button. Taking the tab anyway would spend the cost this path
-    exists to avoid, on a market that had already paid to avoid it."""
+    """The whole reason to prefer a button: no window is taken."""
     client = StubClient(matches={"textarea": 1, _SEND_QUERY: 1})
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
 
@@ -381,9 +377,7 @@ def test_clicking_a_send_button_never_takes_the_sellers_window(store, bus, threa
 def test_a_send_button_that_cannot_be_found_stops_before_the_commit(
     store, bus, thread, button_market
 ):
-    """Still before the commit, so nothing was delivered and the intent stays retryable — the same
-    fail-closed guarantee the message-box locate gives. The text is in the box and no send fired,
-    which is the safe half of the two failure shapes."""
+    """Still before the commit, so nothing was delivered and the intent stays retryable."""
     client = StubClient(matches={"textarea": 1, _SEND_QUERY: 0})
     intent = _reserve(store)
 

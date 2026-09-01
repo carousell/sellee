@@ -1,10 +1,9 @@
 """Publishing by driving the form: what it refuses to do, and what it will never do twice.
 
-Almost every test here is a refusal, because the expensive mistakes all live on one side of a single
-line. Before the commit a listing does not exist and anything wrong is free; after it, a listing may
-exist and the only safe move is to stop. So what is held here is that line: which failures leave the
-work retryable, which retire it, and that nothing gets pressed until the form has been read back and
-agrees with what it was given.
+Before the commit a listing does not exist and anything wrong is free; after it, the only safe move
+is to stop. What is held here is that line: which failures leave the work retryable, which retire
+it, and that nothing is pressed until the form has been read back and agrees with what it was
+given.
 """
 
 from __future__ import annotations
@@ -150,8 +149,8 @@ def test_a_filled_form_publishes_and_names_the_listing() -> None:
 
 
 def test_the_title_and_price_are_typed_not_set() -> None:
-    """A value assigned from script leaves React holding the old one, and publishes an empty
-    listing. Every field goes in as real input."""
+    """A value assigned from script leaves React holding the old one, so every field goes in as
+    real input."""
     client = StubForm()
 
     _publish(client)
@@ -174,8 +173,8 @@ def test_the_price_is_typed_without_separators() -> None:
 
 
 def test_a_form_missing_its_fields_is_never_filled_in() -> None:
-    """The two text inputs are indistinguishable except by the label beside them and they sit one
-    above the other, so a form we only half recognise could put the price in the title."""
+    """The two text inputs are distinguishable only by their labels and sit one above the other,
+    so a half-recognised form could put the price in the title."""
     client = StubForm(marked=["price", "next"])
 
     with pytest.raises(publisher.PublishNotAttempted):
@@ -186,7 +185,7 @@ def test_a_form_missing_its_fields_is_never_filled_in() -> None:
 
 def test_a_dropdown_with_no_matching_option_stops_before_the_commit() -> None:
     """Facebook requires both dropdowns, so carrying on would press Publish against a form that
-    refuses — and that failure arrives with the listing half made and no way to tell."""
+    refuses."""
     client = StubForm(chosen=None)
 
     with pytest.raises(publisher.PublishNotAttempted):
@@ -197,8 +196,7 @@ def test_a_dropdown_with_no_matching_option_stops_before_the_commit() -> None:
 
 @pytest.mark.parametrize("field,seen", [("title", "White Study Des"), ("price", "$6")])
 def test_a_form_that_did_not_take_what_we_gave_it_never_publishes(field, seen) -> None:
-    """The last moment a mistake is free. A field that silently truncated becomes a live listing
-    the seller has to find and fix."""
+    """A field that silently truncated becomes a live listing the seller has to find and fix."""
     client = StubForm(readback={**_GOOD_READBACK, field: seen})
 
     with pytest.raises(publisher.PublishNotAttempted):
@@ -227,8 +225,8 @@ def test_a_paid_boost_that_is_on_is_turned_off() -> None:
 
 
 def test_a_paid_boost_that_will_not_turn_off_refuses_to_publish() -> None:
-    """Refusing to list is the cheaper failure: the seller can ask again, where a boost they never
-    asked for spends real money and cannot be taken back."""
+    """Refusing to list is the cheaper failure; a boost spends real money and cannot be taken
+    back."""
     client = StubForm(boost_on=True)
 
     with pytest.raises(publisher.PublishNotAttempted):
@@ -259,8 +257,8 @@ def test_a_market_with_no_publish_selectors_is_refused_outright() -> None:
 
 
 def test_a_failure_after_next_is_unverified_and_never_retried() -> None:
-    """A Next that lands and a Publish that does not still leaves a draft, and re-driving it would
-    give the seller two listings. The exception type is the whole decision."""
+    """A Next that lands and a Publish that does not still leaves a draft; re-driving it would
+    give the seller two listings."""
     client = StubForm(fail_on={"publish": "the button went away"})
 
     with pytest.raises(publisher.PublishUnverified):
@@ -275,8 +273,7 @@ def test_a_form_that_moves_on_without_offering_publish_is_unverified() -> None:
 
 
 def test_a_publish_whose_listing_cannot_be_named_is_reported_unverified() -> None:
-    """Not an error — but not a success either. Reported for a human rather than retried into a
-    duplicate, which is the same fail-closed rule the send bracket uses."""
+    """Not an error, but not retried into a duplicate either."""
     client = StubForm(listing_id=None)
 
     outcome = _publish(client)
@@ -305,9 +302,8 @@ def test_a_publish_whose_listing_cannot_be_named_is_reported_unverified() -> Non
     ],
 )
 def test_a_condition_is_mapped_to_this_markets_own_words(said, expected) -> None:
-    """Conditions are free text on an item — they come from whatever another marketplace called it.
-    Where the two do not meet this understates: saying a thing is more used than it is costs the
-    seller a little, and the reverse is a lie told on their behalf."""
+    """Conditions are free text from whatever another marketplace called it; where the two do not
+    meet, understate rather than lie."""
     assert publisher._condition_for({"condition": said}) == expected
 
 
@@ -327,9 +323,8 @@ def test_the_default_category_is_one_this_market_offers() -> None:
 
 
 def test_a_form_that_is_not_ready_is_never_pressed_and_stays_retryable() -> None:
-    """Facebook greys Next out until it has everything it requires — a photograph among them — and
-    clicking a disabled button submits nothing. Read as "may have gone through", a missing photo
-    would retire the item forever; it is exactly the case that should be tried again."""
+    """A disabled Next submits nothing, and reading that as "may have gone through" would retire a
+    retryable item."""
     client = StubForm(next_enabled=False)
 
     with pytest.raises(publisher.PublishNotAttempted):
@@ -339,8 +334,7 @@ def test_a_form_that_is_not_ready_is_never_pressed_and_stays_retryable() -> None
 
 
 def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
-    """The browser server only accepts an upload while a chooser is actually open, so handing it
-    paths without pressing Add photos first fails on a form that is otherwise perfect."""
+    """The browser server only accepts an upload while the chooser is actually open."""
     client = StubForm()
 
     _publish(client, photos=["/tmp/a.jpg"])
@@ -355,8 +349,8 @@ def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
 
 
 class ConfirmingForm(StubForm):
-    """A form whose publish lands somewhere that names no listing — Facebook's selling page — so
-    confirmation has to come from the seller's own listings instead."""
+    """A form whose publish lands on a page that names no listing; confirmation comes from the
+    seller's own listings."""
 
     def __init__(self, *, listings=None, **kwargs):
         super().__init__(listing_id=None, **kwargs)
@@ -381,8 +375,8 @@ def _row(listing_id, title):
 
 
 def test_a_publish_is_confirmed_from_the_sellers_own_listings() -> None:
-    """Facebook redirects to its selling page, whose cards carry no listing id at all — so the
-    listing is found among the seller's own, which is the one view that has both."""
+    """Facebook's selling page carries no listing ids, so the listing is found among the seller's
+    own."""
     client = ConfirmingForm(listings=[_row("777", "White Study Desk"), _row("888", "Something")])
 
     outcome = _publish(client, listings_url="https://www.facebook.com/marketplace/you/selling")
@@ -392,8 +386,7 @@ def test_a_publish_is_confirmed_from_the_sellers_own_listings() -> None:
 
 
 def test_two_listings_sharing_the_title_leave_the_publish_unverified() -> None:
-    """The seller already had one. Claiming either id would record a URL pointing at the wrong
-    listing, so buyers on the new one would never reach this item."""
+    """Claiming either id would record a URL pointing at the wrong listing."""
     client = ConfirmingForm(
         listings=[_row("777", "White Study Desk"), _row("888", "White Study Desk")]
     )
@@ -418,10 +411,8 @@ def test_confirmation_is_skipped_when_there_is_nowhere_to_look() -> None:
 def test_photographs_are_staged_from_the_shape_an_item_stores_them_in(
     tmp_path, monkeypatch
 ) -> None:
-    """An item stores each photograph as a mapping, not a path. Taking `str()` of it stringified
-    the whole mapping into a filename hundreds of characters long, so every copy failed and every
-    publish went out with no photograph — and Facebook keeps Next disabled until it has one, so the
-    lane re-drove the same item every thirty seconds forever."""
+    """An item stores each photograph as a mapping, not a path; staging must take the path from
+    inside it."""
     from sellee import paths
 
     monkeypatch.setattr(paths, "publish_staging_dir", lambda: tmp_path / "staging")
@@ -453,10 +444,7 @@ def test_a_photograph_with_no_path_is_skipped_rather_than_crashing(tmp_path, mon
 
 
 def test_the_settles_between_form_steps_are_jittered(monkeypatch) -> None:
-    """Filling a form is the most regular thing the agent does — the same fields in the same order,
-    and previously with the same pause between every one of them to the millisecond. The point is
-    variance, not slowness, so the average pause is unchanged and a publish takes as long as it did.
-    """
+    """The point is variance, not slowness: the average pause is unchanged."""
     import statistics
 
     slept: list = []

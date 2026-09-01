@@ -491,7 +491,7 @@ def test_a_chrome_that_cannot_be_asked_says_nothing(store, bus, factory_bits, mo
     assert _notices(store) == []
 
 
-# --- the window has to be wide enough for the marketplace to serve its desktop layout ------------
+# --- the window has to be wide enough for the desktop layout --------------------------------------
 
 
 def _factory(store, bus, monkeypatch, width, calls):
@@ -519,8 +519,8 @@ def _factory(store, bus, monkeypatch, width, calls):
 
 
 def test_every_acquisition_checks_the_window_width(store, bus, monkeypatch) -> None:
-    """Not once at launch: --restore-last-session brings back whatever width the window last had,
-    so a window narrowed once would otherwise stay narrow across every restart."""
+    """Not once at launch: --restore-last-session brings back whatever width the window last
+    had."""
     calls: list = []
     factory = _factory(store, bus, monkeypatch, 1600, calls)
     factory()
@@ -530,8 +530,8 @@ def test_every_acquisition_checks_the_window_width(store, bus, monkeypatch) -> N
 
 
 def test_a_window_that_stays_narrow_is_evented_not_raised(store, bus, monkeypatch) -> None:
-    """A window we cannot widen must not fail the acquisition — the read may still work, and if it
-    does not, the reader's own measurements promote it to CAUSE_VIEWPORT for the seller."""
+    """A window that cannot be widened must not fail the acquisition — the reader's own
+    measurements promote a failed read to CAUSE_VIEWPORT."""
     factory = _factory(store, bus, monkeypatch, 756, [])
     factory()
 

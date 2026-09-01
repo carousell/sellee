@@ -12,14 +12,12 @@ picked up with no special path.
 
 Two rules keep it from being expensive or surprising:
 
-  * One shot per item and marketplace. Every attempt is a real pass — minutes of browser work and a
-    vision-priced token bill — so a settled attempt is never repeated automatically. What is retried
-    freely is the cheap part: whether Chrome is up, whether Node is installed.
-  * Listing is not held by quiet hours. It was, on the reasoning that a burst of listings
-    starting at 4am is a pattern nobody sells like — but a listing sits there until someone looks
-    at it, so the hour it went up is not what a buyer sees. The window still holds the outbound
-    activity that is genuinely timed: follow-ups and nudges, which land in someone's notifications
-    at that hour.
+  * Bounded attempts per item and marketplace. Every attempt is minutes of browser work, so a
+    failed publish is retried at most `PUBLISH_MAX_ATTEMPTS` times, spaced out (`_shots_spent`).
+    What is retried freely is the cheap part: whether Chrome is up, whether Node is installed.
+  * Listing is not held by quiet hours. A listing sits there until someone looks at it, so the hour
+    it went up is not what a buyer sees. The window still holds follow-ups and nudges, which land
+    in someone's notifications at that hour.
   * The outcome is reported by the daemon, from the rows the pass wrote. A publish pass has no
     conversation to report into, and asking a model to remember to send a message is how a listing
     went live once with nobody told.
@@ -55,16 +53,13 @@ log = logging.getLogger(__name__)
 # ours is reported, because whoever runs a pass by hand is already watching it.
 ORIGIN = "crosslist"
 
-# How many times a *transient* publish refusal is allowed before the pair spends its one shot. A
-# browser that will not settle, or a page that keeps arriving half-built, looks transient on every
-# single attempt — so "retryable" without a bound is the same forever-loop by another name.
+# Transient publish refusals get this many goes before the pair is spent; "retryable" without a
+# bound is a forever-loop.
 MAX_DRIVE_ATTEMPTS = 3
 
-# How many times the fan-out will try a given item on a given marketplace, and how long it waits
-# between goes. A publish that failed is retried now — see `_shots_spent` — because a listing that
-# did not appear is not something a seller should have to notice and ask for. Bounded because the
-# failure is often the kind no retry can fix, and spaced because the lane ticks every thirty
-# seconds and three attempts inside two minutes is not a retry, it is the same attempt three times.
+# Attempts per (item, market), and the spacing between them. Bounded because most failures are not
+# retriable; spaced because the lane ticks every 30s and three attempts in two minutes is one
+# attempt three times.
 PUBLISH_MAX_ATTEMPTS = 3
 PUBLISH_RETRY_AFTER_SEC = 30 * 60.0
 
@@ -93,9 +88,8 @@ class CrosslistDeps:
     # Lane state, in process on purpose: it is all notice de-duplication, and a restart re-arming it
     # errs toward telling the seller twice rather than never.
     notified: dict = field(default_factory=dict)
-    # Consecutive transient publish refusals per (item, market). In process for the same reason the
-    # notice de-duplication beside it is: a restart re-arming it errs toward trying once more rather
-    # than toward never trying again.
+    # Consecutive transient publish refusals per (item, market). In process, like the notice
+    # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
 
@@ -114,9 +108,8 @@ def _clear_notice(deps: CrosslistDeps, key: str) -> None:
 def in_quiet_hours(deps: CrosslistDeps) -> bool:
     """Whether now is inside the seller's quiet window.
 
-    No longer consulted by this lane — see the module docstring. Kept because it is the one place
-    that resolves the seller's window against the pacing config, and the reporting and push phases
-    are hour-independent for reasons of their own.
+    Not consulted by this lane (see the module docstring); kept as the one place that resolves the
+    window against the pacing config.
     """
     cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
     stamp = time.localtime(deps.now())
@@ -177,20 +170,11 @@ def pending_pairs(deps: CrosslistDeps, index=None) -> list:
 
 
 def _shots_spent(index, now: float) -> dict:
-    """Which (item, market) pairs are out of attempts for the moment, and why.
+    """Which (item, market) pairs are out of attempts for the moment.
 
-    A failed publish used to be final. That was right when every publish was a model pass costing
-    real money, so an automatic retry could burn a second one on a repeat of the same failure — but
-    a driven market spends no model tokens at all, and either way a listing that simply did not
-    appear is not something a seller should have to ask for twice.
-
-    So a pair gets `PUBLISH_MAX_ATTEMPTS` goes, spaced by `PUBLISH_RETRY_AFTER_SEC`. The spacing is
-    the part that matters: the lane ticks every thirty seconds, and without it three attempts would
-    burn inside two minutes against a condition — a page mid-redesign, a marketplace refusing the
-    account — that none of them could have changed.
-
-    Counted from the pass rows themselves, which are never pruned, so there is no second counter to
-    keep in step. A pair still in flight counts as spent, so nothing is queued twice.
+    Counted from the pass rows, which are never pruned, so there is no second counter to keep in
+    step. A pair gets `PUBLISH_MAX_ATTEMPTS` goes spaced by `PUBLISH_RETRY_AFTER_SEC`. A pair in
+    flight counts as spent, so nothing is queued twice.
     """
     attempts: dict = {}
     latest: dict = {}
@@ -215,9 +199,8 @@ def _shots_spent(index, now: float) -> dict:
 def _shots_out(index) -> dict:
     """Which pairs have no attempts left at all — the question reporting asks.
 
-    Deliberately not `_shots_spent`, which also holds a pair back during its cooldown. A pair
-    waiting out a cooldown still has a go coming, and telling the seller it failed would be telling
-    them about something that has not finished happening.
+    Not `_shots_spent`: a pair in cooldown still has a go coming, so reporting it as failed would
+    announce something that has not finished happening.
     """
     attempts: dict = {}
     for row in index:
@@ -234,13 +217,9 @@ def _shots_out(index) -> dict:
 def _titles_seen_on(store, market: str) -> set:
     """What the seller already has on this marketplace, by title, whatever they said about it.
 
-    Read from `discovered_listings` rather than from item URLs, and that is the whole point. An item
-    carries a marketplace's URL only once the seller has said yes to *managing* the listing there;
-    say no, and the listing is still on their marketplace while the item still looks absent from it.
-    Fanning out on that would post a second copy of something they told us to leave alone.
-
-    Every discovered row counts — pending, accepted, declined, adopted — because the question
-    here is not what we manage, it is what exists.
+    Read from `discovered_listings`, not item URLs: an item carries a market's URL only once the
+    seller agreed to manage it there, and every discovered row counts because the question is what
+    exists, not what we manage.
     """
     return {
         reconcile.normalize(row.get("title") or "")
@@ -252,51 +231,34 @@ def _titles_seen_on(store, market: str) -> set:
 def already_listed_by_hand(store, item: dict, market: str) -> bool:
     """Whether the seller already has this thing on that marketplace, posted themselves.
 
-    The other half of the ordering guard, and public for the same reason `looked_first` is: the
-    publish tool re-implemented eligibility inline and had neither, so a model could post a
-    duplicate through it onto a marketplace nobody had looked at.
+    Public for the same reason `looked_first` is: the publish tool shares this eligibility rather
+    than re-implementing it.
     """
     title = item.get("title") or ""
     if not reconcile.normalize(title):
         return False
-    # Loose on purpose. Withholding is the cheap mistake — one item not cross-listed, which the
-    # seller can ask for — against posting on their account after we said we would not. The strict
-    # rule stays where merging happens.
+    # Loose on purpose: withholding costs one un-cross-listed item the seller can ask for; posting
+    # after we said we would not costs a second copy on their account.
     return any(reconcile.same_thing_loosely(title, seen) for seen in _titles_seen_on(store, market))
 
 
 def looked_first(store, market: str, region) -> bool:
     """Whether we have looked at what the seller already has on this marketplace.
 
-    Publishing to a market we have never read is how a seller ends up with two of everything. On the
-    first tick after Facebook became publishable, fourteen items were on the rail and absent from
-    every item's `listing_urls['fb']` — and thirteen of them were already on the seller's Facebook,
-    posted by hand, which nothing in the store knew. Without this the fan-out would have posted all
-    thirteen again.
-
-    So the survey comes first, and this asks for one rather than merely waiting for another lane to:
-    the request is insert-only, so it is a no-op on a market already looked at, and it makes the
-    ordering hold even if nothing else ever ran.
-
-    A market nothing could survey is not held back — there is no look to wait for, and blocking on
-    one that can never come would mean never publishing there at all.
+    Publishing to a market we have never read is how a seller ends up with two of everything, so
+    the survey comes first — this asks for one rather than waiting on another lane to. A market
+    nothing could survey is not held back: there is no look to wait for.
     """
     if not market_adapters.can_survey(market, region):
         return True
-    # An answer is still outstanding about what the seller already has there. Holding is temporary
-    # and clears itself the moment they tap, and it closes the window where the two halves disagree:
-    # the title match below is whole-string, so a listing the seller worded slightly differently
-    # from our item ("... (Yudkowsky & Soares)" against "... by Yudkowsky & Soares") is not caught
-    # by it — but it IS sitting in the ask, and a yes records its URL and settles the question
-    # properly. Publishing first would post the second copy the ask exists to prevent.
+    # A pending ask holds the gate: the title match below is whole-string and misses a reworded
+    # listing, but the ask carries it, and a yes records its URL properly.
     if store.list_discovered_listings(market, status="pending"):
         return False
     store.request_market_survey(market)
     survey = store.get_market_survey(market)
-    # `done` and nothing else. `abandoned` means five looks in a row could not be served — signed
-    # out, unreadable, or a page that would not finish loading — so we know less about that
-    # marketplace than when we started, and it is the state where the dedup set below is empty.
-    # Treating it as "looked" would open the gate at exactly the moment we can least afford it.
+    # Only `done` counts. `abandoned` means the looks could not be served, so we know less than
+    # when we started — opening the gate there is the one moment we can least afford it.
     return bool(survey) and survey["state"] == "done"
 
 
@@ -319,10 +281,8 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
         return None
 
     if publisher.can_drive(market):
-        # A market whose form we drive ourselves never spawns a pass: the work is deterministic —
-        # fill the fields, pick two dropdowns, press Publish — and a model reading a recipe to do it
-        # costs about $1.54 a listing and is only as repeatable as its reading. The two paths
-        # coexist; which one a market takes is read off whether it has publish selectors.
+        # A driven market never spawns a pass: the work is deterministic, and a model reading a
+        # recipe to do it costs about $1.54 a listing.
         _drive_publish(deps, item, market)
         return None
 
@@ -340,21 +300,17 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
 def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     """Put one item on a marketplace by driving its form, and record what happened.
 
-    The whole outcome is decided by which exception comes back, which is why the driver has two.
-    `PublishNotAttempted` means nothing was created and the pair stays eligible for the next tick.
-    `PublishUnverified` means a listing may exist, so the pair is *retired* rather than retried —
-    the seller having one listing we cannot see is recoverable; two is not.
-
-    A publish that reports a listing id records the URL, which is what takes the pair out of
-    `pending_pairs` for good and lets a buyer writing about it be joined to this item.
+    The outcome is decided by which exception comes back. `PublishNotAttempted`: nothing was
+    created, the pair stays eligible. `PublishUnverified`: a listing may exist, so the pair is
+    retired, never retried — one unseen listing is recoverable, two are not. A success records the
+    URL, which retires the pair for good.
     """
     region = deps.store.seller_region()
     create_url = marketplaces.market_url(market, "sell", region)
     adapter = market_adapters.get_adapter(market)
     if create_url is None or adapter is None:
         return
-    # Staged where the browser server is allowed to read from: the media store is outside its roots,
-    # and a marketplace that requires a photograph refuses a listing without one.
+    # Staged where the browser server may read from: the media store is outside its roots.
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])
     try:
         client = deps.browser_factory()
@@ -368,15 +324,8 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 listings_url=marketplaces.market_url(market, "my_listings", region),
             )
     except publisher.PublishNotAttempted as exc:
-        # Nothing exists — but "try again" is only right when trying again could differ. The lane
-        # always takes the first eligible pair, so a refusal that will never succeed re-drove the
-        # same item every thirty seconds forever: Chrome opened, the form filled and abandoned, the
-        # browser held against the read lane each time, every other item stuck behind it, and the
-        # seller told nothing at all.
-        #
-        # A terminal refusal spends the pair's one shot immediately. A transient one is allowed a
-        # bounded number of goes and then spends it too, because a condition that has not cleared in
-        # that many attempts is not behaving like a transient one.
+        # A terminal refusal spends the pair's shot immediately; a transient one gets
+        # `MAX_DRIVE_ATTEMPTS` goes and then spends it too.
         attempts = deps.attempts.get((item["id"], market), 0) + 1
         deps.attempts[(item["id"], market)] = attempts
         giving_up = not getattr(exc, "retryable", False) or attempts >= MAX_DRIVE_ATTEMPTS
@@ -391,8 +340,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
             },
         )
         if giving_up:
-            # Ledgered, so the pair stops qualifying and the seller is told through the same path
-            # every other settled publish uses.
+            # The row is what stops the pair qualifying; the report phase tells the seller.
             deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
             deps.attempts.pop((item["id"], market), None)
         return
@@ -408,10 +356,8 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         deps.bus.publish("browser.unavailable", {"reason": str(exc)})
         return
     except BrowserError as exc:
-        # The driver is supposed to answer in its own two exceptions and never leak a bare browser
-        # error. If one gets out anyway we cannot know which side of the commit it came from, so it
-        # is treated as the dangerous side: a row is written and the pair is never re-driven. Losing
-        # a listing we could have made is recoverable by asking; making two is not.
+        # The driver should never leak a bare browser error. If one escapes we cannot tell which
+        # side of the commit it came from, so treat it as the dangerous side: retire the pair.
         deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
         deps.bus.publish(
             "crosslist.unverified",
@@ -419,8 +365,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         )
         return
     finally:
-        # Copies, so dropping them costs nothing and leaving them would grow the state tree one
-        # listing at a time. The item's own photographs are untouched in the media store.
+        # Staged copies only; the item's own photographs stay in the media store.
         publisher.clear_staged(item["id"])
 
     deps.store.record_driven_publish(
@@ -474,16 +419,13 @@ def report_settled(deps: CrosslistDeps) -> int:
     that ended cleanly without recording a URL has left no listing anyone can find, which is a
     failure whatever it reported about itself.
 
-    A failure the lane is going to try again is not announced. The seller is not the one who acts
-    on it, and three "I couldn't list your desk" messages for one desk that is about to appear is
-    noise that trains them to ignore the notice that matters. Only the last attempt speaks — and a
-    success always does, whichever attempt it was.
+    A failure the lane will retry is not announced — only the last attempt speaks, and a success
+    always does.
     """
     reported = 0
     index = deps.store.publish_pass_index()
     spent = _shots_out(index)
-    # One message per item and marketplace, however many attempts are settling at once. The seller
-    # cares that their lamp is not on Carousell, not how many goes it took to establish that.
+    # One message per item and market, however many attempts are settling at once.
     announced: set = set()
     for row in deps.store.unreported_crosslist_passes():
         item = deps.store.get_item(row["item_id"]) if row["item_id"] else None

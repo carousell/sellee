@@ -19,8 +19,7 @@ So the causes are separated here, and each one only claims what the lane has evi
     One sentence covering both would blame the marketplace for our own drift, which is the same
     species of lie this module exists to delete.
   * **viewport** — the window is too narrow for the marketplace to render the thing we read. The
-    only cause the *seller* can fix, which is the whole reason it is separated from `market`: told
-    "it's Facebook that won't hand over your conversations", nobody drags a window wider.
+    one cause the *seller* can fix, so it is separated from `market`.
 
 None of them tells the seller to go and look at Chrome. That sentence lives on, once, in
 `chrome_hint` — for the one caller that reaches a state where it might be true.
@@ -42,17 +41,9 @@ CAUSE_VIEWPORT = "viewport"
 CAUSE_VERIFY = "verify"
 
 # Below this, a marketplace is liable to serve a layout we cannot read — and the failure looks
-# exactly like the marketplace refusing us, which is what makes it worth naming separately.
-#
-# Twice now, from two marketplaces, at the same window size. Carousell collapses to a single
-# full-width column below roughly 900px, which on 2026-08-29 made every conversation unreadable for
-# 22 hours on a window the seller had sized to half their screen (innerWidth 756). Facebook, on
-# 2026-08-31, on a window of the same 756px: the Marketplace inbox renders no scoped conversation
-# list and the listings page renders its cards only intermittently.
-#
-# So the number is the narrower marketplace's own breakpoint, not a guess, and it is deliberately a
-# floor rather than a target: above it a read can still fail for a dozen other reasons, and this
-# cause never claims otherwise. It only fires on a read that ALREADY failed.
+# exactly like the marketplace refusing us, which is what makes it worth naming separately. The
+# number is a marketplace's own responsive breakpoint, not a guess, and only a floor: it never
+# claims a read failed, it only reframes one that already did.
 MIN_USABLE_WIDTH_PX = 900
 
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
@@ -106,8 +97,7 @@ CONTAINER_CHROME_CHECK = (
 )
 
 # The one the seller can fix, so it is the one that asks them to. Names the size because "wider"
-# alone invites a nudge of a few pixels, and says what it costs them not to — a window they have
-# deliberately parked at half a screen is a choice, and this has to be worth reversing.
+# alone invites a nudge of a few pixels.
 VIEWPORT_NOTICE = (
     "I can't read your {name} inbox, and I think it's the window: my Chrome{where} is {width}px "
     "wide and {name} needs about {needed}px to lay the page out the way I read it. Drag that "
@@ -115,11 +105,9 @@ VIEWPORT_NOTICE = (
     "Until then your {name} app has anything I've missed."
 )
 
-# The second one the seller can fix, and the only one where the marketplace is asking *them* a
-# question. Facebook puts a PIN prompt in front of encrypted chats and the messages simply are not
-# there behind it — which from the lane looks identical to Facebook refusing us, and told the seller
-# to go and check a login that was working fine. Nobody enters a PIN they were never asked for, so
-# this names the prompt and nothing else.
+# Also the seller's to fix, and the only one where the marketplace is asking *them* a question: a
+# PIN prompt in front of encrypted chats hides the messages entirely and looks from the lane like
+# the marketplace refusing us, so this names the prompt and nothing else.
 VERIFY_NOTICE = (
     "I can't read your {name} messages — {name} is asking for your PIN before it will show them. "
     "That one's yours to answer: open my Chrome{where}, enter it there, and I'll pick them up on "
@@ -138,18 +126,11 @@ _NOTICES = {
 def cause_for(cause: str, measured: dict | None) -> str:
     """Promote a failed read to `viewport` when the reader says the window was too narrow.
 
-    The lane cannot tell these apart by itself — a marketplace serving a layout we cannot parse and
-    a marketplace refusing us both arrive as "the list did not answer". What tells them apart is the
-    artifact's own measurement of the window it was looking at, which is why every reader reports
-    its width on the way out.
-
-    Only ever *promotes*, and only from a cause about the market. A plumbing failure stays plumbing
-    however narrow the window is: our server losing Chrome is not something the seller can drag
-    away.
-
-    A verification wall wins over the window. Both are the seller's to fix, but a PIN prompt is
-    what the page is *for* at that moment — telling someone behind one to widen their window sends
-    them to do the wrong thing, and the width we measured is the width of the prompt.
+    The lane cannot tell these apart by itself — an unreadable layout and a refusal both arrive as
+    "the list did not answer" — so this consults the width every reader reports. Only ever promotes,
+    and only from a cause about the market: a plumbing failure stays plumbing however narrow the
+    window. A verification wall wins over the window, because the width measured behind a PIN
+    prompt is the prompt's.
     """
     if cause not in (CAUSE_MARKET, CAUSE_TAILS):
         return cause

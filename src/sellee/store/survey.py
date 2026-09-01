@@ -474,11 +474,10 @@ class SurveyMixin:
                 # Declined, re-asked or deleted while this was being read. Raising rolls back the
                 # item insert — an item with no row behind it could never be published.
                 raise ListingGone(f"{listing_id!r} on {market} is no longer waiting to be adopted")
-            # A new item can turn "none of ours" into a match, and the read lane remembers those
-            # answers to avoid re-deriving them every sweep. Cleared here rather than by the
-            # caller because this is the one funnel every adoption goes through, and doing it in
-            # the same transaction means the item and the forgetting commit together — a cache
-            # outliving the fact it was true about is exactly how a buyer goes unanswered.
+            # A new item can turn "none of ours" into a match, and the read lane caches those
+            # answers. Cleared in the same transaction: this is the one funnel every adoption
+            # goes through, and a cache outliving the fact it was about is how a buyer goes
+            # unanswered.
             conn.execute("DELETE FROM thread_listing_lookups WHERE market = ?", (market,))
         rows = self._db.query("SELECT * FROM items WHERE id = ?", (item_id,))
         if not rows:

@@ -165,10 +165,8 @@ def connect_lane(deps: ConnectDeps) -> None:
             deps.store.queue_notice(NO_ADAPTER_NOTICE.format(market=market))
             continue
         if market not in connected:
-            # The row is durable and the tap that wrote it may be old, so the market can have been
-            # disconnected in between. Opening a sign-in window for a marketplace the seller has
-            # since turned off is the clearest way to look like the switch did nothing. Cleared
-            # rather than left pending: nothing about waiting would make this servable.
+            # The row is durable, so the market may have been disconnected since it was written.
+            # Cleared rather than left pending: waiting cannot make it servable.
             deps.store.clear_market_connect_request(market)
             continue
         if inbox.browser_busy(deps.store):
