@@ -39,6 +39,7 @@ CAUSE_PLUMBING = "plumbing"
 CAUSE_MARKET = "market"
 CAUSE_TAILS = "tails"
 CAUSE_VIEWPORT = "viewport"
+CAUSE_VERIFY = "verify"
 
 # Below this, a marketplace is liable to serve a layout we cannot read — and the failure looks
 # exactly like the marketplace refusing us, which is what makes it worth naming separately.
@@ -114,11 +115,23 @@ VIEWPORT_NOTICE = (
     "Until then your {name} app has anything I've missed."
 )
 
+# The second one the seller can fix, and the only one where the marketplace is asking *them* a
+# question. Facebook puts a PIN prompt in front of encrypted chats and the messages simply are not
+# there behind it — which from the lane looks identical to Facebook refusing us, and told the seller
+# to go and check a login that was working fine. Nobody enters a PIN they were never asked for, so
+# this names the prompt and nothing else.
+VERIFY_NOTICE = (
+    "I can't read your {name} messages — {name} is asking for your PIN before it will show them. "
+    "That one's yours to answer: open my Chrome{where}, enter it there, and I'll pick them up on "
+    "my next look. Until then your {name} app has anything I've missed."
+)
+
 _NOTICES = {
     CAUSE_PLUMBING: PLUMBING_NOTICE,
     CAUSE_MARKET: MARKET_NOTICE,
     CAUSE_TAILS: TAILS_NOTICE,
     CAUSE_VIEWPORT: VIEWPORT_NOTICE,
+    CAUSE_VERIFY: VERIFY_NOTICE,
 }
 
 
@@ -133,9 +146,15 @@ def cause_for(cause: str, measured: dict | None) -> str:
     Only ever *promotes*, and only from a cause about the market. A plumbing failure stays plumbing
     however narrow the window is: our server losing Chrome is not something the seller can drag
     away.
+
+    A verification wall wins over the window. Both are the seller's to fix, but a PIN prompt is
+    what the page is *for* at that moment — telling someone behind one to widen their window sends
+    them to do the wrong thing, and the width we measured is the width of the prompt.
     """
     if cause not in (CAUSE_MARKET, CAUSE_TAILS):
         return cause
+    if (measured or {}).get("blocked") == CAUSE_VERIFY:
+        return CAUSE_VERIFY
     width = (measured or {}).get("width")
     if isinstance(width, bool) or not isinstance(width, (int, float)):
         return cause
@@ -145,7 +164,7 @@ def cause_for(cause: str, measured: dict | None) -> str:
 def notice_for(cause: str, *, name: str, count: int = 0, width: int = 0, where: str = "") -> str:
     """The sentence for one cause, addressed to the seller.
 
-    Falls back to the marketplace wording for an unknown cause: of the four it is the only one that
+    Falls back to the marketplace wording for an unknown cause: of them all it is the only one that
     asserts nothing about our own machinery, so a cause nobody has taught this module yet cannot
     make us claim a fault we have not established.
     """

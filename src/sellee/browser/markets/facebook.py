@@ -160,6 +160,30 @@ CONVERSATIONS_LIST_JS = """async () => {
     });
     return { conversations: out, skipped: skipped };
   };
+  // Facebook can put a wall in front of the messages rather than refusing us: a PIN prompt for
+  // encrypted chats, or a "confirm it's you" interstitial. The folder never opens, so from the lane
+  // it is indistinguishable from Facebook declining to hand over the list — and the seller gets
+  // told to check a login that is working perfectly. It is a question addressed to them.
+  //
+  // Deliberately hard to trigger: a phrase AND a prompt-shaped element. The words alone appear in
+  // buyers' own messages, and a false verify sends someone to enter a PIN nobody asked them for,
+  // which is worse than the silence it replaces.
+  const verifyWall = () => {
+    const text = (document.body.innerText || '').toLowerCase();
+    const asks = [
+      'enter your pin',
+      'enter pin',
+      'confirm your pin',
+      'restore your chats',
+      "confirm it's you",
+      'confirm your identity',
+    ];
+    if (!asks.some((phrase) => text.includes(phrase))) return '';
+    const field = document.querySelector(
+      'input[type="password"], input[autocomplete*="one-time"], input[inputmode="numeric"]'
+    );
+    return field || document.querySelector('[role="dialog"]') ? 'verify' : '';
+  };
   // The folder paints after the click returns, so the first look can still be the personal inbox.
   const deadline = Date.now() + 5000;
   let result = read();
@@ -177,6 +201,7 @@ CONVERSATIONS_LIST_JS = """async () => {
       rows: rows().length,
       width: window.innerWidth,
       visible: document.visibilityState === 'visible',
+      blocked: verifyWall(),
     };
   }
   return result;

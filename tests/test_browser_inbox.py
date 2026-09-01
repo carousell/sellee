@@ -951,6 +951,36 @@ def test_a_window_too_narrow_is_named_as_such_not_blamed_on_the_market(store, bu
     assert "wider" in notice
 
 
+def test_a_pin_prompt_is_named_rather_than_blamed_on_the_market(store, bus, seeded) -> None:
+    """Facebook asked a seller for their Messenger PIN mid-install. The messages are not behind a
+    refusal, they are behind a question addressed to them — and the lane said nothing, because a
+    folder that never opens looks the same whatever is standing in front of it."""
+    client = StubClient(error="the Marketplace folder is not open", measured={"blocked": "verify"})
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
+    notice = _texts(store)[0]
+    assert "PIN" in notice
+    # Never the sentence for a login that is working fine.
+    assert "still logged in" not in notice
+
+
+def test_a_pin_prompt_wins_over_a_narrow_window(store, bus, seeded) -> None:
+    """Both are the seller's to fix, and only one of them is what the page is for. Telling someone
+    staring at a PIN prompt to widen their window sends them to do the wrong thing."""
+    client = StubClient(
+        error="the Marketplace folder is not open", measured={"blocked": "verify", "width": 756}
+    )
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
+    assert "wider" not in _texts(store)[0]
+
+
 def test_a_wide_window_still_blames_the_market(store, bus, seeded) -> None:
     """The promotion only ever fires on a narrow window. Above the breakpoint a failed read has a
     dozen other causes and this must not claim otherwise."""
