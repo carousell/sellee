@@ -101,6 +101,50 @@ class BrowserMixin:
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
 
+    # --- what a conversation is about -------------------------------------------------------
+
+    def record_thread_listing(
+        self, thread_id: str, market: str, product_id: str, row_key: str, now: float | None = None
+    ) -> None:
+        """Remember which listing a conversation is about — including that it is none of ours.
+
+        The empty `product_id` is the case worth having: a conversation about a listing we do not
+        manage is re-asked on every sweep otherwise, and for a market that names the listing only
+        inside the conversation, asking costs a page load each time.
+        """
+        now = _now() if now is None else now
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO thread_listing_lookups "
+                "(thread_id, market, product_id, row_key, looked_ts) VALUES (?, ?, ?, ?, ?) "
+                "ON CONFLICT (thread_id) DO UPDATE SET product_id = excluded.product_id, "
+                "row_key = excluded.row_key, looked_ts = excluded.looked_ts",
+                (thread_id, market, product_id, row_key, now),
+            )
+
+    def thread_listing_lookup(self, thread_id: str) -> dict | None:
+        """What we last learned about this conversation, or None if we have never looked."""
+        rows = self._db.query(
+            "SELECT product_id, row_key FROM thread_listing_lookups WHERE thread_id = ?",
+            (thread_id,),
+        )
+        if not rows:
+            return None
+        return {"product_id": rows[0]["product_id"], "row_key": rows[0]["row_key"]}
+
+    def clear_thread_listings(self, market: str) -> int:
+        """Forget this market's lookups, so the next sweep asks again. Returns how many went.
+
+        Deliberately wholesale — positives as well as negatives. Narrower would mean working out
+        which conversations a newly adopted listing could possibly have changed the answer for,
+        and the failure direction here is safe either way: the cost of forgetting too much is a
+        page load, where the cost of forgetting too little is a buyer nobody answers.
+        """
+        with self._db.transaction() as conn:
+            return conn.execute(
+                "DELETE FROM thread_listing_lookups WHERE market = ?", (market,)
+            ).rowcount
+
     def browser_hold_reason(self, now: float | None = None) -> str:
         """Why the browser is spoken for, or "" when it is free.
 

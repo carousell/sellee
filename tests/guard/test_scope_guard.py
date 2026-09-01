@@ -53,6 +53,14 @@ _UNGUARDED_BY_DESIGN = {
         "the thread — and the accessor has no missing-row behaviour to mirror, so a scope refusal "
         "would invent one and leak existence instead of hiding it"
     ),
+    ("record_thread_listing", "thread_id"): (
+        "daemon-only: the inbox lane writes what it read off a conversation's own banner, before "
+        "any thread exists to be scoped to — and no pass tier carries a tool that reaches it"
+    ),
+    ("thread_listing_lookup", "thread_id"): (
+        "daemon-only: the inbox lane's own memory of a lookup it already performed, read before a "
+        "thread exists, and no pass tier carries a tool that reaches it"
+    ),
     ("create_thread", "thread_id"): (
         "the new row's own natural key, not a reference to an existing thread — the insert "
         "refuses a duplicate and the prefix rule validates its shape"

@@ -52,6 +52,10 @@ class StubClient:
         self.navigations: list = []
         self.clicks: list = []
         self.calls: list = []
+        # How many times the lane asked which listing a conversation is about. Counted apart from
+        # navigations because an adopted thread is navigated again to read its tail, and that is
+        # not the lane re-deriving something it already knew.
+        self.product_id_reads = 0
         self.url = ""
 
     class _Exclusive:
@@ -105,6 +109,7 @@ class StubClient:
                 return {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
             return {"conversations": list(self.conversations)}
         if function == fb_market.PRODUCT_ID_JS:
+            self.product_id_reads += 1
             return {"product_id": self.product_id, "visible": True}
         if function == fb_market.CONVERSATION_TAIL_JS:
             native = self.url.rstrip("/").rsplit("/", 1)[-1]
@@ -923,3 +928,67 @@ def test_the_listing_banner_is_polled_rather_than_glanced_at() -> None:
     for by hand, and never there at the instant the lane asked."""
     assert fb_market.PRODUCT_ID_JS.strip().startswith("async"), "a glance, not a read"
     assert "setTimeout" in fb_market.PRODUCT_ID_JS, "nothing waits for the banner"
+
+
+# --- asking once, rather than every five minutes ---------------------------------------------
+
+
+def _notice_texts(store):
+    return [n["text"] for n in store.list_queued_notices()]
+
+
+def test_a_conversation_we_could_not_place_is_not_reopened_next_sweep(store, bus, seeded) -> None:
+    """The churn this removes. Facebook names the listing only inside the conversation, so a
+    conversation about a listing the seller does not manage was opened every five minutes forever
+    to re-derive the same nothing — measured live at ~5.5s each, 25 of them, indefinitely."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert client.product_id_reads == 1, "the conversation was opened twice"
+    # The adoption attempt still runs, and still says why it refused — that event is what the
+    # unplaceable report counts, so the cache must not silence it.
+    assert len(_kinds(bus, "browser.unmatched")) == 2
+
+
+def test_a_changed_row_asks_again(store, bus, seeded) -> None:
+    """A cached answer is trusted only while the row still says what it said. A new message may
+    mean a conversation that has moved to a listing we do manage."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    client.conversations = [_conv(last_message="Gerry: what about the desk?")]
+    inbox.inbox_lane(deps)
+
+    assert client.product_id_reads == 2
+
+
+def test_a_ticking_clock_is_not_a_change(store, bus, seeded) -> None:
+    """The preview carries a relative time the clock keeps advancing. Treating "2m" becoming "1h"
+    as a new message would re-open the conversation every sweep — the whole cost being removed."""
+    client = StubClient(conversations=[_conv(last_message="Gerry: is this still available? 2m")])
+    client.product_id = None
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    client.conversations = [_conv(last_message="Gerry: is this still available? 1h")]
+    inbox.inbox_lane(deps)
+
+    assert client.product_id_reads == 1
+
+
+def test_adopting_a_listing_makes_the_lane_ask_again(store, bus, seeded) -> None:
+    """A remembered "none of ours" stops being true the moment the seller adopts the listing."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+
+    store.clear_thread_listings("fb")  # what adoption does, in its own transaction
+    client.product_id = _PRODUCT_ID
+    inbox.inbox_lane(deps)
+
+    assert client.product_id_reads == 2
+    assert store.get_thread("fb:99") is not None

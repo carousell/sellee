@@ -23,6 +23,7 @@ Three rules keep the lane honest:
 from __future__ import annotations
 
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Callable
@@ -257,7 +258,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             continue  # the platform talking to the seller, not a buyer
         thread = known.get(thread_id)
         if thread is None:
-            row = _with_product_id(client, adapter, market, thread_id, row, region)
+            row = _with_product_id(deps, client, adapter, market, thread_id, row, region)
             if _adopt(deps, market, adapter, thread_id, row, handle, items):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
@@ -376,7 +377,30 @@ def _activate(client, adapter) -> None:
     )
 
 
-def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, region) -> dict:
+# A row's trailing relative-time token — "2m", "1h", "Just now", "Yesterday", "10:11 AM", "12/05".
+# The clock advances it on a message that has not changed, so it must not count as the row changing.
+_ROW_CLOCK_RE = re.compile(
+    r"(?:\d{1,2}:\d{2}\s?(?:AM|PM)?|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d+[smhdw]"
+    r"|just now|yesterday|today|mon|tue|wed|thu|fri|sat|sun)\s*$",
+    re.IGNORECASE,
+)
+
+
+def _row_key(row: dict) -> str:
+    """What this row said, in a form that only changes when the conversation does.
+
+    The comparison key behind the lookup cache. Title and last message, with the trailing clock
+    stripped: a preview whose "2m" becomes "1h" is the same message, and treating it as a change
+    would re-open the conversation on every sweep — which is the cost the cache exists to remove.
+    """
+    title = str(row.get("title") or "").strip()
+    preview = _ROW_CLOCK_RE.sub("", str(row.get("last_message") or "").strip()).strip()
+    return f"{title}\u241f{preview}"
+
+
+def _with_product_id(
+    deps: InboxDeps, client, adapter, market: str, thread_id: str, row: dict, region
+) -> dict:
     """Fill in which listing a conversation is about, for a market that names it only inside the
     conversation itself.
 
@@ -386,6 +410,12 @@ def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, re
     is on a banner inside the open conversation, so it is read there, once, before the thread is
     adopted.
 
+    Once, now, rather than once per sweep. The answer is remembered whether or not it matched
+    anything: a conversation about a listing the seller does not manage was re-opened every five
+    minutes forever to re-derive the same nothing, at a page load each time. A cached answer is
+    trusted only while the row still says what it said — `_row_key` — so a conversation that gains
+    a listing, or moves to a different one after a relist, re-opens on the next sweep.
+
     Answers a new row rather than filling the caller's in place, and answers it unchanged whenever
     there is nothing to add: a market whose list already carries the id, a row that has one, or a
     conversation whose banner would not answer. An unresolved id is not an error here — it becomes
@@ -394,6 +424,11 @@ def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, re
     """
     if not adapter.product_id_js or row.get("product_id"):
         return row
+    row_key = _row_key(row)
+    remembered = deps.store.thread_listing_lookup(thread_id)
+    if remembered is not None and remembered["row_key"] == row_key:
+        product_id = remembered["product_id"]
+        return {**row, "product_id": product_id} if product_id else row
     native = thread_id.split(":", 1)[1] if ":" in thread_id else ""
     url = marketplaces.market_url(market, "thread", region, thread_id=native) if native else None
     if url is None:
@@ -402,10 +437,13 @@ def _with_product_id(client, adapter, market: str, thread_id: str, row: dict, re
         client.navigate_visible(url)
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
+        # Not remembered: a read that failed is not an answer, and storing it would turn one bad
+        # navigation into a conversation nobody looks at again until its preview changes.
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
         return row
-    product_id = answer.get("product_id")
-    return {**row, "product_id": str(product_id)} if product_id else row
+    product_id = str(answer.get("product_id") or "")
+    deps.store.record_thread_listing(thread_id, market, product_id, row_key)
+    return {**row, "product_id": product_id} if product_id else row
 
 
 def _thread_key(market: str, native_id) -> str | None:

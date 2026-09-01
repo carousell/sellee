@@ -418,3 +418,51 @@ def test_holders_release_independently(store) -> None:
 def test_releasing_a_hold_nobody_holds_is_a_success(store) -> None:
     store.release_browser_hold("signin")
     assert store.browser_hold_reason() == ""
+
+
+# --- what a conversation is about ------------------------------------------------------------
+
+
+def test_a_lookup_is_remembered_and_read_back(store) -> None:
+    assert store.thread_listing_lookup("fb:1") is None
+    store.record_thread_listing("fb:1", "fb", "9987", "Dyson␟still available?")
+    assert store.thread_listing_lookup("fb:1") == {
+        "product_id": "9987",
+        "row_key": "Dyson␟still available?",
+    }
+
+
+def test_finding_nothing_is_remembered_too(store) -> None:
+    """The case that was costing the most: a conversation about a listing we do not manage was
+    re-opened every five minutes forever to re-derive the same nothing."""
+    store.record_thread_listing("fb:2", "fb", "", "Kettle␟is this still up?")
+    assert store.thread_listing_lookup("fb:2") == {
+        "product_id": "",
+        "row_key": "Kettle␟is this still up?",
+    }
+
+
+def test_looking_again_replaces_rather_than_duplicates(store) -> None:
+    store.record_thread_listing("fb:3", "fb", "", "a␟b")
+    store.record_thread_listing("fb:3", "fb", "555", "a␟c")
+    assert store.thread_listing_lookup("fb:3") == {"product_id": "555", "row_key": "a␟c"}
+
+
+def test_adopting_a_listing_forgets_that_markets_lookups(store) -> None:
+    """A new item can turn "none of ours" into a match, so the answers we remembered are no longer
+    answers. Same transaction as the adoption, so the item never exists behind a stale cache."""
+    store.record_thread_listing("fb:4", "fb", "", "a␟b")
+    store.record_thread_listing("carousell:5", "carousell", "", "c␟d")
+    store.record_survey_result(
+        "fb",
+        [{"listing_id": "77", "url": "https://fb/77", "title": "Fan", "price": 10.0}],
+    )
+    store.decide_discovered_listings("fb", decision="manage", manage="relist")
+
+    store.adopt_discovered_listing(
+        "fb", "77", title="Fan", list_price=10.0, currency="SGD", url="https://fb/77"
+    )
+
+    assert store.thread_listing_lookup("fb:4") is None
+    # Scoped to the market that changed — Carousell learned nothing from a Facebook adoption.
+    assert store.thread_listing_lookup("carousell:5") is not None
