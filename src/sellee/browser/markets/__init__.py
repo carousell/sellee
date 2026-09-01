@@ -223,12 +223,23 @@ def drivable_markets() -> list:
 
 
 def connectable_markets(region: str | None = None) -> list:
-    """The browser markets *this seller* can connect: one we can drive, on a site where they are."""
-    return [
+    """The browser markets *this seller* can connect: one we can drive, on a site where they are.
+
+    A marketplace with a site in the seller's own country leads. Registry order put Facebook above
+    Carousell for an SG seller, which reads as a recommendation nobody made: Carousell is where
+    their buyers already are, and Facebook is somewhere they are also reachable. Ordered off the
+    registry rather than a per-region list, so a marketplace that adds a real SG site sorts up on
+    its own — and a US seller is unaffected either way, Carousell running no US site.
+    """
+    connectable = [
         market
         for market in drivable_markets()
         if marketplaces.resolve_domain(market, region) is not None
     ]
+    # Stable, so registry order still breaks ties within each group.
+    return sorted(
+        connectable, key=lambda market: not marketplaces.has_regional_site(market, region)
+    )
 
 
 def publishable_markets(region: str | None = None) -> list:

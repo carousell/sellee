@@ -141,6 +141,20 @@ def market_home(market: str, region: str | None = None) -> str | None:
     return f"https://{host}/" if host else None
 
 
+def has_regional_site(market: str, region: str | None = None) -> bool:
+    """Whether this marketplace names a site for this region, rather than a catch-all.
+
+    The distinction a seller feels: a marketplace with a site in their own country is where their
+    buyers already are, and a global one is somewhere they also happen to be reachable. Read by the
+    connect offer to put the home marketplace first — `resolve_domain` deliberately collapses the
+    two (either way there is a site to drive), so the difference has to be asked for separately.
+    """
+    entry = get_marketplace(market)
+    if entry is None:
+        return False
+    return bool((entry.get("domains") or {}).get(region))
+
+
 def resolve_domain(market: str, region: str | None = None) -> str | None:
     """The marketplace's site for a seller in this region, or None when it has none.
 
