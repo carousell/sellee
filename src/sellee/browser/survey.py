@@ -97,7 +97,7 @@ def survey_lane(deps: SurveyDeps) -> None:
     expired = deps.store.expire_stale_decisions(DECISION_TTL_SEC, now=deps.now())
     if expired:
         deps.bus.publish("survey.expired", {"listings": expired})
-    if inbox.browser_pass_running(deps.store):
+    if inbox.browser_busy(deps.store):
         return
     discover_phase(deps)
     adopt.adopt_phase(deps)

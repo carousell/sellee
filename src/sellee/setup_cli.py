@@ -40,6 +40,7 @@ from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
 from sellee.installer import update as update_mod
 from sellee.installer.ui import Abort, Ui
+from sellee.store import HOLD_SETUP
 from sellee.platform import get_platform
 
 # How long the daemon gets to write its first heartbeat after being started. Startup is
@@ -622,9 +623,47 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
         ui.warn("Those marketplaces could not be recorded — carousell.ai only for now.")
         return
 
+    # Claimed for the whole phase, not per sign-in. Recording a connection earns that market a look
+    # at what the seller already has listed, and the survey lane serves it within a minute — down
+    # the one shared tab the seller is signing in to the *next* marketplace on. That is exactly what
+    # happened: Facebook's listings page loaded over a half-typed Carousell login, once a minute.
+    # Each sign-in holds the tab for itself, but only a claim spanning all of them closes the gap
+    # between one finishing and the next one opening.
+    _hold_browser(port, token, "signing in to marketplaces")
+    try:
+        _sign_in_markets(ui, port, token, picked)
+    finally:
+        # Released even on a Ctrl-C, so the seller who abandons setup does not leave the agent
+        # waiting out the full deadline before it looks at anything.
+        _release_browser(port, token)
+
+
+def _sign_in_markets(ui: Ui, port: int, token: str, picked: list) -> None:
+    """Sign in to each picked marketplace in turn, under the phase's hold on the browser."""
     for market in picked:
         ui.say(f"opening {marketplaces.display_name(market)}…")
         connect_cli.market_flow(port, token, market, interactive=ui.interactive)
+
+
+def _hold_browser(port: int, token: str, reason: str) -> None:
+    """Ask the daemon to keep its lanes off the shared tab. Never fatal.
+
+    A failure here costs the seller the bug this exists to prevent, which is bad — but stopping an
+    install over it is worse, and the sign-ins themselves each still hold the tab for their own
+    duration.
+    """
+    try:
+        control.post(port, token, "/control/browser-hold", {"holder": HOLD_SETUP, "reason": reason})
+    except control.DaemonUnreachable:
+        pass
+
+
+def _release_browser(port: int, token: str) -> None:
+    """Give it back. Never fatal — an unreleased hold expires on its own."""
+    try:
+        control.post(port, token, "/control/browser-release", {"holder": HOLD_SETUP})
+    except control.DaemonUnreachable:
+        pass
 
 
 # --- the browser window -------------------------------------------------------------------------

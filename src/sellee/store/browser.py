@@ -1,4 +1,4 @@
-"""The browser layer's request rows: sign-in requests the seller made from chat.
+"""The browser layer's handoff rows: sign-in requests from chat, and holds on the shared tab.
 
 A handoff between two threads, not a history. The provider's receive loop writes a row when the
 seller taps **Sign in on desktop** (it must not drive Chrome itself — that loop answers every other
@@ -19,6 +19,19 @@ from sellee.store.helpers import _now
 CONNECT_MODE_OPEN = "open"
 CONNECT_MODE_PROBE = "probe"
 CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
+
+# Who may claim the one shared tab, named here so the daemon and the CLIs that release a hold are
+# spelling the same string. Two of them, released independently: a single sign-in, and an
+# installer's whole marketplace phase — which outlives every sign-in inside it, and is what keeps
+# the lanes out of the gap between one market finishing and the next one opening.
+HOLD_SIGNIN = "signin"
+HOLD_SETUP = "setup"
+
+# How long a claim survives unrenewed. The claimant is a CLI blocked on a person, so this is not
+# how long a sign-in takes — it is how long the agent stays out of the way for a seller who
+# wandered off, closed the terminal, or Ctrl-C'd. Long enough to find a password, short enough that
+# a dead CLI is not a permanent outage.
+BROWSER_HOLD_TTL_SEC = 900.0
 
 
 class MarketConnectRequest(TypedDict):
@@ -64,3 +77,40 @@ class BrowserMixin:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM market_connect_requests WHERE market = ?", (market,))
+
+    # --- holds on the one shared tab ---------------------------------------------------------
+
+    def hold_browser(self, holder: str, reason: str, ttl_sec: float, now: float | None = None):
+        """Claim the browser for something the daemon is not driving, until `ttl_sec` from now.
+
+        Re-claiming under the same holder renews rather than stacking: the installer takes one
+        hold across a whole marketplace phase and renews it per sign-in, and a second row per
+        market would leave the last one outliving the phase by a full TTL.
+        """
+        now = _now() if now is None else now
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO browser_holds (holder, reason, claimed_ts, expires_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (holder) DO UPDATE SET "
+                "reason = excluded.reason, expires_ts = excluded.expires_ts",
+                (holder, reason, now, now + ttl_sec),
+            )
+
+    def release_browser_hold(self, holder: str) -> None:
+        """Give the tab back. Safe for a holder that never held it, or whose hold has expired."""
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
+
+    def browser_hold_reason(self, now: float | None = None) -> str:
+        """Why the browser is spoken for, or "" when it is free.
+
+        Expired rows are ignored rather than deleted on read: a read that writes turns every lane
+        tick into a transaction, and the row costs nothing until the next claim overwrites it.
+        """
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT reason FROM browser_holds WHERE expires_ts > ? "
+            "ORDER BY expires_ts DESC LIMIT 1",
+            (now,),
+        )
+        return str(rows[0]["reason"]) if rows else ""

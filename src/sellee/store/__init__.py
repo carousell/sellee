@@ -27,8 +27,11 @@ from dataclasses import dataclass
 
 from sellee.db import Database
 from sellee.store.browser import (
+    BROWSER_HOLD_TTL_SEC,
     CONNECT_MODE_OPEN,
     CONNECT_MODE_PROBE,
+    HOLD_SETUP,
+    HOLD_SIGNIN,
     BrowserMixin,
 )
 from sellee.store.channel import ChannelMixin
@@ -65,6 +68,9 @@ from sellee.store.wants import WantsMixin
 # the package is not part of the contract, this list is.
 __all__ = [
     "BIND_NONCE_TTL_SEC",
+    "BROWSER_HOLD_TTL_SEC",
+    "HOLD_SETUP",
+    "HOLD_SIGNIN",
     "CONNECT_MODE_OPEN",
     "CONNECT_MODE_PROBE",
     "KNOWN_ADAPTERS",

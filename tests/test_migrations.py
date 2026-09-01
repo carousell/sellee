@@ -57,6 +57,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 14),
         ("data", 15),
         ("data", 16),
+        ("data", 17),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -76,6 +77,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "ui_cache")
     assert _table_exists(data_db, "crosslink_pushes")
     assert _table_exists(data_db, "market_connect_requests")
+    assert _table_exists(data_db, "browser_holds")
     assert _table_exists(data_db, "market_surveys")
     assert _table_exists(data_db, "discovered_listings")
     assert _table_exists(events_db, "events")
@@ -96,6 +98,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         14,
         15,
         16,
+        17,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

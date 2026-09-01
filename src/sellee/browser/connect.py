@@ -171,7 +171,7 @@ def connect_lane(deps: ConnectDeps) -> None:
             # rather than left pending: nothing about waiting would make this servable.
             deps.store.clear_market_connect_request(market)
             continue
-        if inbox.browser_pass_running(deps.store):
+        if inbox.browser_busy(deps.store):
             # A pass mid-drive owns the tab. Navigating it now would pull the page out from under
             # a half-filled composer, and the seller asked to sign in, not to lose a listing.
             if deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:

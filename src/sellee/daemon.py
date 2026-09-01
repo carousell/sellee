@@ -356,7 +356,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
             # client's own mutex, so replacing its server mid-flow abandons a half-filled listing
             # form and starts the whole thing again from nothing. Asked only once there is a reason
             # to act, so the steady state does not pay for a query about passes on every send.
-            if reason is not None and not inbox.browser_pass_running(store):
+            if reason is not None and not inbox.browser_busy(store):
                 if DETACHED_MARKER in reason:
                     # Marked before the recycle is attempted, not after. If the cooldown declines to
                     # replace it we hand the same client back, and it has to fail fast and name the

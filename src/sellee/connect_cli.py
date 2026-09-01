@@ -30,7 +30,7 @@ import time
 
 from sellee import channel, config, control, deployment, qr
 from sellee.browser import chrome, foreground
-from sellee.store import BIND_NONCE_TTL_SEC
+from sellee.store import BIND_NONCE_TTL_SEC, HOLD_SIGNIN
 
 _POLL_INTERVAL_SEC = 1.0
 # The seller is told the same deadline the daemon enforces, so "timed out" never means "still live".
@@ -133,6 +133,10 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
         print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
         return 0
 
+    # From here a person is typing into a login screen and the daemon holds the tab for them (the
+    # connect route claimed it). Everything below releases it before returning, so the lanes are
+    # only ever waiting on a sign-in that is genuinely still happening.
+
     print(f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
     print(f"  {body.get('url', '')}")
     _surface_window(body)
@@ -141,11 +145,26 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
             input("Press Enter once you've signed in (or Ctrl-C to skip)… ")
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)
+            _release_browser(port, mcp_token, HOLD_SIGNIN)
             return 1
         state = _probe_market(port, mcp_token, market)
 
+    _release_browser(port, mcp_token, HOLD_SIGNIN)
     print(_MARKET_STATE_MESSAGES.get(state or "unknown", "").format(name=name))
     return 0 if state == "logged_in" else 1
+
+
+def _release_browser(port: int, mcp_token: str, holder: str) -> None:
+    """Hand the shared tab back to the lanes. Never fatal, and never the reason a flow fails.
+
+    A hold that outlives its claimant expires on its own, so the worst a failure here costs is a
+    quarter of an hour of the agent staying politely out of the way — which is not worth turning a
+    completed sign-in into an error the seller has to interpret.
+    """
+    try:
+        control.post(port, mcp_token, "/control/browser-release", {"holder": holder})
+    except control.DaemonUnreachable:
+        pass
 
 
 def _surface_window(body: dict) -> None:

@@ -379,3 +379,42 @@ def test_active_passes_of_types_reports_queued_and_running_with_payloads(store) 
     publish = next(row for row in active if row["type"] == "publish")
     assert publish["payload"]["market"] == "carousell"
     assert store.active_passes_of_types(()) == []
+
+
+# --- holds on the one shared tab -------------------------------------------------------------
+
+
+def test_a_hold_makes_the_browser_busy_and_releasing_frees_it(store) -> None:
+    assert store.browser_hold_reason() == ""
+    store.hold_browser("signin", "signing in to fb", 900.0)
+    assert store.browser_hold_reason() == "signing in to fb"
+    store.release_browser_hold("signin")
+    assert store.browser_hold_reason() == ""
+
+
+def test_re_claiming_renews_rather_than_stacking(store) -> None:
+    """The installer takes one hold across a whole marketplace phase and renews it per sign-in.
+    A second row per market would leave the last one outliving the phase by a full TTL."""
+    store.hold_browser("setup", "signing in to marketplaces", 900.0)
+    store.hold_browser("setup", "signing in to marketplaces", 900.0)
+    store.release_browser_hold("setup")
+    assert store.browser_hold_reason() == ""
+
+
+def test_an_expired_hold_reads_as_free(store) -> None:
+    store.hold_browser("signin", "signing in to fb", ttl_sec=-1.0)
+    assert store.browser_hold_reason() == ""
+
+
+def test_holders_release_independently(store) -> None:
+    """A sign-in finishing inside an install must not hand the tab back: the phase around it is
+    still going, and the next marketplace is about to open in that same tab."""
+    store.hold_browser("setup", "signing in to marketplaces", 900.0)
+    store.hold_browser("signin", "signing in to fb", 900.0)
+    store.release_browser_hold("signin")
+    assert store.browser_hold_reason() == "signing in to marketplaces"
+
+
+def test_releasing_a_hold_nobody_holds_is_a_success(store) -> None:
+    store.release_browser_hold("signin")
+    assert store.browser_hold_reason() == ""

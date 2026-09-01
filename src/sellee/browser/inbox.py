@@ -118,11 +118,24 @@ def browser_pass_running(store) -> bool:
     return False
 
 
+def browser_busy(store) -> str:
+    """Why nothing may navigate the shared tab right now, or "" when it is free.
+
+    The question every lane actually wants. `browser_pass_running` answers only half of it, and
+    for a long time that was the whole of it — a pass was the only thing that drove Chrome. It is
+    not: a seller signing in is holding the same one tab, with no pass anywhere, and a lane that
+    asked only about passes navigated straight over them.
+    """
+    if browser_pass_running(store):
+        return "a pass is using the browser"
+    return store.browser_hold_reason()
+
+
 def inbox_lane(deps: InboxDeps) -> None:
     """One tick: read every browser market's inbox and fold what is new into durable rows."""
     if deps.store.is_paused():
         return
-    if browser_pass_running(deps.store):
+    if browser_busy(deps.store):
         return
     try:
         client = deps.browser_factory()

@@ -37,6 +37,7 @@ from sellee.browser import connect as _connect
 from sellee.db import connect_reader
 from sellee.events import event_to_wire, latest_seq, query_events, routine_kinds
 from sellee.paths import PACKAGE_DATA_DIR
+from sellee.store import BROWSER_HOLD_TTL_SEC, HOLD_SIGNIN
 from sellee.tools.registry import Session, ToolError, UnknownTool, dispatch, tools_for_tier
 
 log = logging.getLogger(__name__)
@@ -49,6 +50,7 @@ _LOCALHOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 # Pass types that drive the browser. A login probe navigates the daemon's one tab, so it waits
 # rather than pulling the page out from under one of these.
 _BROWSER_PASS_TYPES = ("reply", "publish")
+
 _DEFAULT_PROTOCOL_VERSION = "2025-06-18"
 # Revisions we will echo back to a client that asks for one — just the one we actually speak.
 # Echoing an older revision to be accommodating would claim a transport this server does not
@@ -430,6 +432,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_seller_basics()
         elif route == "/control/connect-market":
             self._handle_connect_market()
+        elif route == "/control/browser-hold":
+            self._handle_browser_hold()
+        elif route == "/control/browser-release":
+            self._handle_browser_release()
         elif route == "/control/market-login":
             self._handle_market_login()
         elif route == "/control/market-logins":
@@ -704,6 +710,9 @@ class _Handler(BaseHTTPRequestHandler):
             # Unlike Chrome being closed — which this route exists to fix — a pass mid-drive
             # owns the tab. Navigating it now would pull the page out from under a half-filled
             # composer, and the seller asked to sign in, not to lose a listing.
+            #
+            # Passes only, deliberately: a sign-in hold is *this* flow's own claim, and refusing on
+            # it would 409 the second marketplace of every install behind the first one's hold.
             self._send_json(
                 409, {"error": "browser_busy", "detail": "a pass is using the browser right now"}
             )
@@ -713,6 +722,13 @@ class _Handler(BaseHTTPRequestHandler):
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
+        if state != "logged_in":
+            # They have a login screen in front of them now, and the next thing they do is type
+            # into it. Claimed here rather than by the caller because this is the navigation that
+            # put it there — a CLI that forgot to ask would leave the lanes free to navigate away.
+            self._app.store.hold_browser(
+                HOLD_SIGNIN, f"signing in to {adapter.market}", BROWSER_HOLD_TTL_SEC
+            )
         self._app.bus.publish("browser.login", {"market": adapter.market, "state": state})
         # The OS-level raise happens in the CLI (the seller's own frontmost terminal, where
         # activation is honored), but whether they want it is a setting only this side can read.
@@ -721,6 +737,35 @@ class _Handler(BaseHTTPRequestHandler):
             200,
             {"market": adapter.market, "url": url, "state": state, "raise_window": raise_window},
         )
+
+    def _handle_browser_hold(self) -> None:
+        """Claim the shared tab for a caller the daemon is not driving — a person signing in.
+
+        Renewable by calling again under the same holder; expires on its own so a CLI that is
+        closed mid-sign-in costs the agent a quarter of an hour, not the rest of the install.
+        """
+        body = self._attended_body()
+        if body is None:
+            return
+        holder = str(body.get("holder") or "").strip()
+        if not holder:
+            self._send_json(400, {"error": "holder is required"})
+            return
+        reason = str(body.get("reason") or "someone is using the browser")
+        self._app.store.hold_browser(holder, reason, BROWSER_HOLD_TTL_SEC)
+        self._send_json(200, {"held": holder, "ttl_sec": BROWSER_HOLD_TTL_SEC})
+
+    def _handle_browser_release(self) -> None:
+        """Give the tab back. Idempotent — releasing a hold nobody has is a success."""
+        body = self._attended_body()
+        if body is None:
+            return
+        holder = str(body.get("holder") or "").strip()
+        if not holder:
+            self._send_json(400, {"error": "holder is required"})
+            return
+        self._app.store.release_browser_hold(holder)
+        self._send_json(200, {"released": holder})
 
     def _handle_market_login(self) -> None:
         # A read in intent, but it navigates the shared tab, so it takes the same POST +
@@ -751,6 +796,10 @@ class _Handler(BaseHTTPRequestHandler):
         Two reasons, both about not surprising the seller: Chrome being closed (probing acquires
         the browser, which starts it — a status read that opens a window is not a status read),
         and a browser pass already driving the one tab we would navigate.
+
+        A sign-in hold is not one of them. This probe is how a sign-in *ends* — it is the holder's
+        own read, and refusing it on the holder's own claim would mean no sign-in could ever be
+        confirmed.
         """
         from sellee import config as config_module
         from sellee.browser import chrome

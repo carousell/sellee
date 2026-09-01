@@ -263,6 +263,35 @@ def test_a_pass_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
     assert store.get_market_survey(_MARKET)["attempts"] == 0
 
 
+def test_a_sign_in_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
+    """The bug this lane shipped with. Signing in to Facebook earns Facebook a look at the
+    seller's listings; a minute later the lane served it down the one shared tab — while the
+    seller was part-way through typing their Carousell password into that same tab. There is no
+    pass anywhere in that story, which is why asking only about passes was not enough."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.hold_browser("signin", "signing in to fb", 900.0)
+
+    survey.survey_lane(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
+
+    assert store.get_market_survey(_MARKET)["state"] == "due"
+    # Not an attempt either: the market did nothing wrong, and five unserved looks abandon it.
+    assert store.get_market_survey(_MARKET)["attempts"] == 0
+
+
+def test_a_hold_that_has_expired_does_not_defer_the_lane(store, bus) -> None:
+    """A CLI can be closed, killed or Ctrl-C'd with the seller mid-sign-in. A claim that outlived
+    its claimant must stop costing the agent anything — otherwise one abandoned install is a
+    permanently silent agent."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.hold_browser("signin", "signing in to fb", ttl_sec=-1.0)
+
+    survey.survey_lane(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
+
+    assert store.get_market_survey(_MARKET)["state"] != "due"
+
+
 def test_listings_we_already_hold_are_not_offered_again(store, bus) -> None:
     """Everything the agent published itself is on that page too. Offering it back would make a
     second item for one listing."""
