@@ -782,6 +782,47 @@ def test_deciding_nothing_is_reported_as_nothing(store, bus, make_ctx) -> None:
     assert out["decided"] == 0
 
 
+def test_the_seller_can_leave_those_chats_alone_in_words(store, bus, make_ctx) -> None:
+    """The notice carries buttons, but "don't manage those chats" is what a seller actually types,
+    and before this tool existed it landed nowhere at all."""
+    from sellee.tools.registry import TIER_PASS_CHANNEL, dispatch
+
+    ctx = make_ctx(TIER_PASS_CHANNEL)
+    out = dispatch(
+        "decide_unplaceable_conversations", {"market": _MARKET, "decision": "leave"}, ctx
+    )
+
+    assert out == {"market": _MARKET, "decision": "leave"}
+    assert store.unplaceable_muted(_MARKET) is True
+
+
+def test_asking_for_another_look_reopens_the_question_in_words_too(store, bus, make_ctx) -> None:
+    from sellee.tools.registry import TIER_PASS_CHANNEL, dispatch
+
+    _ready(store)
+    store.record_survey_result(_MARKET, [])
+    store.mute_unplaceable(_MARKET)
+    ctx = make_ctx(TIER_PASS_CHANNEL)
+
+    dispatch("decide_unplaceable_conversations", {"market": _MARKET, "decision": "look_again"}, ctx)
+
+    assert store.unplaceable_muted(_MARKET) is False
+    assert store.get_market_survey(_MARKET)["state"] == "due"
+
+
+def test_an_unplaceable_answer_about_a_marketplace_we_do_not_know_is_refused(
+    store, bus, make_ctx
+) -> None:
+    from sellee.tools.registry import TIER_PASS_CHANNEL, ToolError, dispatch
+
+    with pytest.raises(ToolError):
+        dispatch(
+            "decide_unplaceable_conversations",
+            {"market": "nowhere", "decision": "leave"},
+            make_ctx(TIER_PASS_CHANNEL),
+        )
+
+
 def test_an_inbox_only_adoption_owes_no_rail_publish(store, bus, monkeypatch, xdg_tmp) -> None:
     """The half a button cannot express: answer buyers on it where it is, and do not repost it."""
     _found(store, bus)

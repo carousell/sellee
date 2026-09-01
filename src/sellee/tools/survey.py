@@ -26,6 +26,10 @@ from sellee.tools.registry import (
 _DECISIONS = ("manage", "decline", "retry")
 _MANAGE_MODES = ("inbox", "relist")
 
+# What the seller may say about the conversations we could not place. `leave` is them closing the
+# question; `look_again` is them reopening it, which is the same door the notice's own button uses.
+_UNPLACEABLE_DECISIONS = ("leave", "look_again")
+
 
 def _list_discovered(ctx: ToolContext, params: dict) -> dict:
     market = params.get("market")
@@ -72,6 +76,20 @@ def _decide_discovered(ctx: ToolContext, params: dict) -> dict:
     return {"decided": moved, "market": market, "decision": decision, "manage": manage}
 
 
+def _decide_unplaceable(ctx: ToolContext, params: dict) -> dict:
+    market = params["market"]
+    decision = params["decision"]
+    if decision not in _UNPLACEABLE_DECISIONS:
+        raise ToolError(f"decision must be one of {', '.join(_UNPLACEABLE_DECISIONS)}")
+    if marketplaces.get_marketplace(market) is None:
+        raise ToolError(f"no marketplace {market!r}")
+    if decision == "leave":
+        ctx.store.mute_unplaceable(market)
+    else:
+        ctx.store.reopen_market_survey(market)
+    return {"market": market, "decision": decision}
+
+
 register(
     ToolSpec(
         name="list_discovered_listings",
@@ -116,6 +134,29 @@ register(
             "additionalProperties": False,
         },
         handler=_decide_discovered,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
+    )
+)
+register(
+    ToolSpec(
+        name="decide_unplaceable_conversations",
+        description="Record what the seller wants done about buyers messaging them on a "
+        "marketplace about listings I don't manage — the notice that says N people are waiting in "
+        "conversations I can't place. 'leave' stops me raising them at all; use it when they say "
+        "to leave those chats alone, and say back that I've stopped bringing them up. 'look_again' "
+        "takes a fresh look at what they have listed there so I can offer to take some over, and "
+        "reopens the question if they had told me to leave it. The look happens in the background "
+        "and reports itself.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "market": {"type": "string"},
+                "decision": {"type": "string", "enum": list(_UNPLACEABLE_DECISIONS)},
+            },
+            "required": ["market", "decision"],
+            "additionalProperties": False,
+        },
+        handler=_decide_unplaceable,
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )

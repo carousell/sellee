@@ -40,6 +40,12 @@ CB_CONNECT_PROBE = "connectchk"
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
 CB_SURVEY_NO = "adoptno"
+# The two answers to "buyers are waiting in conversations I can't place". Leave = stop telling me,
+# durably. Resurvey is its own token rather than CB_SURVEY_YES: that handler re-acks rather than
+# reopens for any market holding an adopted listing, so on a working install it would be a button
+# that did nothing.
+CB_UNPLACEABLE_LEAVE = "leavechats"
+CB_SURVEY_REOPEN = "adoptagain"
 # Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
 # button that carried the value would apply a stale one when tapped from the scrollback.
 CB_WATCH = "watch"
@@ -57,6 +63,8 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_CONNECT_PROBE,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
+        CB_UNPLACEABLE_LEAVE,
+        CB_SURVEY_REOPEN,
         CB_WATCH,
         CB_ADD_MARKET,
         CB_REMOVE_MARKET,
@@ -81,6 +89,10 @@ SURVEY_NO_LABEL = "No thanks"
 # The way back from a look that could not be served — rides CB_SURVEY_YES, whose handler already
 # reopens a survey for a market with nothing left to decide.
 LOOK_AGAIN_LABEL = "Take another look"
+# The two ways out of the unplaceable-conversations notice. Each names what tapping does to those
+# conversations, because the seller is choosing between leaving them and claiming them.
+LEAVE_CHATS_LABEL = "Leave them alone"
+LOOK_AT_LISTINGS_LABEL = "Look at my listings again"
 # The watch-mode toggle. Each label names what tapping *does*, not what is currently set — the card
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
@@ -109,6 +121,19 @@ def look_again_controls(market: str) -> list:
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
+def unplaceable_controls(market: str) -> list:
+    """The two-button spec on the notice about conversations we cannot place.
+
+    Buttonless until both doors were real: recording "leave them alone" needed durable state, and
+    the look-again token had to be one that actually reopens a survey. A control that lies about
+    what it will do is worse than prose.
+    """
+    return [
+        (LEAVE_CHATS_LABEL, f"{market}:{CB_UNPLACEABLE_LEAVE}"),
+        (LOOK_AT_LISTINGS_LABEL, f"{market}:{CB_SURVEY_REOPEN}"),
+    ]
+
+
 def check_again_controls(market: str) -> list:
     """The one-button control spec that re-probes `market` without touching the window."""
     return [(CHECK_AGAIN_LABEL, f"{market}:{CB_CONNECT_PROBE}")]
@@ -131,6 +156,15 @@ CONNECT_DISCONNECTED = (
     "from /sellee and I'll open it."
 )
 SURVEY_UNKNOWN = "I don't have a list of listings for that marketplace any more."
+# Said in full rather than as a bare "ok": this is the seller closing a question, and what
+# closing it actually means — silence about those chats, not silence about that marketplace —
+# is the part they cannot see from the button they pressed.
+UNPLACEABLE_LEFT = (
+    "Done — I'll leave those {name} chats alone and stop bringing them up. Buyers on the "
+    "listings I do manage are unaffected. Ask me to look at your {name} listings again "
+    "whenever you want any of them taken over."
+)
+UNPLACEABLE_UNKNOWN = "I don't sell on that marketplace, so there are no chats to leave alone."
 
 # Watch mode, both ways. The on side says where the window is for the same reason every other
 # window notice does: this is read on a phone and the window is on a desktop. It promises the tab
@@ -249,6 +283,8 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         return _market_button(store, bus, event["payload"].get("ref"), token)
     if token in (CB_SURVEY_YES, CB_SURVEY_NO):
         return _survey_button(store, event["payload"].get("ref"), token)
+    if token in (CB_UNPLACEABLE_LEAVE, CB_SURVEY_REOPEN):
+        return _unplaceable_button(store, event["payload"].get("ref"), token)
     if token in ("/watch", CB_WATCH):
         return _watch_toggle(store, bus)
     if token in _CONNECT_MODE_FOR_CALLBACK:
@@ -377,6 +413,28 @@ def _survey_button(store, market, token: str) -> tuple:
         # Already said yes. Re-ack, but never reopen the survey: that deletes the accepted rows
         # their first tap created.
         return survey.accepted_text(store, market, in_flight or adopted), None
+    if not market_adapters.can_survey(market, store.seller_region()):
+        return SURVEY_UNKNOWN, None
+    store.reopen_market_survey(market)
+    return survey.stale_text(market), None
+
+
+def _unplaceable_button(store, market, token: str) -> tuple:
+    """A tap on Leave them alone / Look at my listings again.
+
+    Both are idempotent, because the buttons stay on the message forever and a tap months later
+    must still mean what it says. Leaving is durable, so the notice stops for good rather than
+    until the next restart; looking again clears that answer along with the reported set, since a
+    fresh look is the seller reopening the question they closed.
+    """
+    from sellee.browser import markets as market_adapters
+    from sellee.browser import survey
+
+    if not market or marketplaces.get_marketplace(market) is None:
+        return UNPLACEABLE_UNKNOWN, None
+    if token == CB_UNPLACEABLE_LEAVE:
+        store.mute_unplaceable(market)
+        return UNPLACEABLE_LEFT.format(name=marketplaces.display_name(market)), None
     if not market_adapters.can_survey(market, store.seller_region()):
         return SURVEY_UNKNOWN, None
     store.reopen_market_survey(market)

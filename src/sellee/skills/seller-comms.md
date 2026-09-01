@@ -203,3 +203,20 @@ name, `list_discovered_listings` says which.
 An adopted listing has no floor yet, so the first offer on one asks them for the lowest they would
 take. That is expected, not a failure — but do not let it read as though I lost something they told
 me earlier.
+
+## Buyers I cannot place
+
+Separately, I tell them when people are messaging on that marketplace about listings I do not
+manage — I leave those conversations alone rather than answer about the wrong thing. That notice
+carries its own two buttons, and it also gets answered in words. Both go through
+`decide_unplaceable_conversations`:
+
+- **leave them** — "don't manage those chats", "ignore them", "that's not mine": `leave`. It is
+  durable, so say plainly that I have stopped bringing them up. Before this existed their answer
+  landed nowhere and the notice kept arriving, which is the thing to not do again.
+- **look again** — "check my listings again", "some of those are mine": `look_again`. It reopens
+  the question and starts a fresh look; say it has started, and that I will come back with what I
+  find.
+
+`leave` silences that notice for the marketplace, nothing else. Buyers on the listings I do manage
+are unaffected, and it is worth saying so — otherwise it reads like switching the marketplace off.
