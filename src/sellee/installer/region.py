@@ -65,6 +65,31 @@ def region_for_zone(zone: str):
     return found if found in supported() else None
 
 
+def zones_for(region: str) -> list:
+    """The zones this region is known by, in table order — the most populous first.
+
+    The reverse of `region_for_zone`, for the question setup asks when the machine gave no hint:
+    what to propose, and what a zone name for this country looks like.
+    """
+    return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
+
+
+def default_zone(region: str, zone: str | None = None) -> str:
+    """The timezone to propose once the country is known.
+
+    The machine's own zone first: it is where the seller actually is, and the clock check reads
+    the stored zone back as a claim about this machine, not about where they sell. Only when the
+    machine offers nothing does the country answer — and then only for a country with a single
+    zone, where there is nothing to ask. A country with several and a silent machine gets no
+    default; the question carries an example instead of a blank field.
+    """
+    zone = system_timezone() if zone is None else zone
+    if zone:
+        return zone
+    zones = zones_for(region)
+    return zones[0] if len(zones) == 1 else ""
+
+
 def system_timezone() -> str:
     """The machine's IANA zone name, or "" when it cannot be read.
 
@@ -120,6 +145,33 @@ def _zone_exists(name: str) -> bool:
     except Exception:  # noqa: BLE001 — malformed, unknown, or no database: none of them usable
         return False
     return True
+
+
+def zone_error(name: str) -> str:
+    """Why this timezone cannot be stored, or "" when it can.
+
+    The rule `tools.seller.validate_basics` applies, brought within reach of the prompt: a typo
+    should re-ask the question it was typed into, not end the install four lines later with the
+    country already chosen and nothing written. That door stays the authority, so this must never
+    be stricter than it — which is why a machine with no zone database vouches for nothing here
+    too, rather than rejecting every name it cannot look up.
+    """
+    import zoneinfo
+
+    if not name:
+        return "a timezone is needed"
+    try:
+        zoneinfo.ZoneInfo(name)
+        return ""
+    except zoneinfo.ZoneInfoNotFoundError:
+        pass
+    except (ValueError, OSError):
+        return f"{name!r} is not a valid timezone name"
+    try:
+        zoneinfo.ZoneInfo("UTC")
+    except Exception:  # noqa: BLE001 — no zone database here, so there is nothing to check against
+        return ""
+    return f"unknown timezone {name!r}"
 
 
 def guess(zone: str | None = None):

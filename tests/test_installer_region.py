@@ -110,3 +110,50 @@ def test_the_zone_name_is_read_from_the_last_database_directory(monkeypatch) -> 
         region.os.path, "realpath", lambda _: "/home/zoneinfo/share/zoneinfo/Asia/Singapore"
     )
     assert region.system_timezone() == "Asia/Singapore"
+
+
+def test_zones_for_is_the_reverse_of_the_lookup() -> None:
+    assert region.zones_for("SG") == ["Asia/Singapore"]
+    assert region.zones_for("US")[0] == "America/New_York"
+    assert all(region.region_for_zone(zone) == "US" for zone in region.zones_for("US"))
+
+
+def test_a_silent_machine_still_proposes_the_zone_of_a_one_zone_country() -> None:
+    # The prompt that produced "gmt8+" was empty because the machine said nothing. Singapore has
+    # exactly one zone, so there was never anything to ask.
+    assert region.default_zone("SG", "") == "Asia/Singapore"
+
+
+def test_a_country_with_several_zones_proposes_none() -> None:
+    # Guessing New York for a seller in Denver is a wrong default, not a helpful one.
+    assert region.default_zone("US", "") == ""
+
+
+def test_the_machines_own_zone_beats_the_country_default() -> None:
+    """The stored zone is read back as a claim about this machine — the clock check compares it
+    against this process's clock — so where the seller *is* wins over where they sell."""
+    assert region.default_zone("SG", "Asia/Kuala_Lumpur") == "Asia/Kuala_Lumpur"
+    assert region.default_zone("US", "America/Denver") == "America/Denver"
+
+
+def test_zone_error_names_what_is_wrong_and_passes_what_is_right() -> None:
+    assert region.zone_error("Asia/Singapore") == ""
+    assert region.zone_error("America/Indiana/Indianapolis") == ""
+    assert "gmt8+" in region.zone_error("gmt8+")
+    assert region.zone_error("")
+    assert region.zone_error("../../etc/passwd")
+
+
+def test_zone_error_is_never_stricter_than_the_write_door() -> None:
+    """Setup checks locally so a typo re-asks instead of ending the install; the door stays the
+    authority, and a local check that refused what the door accepts would be a wall."""
+    from sellee.tools.seller import BasicsError, validate_basics
+
+    for name in ("Asia/Singapore", "America/New_York", "gmt8+", "UTC+8", "../../etc/passwd"):
+        refused_here = bool(region.zone_error(name))
+        try:
+            validate_basics({"timezone": name})
+            refused_there = False
+        except BasicsError:
+            refused_there = True
+        assert refused_here == refused_there, name

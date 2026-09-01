@@ -524,6 +524,43 @@ def test_a_timezone_outside_the_supported_countries_makes_no_guess(
     assert "No region recorded" in out
 
 
+def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
+    world, monkeypatch, capsys
+) -> None:
+    """A typo in the one free-text field of setup used to be fatal: it went to the daemon, the
+    daemon refused it, and the install ended with the country already chosen and nothing written.
+    The question comes back instead, carrying the reason and the country's own zone."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    # country, a zone that does not exist, then Enter for the proposed one — and the tail: no
+    # marketplace, the window question defaulted, no chat channel.
+    _answer(monkeypatch, ["1", "gmt8+", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"] == {
+        "region": "SG",
+        "currency": "SGD",
+        "timezone": "Asia/Singapore",
+    }
+    out = capsys.readouterr().out
+    assert "unknown timezone 'gmt8+'" in out
+    assert "zone names look like Asia/Singapore" in out
+
+
+def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
+    world, monkeypatch, capsys
+) -> None:
+    """The empty field is what the typo was typed into. Singapore has exactly one zone, so the
+    question has an answer already in it and Enter is enough."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["1", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["timezone"] == "Asia/Singapore"
+    assert "Timezone? [Asia/Singapore]" in capsys.readouterr().out
+
+
 def test_provisioning_gets_the_region_that_was_recorded(world) -> None:
     setup_main("--yes", "--manual")
     assert world.calls["provisioned"] == "SG"

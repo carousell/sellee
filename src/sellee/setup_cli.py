@@ -498,7 +498,7 @@ def _stored_basics(port: int, token: str) -> dict:
 
 def _basics_from_flag(args) -> dict:
     code = str(args.region).strip().upper()
-    basics = {"region": code, "timezone": region_guess.system_timezone()}
+    basics = {"region": code, "timezone": region_guess.default_zone(code)}
     currency = region_guess.CURRENCIES.get(code)
     if currency:
         basics["currency"] = currency
@@ -517,13 +517,38 @@ def _ask_basics(ui: Ui):
     supported = region_guess.supported()
     code = ui.choose("Which country do you sell in?", supported)
     region = supported[code]
-    timezone = ui.ask("Timezone?", default=region_guess.system_timezone(), lead=False).strip()
     basics = {
         "region": region,
         "currency": region_guess.CURRENCIES.get(region, ""),
-        "timezone": timezone,
+        "timezone": _ask_timezone(ui, region),
     }
     return {key: value for key, value in basics.items() if value}
+
+
+def _ask_timezone(ui: Ui, region: str) -> str:
+    """Ask for the timezone until the answer is one that can be stored, or until it is skipped.
+
+    Every other prompt in setup re-asks an answer it cannot use. This one sent it to the daemon
+    instead, so a typo ended the install — with the country already chosen, nothing written, and
+    an error naming a route the seller never typed. Checked here against the same rule the write
+    door applies, and the question comes back with the reason and an example.
+
+    Enter with no default still skips it. The zone is a convenience — it is what quiet hours and
+    the clock check read — and a seller who cannot name their own zone is better served by a
+    finished install than by a question with no way past it.
+    """
+    default = region_guess.default_zone(region)
+    example = (region_guess.zones_for(region) or ["Asia/Singapore"])[0]
+    hint = "" if default else f" (e.g. {example})"
+    while True:
+        answer = ui.ask(f"Timezone?{hint}", default=default, lead=False).strip()
+        if not answer:
+            ui.note("no timezone recorded — ask Sellee to set one any time")
+            return ""
+        reason = region_guess.zone_error(answer)
+        if not reason:
+            return answer
+        ui.say(f"{reason} — zone names look like {example}.")
 
 
 # --- the rail ----------------------------------------------------------------------------------
