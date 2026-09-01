@@ -26,6 +26,7 @@ import json
 from typing import TypedDict
 
 from sellee.db import Database
+from sellee.store.browser import UNPLACEABLE_MUTED_KEY
 from sellee.store.helpers import (
     ItemRecord,
     StoreError,
@@ -200,6 +201,14 @@ class SurveyMixin:
             conn.execute(
                 "DELETE FROM discovered_listings WHERE market = ? AND status != 'adopted'",
                 (market,),
+            )
+            # And what we told the seller about conversations we could not place, including their
+            # answer to it. A fresh look may make some of them placeable, and whatever is still
+            # unplaceable afterwards is worth saying once more.
+            conn.execute("DELETE FROM unplaceable_conversations WHERE market = ?", (market,))
+            conn.execute(
+                "DELETE FROM meta WHERE key = ?",
+                (UNPLACEABLE_MUTED_KEY.format(market=market),),
             )
             conn.execute(
                 "INSERT INTO market_surveys (market, state, requested_ts) VALUES (?, 'due', ?) "

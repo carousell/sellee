@@ -466,3 +466,70 @@ def test_adopting_a_listing_forgets_that_markets_lookups(store) -> None:
     assert store.thread_listing_lookup("fb:4") is None
     # Scoped to the market that changed — Carousell learned nothing from a Facebook adoption.
     assert store.thread_listing_lookup("carousell:5") is not None
+
+
+# --- conversations we cannot place --------------------------------------------------------------
+
+
+def test_only_conversations_never_mentioned_come_back_as_unreported(store) -> None:
+    """The set a sweep sees is a fact about one read of the marketplace's list, not about the
+    inbox: consecutive sweeps see overlapping but different subsets, and keyed on the set every
+    one of those differences read to the seller as news."""
+    assert store.record_unplaceable("fb", ["fb:1", "fb:2"]) == {
+        "unreported": ["fb:1", "fb:2"],
+        "total": 2,
+    }
+    store.queue_unplaceable_notice("fb", "2 people are waiting")
+
+    # The same sweep again, and a partial one — neither has anything new to say.
+    assert store.record_unplaceable("fb", ["fb:1", "fb:2"])["unreported"] == []
+    assert store.record_unplaceable("fb", ["fb:2"])["unreported"] == []
+    # A genuinely new buyer does.
+    assert store.record_unplaceable("fb", ["fb:2", "fb:3"]) == {
+        "unreported": ["fb:3"],
+        "total": 3,
+    }
+
+
+def test_the_count_is_everyone_waiting_not_only_the_new_one(store) -> None:
+    store.record_unplaceable("fb", ["fb:1", "fb:2"])
+    store.queue_unplaceable_notice("fb", "2 people are waiting")
+    assert store.record_unplaceable("fb", ["fb:3"]) == {"unreported": ["fb:3"], "total": 3}
+
+
+def test_a_market_keeps_its_own_conversations(store) -> None:
+    store.record_unplaceable("fb", ["fb:1"])
+    store.queue_unplaceable_notice("fb", "1 person is waiting")
+    assert store.record_unplaceable("carousell", ["carousell:1"])["unreported"] == ["carousell:1"]
+
+
+def test_queueing_and_marking_told_are_one_act(store) -> None:
+    """Stamping without queueing loses the report silently; queueing without stamping is the
+    duplicate this exists to stop."""
+    store.record_unplaceable("fb", ["fb:1"])
+    store.queue_unplaceable_notice("fb", "1 person is waiting", controls=[("Leave them", "fb:x")])
+
+    notice = store.claim_queued_notices(10)[0]
+    assert notice["text"] == "1 person is waiting"
+    assert notice["controls"] == [["Leave them", "fb:x"]]
+    assert store.record_unplaceable("fb", ["fb:1"])["unreported"] == []
+
+
+def test_the_sellers_answer_to_leave_them_alone_is_remembered(store) -> None:
+    assert store.unplaceable_muted("fb") is False
+    store.mute_unplaceable("fb")
+    assert store.unplaceable_muted("fb") is True
+    assert store.unplaceable_muted("carousell") is False
+
+
+def test_a_fresh_look_at_the_listings_re_arms_the_notice(store) -> None:
+    """The way back the notice's own text offers: whatever is still unplaceable after a new look
+    is worth saying once more, and the mute goes with it."""
+    store.record_unplaceable("fb", ["fb:1"])
+    store.queue_unplaceable_notice("fb", "1 person is waiting")
+    store.mute_unplaceable("fb")
+
+    store.reopen_market_survey("fb")
+
+    assert store.unplaceable_muted("fb") is False
+    assert store.record_unplaceable("fb", ["fb:1"])["unreported"] == ["fb:1"]
