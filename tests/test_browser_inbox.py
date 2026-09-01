@@ -327,6 +327,76 @@ def test_an_escalated_thread_is_still_opened_to_chase_our_own_send(store, bus, s
     assert _notices(store) == []  # the seller hears nothing: this is our own bookkeeping
 
 
+def test_a_conversation_the_list_never_names_is_still_chased(store, bus, seeded) -> None:
+    """The list is a window onto the folder, not the folder. Facebook's unmounts rows far outside
+    the viewport, so a thread in the middle is never returned — and the settle read that answers
+    "did our message land" only ever visited what the list named. Every market has a thread URL,
+    so the answer does not have to be found in a list."""
+    _thread(store, seeded)
+    store.record_inbound("carousell:99", msg_id="in|q|1", text="still available?", ts=500.0)
+    intent = _unverified_intent(store)
+
+    client = StubClient(
+        conversations=[],  # the list does not mention it at all
+        tails={"99": [_bubble("still available?"), _bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.intent_status(intent) == "committed"
+    assert store.list_open_escalations() == []
+    assert [e.payload["chased"] for e in _kinds(bus, "browser.read")] == [1]
+    assert _notices(store) == []
+
+
+def test_a_thread_the_list_already_opened_is_not_chased_twice(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    _unverified_intent(store)
+    client = StubClient(
+        conversations=[_conv(unread=0, last_message=_LINK[:40])],
+        tails={"99": [_bubble(_LINK, "out")]},
+    )
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert [e.payload["chased"] for e in _kinds(bus, "browser.read")] == [0]
+
+
+def test_a_conversation_we_cannot_chase_does_not_blind_the_whole_market(store, bus, seeded) -> None:
+    """The list read succeeded, so the market is visible. And a conversation the marketplace has
+    deleted is unreadable forever: counting it would hold this market blind for the life of the
+    install, and the attempt cap cannot bound that — an attempt is only recorded by a read that
+    succeeded and did not find the bubble."""
+    _thread(store, seeded)
+    _unverified_intent(store)
+    deps = _deps(store, bus, StubClient(conversations=[], tails={"99": None}))
+
+    for _ in range(Config().browser_blind_after + 1):
+        inbox.inbox_lane(deps)
+
+    assert deps.blind == {}
+    assert _notices(store) == []
+    assert [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
+
+
+def test_a_chase_that_cannot_even_navigate_still_lets_the_tick_finish(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    _unverified_intent(store)
+
+    class RefusesThreads(StubClient):
+        def navigate(self, url):
+            if url.rstrip("/").endswith("/99"):
+                raise BrowserToolError("navigation refused")
+            super().navigate(url)
+
+    deps = _deps(store, bus, RefusesThreads(conversations=[]))
+    inbox.inbox_lane(deps)
+
+    assert deps.blind == {}
+    assert [e.payload["chased"] for e in _kinds(bus, "browser.read")] == [1]
+    assert [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")] == [
+        "navigation refused"
+    ]
+
+
 def test_a_settled_bubble_is_not_also_recorded_as_a_manual_seller_reply(store, bus, seeded) -> None:
     """Settling has to keep the reconciler off the bubble it just recognised, or our own reply is
     journaled as one the seller typed in the app — a `manual` outbound row means "our account spoke
