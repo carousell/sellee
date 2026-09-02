@@ -37,10 +37,12 @@ class StubClient:
         product_id=_PRODUCT_ID,
         tails=None,
         click_fails=False,
+        blocked=None,
     ):
         self.login = login
         self.conversations = conversations
         self.list_error = list_error
+        self.blocked = blocked
         self.folder_marked = folder_marked
         self.folder_already_open = folder_already_open
         self.focus_works = focus_works
@@ -103,7 +105,10 @@ class StubClient:
             return self.focus_works
         if function == fb_market.CONVERSATIONS_LIST_JS:
             if self.list_error is not None:
-                return {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
+                answer = {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
+                if self.blocked:
+                    answer["blocked"] = self.blocked
+                return answer
             return {"conversations": list(self.conversations)}
         if function == fb_market.PRODUCT_ID_JS:
             self.product_id_reads += 1
@@ -130,7 +135,7 @@ def seeded(store):
     return store.get_item(item["id"])
 
 
-def _deps(store, bus, client):
+def _deps(store, bus, client, **overrides):
     clock = {"t": 1000.0}
 
     def now():
@@ -138,7 +143,11 @@ def _deps(store, bus, client):
         return clock["t"]
 
     return inbox.InboxDeps(
-        store=store, bus=bus, config=Config(), browser_factory=lambda: client, now=now
+        store=store,
+        bus=bus,
+        config=Config(**overrides) if overrides else Config(),
+        browser_factory=lambda: client,
+        now=now,
     )
 
 
@@ -1102,3 +1111,15 @@ def test_every_mapped_condition_is_one_facebook_offers() -> None:
     """A condition the dropdown does not offer is a publish that fails at the last moment."""
     for said in ("Brand new", "Like new", "Lightly used", "Fair", "", "unknown"):
         assert fb_market.condition_for(said) in fb_market.CONDITIONS
+
+
+def test_facebooks_pin_wall_is_named_in_its_own_words(store, bus, seeded) -> None:
+    """The wall in front of encrypted chats asks for a Messenger PIN; the notice says so because
+    this adapter ships the wording — the generic sentence cannot know what any wall asks for."""
+    client = StubClient(list_error="the Marketplace folder is not open", blocked="verify")
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
+    assert "PIN" in _notice_texts(store)[0]

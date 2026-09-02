@@ -851,6 +851,7 @@ def _count_blind(
     payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})
     deps.bus.publish("browser.blind", payload)
     if failures >= int(deps.config.browser_blind_after):
+        adapter = market_adapters.get_adapter(market)
         _notify_once(
             deps,
             f"blind:{market}",
@@ -860,6 +861,7 @@ def _count_blind(
                 count=count,
                 width=(measured or {}).get("width") or 0,
                 where=window.where(),
+                verify_notice=adapter.verify_notice if adapter else "",
             ),
         )
 

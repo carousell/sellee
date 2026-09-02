@@ -39,6 +39,15 @@ SYSTEM_HANDLES = frozenset({"facebook", "marketplace", "meta business support", 
 # empty tail on such a row must not be counted as blindness, and the row is never worth opening.
 EMPTY_PREVIEW_PATTERN = r"^\s*message unavailable\b"
 
+# What Facebook's verification wall is: a PIN prompt in front of encrypted chats, hiding the
+# messages entirely. The wall is reported by the list artifact (`blocked: 'verify'`); the wording
+# is this market's because the thing being asked for — a Messenger PIN — is.
+VERIFY_NOTICE = (
+    "I can't read your {name} messages — {name} is asking for your PIN before it will show them. "
+    "That one's yours to answer: open my Chrome{where}, enter it there, and I'll pick them up on "
+    "my next look. Until then your {name} app has anything I've missed."
+)
+
 # The attribute `INBOX_FOLDER_JS` stamps on the folder control, and the selector the caller clicks.
 # One constant so the marking and the clicking cannot drift apart.
 FOLDER_MARK_ATTR = "data-sellee-inbox-folder"

@@ -946,17 +946,20 @@ def test_a_window_too_narrow_is_named_as_such_not_blamed_on_the_market(store, bu
     assert "wider" in notice
 
 
-def test_a_pin_prompt_is_named_rather_than_blamed_on_the_market(store, bus, seeded) -> None:
-    """Messages behind a PIN prompt are behind a question addressed to the seller, not a refusal;
-    the measured `blocked` field says which."""
-    client = StubClient(error="the Marketplace folder is not open", measured={"blocked": "verify"})
+def test_a_verification_wall_is_named_rather_than_blamed_on_the_market(store, bus, seeded) -> None:
+    """Messages behind a verification wall are behind a question addressed to the seller, not a
+    refusal; the measured `blocked` field says which. A market whose adapter ships no wording of
+    its own gets the generic sentence — never another market's PIN. (Facebook's own wording is
+    tested with its lane, in test_browser_facebook.py.)"""
+    client = StubClient(error="no conversation rows", measured={"blocked": "verify"})
     deps = _deps(store, bus, client, browser_blind_after=1)
 
     inbox.inbox_lane(deps)
 
     assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
     notice = _texts(store)[0]
-    assert "PIN" in notice
+    assert "verify something" in notice
+    assert "PIN" not in notice
     # Never the sentence for a login that is working fine.
     assert "still logged in" not in notice
 

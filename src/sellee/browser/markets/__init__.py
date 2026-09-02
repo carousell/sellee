@@ -99,6 +99,9 @@ class MarketAdapter:
     # case-insensitively against the list row's preview. Without it, a withdrawn conversation is
     # indistinguishable from one our own reader failed on, and the two want opposite answers.
     empty_preview_pattern: str = ""
+    # This market's own wording for its verification wall (`blindness.CAUSE_VERIFY`) — what the
+    # wall asks for is the market's to name. Empty falls back to blindness.py's generic sentence.
+    verify_notice: str = ""
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -142,6 +145,7 @@ FACEBOOK = MarketAdapter(
     composer=tuple(Selector(**row) for row in facebook.COMPOSER_DEFAULTS),
     system_handles=facebook.SYSTEM_HANDLES,
     empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
+    verify_notice=facebook.VERIFY_NOTICE,
 )
 
 _ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}

@@ -105,13 +105,15 @@ VIEWPORT_NOTICE = (
     "Until then your {name} app has anything I've missed."
 )
 
-# Also the seller's to fix, and the only one where the marketplace is asking *them* a question: a
-# PIN prompt in front of encrypted chats hides the messages entirely and looks from the lane like
-# the marketplace refusing us, so this names the prompt and nothing else.
+# Also the seller's to fix, and the only one where the marketplace is asking *them* a question —
+# a verification wall in front of the messages looks from the lane like the marketplace refusing
+# us. What the wall actually asks for is the market's own business, so an adapter that reports
+# this cause ships its own wording (`verify_notice`); this is the fallback for one that does not,
+# and it names only what any wall evidences.
 VERIFY_NOTICE = (
-    "I can't read your {name} messages — {name} is asking for your PIN before it will show them. "
-    "That one's yours to answer: open my Chrome{where}, enter it there, and I'll pick them up on "
-    "my next look. Until then your {name} app has anything I've missed."
+    "I can't read your {name} messages — {name} is asking you to verify something before it will "
+    "show them. That one's yours to answer: open my Chrome{where}, do it there, and I'll pick "
+    "them up on my next look. Until then your {name} app has anything I've missed."
 )
 
 _NOTICES = {
@@ -142,14 +144,28 @@ def cause_for(cause: str, measured: dict | None) -> str:
     return CAUSE_VIEWPORT if 0 < width < MIN_USABLE_WIDTH_PX else cause
 
 
-def notice_for(cause: str, *, name: str, count: int = 0, width: int = 0, where: str = "") -> str:
+def notice_for(
+    cause: str,
+    *,
+    name: str,
+    count: int = 0,
+    width: int = 0,
+    where: str = "",
+    verify_notice: str = "",
+) -> str:
     """The sentence for one cause, addressed to the seller.
+
+    `verify_notice` is the market's own wording for its verification wall, used only on that
+    cause — the wall asks for something market-specific (Facebook: a Messenger PIN) that a shared
+    sentence cannot name without lying about the others.
 
     Falls back to the marketplace wording for an unknown cause: of them all it is the only one that
     asserts nothing about our own machinery, so a cause nobody has taught this module yet cannot
     make us claim a fault we have not established.
     """
     template = _NOTICES.get(cause, MARKET_NOTICE)
+    if cause == CAUSE_VERIFY and verify_notice:
+        template = verify_notice
     return template.format(
         name=name, count=count, width=int(width or 0), needed=MIN_USABLE_WIDTH_PX, where=where
     )
