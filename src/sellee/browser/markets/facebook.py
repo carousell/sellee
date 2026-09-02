@@ -43,6 +43,14 @@ SYSTEM_HANDLES = frozenset({"facebook", "marketplace", "meta business support", 
 # empty tail on such a row must not be counted as blindness, and the row is never worth opening.
 EMPTY_PREVIEW_PATTERN = r"^\s*message unavailable\b"
 
+# A row's trailing relative-time token — "2m", "1h", "Just now", "Yesterday", "10:11 AM", "12/05".
+# Messenger's clock advances it on a message that has not changed, so a row comparison must not
+# read it as the conversation changing.
+ROW_CLOCK_PATTERN = (
+    r"(?:\d{1,2}:\d{2}\s?(?:AM|PM)?|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d+[smhdw]"
+    r"|just now|yesterday|today|mon|tue|wed|thu|fri|sat|sun)\s*$"
+)
+
 # What Facebook's verification wall is: a PIN prompt in front of encrypted chats, hiding the
 # messages entirely. The wall is reported by the list artifact (`blocked: 'verify'`); the wording
 # is this market's because the thing being asked for — a Messenger PIN — is.

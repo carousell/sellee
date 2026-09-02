@@ -380,23 +380,17 @@ def _activate(client, adapter) -> None:
     )
 
 
-# A row's trailing relative-time token — "2m", "1h", "Just now", "Yesterday", "10:11 AM", "12/05".
-# The clock advances it on a message that has not changed, so it must not count as the row changing.
-_ROW_CLOCK_RE = re.compile(
-    r"(?:\d{1,2}:\d{2}\s?(?:AM|PM)?|\d{1,2}/\d{1,2}(?:/\d{2,4})?|\d+[smhdw]"
-    r"|just now|yesterday|today|mon|tue|wed|thu|fri|sat|sun)\s*$",
-    re.IGNORECASE,
-)
-
-
-def _row_key(row: dict) -> str:
+def _row_key(adapter, row: dict) -> str:
     """What this row said, in a form that only changes when the conversation does.
 
     The comparison key behind the lookup cache: title and last message with the trailing clock
-    token stripped, so a preview whose "2m" becomes "1h" is the same message.
+    token stripped, so a preview whose "2m" becomes "1h" is the same message. What a clock token
+    looks like is the market's own rendering, so the pattern is the adapter's.
     """
     title = str(row.get("title") or "").strip()
-    preview = _ROW_CLOCK_RE.sub("", str(row.get("last_message") or "").strip()).strip()
+    preview = str(row.get("last_message") or "").strip()
+    if adapter.row_clock_pattern:
+        preview = re.sub(adapter.row_clock_pattern, "", preview, flags=re.IGNORECASE).strip()
     return f"{title}\u241f{preview}"
 
 
@@ -418,7 +412,7 @@ def _with_product_id(
     """
     if not adapter.product_id_js or row.get("product_id"):
         return row
-    row_key = _row_key(row)
+    row_key = _row_key(adapter, row)
     remembered = deps.store.thread_listing_lookup(thread_id)
     if remembered is not None and remembered["row_key"] == row_key:
         product_id = remembered["product_id"]
