@@ -80,9 +80,9 @@ class MarketAdapter:
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
     # Publishing by driving the form rather than by a recipe a model reads: the market's create
-    # form as artifacts and overridable steps (`markets/publishing.py`), driven by the shared flow
-    # in `browser/publisher.py`. Presence is the capability — a market has one of these or it has
-    # a `listing_flow`, and `supported_markets` asks for either.
+    # form as artifacts plus the choreography that fills it (`markets/publishing.py`), run behind
+    # the gates and the commit bracket in `browser/publisher.py`. Presence is the capability — a
+    # market has one of these or it has a `listing_flow`, and `supported_markets` asks for either.
     publish: publishing.PublishSurface | None = None
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()

@@ -11,15 +11,18 @@ and the moment of commit is the one place we cannot see. Hence two exception typ
   * from the commit onward, `PublishUnverified`: a listing may exist, and re-driving would give
     the seller two.
 
-What is market-specific — the artifacts and the individual steps — lives on the adapter's
-`markets.publishing.PublishSurface`. What is ours — the order of the steps, the exception bracket
-above, the human pacing — lives here, in a module function no market module can override.
+What is market-specific — the artifacts, and the whole choreography of filling the form and
+pressing publish — lives on the adapter's `markets.publishing.PublishSurface`, because create forms
+share no sequence. What is ours lives here, in a module function no market module can override: the
+bracket above, the two gates that run between the market's `prepare` and its `commit`, reading the
+outcome, and the human pacing.
 
 Nothing here decides *what* to say — title, price, description and photographs arrive as an item.
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import shutil
 from pathlib import Path
@@ -28,7 +31,7 @@ from urllib.parse import urljoin
 from sellee import paths
 from sellee.browser import markets as market_adapters
 from sellee.browser import reconcile
-from sellee.browser.client import BrowserError
+from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.markets.publishing import (
     STEP_SETTLE_SEC,
     PublishNotAttempted,
@@ -55,60 +58,56 @@ def publish(
     """Fill this market's create form from an item and publish it.
 
     Answers a `PublishOutcome`. Raises `PublishNotAttempted` when nothing was created and
-    `PublishUnverified` when something may have been — never a bare `BrowserError`, because the
-    caller's decision to retry turns entirely on which of those two it is.
+    `PublishUnverified` when something may have been — never a bare `BrowserError` from the drive
+    itself, because the caller's decision to retry turns entirely on which of those two it is. A
+    browser that cannot run at all still raises `BrowserUnavailable`: that is not this item's
+    fault, and the caller answers it by skipping its browser lanes rather than by retiring a pair.
     """
     surface = adapter.publish
     if surface is None:
         raise PublishNotAttempted(f"{adapter.market} has no publish surface")
     pause = sleep or _sleep
 
-    client.navigate_visible(create_url)
-    pause(STEP_SETTLE_SEC)
-    surface.open_form(client, pause)
-    found = client.evaluate(surface.fields_js) or {}
-    _refuse_unless_ready(surface, found)
-
-    if photos:
-        surface.attach_photos(client, photos, found, pause)
+    with _nothing_exists_yet():
+        client.navigate_visible(create_url)
         pause(STEP_SETTLE_SEC)
-    surface.fill(client, item, found)
-    condition = surface.map_condition(str(item.get("condition") or ""))
-    surface.choose_option(client, "condition", condition, found, pause)
-    surface.choose_option(client, "category", surface.default_category, found, pause)
-    surface.refuse_paid_extras(client)
-    surface.verify_form(client, item)
+        # The market's own choreography, whatever that is, and then the two gates — which run
+        # after it whatever it did. They are rules about us, not about any marketplace: never
+        # publish input the form did not take, never spend the seller's money.
+        surface.prepare(client, item, photos, pause)
+        surface.refuse_paid_extras(client)
+        surface.verify_form(client, item)
 
     # Everything past here may have created a listing.
     return _commit(client, adapter, surface, item, listings_url, pause)
 
 
-def _refuse_unless_ready(surface, found: dict) -> None:
-    missing = [step for step in surface.required_fields if step not in (found.get("marked") or [])]
-    if missing:
+@contextlib.contextmanager
+def _nothing_exists_yet():
+    """Everything inside this runs while there is no listing, so a stray failure is a refusal.
+
+    A market writes its own `prepare`; if one lets a bare browser error out, the caller cannot tell
+    which side of the commit it came from and retires the item rather than risk a duplicate. That
+    is ours to prevent here, not each market's to remember. Two things still pass through
+    untouched: `PublishUnverified`, because a market that says it crossed its own point of no
+    return is believed, and a browser that is gone altogether, which is not this item's fault.
+    """
+    try:
+        yield
+    except (PublishNotAttempted, PublishUnverified, BrowserUnavailable):
+        raise
+    except BrowserError as exc:
         raise PublishNotAttempted(
-            f"the {surface.market} create form is missing {missing} — nothing was filled in",
-            retryable=True,
-        )
+            f"the form was not filled in and nothing was submitted: {exc}", retryable=True
+        ) from exc
 
 
 def _commit(client, adapter, surface, item: dict, listings_url, pause) -> PublishOutcome:
-    """Press through the form's own steps, and find out what was made.
+    """Let the market press what it calls publishing, and find out what was made.
 
     Everything in here is past the point of no return, so every failure is `PublishUnverified`:
     re-driving any of them would give the seller two listings.
     """
-    # Last check on the safe side of the line. A marketplace greys Next out until it has
-    # everything it requires (Facebook: no photo, no Next), and clicking a disabled button
-    # submits nothing — treating that as "may have gone through" would retire the item over a
-    # missing photograph. Read fresh: the caller's `found` predates filling, when Next is always
-    # disabled.
-    ready = client.evaluate(surface.fields_js) or {}
-    if ready.get("next_enabled") is False:
-        raise PublishNotAttempted(
-            f"the {surface.market} form will not accept this listing yet — it still wants "
-            "something, and nothing was submitted"
-        )
     try:
         surface.commit(client, pause)
 
@@ -116,7 +115,7 @@ def _commit(client, adapter, surface, item: dict, listings_url, pause) -> Publis
         # navigated, the likeliest moment for a browser call to fail, and a failure here means a
         # listing that probably exists and cannot be named. Outside the bracket it escaped as a
         # bare `BrowserError`, no ledger row was written, and the next tick made a second copy.
-        result = client.evaluate(surface.result_js) or {}
+        result = (client.evaluate(surface.result_js) or {}) if surface.result_js else {}
         listing_id = result.get("listing_id")
         if listing_id:
             return PublishOutcome(
