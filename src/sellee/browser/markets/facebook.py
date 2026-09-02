@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import json
 
-from sellee.browser.markets import jslib
+from sellee.browser.markets import jslib, publishing
 
 # Where a listing's id sits in its permalink. Facebook names the listing a conversation is about
 # only inside the opened conversation — see `PRODUCT_ID_JS` — and this is what turns that link into
@@ -799,6 +799,30 @@ def condition_for(said: str) -> str:
 # a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own
 # catch-all word, and one of the menu's options.
 DEFAULT_CATEGORY = "Miscellaneous"
+
+
+class FacebookPublish(publishing.PublishSurface):
+    """Facebook's create form. The shared step defaults ARE this form's flow — it was the first
+    driven market — so only the artifacts and the vocabulary are its own."""
+
+    market = "fb"
+    fields_js = PUBLISH_FIELDS_JS
+    readback_js = PUBLISH_READBACK_JS
+    result_js = PUBLISH_RESULT_JS
+    default_category = DEFAULT_CATEGORY
+
+    def target(self, step: str) -> str:
+        return publish_target(step)
+
+    def options_js(self, wanted: str) -> str:
+        return options_js(wanted)
+
+    def map_condition(self, said: str) -> str:
+        return condition_for(said)
+
+
+# Stateless, so one instance serves every drive.
+PUBLISH_SURFACE = FacebookPublish()
 
 
 # The reply composer, as shipped defaults under the heal cache.

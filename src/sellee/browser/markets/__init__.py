@@ -10,10 +10,9 @@ registry entry, not edits threaded through the layer — the same split `channel
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Callable
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell, facebook
+from sellee.browser.markets import carousell, facebook, publishing
 
 
 @dataclass(frozen=True)
@@ -80,22 +79,11 @@ class MarketAdapter:
     # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
-    # Publishing by driving the form rather than by a recipe a model reads. These move together: a
-    # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
-    # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
-    # what the form holds; `publish_options_js(wanted)` marks one dropdown option;
-    # `publish_result_js` names the listing that was made.
-    publish_fields_js: str = ""
-    publish_readback_js: str = ""
-    publish_result_js: str = ""
-    publish_target: Callable[[str], str] = lambda step: ""
-    publish_options_js: Callable[[str], str] = lambda wanted: ""
-    # Where a driver files a listing when nothing better is known — choosing a category from a
-    # title is the listing flow's judgement, not a driver's.
-    publish_default_category: str = ""
-    # This market's own word for an item's free-text condition — the vocabulary its condition
-    # dropdown offers is the market's, so the mapping lives with the market, not the driver.
-    publish_condition_for: Callable[[str], str] = lambda said: ""
+    # Publishing by driving the form rather than by a recipe a model reads: the market's create
+    # form as artifacts and overridable steps (`markets/publishing.py`), driven by the shared flow
+    # in `browser/publisher.py`. Presence is the capability — a market has one of these or it has
+    # a `listing_flow`, and `supported_markets` asks for either.
+    publish: publishing.PublishSurface | None = None
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -142,13 +130,7 @@ FACEBOOK = MarketAdapter(
     my_listings_js=facebook.MY_LISTINGS_JS,
     listing_detail_js=facebook.LISTING_DETAIL_JS,
     my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
-    publish_fields_js=facebook.PUBLISH_FIELDS_JS,
-    publish_readback_js=facebook.PUBLISH_READBACK_JS,
-    publish_result_js=facebook.PUBLISH_RESULT_JS,
-    publish_target=facebook.publish_target,
-    publish_options_js=facebook.options_js,
-    publish_default_category=facebook.DEFAULT_CATEGORY,
-    publish_condition_for=facebook.condition_for,
+    publish=facebook.PUBLISH_SURFACE,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
@@ -198,11 +180,11 @@ def supported_markets() -> list:
 def _has_a_publish_path(market: str) -> bool:
     """Whether anything at all knows how to put a listing on this marketplace.
 
-    Either a recipe skill a publish pass reads or the publish selectors `browser/publisher.py`
+    Either a recipe skill a publish pass reads or a publish surface `browser/publisher.py`
     drives — asked of the code, never of a registry flag.
     """
     adapter = _ADAPTERS.get(market)
-    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish_fields_js))
+    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish is not None))
 
 
 def surveyable_markets(region: str | None = None) -> list:

@@ -2,7 +2,7 @@
 
 A recipe pass works and is what Carousell uses, but it costs about $1.54 a listing in model turns
 to do something deterministic. The two coexist: `supported_markets` asks whether a market has a
-recipe **or** publish selectors.
+recipe **or** a publish surface.
 
 The shape is `browser/sink.py`'s, because a publish commits something the seller cannot take back
 and the moment of commit is the one place we cannot see. Hence two exception types:
@@ -11,6 +11,10 @@ and the moment of commit is the one place we cannot see. Hence two exception typ
   * from the commit onward, `PublishUnverified`: a listing may exist, and re-driving would give
     the seller two.
 
+What is market-specific — the artifacts and the individual steps — lives on the adapter's
+`markets.publishing.PublishSurface`. What is ours — the order of the steps, the exception bracket
+above, the human pacing — lives here, in a module function no market module can override.
+
 Nothing here decides *what* to say — title, price, description and photographs arrive as an item.
 """
 
@@ -18,7 +22,6 @@ from __future__ import annotations
 
 import logging
 import shutil
-from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import urljoin
 
@@ -26,43 +29,24 @@ from sellee import paths
 from sellee.browser import markets as market_adapters
 from sellee.browser import reconcile
 from sellee.browser.client import BrowserError
+from sellee.browser.markets.publishing import (
+    STEP_SETTLE_SEC,
+    PublishNotAttempted,
+    PublishOutcome,
+    PublishUnverified,
+)
+
+__all__ = [
+    "PublishNotAttempted",
+    "PublishOutcome",
+    "PublishUnverified",
+    "can_drive",
+    "clear_staged",
+    "publish",
+    "stage_photos",
+]
 
 log = logging.getLogger(__name__)
-
-# The fields that must be marked before anything is typed. The two text inputs are
-# indistinguishable except by label, so a partly-recognised form could put the price in the title.
-REQUIRED_FIELDS = ("title", "price", "next")
-
-# How long the form is given to settle between steps, in seconds. A dropdown fetches its options.
-STEP_SETTLE_SEC = 2.0
-COMMIT_SETTLE_SEC = 6.0
-
-
-class PublishNotAttempted(BrowserError):
-    """Nothing was created.
-
-    `retryable` says whether trying again could produce a different answer; the caller turns that
-    into "leave the pair eligible" or "spend its shot". Defaults to False because most refusals
-    are about the shape of the form or the item, and neither changes on a retry.
-    """
-
-    def __init__(self, message: str, *, retryable: bool = False):
-        super().__init__(message)
-        self.retryable = retryable
-
-
-class PublishUnverified(BrowserError):
-    """A listing may exist. Never re-driven — the seller would end up with two."""
-
-
-@dataclass(frozen=True)
-class PublishOutcome:
-    """What the drive produced: the listing if it could be shown, and how sure we are."""
-
-    listing_id: str | None
-    url: str
-    verified: bool
-    reason: str = ""
 
 
 def publish(
@@ -74,183 +58,41 @@ def publish(
     `PublishUnverified` when something may have been — never a bare `BrowserError`, because the
     caller's decision to retry turns entirely on which of those two it is.
     """
-    if not adapter.publish_fields_js:
-        raise PublishNotAttempted(f"{adapter.market} has no publish selectors")
+    surface = adapter.publish
+    if surface is None:
+        raise PublishNotAttempted(f"{adapter.market} has no publish surface")
     pause = sleep or _sleep
 
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
-    _open_all_fields(client, adapter, pause)
-    found = client.evaluate(adapter.publish_fields_js) or {}
-    _refuse_unless_ready(adapter.market, found)
+    surface.open_form(client, pause)
+    found = client.evaluate(surface.fields_js) or {}
+    _refuse_unless_ready(surface, found)
 
     if photos:
-        _attach(client, adapter, photos, found, pause)
+        surface.attach_photos(client, photos, found, pause)
         pause(STEP_SETTLE_SEC)
-    _fill_text(client, adapter, item, found)
-    condition = adapter.publish_condition_for(str(item.get("condition") or ""))
-    _choose(client, adapter, "condition", condition, found, pause)
-    _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
-    _refuse_paid_promotion(client, adapter)
-    _verify_form(client, adapter, item)
+    surface.fill(client, item, found)
+    condition = surface.map_condition(str(item.get("condition") or ""))
+    surface.choose_option(client, "condition", condition, found, pause)
+    surface.choose_option(client, "category", surface.default_category, found, pause)
+    surface.refuse_paid_extras(client)
+    surface.verify_form(client, item)
 
     # Everything past here may have created a listing.
-    return _commit(client, adapter, item, listings_url, pause)
+    return _commit(client, adapter, surface, item, listings_url, pause)
 
 
-def _open_all_fields(client, adapter, pause) -> None:
-    """Expand whatever the form keeps collapsed (Facebook hides the description behind "More
-    details"). Best-effort: the marking pass that follows decides whether the form is usable."""
-    found = client.evaluate(adapter.publish_fields_js) or {}
-    if "more" not in (found.get("marked") or []):
-        return
-    try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("more"), "element": "the rest of the listing fields"},
-        )
-        pause(STEP_SETTLE_SEC)
-    except BrowserError:
-        log.debug("could not expand the %s create form", adapter.market, exc_info=True)
-
-
-def _refuse_unless_ready(market: str, found: dict) -> None:
-    missing = [step for step in REQUIRED_FIELDS if step not in (found.get("marked") or [])]
+def _refuse_unless_ready(surface, found: dict) -> None:
+    missing = [step for step in surface.required_fields if step not in (found.get("marked") or [])]
     if missing:
         raise PublishNotAttempted(
-            f"the {market} create form is missing {missing} — nothing was filled in",
+            f"the {surface.market} create form is missing {missing} — nothing was filled in",
             retryable=True,
         )
 
 
-def _attach(client, adapter, photos, found: dict, pause) -> None:
-    """Hand the item's photographs to the form.
-
-    The control that opens a file chooser is pressed first, because the browser server only
-    accepts an upload while a chooser is open. Facebook requires a photo and leaves Next greyed
-    out until it has one.
-    """
-    if "add_photos" in (found.get("marked") or []):
-        try:
-            client.call_tool(
-                "browser_click",
-                {"target": adapter.publish_target("add_photos"), "element": "Add photos"},
-            )
-            pause(STEP_SETTLE_SEC)
-        except BrowserError as exc:
-            raise PublishNotAttempted(
-                f"the photo chooser would not open: {exc}", retryable=True
-            ) from exc
-    try:
-        client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
-    except BrowserError as exc:
-        raise PublishNotAttempted(
-            f"the photographs would not attach: {exc}", retryable=True
-        ) from exc
-
-
-def _fill_text(client, adapter, item: dict, found: dict) -> None:
-    """Type the fields that are text. Never `value =`: the form listens for real input, and a value
-    set from script leaves React holding the old one — which publishes an empty listing."""
-    for step, text in _text_fields(item):
-        if step not in (found.get("marked") or []) or not text:
-            continue
-        try:
-            client.call_tool(
-                "browser_type",
-                {
-                    "target": adapter.publish_target(step),
-                    "element": f"the {step} field",
-                    "text": str(text),
-                    "submit": False,
-                },
-            )
-        except BrowserError as exc:
-            raise PublishNotAttempted(f"could not fill {step}: {exc}", retryable=True) from exc
-
-
-def _text_fields(item: dict) -> list:
-    price = item.get("list_price")
-    return [
-        ("title", item.get("title") or ""),
-        # Typed bare: the field formats what it is given, and a grouped "1,299" has been read
-        # as 1 by more than one marketplace form.
-        (
-            "price",
-            f"{price:.0f}" if isinstance(price, (int, float)) and price == int(price) else price,
-        ),
-        ("description", item.get("description") or ""),
-    ]
-
-
-def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None:
-    """Open one dropdown and pick an option by name.
-
-    An unsatisfiable dropdown is fatal before the commit: Facebook requires both, so carrying on
-    would press Publish against a form that refuses.
-    """
-    if step not in (found.get("marked") or []) or not wanted:
-        return
-    try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target(step), "element": f"the {step} dropdown"},
-        )
-        pause(STEP_SETTLE_SEC)
-        answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
-        if not answer.get("chosen"):
-            raise PublishNotAttempted(
-                f"{adapter.market} offers no {step} called {wanted!r} "
-                f"(it offers {(answer.get('options') or [])[:8]})"
-            )
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("option"), "element": f"the {step}"},
-        )
-        pause(STEP_SETTLE_SEC)
-    except BrowserError as exc:
-        if isinstance(exc, PublishNotAttempted):
-            raise
-        raise PublishNotAttempted(f"could not choose a {step}: {exc}", retryable=True) from exc
-
-
-def _refuse_paid_promotion(client, adapter) -> None:
-    """Never publish with a paid boost switched on — it spends the seller's money unasked. Read
-    rather than assumed: "it defaults to off" is the kind of belief that stops being true in a
-    release nobody told us about."""
-    found = client.evaluate(adapter.publish_fields_js) or {}
-    if not found.get("boost_on"):
-        return
-    try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("boost"), "element": "the paid boost switch"},
-        )
-    except BrowserError as exc:
-        raise PublishNotAttempted(
-            f"the paid boost was on and would not turn off: {exc}", retryable=True
-        ) from exc
-    if (client.evaluate(adapter.publish_fields_js) or {}).get("boost_on"):
-        raise PublishNotAttempted("the paid boost is still on — refusing to publish")
-
-
-def _verify_form(client, adapter, item: dict) -> None:
-    """Read the form back before pressing anything — the last moment a mistake is free. A field
-    that truncated or refused its input otherwise becomes a live listing the seller has to fix."""
-    if not adapter.publish_readback_js:
-        return
-    seen = client.evaluate(adapter.publish_readback_js) or {}
-    title = (item.get("title") or "").strip()
-    got = (seen.get("title") or "").strip()
-    if title and got != title:
-        raise PublishNotAttempted(f"the form shows the title as {got!r}, not {title!r}")
-    price = item.get("list_price")
-    digits = "".join(ch for ch in str(seen.get("price") or "") if ch.isdigit())
-    if isinstance(price, (int, float)) and digits and int(digits) != int(price):
-        raise PublishNotAttempted(f"the form shows the price as {seen.get('price')!r}, not {price}")
-
-
-def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
+def _commit(client, adapter, surface, item: dict, listings_url, pause) -> PublishOutcome:
     """Press through the form's own steps, and find out what was made.
 
     Everything in here is past the point of no return, so every failure is `PublishUnverified`:
@@ -261,30 +103,20 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
     # submits nothing — treating that as "may have gone through" would retire the item over a
     # missing photograph. Read fresh: the caller's `found` predates filling, when Next is always
     # disabled.
-    ready = client.evaluate(adapter.publish_fields_js) or {}
+    ready = client.evaluate(surface.fields_js) or {}
     if ready.get("next_enabled") is False:
         raise PublishNotAttempted(
-            f"the {adapter.market} form will not accept this listing yet — it still wants "
+            f"the {surface.market} form will not accept this listing yet — it still wants "
             "something, and nothing was submitted"
         )
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("next"), "element": "Next"}
-        )
-        pause(COMMIT_SETTLE_SEC)
-        after = client.evaluate(adapter.publish_fields_js) or {}
-        if "publish" not in (after.get("marked") or []):
-            raise PublishUnverified("the form moved on but offered no Publish button")
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("publish"), "element": "Publish"}
-        )
-        pause(COMMIT_SETTLE_SEC)
+        surface.commit(client, pause)
 
         # Reading the result stays inside the bracket on purpose: it runs on a page that just
         # navigated, the likeliest moment for a browser call to fail, and a failure here means a
         # listing that probably exists and cannot be named. Outside the bracket it escaped as a
         # bare `BrowserError`, no ledger row was written, and the next tick made a second copy.
-        result = client.evaluate(adapter.publish_result_js) or {}
+        result = client.evaluate(surface.result_js) or {}
         listing_id = result.get("listing_id")
         if listing_id:
             return PublishOutcome(
@@ -292,7 +124,9 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
             )
 
         # The page we land on may not name the listing (Facebook redirects to its selling page,
-        # whose cards carry no id), so ask the seller's own listings instead.
+        # whose cards carry no id), so ask the seller's own listings instead. That read is the
+        # listings surface's, not the publish surface's, which is why the adapter is still in
+        # hand here.
         found = _confirm_by_title(client, adapter, item, listings_url, pause)
         if found is not None:
             return found
@@ -406,4 +240,4 @@ def clear_staged(item_id: str) -> None:
 def can_drive(market: str) -> bool:
     """Whether this marketplace can be published to by driving its form."""
     adapter = market_adapters.get_adapter(market)
-    return bool(adapter and adapter.publish_fields_js)
+    return bool(adapter is not None and adapter.publish is not None)

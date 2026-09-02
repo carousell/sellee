@@ -93,7 +93,7 @@ class StubForm:
         return ""
 
     def evaluate(self, function, **kwargs):
-        if function == _ADAPTER.publish_fields_js:
+        if function == _ADAPTER.publish.fields_js:
             marked = self.after_next if self._pressed_next else self.marked
             return {
                 "marked": list(marked),
@@ -102,9 +102,9 @@ class StubForm:
                 "publish_enabled": True,
                 "boost_on": self.boost_on,
             }
-        if function == _ADAPTER.publish_readback_js:
+        if function == _ADAPTER.publish.readback_js:
             return self.readback if self.readback is not None else dict(_GOOD_READBACK)
-        if function == _ADAPTER.publish_result_js:
+        if function == _ADAPTER.publish.result_js:
             return {"listing_id": self.listing_id, "url": _listing_url(self.listing_id)}
         # An options artifact, built per call with the wanted text baked in.
         self.option_queries.append(function)
@@ -220,7 +220,7 @@ def test_a_paid_boost_that_is_on_is_turned_off() -> None:
 
     def evaluate(function, **kwargs):
         answer = real_evaluate(function, **kwargs)
-        if function == _ADAPTER.publish_fields_js and "boost" in _steps(client):
+        if function == _ADAPTER.publish.fields_js and "boost" in _steps(client):
             return {**answer, "boost_on": False}
         return answer
 
@@ -254,7 +254,7 @@ def test_photographs_that_will_not_attach_stop_the_publish() -> None:
 def test_a_market_with_no_publish_selectors_is_refused_outright() -> None:
     import dataclasses
 
-    stripped = dataclasses.replace(_ADAPTER, publish_fields_js="")
+    stripped = dataclasses.replace(_ADAPTER, publish=None)
 
     with pytest.raises(publisher.PublishNotAttempted):
         publisher.publish(StubForm(), stripped, _ITEM, create_url=_CREATE, sleep=lambda _s: None)
@@ -297,7 +297,7 @@ def test_the_category_dropdown_is_asked_for_the_adapters_default() -> None:
 
     _publish(client)
 
-    assert any(_ADAPTER.publish_default_category in query for query in client.option_queries), (
+    assert any(_ADAPTER.publish.default_category in query for query in client.option_queries), (
         "no options artifact carried the default category"
     )
 
