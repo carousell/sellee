@@ -844,14 +844,14 @@ def _count_blind(
     failures = deps.blind.get(market, 0) + 1
     deps.blind[market] = failures
     deps.blind_since.setdefault(market, deps.now())
+    adapter = market_adapters.get_adapter(market)
     # The measurements can promote the cause: a window too narrow to lay the page out looks,
     # from here, like the marketplace refusing us, and it is the one of the two the seller can fix.
-    cause = blindness.cause_for(cause, measured)
+    cause = blindness.cause_for(cause, measured, adapter.min_usable_width_px if adapter else 0)
     payload = {k: v for k, v in (measured or {}).items() if isinstance(k, str)}
     payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})
     deps.bus.publish("browser.blind", payload)
     if failures >= int(deps.config.browser_blind_after):
-        adapter = market_adapters.get_adapter(market)
         _notify_once(
             deps,
             f"blind:{market}",
@@ -861,6 +861,7 @@ def _count_blind(
                 count=count,
                 width=(measured or {}).get("width") or 0,
                 where=window.where(),
+                needed=adapter.min_usable_width_px if adapter else 0,
                 verify_notice=adapter.verify_notice if adapter else "",
             ),
         )

@@ -14,8 +14,8 @@ open `/messages/`, click that row, read what replaces the personal list.
 the adapter carries a marking artifact and a target rather than one "open the inbox" script.
 
 Everything here is written against the desktop layout, which Facebook serves only above roughly
-900px (see `blindness.MIN_USABLE_WIDTH_PX`). Selectors are class-agnostic throughout: Facebook's
-hashed class names churn on every deploy.
+900px (`MIN_USABLE_WIDTH_PX`). Selectors are class-agnostic throughout: Facebook's hashed class
+names churn on every deploy.
 """
 
 from __future__ import annotations
@@ -28,6 +28,10 @@ from sellee.browser.markets import jslib
 # only inside the opened conversation — see `PRODUCT_ID_JS` — and this is what turns that link into
 # the id `reconcile.matching_items` joins on.
 LISTING_ID_PATTERN = r"/marketplace/item/(\d+)"
+
+# Below this Facebook serves its narrow layout, which none of the readers here can parse — the
+# number is Facebook's own responsive breakpoint, not a guess.
+MIN_USABLE_WIDTH_PX = 900
 
 # Rows that are Facebook talking to the seller rather than a buyer. Deliberately a backstop and not
 # the scoping mechanism: what keeps personal and e2ee chats out of the lane is that they are not in
@@ -781,6 +785,7 @@ def condition_for(said: str) -> str:
     if "fair" in said or "heavily" in said or "well used" in said or "poor" in said:
         return "Used - Fair"
     return "Used - Good"
+
 
 # Where a driven listing is filed when nothing has chosen better. Picking the right category from
 # a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own

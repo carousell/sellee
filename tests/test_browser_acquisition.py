@@ -13,8 +13,9 @@ import time
 import pytest
 
 from sellee import daemon
-from sellee.browser import blindness, chrome
+from sellee.browser import chrome
 from sellee.browser.client import BrowserUnavailable
+from sellee.browser.markets import facebook as fb_market
 from sellee.config import Config
 
 
@@ -526,7 +527,7 @@ def test_every_acquisition_checks_the_window_width(store, bus, monkeypatch) -> N
     factory()
     factory()
 
-    assert calls == [(9222, blindness.MIN_USABLE_WIDTH_PX)] * 2
+    assert calls == [(9222, fb_market.MIN_USABLE_WIDTH_PX)] * 2
 
 
 def test_a_window_that_stays_narrow_is_evented_not_raised(store, bus, monkeypatch) -> None:
@@ -537,7 +538,7 @@ def test_a_window_that_stays_narrow_is_evented_not_raised(store, bus, monkeypatc
 
     narrow = bus.store.read(kinds=["browser.window_narrow"])
     assert [e.payload["width"] for e in narrow] == [756]
-    assert narrow[0].payload["needed"] == blindness.MIN_USABLE_WIDTH_PX
+    assert narrow[0].payload["needed"] == fb_market.MIN_USABLE_WIDTH_PX
 
 
 def test_a_wide_enough_window_says_nothing(store, bus, monkeypatch) -> None:

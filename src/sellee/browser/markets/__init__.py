@@ -102,6 +102,11 @@ class MarketAdapter:
     # This market's own wording for its verification wall (`blindness.CAUSE_VERIFY`) — what the
     # wall asks for is the market's to name. Empty falls back to blindness.py's generic sentence.
     verify_notice: str = ""
+    # The market's own responsive breakpoint: below this it is liable to serve a layout the
+    # readers cannot parse, and a failed read may be the window's fault rather than the market's.
+    # 0 means no width is too narrow. Only a floor — it never claims a read failed, it only
+    # reframes one that already did.
+    min_usable_width_px: int = 0
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -121,6 +126,7 @@ CAROUSELL = MarketAdapter(
     listing_id_pattern=carousell.LISTING_ID_PATTERN,
     composer=tuple(Selector(**row) for row in carousell.COMPOSER_DEFAULTS),
     system_handles=carousell.SYSTEM_HANDLES,
+    min_usable_width_px=carousell.MIN_USABLE_WIDTH_PX,
 )
 
 FACEBOOK = MarketAdapter(
@@ -146,6 +152,7 @@ FACEBOOK = MarketAdapter(
     system_handles=facebook.SYSTEM_HANDLES,
     empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
     verify_notice=facebook.VERIFY_NOTICE,
+    min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
 )
 
 _ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}

@@ -20,6 +20,11 @@ import json
 
 from sellee.browser.markets import jslib
 
+# Below this Carousell may serve a layout the readers here were not written against. Carried over
+# from the floor that used to be shared with every market, not measured against Carousell's own
+# breakpoints.
+MIN_USABLE_WIDTH_PX = 900
+
 # Conversations with Carousell itself — the platform assistant and its promotional accounts — rather
 # than with a buyer. Never conversations to answer. (`is_bot_offer` looks like it should say this
 # and does not: it is false for the campaign accounts.)

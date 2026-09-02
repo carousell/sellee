@@ -40,12 +40,6 @@ CAUSE_TAILS = "tails"
 CAUSE_VIEWPORT = "viewport"
 CAUSE_VERIFY = "verify"
 
-# Below this, a marketplace is liable to serve a layout we cannot read — and the failure looks
-# exactly like the marketplace refusing us, which is what makes it worth naming separately. The
-# number is a marketplace's own responsive breakpoint, not a guess, and only a floor: it never
-# claims a read failed, it only reframes one that already did.
-MIN_USABLE_WIDTH_PX = 900
-
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
 # the seller is signed in — no login probe ran, because the navigate before it failed. Not that the
 # network is fine either: the 2026-08-27 wedge began with `net::ERR_INTERNET_DISCONNECTED`, so "this
@@ -125,14 +119,15 @@ _NOTICES = {
 }
 
 
-def cause_for(cause: str, measured: dict | None) -> str:
+def cause_for(cause: str, measured: dict | None, minimum: int = 0) -> str:
     """Promote a failed read to `viewport` when the reader says the window was too narrow.
 
     The lane cannot tell these apart by itself — an unreadable layout and a refusal both arrive as
-    "the list did not answer" — so this consults the width every reader reports. Only ever promotes,
-    and only from a cause about the market: a plumbing failure stays plumbing however narrow the
-    window. A verification wall wins over the window, because the width measured behind a PIN
-    prompt is the prompt's.
+    "the list did not answer" — so this consults the width every reader reports against `minimum`,
+    the market's own responsive breakpoint (`MarketAdapter.min_usable_width_px`; 0 means no width
+    is too narrow for it). Only ever promotes, and only from a cause about the market: a plumbing
+    failure stays plumbing however narrow the window. A verification wall wins over the window,
+    because the width measured behind a PIN prompt is the prompt's.
     """
     if cause not in (CAUSE_MARKET, CAUSE_TAILS):
         return cause
@@ -141,7 +136,7 @@ def cause_for(cause: str, measured: dict | None) -> str:
     width = (measured or {}).get("width")
     if isinstance(width, bool) or not isinstance(width, (int, float)):
         return cause
-    return CAUSE_VIEWPORT if 0 < width < MIN_USABLE_WIDTH_PX else cause
+    return CAUSE_VIEWPORT if 0 < width < minimum else cause
 
 
 def notice_for(
@@ -151,6 +146,7 @@ def notice_for(
     count: int = 0,
     width: int = 0,
     where: str = "",
+    needed: int = 0,
     verify_notice: str = "",
 ) -> str:
     """The sentence for one cause, addressed to the seller.
@@ -167,7 +163,7 @@ def notice_for(
     if cause == CAUSE_VERIFY and verify_notice:
         template = verify_notice
     return template.format(
-        name=name, count=count, width=int(width or 0), needed=MIN_USABLE_WIDTH_PX, where=where
+        name=name, count=count, width=int(width or 0), needed=int(needed or 0), where=where
     )
 
 
