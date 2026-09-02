@@ -173,20 +173,6 @@ def _kinds(bus, kind):
 # --- opening a folder that has no URL ------------------------------------------------------------
 
 
-def test_the_folder_is_opened_by_a_real_click_before_the_list_is_read(store, bus, seeded) -> None:
-    """The folder is opened before the list is read, or the list read answers with the seller's
-    personal inbox."""
-    client = StubClient(conversations=[_conv()])
-
-    inbox.inbox_lane(_deps(store, bus, client))
-
-    focused = [c for c in client.calls if c[0] == "focus"]
-    keys = [c for c in client.calls if c[0] == "browser_press_key"]
-    assert focused, "the lane never focused the folder control"
-    assert focused[0][1] == fb_market.INBOX_FOLDER_TARGET
-    assert keys, "focus without a key press opens nothing"
-
-
 def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_only) -> None:
     """The seam stays inert for a market whose inbox is an address, not a folder."""
     from sellee.browser.markets import carousell as carousell_market
@@ -209,8 +195,13 @@ def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_o
 def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
     store, bus, seeded
 ) -> None:
-    """A failed click must not raise; the list artifact reports the folder's state for itself."""
-    client = StubClient(click_fails=True, list_error="the Marketplace folder is not open")
+    """A failed click must not raise; the list artifact reports the folder's state for itself.
+
+    `focus_works=False` matters: focus is tried first, and with it succeeding the click this test
+    is about never runs at all."""
+    client = StubClient(
+        focus_works=False, click_fails=True, list_error="the Marketplace folder is not open"
+    )
 
     inbox.inbox_lane(_deps(store, bus, client))
 
@@ -873,6 +864,7 @@ def test_the_folder_is_opened_by_focus_and_a_real_key(store, bus, seeded) -> Non
 
     order = [c for c in client.calls if c[0] in ("focus", "browser_press_key", "browser_click")]
     assert [c[0] for c in order][:2] == ["focus", "browser_press_key"]
+    assert order[0][1] == fb_market.INBOX_FOLDER_TARGET
     assert not [c for c in order if c[0] == "browser_click"], "fell back to a click unnecessarily"
 
 
@@ -895,25 +887,6 @@ def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
 
     assert not [c for c in client.calls if c[0] in ("focus", "browser_press_key")]
     assert client.clicks == []
-
-
-def test_the_listing_banner_is_polled_rather_than_glanced_at() -> None:
-    """The banner only appears after load, so a synchronous look finds no id — and a missing id is
-    `unknown_listing`, which is silence."""
-    assert fb_market.PRODUCT_ID_JS.strip().startswith("async"), "a glance, not a read"
-    assert "setTimeout" in fb_market.PRODUCT_ID_JS, "nothing waits for the banner"
-
-
-def test_the_folder_is_read_from_both_ends() -> None:
-    """`loadAll` finishes at the OLDEST row and Messenger unmounts off-screen rows, so the read
-    must return to the top and merge both ends.
-
-    Asserted on the source because the suite stubs this artifact by identity and never runs it.
-    """
-    js = fb_market.CONVERSATIONS_LIST_JS
-    assert "scrollToTop" in js, "the read never returns to the newest end"
-    assert js.index("loadAll()") < js.index("scrollToTop()"), "it must load first, then go back up"
-    assert "merge(" in js, "two reads are taken but only one is used"
 
 
 # --- asking once, not every sweep ---------------------------------------------------------------

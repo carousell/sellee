@@ -54,6 +54,11 @@ class StubForm:
         self.next_enabled = next_enabled
         self.fail_on = fail_on or {}
         self.actions: list = []
+        # What was actually typed into each field, so a test can hold the text and not merely
+        # that a call happened.
+        self.typed: dict = {}
+        # Every options artifact evaluated, with the wanted text baked in.
+        self.option_queries: list = []
         self._pressed_next = False
 
     class _Exclusive:
@@ -79,6 +84,8 @@ class StubForm:
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
         self.actions.append((name, step))
+        if name == "browser_type":
+            self.typed[step] = arguments.get("text")
         if name in self.fail_on or step in self.fail_on:
             raise BrowserToolError(self.fail_on.get(name) or self.fail_on.get(step))
         if step == "next":
@@ -100,6 +107,7 @@ class StubForm:
         if function == _ADAPTER.publish_result_js:
             return {"listing_id": self.listing_id, "url": _listing_url(self.listing_id)}
         # An options artifact, built per call with the wanted text baked in.
+        self.option_queries.append(function)
         return {"chosen": self.chosen, "options": ["New", "Used - Good", "Miscellaneous"]}
 
 
@@ -165,8 +173,7 @@ def test_the_price_is_typed_without_separators() -> None:
 
     _publish(client, item={**_ITEM, "title": "Piano", "list_price": 1299.0})
 
-    price = [a for a in client.actions if a[0] == "browser_type" and a[1] == "price"]
-    assert price, "the price was never typed"
+    assert client.typed.get("price") == "1299"
 
 
 # --- refusals before anything exists --------------------------------------------------------------
@@ -283,11 +290,16 @@ def test_a_publish_whose_listing_cannot_be_named_is_reported_unverified() -> Non
     assert "could not be identified" in outcome.reason
 
 
-def test_the_default_category_is_one_this_market_offers() -> None:
-    from sellee.browser.markets import facebook
+def test_the_category_dropdown_is_asked_for_the_adapters_default() -> None:
+    """The driver files under the adapter's default category — nothing here may choose one — so
+    the category dropdown must actually be asked for that word."""
+    client = StubForm()
 
-    assert facebook.DEFAULT_CATEGORY == "Miscellaneous"
-    assert _ADAPTER.publish_default_category == facebook.DEFAULT_CATEGORY
+    _publish(client)
+
+    assert any(_ADAPTER.publish_default_category in query for query in client.option_queries), (
+        "no options artifact carried the default category"
+    )
 
 
 def test_a_form_that_is_not_ready_is_never_pressed_and_stays_retryable() -> None:
