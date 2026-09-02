@@ -283,38 +283,6 @@ def test_a_publish_whose_listing_cannot_be_named_is_reported_unverified() -> Non
     assert "could not be identified" in outcome.reason
 
 
-# --- the condition map ----------------------------------------------------------------------------
-
-
-@pytest.mark.parametrize(
-    "said,expected",
-    [
-        ("Brand new", "New"),
-        ("new", "New"),
-        ("Like new", "Used - Like New"),
-        ("Open box", "Used - Like New"),
-        ("Lightly used", "Used - Good"),
-        ("Used - Good", "Used - Good"),
-        ("Fair", "Used - Fair"),
-        ("Heavily used", "Used - Fair"),
-        ("", "Used - Good"),
-        ("something nobody has seen", "Used - Good"),
-    ],
-)
-def test_a_condition_is_mapped_to_this_markets_own_words(said, expected) -> None:
-    """Conditions are free text from whatever another marketplace called it; where the two do not
-    meet, understate rather than lie."""
-    assert publisher._condition_for({"condition": said}) == expected
-
-
-def test_every_mapped_condition_is_one_this_market_offers() -> None:
-    """A condition the dropdown does not offer is a publish that fails at the last moment."""
-    from sellee.browser.markets import facebook
-
-    for said in ("Brand new", "Like new", "Lightly used", "Fair", "", "unknown"):
-        assert publisher._condition_for({"condition": said}) in facebook.CONDITIONS
-
-
 def test_the_default_category_is_one_this_market_offers() -> None:
     from sellee.browser.markets import facebook
 

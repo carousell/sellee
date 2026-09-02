@@ -88,6 +88,9 @@ class MarketAdapter:
     # Where a driver files a listing when nothing better is known — choosing a category from a
     # title is the listing flow's judgement, not a driver's.
     publish_default_category: str = ""
+    # This market's own word for an item's free-text condition — the vocabulary its condition
+    # dropdown offers is the market's, so the mapping lives with the market, not the driver.
+    publish_condition_for: Callable[[str], str] = lambda said: ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -131,6 +134,7 @@ FACEBOOK = MarketAdapter(
     publish_target=facebook.publish_target,
     publish_options_js=facebook.options_js,
     publish_default_category=facebook.DEFAULT_CATEGORY,
+    publish_condition_for=facebook.condition_for,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,

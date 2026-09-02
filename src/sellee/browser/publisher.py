@@ -88,7 +88,8 @@ def publish(
         _attach(client, adapter, photos, found, pause)
         pause(STEP_SETTLE_SEC)
     _fill_text(client, adapter, item, found)
-    _choose(client, adapter, "condition", _condition_for(item), found, pause)
+    condition = adapter.publish_condition_for(str(item.get("condition") or ""))
+    _choose(client, adapter, "condition", condition, found, pause)
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
     _refuse_paid_promotion(client, adapter)
     _verify_form(client, adapter, item)
@@ -342,23 +343,6 @@ def _confirm_by_title(client, adapter, item: dict, listings_url, pause) -> Publi
     return PublishOutcome(
         listing_id=str(row.get("listing_id") or ""), url=str(row.get("url") or ""), verified=True
     )
-
-
-def _condition_for(item: dict) -> str:
-    """This market's own word for the item's condition.
-
-    Conditions are free text on an item and Facebook offers four; where they do not meet, this
-    understates rather than overstates — calling something more used than it is costs the seller
-    a little, and the reverse is a lie told on their behalf.
-    """
-    said = (item.get("condition") or "").strip().lower()
-    if "like new" in said or "open box" in said:
-        return "Used - Like New"
-    if said.startswith("new") or said == "brand new":
-        return "New"
-    if "fair" in said or "heavily" in said or "well used" in said or "poor" in said:
-        return "Used - Fair"
-    return "Used - Good"
 
 
 # How much a settle may vary either side. The same fields in the same order at fixed millisecond

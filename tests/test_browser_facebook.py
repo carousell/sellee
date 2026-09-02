@@ -1072,3 +1072,33 @@ def test_an_ordinary_empty_read_is_still_blindness(store, bus, seeded) -> None:
 
     reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
     assert any("read as empty" in r for r in reasons)
+
+
+# --- the condition map ----------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "said,expected",
+    [
+        ("Brand new", "New"),
+        ("new", "New"),
+        ("Like new", "Used - Like New"),
+        ("Open box", "Used - Like New"),
+        ("Lightly used", "Used - Good"),
+        ("Used - Good", "Used - Good"),
+        ("Fair", "Used - Fair"),
+        ("Heavily used", "Used - Fair"),
+        ("", "Used - Good"),
+        ("something nobody has seen", "Used - Good"),
+    ],
+)
+def test_a_condition_is_mapped_to_facebooks_own_words(said, expected) -> None:
+    """Conditions are free text from whatever another marketplace called it; where the two do not
+    meet, understate rather than lie."""
+    assert fb_market.condition_for(said) == expected
+
+
+def test_every_mapped_condition_is_one_facebook_offers() -> None:
+    """A condition the dropdown does not offer is a publish that fails at the last moment."""
+    for said in ("Brand new", "Like new", "Lightly used", "Fair", "", "unknown"):
+        assert fb_market.condition_for(said) in fb_market.CONDITIONS

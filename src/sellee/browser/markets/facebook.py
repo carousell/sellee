@@ -752,9 +752,26 @@ PUBLISH_RESULT_JS = """() => {
 }"""
 
 # Facebook's own condition wording, offered verbatim by the dropdown. Anything else is mapped by
-# the driver; an item with no usable condition does not publish, because guessing "New" for a used
-# thing is a lie told to a buyer.
+# `condition_for`; an item with no usable condition does not publish, because guessing "New" for a
+# used thing is a lie told to a buyer.
 CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
+
+
+def condition_for(said: str) -> str:
+    """Facebook's own word for an item's condition.
+
+    Conditions are free text on an item and Facebook offers four; where they do not meet, this
+    understates rather than overstates — calling something more used than it is costs the seller
+    a little, and the reverse is a lie told on their behalf.
+    """
+    said = (said or "").strip().lower()
+    if "like new" in said or "open box" in said:
+        return "Used - Like New"
+    if said.startswith("new") or said == "brand new":
+        return "New"
+    if "fair" in said or "heavily" in said or "well used" in said or "poor" in said:
+        return "Used - Fair"
+    return "Used - Good"
 
 # Where a driven listing is filed when nothing has chosen better. Picking the right category from
 # a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own
