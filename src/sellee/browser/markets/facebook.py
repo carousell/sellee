@@ -21,8 +21,12 @@ names churn on every deploy.
 from __future__ import annotations
 
 import json
+import logging
 
-from sellee.browser.markets import jslib
+from sellee.browser.client import BrowserError
+from sellee.browser.markets import forms, jslib, publishing
+
+log = logging.getLogger(__name__)
 
 # Where a listing's id sits in its permalink. Facebook names the listing a conversation is about
 # only inside the opened conversation — see `PRODUCT_ID_JS` — and this is what turns that link into
@@ -799,6 +803,168 @@ def condition_for(said: str) -> str:
 # a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own
 # catch-all word, and one of the menu's options.
 DEFAULT_CATEGORY = "Miscellaneous"
+
+
+class FacebookPublish(publishing.PublishSurface):
+    """Facebook's create form, start to finish.
+
+    The choreography is this form's own: expand what it collapses, mark its controls, attach the
+    photographs it insists on, type the three text fields, choose its two dropdowns, then Next
+    before Publish. `prepare` stops while all of that is still free to abandon; the flow in
+    `browser/publisher.py` runs the gates and holds the bracket.
+    """
+
+    market = "fb"
+    fields_js = PUBLISH_FIELDS_JS
+    readback_js = PUBLISH_READBACK_JS
+    result_js = PUBLISH_RESULT_JS
+    default_category = DEFAULT_CATEGORY
+
+    # Marked before anything is typed: the two text inputs are indistinguishable except by the
+    # label beside them, so a partly-recognised form could put the price in the title.
+    required_fields = ("title", "price", "next")
+
+    def prepare(self, client, item: dict, photos, pause) -> None:
+        """Everything up to Next, which is where this form stops being free to abandon."""
+        self._expand(client, pause)
+        found = client.evaluate(self.fields_js) or {}
+        self._refuse_unless_recognised(found)
+        if photos:
+            self._attach(client, photos, found, pause)
+            pause(publishing.STEP_SETTLE_SEC)
+        self._fill(client, item, found)
+        condition = self.map_condition(str(item.get("condition") or ""))
+        self._choose(client, "condition", condition, found, pause)
+        self._choose(client, "category", self.default_category, found, pause)
+        self._refuse_unless_ready(client)
+
+    def commit(self, client, pause) -> None:
+        """Next, then Publish. The Next is the point of no return: it submits the listing and the
+        second page only names it."""
+        client.call_tool("browser_click", {"target": publish_target("next"), "element": "Next"})
+        pause(publishing.COMMIT_SETTLE_SEC)
+        after = client.evaluate(self.fields_js) or {}
+        if "publish" not in (after.get("marked") or []):
+            raise publishing.PublishUnverified("the form moved on but offered no Publish button")
+        client.call_tool(
+            "browser_click", {"target": publish_target("publish"), "element": "Publish"}
+        )
+        pause(publishing.COMMIT_SETTLE_SEC)
+
+    def verify_form(self, client, item: dict) -> None:
+        forms.check_readback(client, self.readback_js, item)
+
+    def refuse_paid_extras(self, client) -> None:
+        """Never publish with Boost listing switched on — it spends the seller's money unasked."""
+        found = client.evaluate(self.fields_js) or {}
+        if not found.get("boost_on"):
+            return
+        try:
+            client.call_tool(
+                "browser_click",
+                {"target": publish_target("boost"), "element": "the paid boost switch"},
+            )
+        except BrowserError as exc:
+            raise publishing.PublishNotAttempted(
+                f"the paid boost was on and would not turn off: {exc}", retryable=True
+            ) from exc
+        if (client.evaluate(self.fields_js) or {}).get("boost_on"):
+            raise publishing.PublishNotAttempted("the paid boost is still on — refusing to publish")
+
+    def map_condition(self, said: str) -> str:
+        return condition_for(said)
+
+    def _expand(self, client, pause) -> None:
+        """Open "More details", which is where the description lives. Best-effort: the marking
+        pass that follows decides whether the form is usable."""
+        found = client.evaluate(self.fields_js) or {}
+        if "more" not in (found.get("marked") or []):
+            return
+        try:
+            client.call_tool(
+                "browser_click",
+                {
+                    "target": publish_target("more"),
+                    "element": "the rest of the listing fields",
+                },
+            )
+            pause(publishing.STEP_SETTLE_SEC)
+        except BrowserError:
+            log.debug("could not expand the Facebook create form", exc_info=True)
+
+    def _refuse_unless_recognised(self, found: dict) -> None:
+        missing = [step for step in self.required_fields if step not in (found.get("marked") or [])]
+        if missing:
+            raise publishing.PublishNotAttempted(
+                f"the {self.market} create form is missing {missing} — nothing was filled in",
+                retryable=True,
+            )
+
+    def _attach(self, client, photos, found: dict, pause) -> None:
+        """Hand the item's photographs to the form.
+
+        The control that opens a file chooser is pressed first, because the browser server only
+        accepts an upload while a chooser is open. Facebook requires a photo and leaves Next
+        greyed out until it has one.
+        """
+        if "add_photos" in (found.get("marked") or []):
+            try:
+                client.call_tool(
+                    "browser_click",
+                    {"target": publish_target("add_photos"), "element": "Add photos"},
+                )
+                pause(publishing.STEP_SETTLE_SEC)
+            except BrowserError as exc:
+                raise publishing.PublishNotAttempted(
+                    f"the photo chooser would not open: {exc}", retryable=True
+                ) from exc
+        try:
+            client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
+        except BrowserError as exc:
+            raise publishing.PublishNotAttempted(
+                f"the photographs would not attach: {exc}", retryable=True
+            ) from exc
+
+    def _fill(self, client, item: dict, found: dict) -> None:
+        fields = (
+            ("title", item.get("title") or ""),
+            ("price", forms.bare_price(item.get("list_price"))),
+            ("description", item.get("description") or ""),
+        )
+        for step, text in fields:
+            if step not in (found.get("marked") or []) or not text:
+                continue
+            forms.type_text(client, publish_target(step), step, text)
+
+    def _choose(self, client, step: str, wanted: str, found: dict, pause) -> None:
+        if step not in (found.get("marked") or []) or not wanted:
+            return
+        forms.pick_option_by_name(
+            client,
+            market=self.market,
+            step=step,
+            target=publish_target(step),
+            option_target=publish_target("option"),
+            options_js=options_js(wanted),
+            wanted=wanted,
+            pause=pause,
+        )
+
+    def _refuse_unless_ready(self, client) -> None:
+        """The last look on the safe side of the line: Facebook greys Next out until it has
+        everything it requires, and clicking a disabled button submits nothing — reading that as
+        "may have gone through" would retire an item over a missing photograph. Read fresh, because
+        the marking pass ran before the form was filled, when Next is always disabled."""
+        ready = client.evaluate(self.fields_js) or {}
+        if ready.get("next_enabled") is False:
+            raise publishing.PublishNotAttempted(
+                f"the {self.market} form will not accept this listing yet — it still wants "
+                "something, and nothing was submitted"
+            )
+
+
+# Stateless, so one instance serves every drive.
+PUBLISH_SURFACE = FacebookPublish()
 
 
 # The reply composer, as shipped defaults under the heal cache.

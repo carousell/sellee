@@ -84,7 +84,7 @@ def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
 def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypatch) -> None:
     """The capability is read off the code that implements it: an adapter with neither is not
     publishable."""
-    stripped = dataclasses.replace(market_adapters.FACEBOOK, publish_fields_js="")
+    stripped = dataclasses.replace(market_adapters.FACEBOOK, publish=None)
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {"fb": stripped})
 
