@@ -56,7 +56,7 @@ LOGGED_OUT_NOTICE = (
 # one case where the lane could not drive Chrome at all.
 # Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
 # listings the seller made outside the agent, and calling that a fault would be a wrong guess
-# about their own marketplace. No buttons on purpose; see `_unplaceable_notice`.
+# about their own marketplace. No buttons on purpose, and said once; see `_report_unplaceable`.
 UNPLACEABLE_NOTICE = (
     "{count} {who} messaging you on {name} about listings I don't manage, so I'm leaving {them} "
     "alone rather than answering about the wrong thing. If any of those listings should be mine, "
@@ -101,19 +101,6 @@ def _notify_once(deps: InboxDeps, key: str, text: str, controls: list | None = N
 
 def _clear_notice(deps: InboxDeps, key: str) -> None:
     deps.notified.pop(key, None)
-
-
-def _notify_on_change(deps: InboxDeps, key: str, signature: str, text: str) -> None:
-    """Queue when the condition's CONTENT changes, not merely the first time it holds.
-
-    `_notify_once` is the wrong shape for a condition that can grow: a bool cannot say that three
-    unplaceable buyers became four. `deps.notified` therefore holds two kinds of value — bools from
-    `_notify_once`, signatures from here — and nothing may compare values across the two helpers.
-    """
-    if deps.notified.get(key) == signature:
-        return
-    deps.notified[key] = signature
-    deps.store.queue_notice(text)
 
 
 def _unavailable(deps: InboxDeps, exc: BrowserUnavailable) -> None:
@@ -380,18 +367,16 @@ def _activate(client, adapter) -> None:
     )
 
 
-def _row_key(adapter, row: dict) -> str:
-    """What this row said, in a form that only changes when the conversation does.
+def _listing_key(row: dict) -> str:
+    """Which listing this row claims to be about, as the list reports it.
 
-    The comparison key behind the lookup cache: title and last message with the trailing clock
-    token stripped, so a preview whose "2m" becomes "1h" is the same message. What a clock token
-    looks like is the market's own rendering, so the pattern is the adapter's.
+    The freshness key behind the lookup cache, and the title alone on purpose: the cached answer
+    stops being true when the conversation changes *listing*, and only the title carries that. It
+    once included the last-message preview, which made every new buyer message re-open a
+    conversation to re-read a banner that had not moved \u2014 twenty-one buyers on listings we do
+    not manage, each typing, cost a page load apiece every sweep for an answer already known.
     """
-    title = str(row.get("title") or "").strip()
-    preview = str(row.get("last_message") or "").strip()
-    if adapter.row_clock_pattern:
-        preview = re.sub(adapter.row_clock_pattern, "", preview, flags=re.IGNORECASE).strip()
-    return f"{title}\u241f{preview}"
+    return str(row.get("title") or "").strip()
 
 
 def _with_product_id(
@@ -404,15 +389,16 @@ def _with_product_id(
     `reconcile.matching_items` joins on the id or refuses, which is what stops a conversation being
     attached to the wrong item. The id is on the banner inside the conversation, read there once
     and remembered whether or not it matched, so a conversation about a listing we do not manage is
-    not re-opened every sweep. A cached answer is trusted only while the row still says what it
-    said (`_row_key`), so a conversation that gains or changes its listing re-opens.
+    not re-opened every sweep. A cached answer is trusted while the row still names the same listing
+    (`_listing_key`), so a conversation that gains or changes its listing re-opens — and a buyer
+    simply writing again does not.
 
     Answers a new row, unchanged whenever there is nothing to add. An unresolved id is not an
     error here; it becomes an `unknown_listing` in `_adopt`.
     """
     if not adapter.product_id_js or row.get("product_id"):
         return row
-    row_key = _row_key(adapter, row)
+    row_key = _listing_key(row)
     remembered = deps.store.thread_listing_lookup(thread_id)
     if remembered is not None and remembered["row_key"] == row_key:
         product_id = remembered["product_id"]
@@ -426,7 +412,7 @@ def _with_product_id(
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
         # Not remembered: a failed read is not an answer, and caching it would hide the
-        # conversation until its preview changed.
+        # conversation for as long as it kept naming the same listing.
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
         return row
     product_id = str(answer.get("product_id") or "")
@@ -472,27 +458,27 @@ def _can_skip(store, adapter, thread: dict, row: dict) -> bool:
 
 
 def _report_unplaceable(deps: InboxDeps, market: str, unplaceable: list) -> None:
-    """Tell the seller once that buyers are waiting in conversations we cannot place.
+    """Tell the seller — once, ever — that buyers are waiting in conversations we cannot place.
 
-    `_unmatched` publishes an event per conversation and nothing else — right shape for a log,
-    wrong shape for a person. Keyed on the *set*, not the fact, so a fourth buyer arriving after
-    three were reported still says something while the same three swept every five minutes say
-    nothing more. Cleared when the set empties, so the next arrival is announced.
+    `_unmatched` publishes an event per conversation and nothing else: right shape for a log, wrong
+    shape for a person. This is the person-shaped half, and the store owns the guard because it has
+    to be durable — see `report_unplaceable_once` for why once beats once-per-set. Nothing here
+    re-arms it: not a set that grew, not one that emptied, not a restart. Only the seller asking
+    for a fresh look at their listings does.
+
+    Held while the market's own listings are still an open question. The seller is being asked, or
+    is about to be, which of these are theirs to manage; answering that shrinks this set, and the
+    one notice is worth more spent on what is left than on a count that is about to change. Nothing
+    is lost by waiting — the set is recomputed every sweep, and a survey nobody answers expires.
     """
-    key = f"unplaceable:{market}"
-    if not unplaceable:
-        _clear_notice(deps, key)
+    if not unplaceable or deps.store.market_survey_unsettled(market):
         return
-    ids = sorted(set(unplaceable))
-    name = marketplaces.display_name(market)
-    count = len(ids)
-    _notify_on_change(
-        deps,
-        key,
-        ",".join(ids),
+    count = len(set(unplaceable))
+    deps.store.report_unplaceable_once(
+        market,
         UNPLACEABLE_NOTICE.format(
             count=count,
-            name=name,
+            name=marketplaces.display_name(market),
             who="people are" if count > 1 else "person is",
             them="them" if count > 1 else "it",
         ),

@@ -29,6 +29,7 @@ from sellee.db import Database
 from sellee.store.helpers import (
     ItemRecord,
     StoreError,
+    _clear_unplaceable_report_in_txn,
     _forget_thread_listings_in_txn,
     _insert_item_in_txn,
     _insert_notice,
@@ -168,6 +169,27 @@ class SurveyMixin:
         rows = self._db.query("SELECT * FROM market_surveys WHERE market = ?", (market,))
         return _survey_from_row(rows[0]) if rows else None
 
+    def market_survey_unsettled(self, market: str) -> bool:
+        """Whether which of this market's listings are ours is still an open question.
+
+        Three ways it can be: the survey is owed a look, the seller has not answered what it found,
+        or a listing they accepted is still being turned into an item. Anything that tells them
+        about conversations it could not place should wait for this — the set it would report is
+        about to change, and a once-per-market notice spent on the pre-adoption count says a number
+        that was never true for long.
+
+        A market with no survey row at all is settled, not blocked: that is a market no adapter can
+        survey, and treating "never asked" as "still asking" would mute it forever.
+        """
+        rows = self._db.query(
+            "SELECT 1 FROM market_surveys WHERE market = ? AND state = 'due' "
+            "UNION ALL "
+            "SELECT 1 FROM discovered_listings WHERE market = ? AND status IN ('pending', "
+            "'accepted') LIMIT 1",
+            (market, market),
+        )
+        return bool(rows)
+
     def bump_survey_attempt(self, market: str) -> int:
         """Count one look that could not be served — signed out, or a listings page we could not
         read. Returns the new count."""
@@ -193,6 +215,10 @@ class SurveyMixin:
         """Take a fresh look at a market that has already been surveyed — the one door back through
         the one-ask guard, for a seller acting on a list that has gone stale.
 
+        Both one-ask guards, in one transaction: the unplaceable-buyers notice tells the seller to
+        ask for exactly this when a conversation should have been theirs, so an ask that reopened
+        the survey and left that notice muted would have pointed at a door it then held shut.
+
         The previous look's rows go with it: keeping decided rows would filter out everything the
         seller declined months ago, and adopted ones are remembered by the item carrying the URL.
         """
@@ -202,6 +228,7 @@ class SurveyMixin:
                 "DELETE FROM discovered_listings WHERE market = ? AND status != 'adopted'",
                 (market,),
             )
+            _clear_unplaceable_report_in_txn(conn, market)
             conn.execute(
                 "INSERT INTO market_surveys (market, state, requested_ts) VALUES (?, 'due', ?) "
                 "ON CONFLICT (market) DO UPDATE SET state = 'due', requested_ts = excluded"

@@ -480,3 +480,93 @@ def test_linking_an_existing_item_forgets_that_markets_lookups(store) -> None:
 
     assert store.thread_listing_lookup("fb:6") is None
     assert store.thread_listing_lookup("carousell:7") is not None
+
+
+# --- saying "these buyers are about listings I don't manage", once ----------------------------
+
+
+def _texts(store):
+    return [n["text"] for n in store.list_queued_notices()]
+
+
+def test_buyers_we_cannot_place_are_reported_once(store) -> None:
+    assert store.report_unplaceable_once("fb", "9 people are messaging you") is True
+    assert store.report_unplaceable_once("fb", "21 people are messaging you") is False
+    assert _texts(store) == ["9 people are messaging you"]
+
+
+def test_each_market_is_reported_on_its_own(store) -> None:
+    store.report_unplaceable_once("fb", "on Facebook")
+    assert store.report_unplaceable_once("carousell", "on Carousell") is True
+    assert _texts(store) == ["on Facebook", "on Carousell"]
+
+
+def test_a_fresh_look_lets_it_be_said_again(store) -> None:
+    """The notice tells the seller to ask for a fresh look at their listings; that ask is the one
+    thing that un-mutes it."""
+    store.report_unplaceable_once("fb", "first")
+
+    store.reopen_market_survey("fb")
+
+    assert store.report_unplaceable_once("fb", "second") is True
+    assert _texts(store) == ["first", "second"]
+
+
+def test_a_fresh_look_at_one_market_leaves_the_others_muted(store) -> None:
+    store.report_unplaceable_once("fb", "on Facebook")
+    store.report_unplaceable_once("carousell", "on Carousell")
+
+    store.reopen_market_survey("fb")
+
+    assert store.report_unplaceable_once("carousell", "again") is False
+
+
+# --- whether the market's own listings are still an open question ------------------------------
+
+
+def test_a_market_nobody_surveyed_is_settled(store) -> None:
+    """A market nobody asked about must not read as one still being asked about — a market no
+    adapter can survey would be muted forever."""
+    assert store.market_survey_unsettled("fb") is False
+
+
+def test_a_survey_owed_a_look_is_unsettled(store) -> None:
+    store.request_market_survey("fb")
+    assert store.market_survey_unsettled("fb") is True
+
+
+def test_listings_the_seller_has_not_answered_about_are_unsettled(store) -> None:
+    store.record_survey_result(
+        "fb", [{"listing_id": "77", "url": "https://fb/77", "title": "Fan", "price": 10.0}]
+    )
+    assert store.market_survey_unsettled("fb") is True
+
+    store.decide_discovered_listings("fb", decision="decline")
+    assert store.market_survey_unsettled("fb") is False
+
+
+def test_an_accepted_listing_still_being_adopted_is_unsettled(store) -> None:
+    """The item does not exist yet, so the conversation about it would still read as unplaceable."""
+    store.record_survey_result(
+        "fb", [{"listing_id": "77", "url": "https://fb/77", "title": "Fan", "price": 10.0}]
+    )
+    store.decide_discovered_listings("fb", decision="manage", manage="relist")
+    assert store.market_survey_unsettled("fb") is True
+
+    store.adopt_discovered_listing(
+        "fb", "77", title="Fan", list_price=10.0, currency="SGD", url="https://fb/77"
+    )
+    assert store.market_survey_unsettled("fb") is False
+
+
+def test_a_market_given_up_on_is_settled(store) -> None:
+    """Abandoned is an answer: we will never know what is listed there, and waiting on it would
+    mute the report for good."""
+    store.request_market_survey("fb")
+    store.abandon_market_survey("fb")
+    assert store.market_survey_unsettled("fb") is False
+
+
+def test_settledness_is_per_market(store) -> None:
+    store.request_market_survey("fb")
+    assert store.market_survey_unsettled("carousell") is False
