@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import marketplaces, prompt_data, settings
+from sellee import channel, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -39,9 +39,17 @@ CB_CONNECT_PROBE = "connectchk"
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
 CB_SURVEY_NO = "adoptno"
-# Watch mode, from the control row. Carries no ref: it is a flip of what is currently set, and a
-# button that carried the value would apply a stale one when tapped from the scrollback.
-CB_WATCH = "watch"
+# Watch mode, from the control row — one token per direction, like pause/resume, so the button does
+# what its label says whenever it lands.
+#
+# This was a single valueless token that flipped whatever was set at landing time. The argument for
+# it was that a button carrying a value would apply a stale one from the scrollback; the argument
+# against it is what a seller reported: they tapped "🌙 Work in background" on a card from an hour
+# earlier, watch mode came ON, they tapped again, and it went off — so the button read as broken.
+# A label that names an action has to perform that action. A stale idempotent tap is harmless and
+# re-acks, which is the rule the marketplace buttons right below already follow.
+CB_WATCH_ON = "watchon"
+CB_WATCH_OFF = "watchoff"
 # Connecting and disconnecting a marketplace, from the Connections block on the /sellee card. The
 # market rides in the ref, not a toggle: a scrollback tap must name the market it flips.
 CB_ADD_MARKET = "addmkt"
@@ -56,10 +64,27 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_CONNECT_PROBE,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
-        CB_WATCH,
+        CB_WATCH_ON,
+        CB_WATCH_OFF,
         CB_ADD_MARKET,
         CB_REMOVE_MARKET,
     }
+)
+_WATCH_VALUE_FOR_CALLBACK = {CB_WATCH_ON: True, CB_WATCH_OFF: False}
+
+# Tokens that used to exist. Retiring one does not retire the buttons already sent — they sit in the
+# seller's scrollback forever, and nothing about an old button looks old. Answered here rather than
+# left to fall through, because a fall-through spends an LLM pass on a dead token and tells the
+# seller their button "can't be placed", which is ask-shaped language for something that was never
+# an ask.
+#
+# `watch` is the valueless toggle CB_WATCH_ON / CB_WATCH_OFF replaced. Its intent is genuinely
+# unrecoverable — the token never recorded which way it meant, which is exactly what it was retired
+# for — so the only honest answer is to change nothing and hand back buttons that work.
+RETIRED_CALLBACKS = frozenset({"watch"})
+RETIRED_NOTICE = (
+    "That button is from an older version of me, so I've left everything exactly as it is. Here "
+    "are the current ones — these work."
 )
 
 _CONNECT_MODE_FOR_CALLBACK = {
@@ -84,6 +109,10 @@ LOOK_AGAIN_LABEL = "Take another look"
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
 WATCH_OFF_LABEL = "🌙 Work in background"
+# Named once because the receipt for an arrival that lands while paused offers the way back too
+# (channel/acks.py), and a door worded two ways is two doors as far as the seller can tell.
+PAUSE_LABEL = "⏸ Pause"
+RESUME_LABEL = "▶️ Resume"
 
 
 def signin_controls(market: str) -> list:
@@ -141,6 +170,11 @@ WATCH_ON_NOTICE = (
     "follows whatever page I'm on. Reading your inboxes stays quiet in the background."
 )
 WATCH_OFF_NOTICE = "Watch mode off — I'll keep out of your way and work in the background."
+# A tap on the state already set. These buttons sit in the scrollback forever, so this is ordinary
+# rather than exceptional — the same re-ack the marketplace switches give, and the honest answer to
+# a stale card. Saying "already" is what tells the seller nothing moved, so they do not tap again.
+WATCH_ALREADY_ON = "Watch mode is already on — my Chrome comes forward when I start something."
+WATCH_ALREADY_OFF = "Watch mode is already off — I'm working in the background."
 
 # Connecting a marketplace. The reply names sign-in as the next step: nothing can be read until the
 # seller is signed in at the desktop where my Chrome is.
@@ -203,12 +237,17 @@ def is_settings_door(event: dict) -> bool:
 def is_fast_path(event: dict) -> bool:
     """True if `event` (a normalized inbox row's kind/text/payload) is one the daemon answers
     itself. A command matches on its exact first-word token; an action on its callback choice; a
-    settings door on its button token or exact text token."""
+    settings door on its button token or exact text token; a retired token on being one we used to
+    send, which is answered here so a dead button never costs a pass."""
     if event["kind"] == "command":
         return event["text"] in _FAST_PATH_COMMANDS
     if event["kind"] == "action":
         choice = (event.get("payload") or {}).get("choice")
-        return choice in _FAST_PATH_CALLBACKS or choice in settings.CALLBACK_CHOICES
+        return (
+            choice in _FAST_PATH_CALLBACKS
+            or choice in settings.CALLBACK_CHOICES
+            or choice in RETIRED_CALLBACKS
+        )
     return is_settings_door(event)
 
 
@@ -242,14 +281,18 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
     settings ledger publishes what it applied, and the window raise rides on that event.
     """
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
-    if token in ("/watch", CB_WATCH):
-        return _watch_toggle(store, bus)
+    if token in RETIRED_CALLBACKS:
+        return RETIRED_NOTICE, _control_spec(store)
+    if token == "/watch":
+        # The command carries no argument, so it stays a flip — it is typed in the present moment,
+        # which is the one case where "the opposite of now" is unambiguous.
+        return _watch_set(store, bus, not settings.get(store, window.WATCH_SETTING))
+    if token in _WATCH_VALUE_FOR_CALLBACK:
+        return _watch_set(store, bus, _WATCH_VALUE_FOR_CALLBACK[token])
     if token in (CB_ADD_MARKET, CB_REMOVE_MARKET):
         return _market_button(store, bus, event["payload"].get("ref"), token)
     if token in (CB_SURVEY_YES, CB_SURVEY_NO):
         return _survey_button(store, event["payload"].get("ref"), token)
-    if token in ("/watch", CB_WATCH):
-        return _watch_toggle(store, bus)
     if token in _CONNECT_MODE_FOR_CALLBACK:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
@@ -421,24 +464,24 @@ def _request(store, market: str, mode: str) -> tuple:
     return template.format(name=marketplaces.display_name(market)), None
 
 
-def _watch_toggle(store, bus) -> tuple:
-    """Flip watch mode: work in front of the seller, or out of their way.
+def _watch_set(store, bus, watching: bool) -> tuple:
+    """Put watch mode where the seller asked for it: work in front of them, or out of their way.
 
     The tap *is* the consent — an authenticated surface, a deterministic parse, a deterministic
     apply — so this applies immediately rather than proposing, exactly as the shell door does. It
     goes through the settings ledger rather than writing a row of its own, which is what gives it
     one home with the card line, the CLI, and the model's vocabulary.
 
-    The button carries no value: the flip is read off what is set right now, so one tapped from
-    months-old scrollback flips whatever is true when it lands rather than restoring a state that
-    was true when the message was sent. The reply carries the refreshed row, whose label is now the
-    way back — which is why this door renders no separate Undo.
+    Idempotent, and that is the point: the value comes from the button rather than from whatever
+    happened to be set when the tap landed, so a card from months back still does what it says. A
+    tap that changes nothing re-acks — the same answer `_market_button` gives, and for the same
+    reason, since these buttons live in the scrollback forever. The reply carries the refreshed row,
+    whose label is now the way back, which is why this door renders no separate Undo.
     """
-    turning_on = not settings.get(store, window.WATCH_SETTING)
-    settings.set_now(
-        store, bus, key=window.WATCH_SETTING, raw_value=turning_on, decided_via="button"
-    )
-    text = WATCH_ON_NOTICE.format(where=window.where()) if turning_on else WATCH_OFF_NOTICE
+    if settings.get(store, window.WATCH_SETTING) == watching:
+        return (WATCH_ALREADY_ON if watching else WATCH_ALREADY_OFF), _control_spec(store)
+    settings.set_now(store, bus, key=window.WATCH_SETTING, raw_value=watching, decided_via="button")
+    text = WATCH_ON_NOTICE.format(where=window.where()) if watching else WATCH_OFF_NOTICE
     return text, _control_spec(store)
 
 
@@ -447,9 +490,9 @@ def _control_spec(store) -> list:
     reflecting current state, a what-needs-me shortcut, the watch-mode toggle, and one connect or
     disconnect button per marketplace. The provider wraps it onto as many rows as it takes, so this
     stays a flat list."""
-    toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
+    toggle = (RESUME_LABEL, CB_RESUME) if store.is_paused() else (PAUSE_LABEL, CB_PAUSE)
     watching = settings.get(store, window.WATCH_SETTING)
-    watch = (WATCH_OFF_LABEL, CB_WATCH) if watching else (WATCH_ON_LABEL, CB_WATCH)
+    watch = (WATCH_OFF_LABEL, CB_WATCH_OFF) if watching else (WATCH_ON_LABEL, CB_WATCH_ON)
     return [toggle, ("What needs me", CB_NEEDS_ME), watch] + _connection_controls(store)
 
 
@@ -508,14 +551,39 @@ def _listings_line(store) -> str:
     return "• Listings: " + ", ".join(f"{n} {label}" for n, label in counts if n)
 
 
+def _held_line(store) -> str:
+    """What the agent still owes the seller an answer for, or "" when it owes nothing.
+
+    The missing half of both reads. Everything else here reports what waits on the *seller*; a
+    message of theirs the agent has not answered waits the other way, and it was reported nowhere —
+    so a seller whose tapped answer was queued behind a running pass saw the identical open question
+    printed back at them, with no way to tell "never arrived" from "in hand, still working".
+
+    Pause gets its own wording because the wait is a different shape: a paused agent claims the row
+    into a pass its lane will never run, so nothing ends that wait except the seller resuming.
+    """
+    held = store.count_unsettled_inbox()
+    if not held:
+        return ""
+    noun = "message" if held == 1 else "messages"
+    if store.is_paused():
+        them = "it" if held == 1 else "them"
+        return f"I'm holding {held} {noun} you sent — resume me and I'll act on {them}."
+    return f"I'm still working through {held} {noun} you sent."
+
+
 def render_status(store) -> str:
-    """A one-glance status line: paused?, and the counts of what's waiting."""
+    """A one-glance status line: paused?, the counts of what's waiting, and anything the agent is
+    still holding of the seller's."""
     escalations, notices = _needs_me_counts(store)
     paused = "paused" if store.is_paused() else "running"
     waiting = escalations + notices
     if waiting:
-        return f"Status: {paused}. {escalations} decision(s) and {notices} update(s) waiting."
-    return f"Status: {paused}. Nothing waiting on you."
+        line = f"Status: {paused}. {escalations} decision(s) and {notices} update(s) waiting."
+    else:
+        line = f"Status: {paused}. Nothing waiting on you."
+    held = _held_line(store)
+    return f"{line} {held}" if held else line
 
 
 def render_catchup(store) -> str:
@@ -528,6 +596,12 @@ def render_catchup(store) -> str:
         # One bullet per escalation: the question is buyer-derived (the reply pass composed it
         # while reading a stranger), and a newline in it would read as an extra escalation.
         lines.extend(f"• {prompt_data.one_line(e['open_question'])}" for e in escalations)
+    # Directly under the questions, because that is the confusion it resolves: an escalation stays
+    # open until something resolves it, so a seller who has already answered one sees their own
+    # question printed back and reads it as their answer having gone nowhere.
+    held = _held_line(store)
+    if held:
+        lines.append(held)
     notices = store.list_queued_notices()
     if notices:
         lines.append("Updates:" if lines else "Updates for you:")
@@ -566,7 +640,10 @@ def render_settings_card(store) -> str:
     lines = [
         "Here's where things stand:",
         f"• Agent: {paused}",
-        f"• Telegram: {bound}",
+        # Named from the row, never hardcoded: `bound` alone cannot tell a Telegram binding from a
+        # Discord one, and a card claiming a channel the seller never set up is the failure
+        # docs/channels.md calls out by name.
+        f"• {channel.display_name(ch['adapter'])}: {bound}",
         f"• Waiting on you: {escalations} decision(s), {notices} update(s)",
         _listings_line(store),
         "",

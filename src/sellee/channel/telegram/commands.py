@@ -5,6 +5,7 @@ channel/outbound.py — queued as ordinary notices at bind time.)
 
 from __future__ import annotations
 
+from sellee.channel import controls
 from sellee.channel.telegram.transport import build_inline_keyboard
 
 # The commands this plan handles deterministically — setMyCommands registers exactly these, so the
@@ -20,20 +21,15 @@ BOT_COMMANDS = [
     {"command": "resume", "description": "Resume the agent"},
 ]
 
-# Buttons per keyboard row. A control spec is a handful of buttons, but the marketplace picker is
-# as long as the seller's enabled list — and a row of six is unreadable on a phone, where these
-# are tapped. Chunking rather than truncating: every button in the spec is always rendered.
-MAX_BUTTONS_PER_ROW = 4
-
 
 def render_controls(spec) -> dict | None:
-    """Render the core's (label, token) control spec into an inline keyboard, wrapped onto as many
-    rows as it takes, or None when there are no controls (the fast paths that reply with plain
-    text)."""
+    """Render the core's (label, token) control spec into an inline keyboard, or None when there
+    are no controls (the fast paths that reply with plain text).
+
+    The row packing is `channel.controls.wrap` rather than a chunk local to this module: it is the
+    same decision on every provider, and when it lived here as a fixed four-per-row it shipped
+    `/sellee` as "What needs…" / "👀 Watch …" / "Disconnect …" side by side.
+    """
     if not spec:
         return None
-    buttons = [(label, token) for label, token in spec]
-    rows = [
-        buttons[i : i + MAX_BUTTONS_PER_ROW] for i in range(0, len(buttons), MAX_BUTTONS_PER_ROW)
-    ]
-    return build_inline_keyboard(rows)
+    return build_inline_keyboard(controls.wrap([(label, token) for label, token in spec]))

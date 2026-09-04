@@ -33,12 +33,18 @@ a guard test enforces that the core imports no provider.
     at the tool boundary), and resolving a tap back to the *words* the seller
     tapped before ingest, so the durable row — and so the pass prompt, the
     transcript, and catchup — read as them saying it.
-  - `routing` — after a batch is ingested: the `channel.in` event and coalesced
-    routing of pending free text to a channel pass.
+  - `routing` — after a batch is ingested: the `channel.in` event, coalesced
+    routing of pending free text to a channel pass, and `settle_batch`, the
+    shared ingest tail (route → receipt → typing pulse).
+  - `acks` — the receipt policy: what the seller hears the moment something they
+    sent lands, and how long the wait honestly is.
+  - `controls` — how a control spec packs into rows, by label width rather than a
+    fixed count, so nothing renders truncated.
   - `outbound` — the delivery *policy* (notice drain, typing pulse), the
     settled-pass inbox fold (a scheduler lane off durable rows), and the
     escalation-push bus subscriber (which renders the escalation's `options` as
-    its buttons).
+    its buttons). The typing pulse fires from the receive loop too, at route
+    time, so the indicator does not wait out a scheduler tick.
   - `prompt` — the channel pass's prompt with its capped transcript window.
 - **Provider** (`channel/telegram/`):
   - `transport` — the Bot API client (the one network module; allowlisted) and
@@ -167,8 +173,11 @@ they never set up. So `setup` names the holder instead of re-offering,
 
 ## The Telegram poller's three states
 
-One thread owns *all* Bot API traffic, so "an unbound channel consumes nothing"
-is a property of that single consumer. State is derived from durable rows each
+One thread owns *all* `getUpdates` traffic, so "an unbound channel consumes
+nothing" is a property of that single consumer. (Sends also originate from the
+delivery lanes, which build their own clients; the poller's is built with a short
+timeout, since a stalled send there stops the seller's next messages being
+fetched at all.) State is derived from durable rows each
 tick, always failing toward the less-capable one:
 
 - **off** — no token (or a token with no live nonce and no chat): zero API calls.
@@ -188,14 +197,35 @@ while the gateway holds no WebSocket open at all.
 - Each inbound batch is persisted and the cursor advanced in **one transaction**
   (persist-then-ack), with media downloaded first; re-delivery after a crash is
   deduped by the update id.
-- **Every** button tap is acked before dispatch (Telegram spins the button until
-  `answerCallbackQuery` lands; Discord reports an unacknowledged interaction as
-  failed) — including the taps that route rather than being answered here.
+- **Every** button tap is *acknowledged to the platform* before dispatch (Telegram
+  spins the button until `answerCallbackQuery` lands; Discord reports an
+  unacknowledged interaction as failed) — including the taps that route rather
+  than being answered here. This is protocol, not feedback: it clears a spinner
+  the seller never sees.
+- An **answered ask loses its buttons** in the same step. Only asks: the control
+  row and the marketplace switches are meant to be tapped again tomorrow.
 - Fast paths are then answered by daemon code immediately.
 - Everything else — free text, photos, and a tap on a *decision* — stays pending
   and routes to a channel pass. A decision tap is deliberately not a fast path:
   answering "checkout or handle it myself" means composing a buyer reply and
   minting a link, which is the pass's work, not a deterministic one.
+- That routed remainder gets a **receipt** (`channel/acks.py`), because a pass
+  takes 30s–15min and Telegram renders a tap as nothing at all. It names what
+  arrived and how long the wait is, never what will be done about it — that is
+  the pass's to know. One per arrival rather than per row, since a pass coalesces
+  and answers once. Queued as a notice, so it lands in the pass's own transcript
+  window and needs no prompt telling the pass not to acknowledge twice; sent
+  directly only while paused, where the drain lane deliberately does not run.
+
+`routing.settle_batch` owns that tail on both providers, and its order is not
+arrangeable: route first (ingest has already advanced the cursor, so an unrouted
+row cannot be redelivered), then receipt, then pulse typing (both platforms clear
+the indicator the moment the bot sends anything).
+
+Routing also runs as its own lane (`channel_route`), not only from an ingest
+path. `enqueue_channel_pass` coalesces, so a message arriving mid-pass stays
+pending — and with nothing else looking, it waited on the seller happening to
+speak again. One tapped answer sat that way for 3h52m.
 
 ## The needs-me queue
 

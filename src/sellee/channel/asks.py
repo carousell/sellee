@@ -26,16 +26,25 @@ from __future__ import annotations
 
 import logging
 
+from sellee.channel import controls
 from sellee.store import ask_notice_id
 
 log = logging.getLogger(__name__)
 
 # At most four options, matching Telegram's buttons-per-row: these are tapped on a phone, and a
-# decision that needs a fifth answer is really a question that hasn't been narrowed yet. The label
-# cap is well inside what the providers accept, so it bites as a prompt for a shorter label rather
-# than as a rejected send.
+# decision that needs a fifth answer is really a question that hasn't been narrowed yet.
 MAX_OPTIONS = 4
-MAX_OPTION_LABEL_CHARS = 64
+
+# How wide a label may draw. This is a legibility cap, not a send-safety one — the providers accept
+# far longer, and that was the problem: a 64-character label passes every API check and renders as
+# "Set floor an…" next to "Decline this…". A seller who cannot read a button is guessing, and on a
+# price ask a wrong guess declines a live offer or sets a permanent floor.
+#
+# 24 columns is set by the copy that already exists: every answer set pinned in seller-comms.md
+# clears it, the widest being "👍 Not a scam — resume" at 23. Measured in columns rather than
+# characters, so an emoji counts for the two it draws — the same measure `channel.controls` packs
+# rows by, so a label that passes here is one the renderer can seat.
+MAX_OPTION_LABEL_COLS = 24
 
 
 def validate_options(options) -> list:
@@ -56,10 +65,11 @@ def validate_options(options) -> list:
         )
     if any(not label for label in labels):
         raise ValueError("every option needs a label")
-    if any(len(label) > MAX_OPTION_LABEL_CHARS for label in labels):
+    if any(controls.display_width(label) > MAX_OPTION_LABEL_COLS for label in labels):
         raise ValueError(
-            f"an option label is at most {MAX_OPTION_LABEL_CHARS} characters — these are buttons "
-            "on a phone; put the detail in the question"
+            f"an option label is at most {MAX_OPTION_LABEL_COLS} characters — these are buttons on "
+            "a phone, and a longer one renders as an ellipsis the seller has to guess at; put the "
+            "detail in the question and keep the button to the answer"
         )
     if any("\n" in label or "\r" in label for label in labels):
         raise ValueError("an option label is a single line")

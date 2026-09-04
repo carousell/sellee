@@ -14,7 +14,7 @@ import pytest
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import secrets
-from sellee.channel import asks, fastpaths
+from sellee.channel import acks, asks, fastpaths
 from sellee.channel.fastpaths import CB_PAUSE
 from sellee.channel.prompt import build_channel_prompt
 from sellee.channel.telegram.poller import Poller
@@ -42,6 +42,30 @@ def test_strips_surrounding_whitespace() -> None:
 
 
 @pytest.mark.parametrize(
+    "options",
+    [
+        ["✅ Accept", "↔️ Counter", "❌ Decline"],
+        ["🔗 Send checkout link", "🤝 I'll handle it"],
+        ["👍 Not a scam — resume", "🛑 Keep it held"],
+        ["✅ Sold", "💔 Fell through", "⏳ Still on it"],
+    ],
+)
+def test_every_label_the_rulebook_pins_clears_the_legibility_cap(options) -> None:
+    """The cap is set by the copy that already exists, not the other way round: seller-comms.md
+    pins these exact answer sets, so a cap that rejected one of them would be the cap being wrong.
+    The widest is "👍 Not a scam — resume" at 23 columns."""
+    assert asks.validate_options(options) == options
+
+
+def test_an_emoji_label_is_measured_by_what_it_draws() -> None:
+    """Counting characters would let two more emoji through than fit. The cap is in columns, the
+    same measure the renderer packs rows by."""
+    assert asks.validate_options(["ok", "😀" * 12]) == ["ok", "😀" * 12]  # 24 columns exactly
+    with pytest.raises(ValueError):
+        asks.validate_options(["ok", "😀" * 13])
+
+
+@pytest.mark.parametrize(
     ("options", "because"),
     [
         (["Only one"], "a single button is not a decision"),
@@ -50,6 +74,8 @@ def test_strips_surrounding_whitespace() -> None:
         (["Accept", ""], "a blank label is an unreadable button"),
         (["Accept", "   "], "whitespace is a blank label"),
         (["Accept", "x" * 65], "an over-long label would be rejected at send"),
+        (["Accept", "Set floor and I'll respond"], "26 columns renders as an ellipsis on a phone"),
+        (["Accept", "I'll give you a price to counter with"], "and 37 is hopeless"),
         (["Accept", "two\nlines"], "a newline would forge a second line"),
         (["Accept", "Accept"], "two identical buttons are one unreachable door"),
         (["Accept", 7], "options are strings"),
@@ -231,9 +257,18 @@ def _inbox_rows(store):
     return store._db.query("SELECT text, status FROM channel_inbox ORDER BY id")
 
 
-def test_a_decision_tap_is_acked_but_left_for_the_pass(store, bus, xdg_tmp) -> None:
-    """The whole point: the spinner clears immediately, and the answer is still the pass's to act
-    on — minting a checkout link is not something the receive loop can do."""
+def _label_for(msg, token):
+    buttons = [b for row in msg["reply_markup"]["inline_keyboard"] for b in row]
+    return next((b["text"] for b in buttons if b["callback_data"] == token), None)
+
+
+def _receipts(store):
+    return [n["text"] for n in store.list_queued_notices() if n["text"].startswith("Got it:")]
+
+
+def test_a_decision_tap_is_receipted_but_left_for_the_pass(store, bus, xdg_tmp) -> None:
+    """The whole point: the seller hears immediately that the tap landed, and the answer is still
+    the pass's to act on — minting a checkout link is not something the receive loop can do."""
     _bound(store)
     notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
     with FakeTelegramAPI() as api:
@@ -242,12 +277,97 @@ def test_a_decision_tap_is_acked_but_left_for_the_pass(store, bus, xdg_tmp) -> N
 
         assert api.answered == ["cbq1"]  # gap 3: an unacked tap spins for ~15s
         assert api.outbox == []  # no fast-path reply — nothing was answered deterministically
+        assert api.chat_actions == [CHAT_ID]  # and the chat shows the agent working
 
     rows = _inbox_rows(store)
     assert len(rows) == 1
     assert rows[0]["text"] == "🔗 Send checkout link"  # the words, not the token
     assert rows[0]["status"] == "claimed"  # claimed into the pass the tap enqueued
     assert bus.store.read(kinds=["pass.queued"])
+    # Queued rather than sent, which is what puts it in the pass's own transcript window.
+    assert _receipts(store) == ["Got it: 🔗 Send checkout link. " + acks.WORKING]
+
+
+def test_the_receipt_reaches_the_pass_that_is_about_to_answer(store, bus, xdg_tmp) -> None:
+    """So the pass knows the tap was already acknowledged and does not open by acknowledging it
+    again — with nothing added to the prompt asking it not to."""
+    _bound(store)
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+    pass_id = store._db.query("SELECT pass_id FROM passes WHERE type = 'channel'")[0]["pass_id"]
+    window = _channel_prompt({}, store, pass_id).split("Messages to handle now:")[0]
+    assert "Got it: 🔗 Send checkout link" in window
+
+
+def test_a_double_tap_earns_one_receipt_not_two(store, bus, xdg_tmp) -> None:
+    """The field case: two taps a second apart, both in one batch. One pass answers both, so two
+    receipts would promise two answers."""
+    _bound(store)
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(f"n{notice_id}:a0")
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+    assert len(_inbox_rows(store)) == 2  # both taps are still durably recorded
+    assert len(_receipts(store)) == 1
+
+
+def test_a_tap_taken_while_paused_says_so_and_offers_the_way_back(store, bus, xdg_tmp) -> None:
+    """A paused agent claims the row into a pass its lane will never run. Nothing else would tell
+    the seller, so this one is sent rather than queued — the drain lane is not running either."""
+    _bound(store)
+    store.set_paused(True, source="test")
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+        assert len(api.outbox) == 1
+        sent = api.outbox[-1]
+    assert "paused" in sent["text"].lower() and "🔗 Send checkout link" in sent["text"]
+    assert sent["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == fastpaths.CB_RESUME
+
+
+def test_a_fast_path_tap_is_never_also_receipted(store, bus, xdg_tmp) -> None:
+    """It already replied. "Paused." followed by "I'm working out what to do" is a contradiction."""
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_PAUSE)
+        _poller(store, bus, api).tick()
+
+    assert _receipts(store) == []
+
+
+def test_a_typed_message_is_receipted_once_per_burst(store, bus, xdg_tmp) -> None:
+    """The second message lands while the first message's pass is still running — they have already
+    been told, and the same pass sweeps both."""
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        p = _poller(store, bus, api)
+        api.inject_text("is the lamp still available?")
+        p.tick()
+        api.inject_text("and the chair?")
+        p.tick()
+
+    assert len(_receipts(store)) == 0  # text receipts carry no label to quote
+    working = [n["text"] for n in store.list_queued_notices() if acks.WORKING in n["text"]]
+    assert len(working) == 1
+
+
+def test_traffic_from_another_chat_never_pulses_or_receipts(store, bus, xdg_tmp) -> None:
+    """Dropped before ingest, but the cursor still advances — so the tail must key off what was
+    actually routed, not off the batch having been non-empty."""
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_text("hello from a stranger", chat_id=CHAT_ID + 1)
+        _poller(store, bus, api).tick()
+
+        assert api.chat_actions == []
+    assert store.list_queued_notices() == []
 
 
 def test_the_pass_prompt_shows_a_tap_as_the_seller_answering(store, bus, xdg_tmp) -> None:
@@ -303,3 +423,66 @@ def test_a_sellers_own_multi_line_message_still_renders_verbatim() -> None:
     prompt = build_channel_prompt([row], [])
 
     assert "1. Selling:\n- fan\n- lamp" in prompt
+
+
+# --- an answered ask stops offering itself ------------------------------------------------------
+
+
+def test_answering_an_ask_takes_its_buttons_away(store, bus, xdg_tmp) -> None:
+    """A seller who sees nothing happen taps again — and the buttons vanishing is the one piece of
+    feedback that arrives instantly, before even the receipt. It also stops the second tap that
+    stranded a row in the field."""
+    _bound(store)
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+        assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
+
+
+def test_a_tapped_control_row_is_spent_and_replaced_rather_than_left_stale(
+    store, bus, xdg_tmp
+) -> None:
+    """Every tap spends its keyboard, not only an ask's. A control row's labels were rendered from
+    state the tap has just changed — the row that said "⏸ Pause" is looking at a paused agent the
+    moment it lands — so leaving it there offers the seller a button that lies about what it does.
+    That is the shape the watch bug took.
+
+    Nothing is lost: the reply carries a freshly rendered row, so what they hold is current."""
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_PAUSE)
+        _poller(store, bus, api).tick()
+
+        assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
+        assert _label_for(api.outbox[-1], fastpaths.CB_RESUME) is not None  # the live way back
+
+
+def test_a_second_tap_on_a_stripped_ask_does_not_break_the_tick(store, bus, xdg_tmp) -> None:
+    """Telegram answers a no-op edit with 400 "message is not modified". Two taps in one batch hit
+    exactly that, and the batch is already ingested — a cosmetic edit must not cost it."""
+    _bound(store)
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.fail_edits = True
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+    assert store.has_active_channel_pass() is True  # routed regardless
+    assert len(_receipts(store)) == 1
+
+
+def test_a_stale_tap_still_resolves_after_its_keyboard_was_stripped(store, bus, xdg_tmp) -> None:
+    """Stripping touches the chat, never the row: `controls` is what a months-old tap resolves
+    against, so taking the buttons off one message must not retire the answer they meant."""
+    _bound(store)
+    notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(f"n{notice_id}:a0")
+        _poller(store, bus, api).tick()
+
+    assert store.notice_option(notice_id, f"n{notice_id}:a0") == {
+        "label": "🔗 Send checkout link",
+        "text": _CLOSE_ASK,
+    }
