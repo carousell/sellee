@@ -21,6 +21,7 @@ BOT_COMMANDS = [
     {"command": "resume", "description": "Resume the agent"},
 ]
 
+
 def render_controls(spec) -> dict | None:
     """Render the core's (label, token) control spec into an inline keyboard, or None when there
     are no controls (the fast paths that reply with plain text).

@@ -156,7 +156,7 @@ def test_a_row_left_waiting_is_routed_once_the_pass_it_waited_for_settles(store,
 
 
 def test_the_routing_lane_is_silent_when_there_is_nothing_waiting(store, bus) -> None:
-    """It ticks every couple of seconds forever; a no-op tick must enqueue nothing and say nothing."""
+    """It ticks every couple of seconds forever, so a no-op tick must enqueue and say nothing."""
     routing.route_channel_pass(store, bus)
 
     assert store.has_active_channel_pass() is False

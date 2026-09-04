@@ -42,6 +42,11 @@ class FakeTelegramAPI:
         self.commands: list | None = None
         self.chat_actions: list = []
         self.answered: list = []
+        # Every editMessageReplyMarkup, as {message_id, inline_keyboard}. `fail_edits` makes the
+        # method answer the way Telegram does for a no-op edit ("message is not modified"), which is
+        # what a second tap on an already-stripped ask produces.
+        self.edited: list = []
+        self.fail_edits = False
         self.files: dict = {"_default": b"\xff\xd8\xff\xe0fake-jpeg-bytes"}
         self._longpoll_cap = longpoll_cap_sec
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
@@ -160,6 +165,22 @@ class FakeTelegramAPI:
                 if method == "sendChatAction":
                     with api._lock:
                         api.chat_actions.append(p.get("chat_id"))
+                    return self._reply({"ok": True, "result": True})
+                if method == "editMessageReplyMarkup":
+                    if api.fail_edits:
+                        return self._reply(
+                            {"ok": False, "description": "Bad Request: message is not modified"},
+                            400,
+                        )
+                    with api._lock:
+                        api.edited.append(
+                            {
+                                "message_id": p.get("message_id"),
+                                "inline_keyboard": (p.get("reply_markup") or {}).get(
+                                    "inline_keyboard"
+                                ),
+                            }
+                        )
                     return self._reply({"ok": True, "result": True})
                 if method == "answerCallbackQuery":
                     with api._lock:

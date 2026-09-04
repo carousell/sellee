@@ -15,6 +15,7 @@ import pytest
 
 from fake_discord_api import CHANNEL_ID, FAKE_TOKEN, FakeDiscordAPI
 from sellee import secrets
+from sellee.channel import acks, fastpaths
 from sellee.channel.discord import gateway
 from sellee.channel.discord.gateway import DiscordGateway
 from sellee.channel.discord.transport import DiscordClient
@@ -366,3 +367,65 @@ def test_a_decision_tap_is_acknowledged_but_left_for_the_pass(store, bus, xdg_tm
     assert rows[0]["text"] == "🔗 Send checkout link"  # the words, not the token
     assert rows[0]["status"] == "claimed"
     assert store.has_active_channel_pass()
+
+
+def test_a_decision_tap_is_receipted_on_discord_too(store, bus, xdg_tmp) -> None:
+    """Parity, and it is not decorative: Discord splits ingest across two handlers where Telegram
+    has one loop, so the tail is exactly the shape that gets added to one and forgotten on the
+    other. Both go through routing.settle_batch."""
+    _bound(store)
+    notice_id = store.queue_notice(
+        "Needs your call: meet at Orchard, or checkout?",
+        options=["🔗 Send checkout link", "🤝 I'll handle it"],
+    )
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_interaction(
+            _interaction(f"n{notice_id}:a0"), client=_client(api)
+        )
+        assert api.typing_pulses == [True]
+
+    receipts = [n["text"] for n in store.list_queued_notices() if n["text"].startswith("Got it:")]
+    assert receipts == ["Got it: 🔗 Send checkout link. " + acks.WORKING]
+
+
+def test_a_typed_message_is_receipted_on_discord_too(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_bound_message(
+            _dm("is the lamp still available?"), client=_client(api)
+        )
+
+    assert [n["text"] for n in store.list_queued_notices()] == [acks.WORKING]
+
+
+def test_a_fast_path_click_is_never_also_receipted_on_discord(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_interaction(
+            _interaction(fastpaths.CB_PAUSE), client=_client(api)
+        )
+
+    assert store.list_queued_notices() == []
+
+
+def test_answering_an_ask_takes_its_buttons_away_on_discord(store, bus, xdg_tmp) -> None:
+    """Type 7 acknowledges the click and strips the components in one request, so the Gateway pump
+    thread — the one that has to keep heartbeating — pays for one REST call, not two."""
+    _bound(store)
+    notice_id = store.queue_notice("meet, or checkout?", options=["Checkout", "Myself"])
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_interaction(
+            _interaction(f"n{notice_id}:a0"), client=_client(api)
+        )
+
+    assert api.callbacks == [{"type": 7, "data": {"components": []}}]
+
+
+def test_a_control_row_click_keeps_its_buttons_on_discord(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    with FakeDiscordAPI() as api:
+        _gateway(store, bus, api)._handle_interaction(
+            _interaction(fastpaths.CB_PAUSE), client=_client(api)
+        )
+
+    assert api.callbacks == [{"type": 6}]

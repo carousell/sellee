@@ -94,6 +94,10 @@ LOOK_AGAIN_LABEL = "Take another look"
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
 WATCH_OFF_LABEL = "🌙 Work in background"
+# Named once because the receipt for an arrival that lands while paused offers the way back too
+# (channel/acks.py), and a door worded two ways is two doors as far as the seller can tell.
+PAUSE_LABEL = "⏸ Pause"
+RESUME_LABEL = "▶️ Resume"
 
 
 def signin_controls(market: str) -> list:
@@ -454,9 +458,7 @@ def _watch_set(store, bus, watching: bool) -> tuple:
     """
     if settings.get(store, window.WATCH_SETTING) == watching:
         return (WATCH_ALREADY_ON if watching else WATCH_ALREADY_OFF), _control_spec(store)
-    settings.set_now(
-        store, bus, key=window.WATCH_SETTING, raw_value=watching, decided_via="button"
-    )
+    settings.set_now(store, bus, key=window.WATCH_SETTING, raw_value=watching, decided_via="button")
     text = WATCH_ON_NOTICE.format(where=window.where()) if watching else WATCH_OFF_NOTICE
     return text, _control_spec(store)
 
@@ -466,7 +468,7 @@ def _control_spec(store) -> list:
     reflecting current state, a what-needs-me shortcut, the watch-mode toggle, and one connect or
     disconnect button per marketplace. The provider wraps it onto as many rows as it takes, so this
     stays a flat list."""
-    toggle = ("▶️ Resume", CB_RESUME) if store.is_paused() else ("⏸ Pause", CB_PAUSE)
+    toggle = (RESUME_LABEL, CB_RESUME) if store.is_paused() else (PAUSE_LABEL, CB_PAUSE)
     watching = settings.get(store, window.WATCH_SETTING)
     watch = (WATCH_OFF_LABEL, CB_WATCH_OFF) if watching else (WATCH_ON_LABEL, CB_WATCH_ON)
     return [toggle, ("What needs me", CB_NEEDS_ME), watch] + _connection_controls(store)

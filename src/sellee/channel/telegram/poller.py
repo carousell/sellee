@@ -32,11 +32,16 @@ from sellee.channel.telegram.transport import (
     _normalize,
     commands_hash,
 )
-from sellee.store import bind_nonce_live
+from sellee.store import ask_notice_id, bind_nonce_live
 
 log = logging.getLogger(__name__)
 
 POLL_TIMEOUT_SEC = 25
+# What a send from this thread may cost before it is given up on. Everything this client sends runs
+# on the one thread consuming getUpdates, so a stalled send stops the seller's next messages being
+# fetched at all. `get_updates` sets its own, longer, timeout from the poll — this never shortens
+# the long poll.
+INLINE_SEND_TIMEOUT_SEC = 10.0
 OFF_IDLE_SEC = 1.0
 BACKOFF_BASE_SEC = 5.0
 BACKOFF_CAP_SEC = 60.0
@@ -66,7 +71,14 @@ class Poller:
         self._backoff = 0.0
 
     def _default_client_factory(self, token: str) -> TelegramClient:
-        return TelegramClient(token, api_base=self.config.telegram_api_base)
+        # A short timeout, because this client's sends run on the one thread consuming getUpdates.
+        # The transport's 60s default is right for a delivery lane, where a stall costs only that
+        # lane; here it stalls receive, so the seller's next messages are not even fetched — which
+        # is the "I tapped and nothing happened" symptom, made worse by the code meant to fix it.
+        # The long poll sets its own timeout per call, so this does not shorten that.
+        return TelegramClient(
+            token, api_base=self.config.telegram_api_base, timeout=INLINE_SEND_TIMEOUT_SEC
+        )
 
     # --- the loop -------------------------------------------------------------------------
 
@@ -218,8 +230,16 @@ class Poller:
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
         self._ack_taps(client, inserted)
-        self._dispatch_fast_paths(client, ch["chat_id"], inserted)
-        routing.route_channel_pass(self.store, self.bus)
+        handled = self._dispatch_fast_paths(client, ch["chat_id"], inserted)
+        routing.settle_batch(
+            self.store,
+            self.bus,
+            [row for row in inserted if row["id"] not in handled],
+            reply=lambda text, ctrl: client.send_message(
+                ch["chat_id"], text, reply_markup=commands.render_controls(ctrl)
+            ),
+            typing=lambda chat_id: client.send_chat_action(chat_id, "typing"),
+        )
 
     def _ack_taps(self, client, inserted) -> None:
         """Stop the spinner on every button tap, fast path or not.
@@ -230,19 +250,49 @@ class Poller:
         a failed ack is cosmetic, and the reply still goes out.
         """
         for row in inserted:
-            cq_id = (row["payload"] or {}).get("callback_query_id")
+            payload = row["payload"] or {}
+            cq_id = payload.get("callback_query_id")
             if not cq_id:
                 continue
             try:
                 client.answer_callback_query(cq_id)
             except ChannelError as exc:
                 log.warning("answerCallbackQuery failed: %s", exc)
+            self._retire_answered_ask(client, payload)
 
-    def _dispatch_fast_paths(self, client, chat_id, inserted) -> None:
+    def _retire_answered_ask(self, client, payload: dict) -> None:
+        """Take the buttons off an ask the seller has just answered.
+
+        Asks only — `ask_notice_id` is what tells one apart. The control row and the marketplace
+        switches are meant to be tapped again tomorrow, so stripping those would take the card away.
+
+        This is also the fastest feedback there is: the buttons disappear in the same tick, ahead of
+        the receipt the drain lane carries. A seller who saw nothing happen tapped again, and the
+        second tap is what stranded a row for four hours.
+
+        Only the chat is touched; the notice's `controls` stay, so a tap from a copy of the ask
+        further up the scrollback still resolves to the words it meant.
+        """
+        message_id = payload.get("message_id")
+        if message_id is None or ask_notice_id(payload.get("ref")) is None:
+            return
+        try:
+            client.clear_inline_keyboard(self.store.get_channel()["chat_id"], message_id)
+        except ChannelError as exc:
+            # Two taps in one batch make the second edit a no-op, which Telegram calls a 400. The
+            # batch is already ingested and about to be routed; a cosmetic edit cannot cost it that.
+            log.debug("clearing an answered ask's keyboard failed: %s", exc)
+
+    def _dispatch_fast_paths(self, client, chat_id, inserted) -> set:
         """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /sellee and the
         control-row buttons) instantly, before any pass routing — so `/pause` is heard even mid-
         pass. The row is marked handled so it never routes; everything else stays pending for the
-        channel pass. Taps are already acked by `_ack_taps`, which covers the ones that route."""
+        channel pass. Taps are already acked by `_ack_taps`, which covers the ones that route.
+
+        Returns the ids it answered, so the tail can receipt only what is still going to a pass — a
+        fast path has already replied, and a second "I'm working on it" after "Paused" contradicts
+        it.
+        """
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
@@ -263,6 +313,7 @@ class Poller:
             self.bus.publish("channel.handled", {"kind": row["kind"], "by": "fast_path"})
         if handled:
             self.store.mark_inbox_handled(handled, "fast_path")
+        return set(handled)
 
     def _download_photos(self, client, ev) -> list:
         file_id = ev["payload"].get("file_id")
