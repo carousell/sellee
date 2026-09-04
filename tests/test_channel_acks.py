@@ -190,3 +190,14 @@ def test_nothing_is_queued_or_sent_when_no_receipt_is_owed(store, rows) -> None:
     acks.ack_arrival(store, rows, pass_was_active=True, reply=lambda t, c: sent.append(t))
 
     assert sent == [] and store.list_queued_notices() == []
+
+
+def test_an_unresolvable_tap_while_paused_names_the_pause_as_well(store) -> None:
+    """It asks the seller to answer in words, and while paused words are no more actionable than
+    the tap was — so saying only the first half would send them off to be ignored twice."""
+    store.set_paused(True, source="test")
+
+    text, controls = _ack(store, [_unresolved_tap()])
+
+    assert "can't place" in text and "paused" in text.lower()
+    assert controls == [(fastpaths.RESUME_LABEL, fastpaths.CB_RESUME)]

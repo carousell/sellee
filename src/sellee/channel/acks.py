@@ -96,7 +96,9 @@ def _ack_for(store, rows, *, pass_was_active: bool) -> tuple | None:
     # prevent, and both carry the same label. Where they differ, the later one is the live intent.
     last = taps[-1]
     if not (last["payload"] or {}).get("answers_notice_id"):
-        return f"{UNRESOLVED} {tail}" if paused else UNRESOLVED, controls
+        # Paused, the pause still has to be said: this asks them to answer in words, and words are
+        # no more actionable than the tap was until they resume.
+        return ((f"{UNRESOLVED} {tail}" if paused else UNRESOLVED), controls)
     # Newline-free by validation; one_line is belt-and-braces against a label that predates it,
     # since a break here would stage a second message nobody wrote.
     return f"{HEARD.format(label=prompt_data.one_line(last['text']))} {tail}", controls
