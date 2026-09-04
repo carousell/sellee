@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>sellee buyer simulator</title>
+<!--
+  A buyer the seller plays themselves, so the reply loop can be rehearsed without a marketplace.
+  Messages typed here are written to a `simbuyer:` thread exactly as the browser inbox writes a
+  real conversation; everything the agent does in response is the real thing.
+
+  The same DOM rule as the tail page, and for a stronger reason: every string this page renders
+  was written by the agent or echoed back from the store, so text reaches the DOM only as
+  textContent. The single exception is a checkout link, which is turned into an anchor only after
+  its origin is checked against this daemon's own carousell.ai base — a URL the agent produced is
+  still a URL a model produced.
+-->
+<style>
+:root{
+  --bg:#111; --panel:#191919; --rule:#2a2a2a; --fg:#ddd; --bright:#fff; --dim:#8a8a8a;
+  --buyer:hsl(210,60%,58%); --agent:hsl(150,42%,52%); --warn:#f0a35e; --err:#e06c6c;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);
+  font:14px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+header{display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+  padding:10px 14px;background:var(--panel);border-bottom:1px solid var(--rule)}
+header h1{font-size:13px;margin:0 10px 0 0;color:var(--bright);letter-spacing:.06em;
+  text-transform:uppercase;font-weight:700}
+select,input,button{font:inherit;background:#101010;color:var(--fg);
+  border:1px solid var(--rule);border-radius:4px;padding:6px 8px}
+button{cursor:pointer;background:#232323}
+button:hover:not(:disabled){background:#2d2d2d}
+button:disabled{opacity:.45;cursor:default}
+#status{margin-left:auto;color:var(--dim);font-size:12px}
+#status.err{color:var(--err)}
+main{max-width:820px;margin:0 auto;padding:18px 14px 120px}
+.msg{margin:12px 0;display:flex}
+.msg .bubble{max-width:76%;padding:8px 12px;border-radius:10px;
+  white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid var(--rule)}
+.msg.out{justify-content:flex-start}
+.msg.out .bubble{background:#16211c;border-color:#26372e}
+.msg.in{justify-content:flex-end}
+.msg.in .bubble{background:#151d28;border-color:#26313f}
+.who{font-size:11px;letter-spacing:.06em;text-transform:uppercase;color:var(--dim);margin-bottom:3px}
+.msg.out .who{color:var(--agent)}
+.msg.in .who{color:var(--buyer)}
+.bubble a{color:var(--agent);word-break:break-all}
+.empty{color:var(--dim);text-align:center;margin-top:60px}
+footer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
+  border-top:1px solid var(--rule);padding:10px 14px}
+.composer{max-width:820px;margin:0 auto;display:flex;gap:8px}
+.composer input{flex:1}
+.hint{max-width:820px;margin:6px auto 0;color:var(--dim);font-size:12px}
+</style>
+</head>
+<body>
+<header>
+  <h1>buyer simulator</h1>
+  <label>item <select id="item"></select></label>
+  <label>as <input id="handle" value="sim-buyer" size="10"></label>
+  <label>chat <input id="conv" value="1" size="3"></label>
+  <button id="reset" title="Start a fresh conversation on a new thread">new chat</button>
+  <span id="status">connecting…</span>
+</header>
+<main><div id="log"><p class="empty">Pick an item and make an offer.</p></div></main>
+<footer>
+  <form class="composer" id="composer">
+    <input id="text" placeholder="e.g. would you take 70 for this?" autocomplete="off" disabled>
+    <button id="send" disabled>send</button>
+  </form>
+  <p class="hint">Your message is written to the agent's inbox and a reply pass is queued
+    immediately — the agent's answer appears here when it commits.</p>
+</footer>
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+let TOKEN = null, THREAD = null, POLL = null, CHECKOUT_BASE = null;
+
+function status(text, isErr) {
+  const el = $("status");
+  el.textContent = text;
+  el.classList.toggle("err", !!isErr);
+}
+
+// Every string here was written by the agent or round-tripped through the store, so it is set as
+// textContent. A checkout link is the one thing promoted to an anchor, and only when its origin
+// matches this daemon's configured carousell.ai base.
+function render(messages) {
+  const log = $("log");
+  log.textContent = "";
+  if (!messages.length) {
+    const p = document.createElement("p");
+    p.className = "empty";
+    p.textContent = "No messages yet on this conversation.";
+    log.appendChild(p);
+    return;
+  }
+  for (const m of messages) {
+    const row = document.createElement("div");
+    row.className = "msg " + (m.dir === "in" ? "in" : "out");
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+    const who = document.createElement("div");
+    who.className = "who";
+    who.textContent = m.dir === "in" ? "you (buyer)" : "sellee";
+    bubble.appendChild(who);
+    bubble.appendChild(withLinks(String(m.text == null ? "" : m.text)));
+    row.appendChild(bubble);
+    log.appendChild(row);
+  }
+  log.lastChild.scrollIntoView({block: "end"});
+}
+
+function withLinks(text) {
+  const frag = document.createDocumentFragment();
+  if (!CHECKOUT_BASE) { frag.appendChild(document.createTextNode(text)); return frag; }
+  const prefix = CHECKOUT_BASE + "/checkout/";
+  let rest = text;
+  for (;;) {
+    const at = rest.indexOf(prefix);
+    if (at < 0) break;
+    frag.appendChild(document.createTextNode(rest.slice(0, at)));
+    let end = at;
+    while (end < rest.length && !/\s/.test(rest[end])) end++;
+    const url = rest.slice(at, end);
+    const a = document.createElement("a");
+    a.href = url;              // origin already matches the configured checkout base
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    a.textContent = url;
+    frag.appendChild(a);
+    rest = rest.slice(end);
+  }
+  frag.appendChild(document.createTextNode(rest));
+  return frag;
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, opts);
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error || ("HTTP " + res.status));
+  return body;
+}
+
+async function loadItems() {
+  const body = await api("/control/sim-items?token=" + encodeURIComponent(TOKEN));
+  const items = body.items;
+  CHECKOUT_BASE = body.checkout_base || null;
+  const sel = $("item");
+  sel.textContent = "";
+  if (!items.length) {
+    const o = document.createElement("option");
+    o.textContent = "no published items";
+    o.value = "";
+    sel.appendChild(o);
+    status("publish an item to carousell.ai first", true);
+    return false;
+  }
+  for (const it of items) {
+    const o = document.createElement("option");
+    o.value = it.id;
+    const price = it.list_price == null ? "" : ` — ${it.list_price} ${it.currency || ""}`.trimEnd();
+    o.textContent = it.title + price;
+    sel.appendChild(o);
+  }
+  return true;
+}
+
+async function refresh() {
+  if (!THREAD) return;
+  try {
+    const {messages} = await api(
+      "/control/sim-thread?token=" + encodeURIComponent(TOKEN) +
+      "&thread_id=" + encodeURIComponent(THREAD));
+    render(messages);
+    status(messages.length + " message" + (messages.length === 1 ? "" : "s"));
+  } catch (err) {
+    status(err.message, true);
+  }
+}
+
+$("composer").addEventListener("submit", async (ev) => {
+  ev.preventDefault();
+  const text = $("text").value.trim();
+  const item = $("item").value;
+  if (!text || !item) return;
+  $("send").disabled = true;
+  try {
+    const body = await api("/control/sim-inbound", {
+      method: "POST",
+      headers: {"Content-Type": "application/json", "Authorization": "Bearer " + TOKEN},
+      body: JSON.stringify({
+        item_id: item, text,
+        handle: $("handle").value.trim() || "sim-buyer",
+        conversation: $("conv").value.trim() || "1",
+      }),
+    });
+    THREAD = body.thread_id;
+    $("text").value = "";
+    status("sent — agent is thinking…");
+    await refresh();
+  } catch (err) {
+    status(err.message, true);
+  } finally {
+    $("send").disabled = false;
+    $("text").focus();
+  }
+});
+
+$("reset").addEventListener("click", () => {
+  $("conv").value = String(Date.now() % 100000);
+  THREAD = null;
+  render([]);
+  status("new conversation");
+});
+
+(async function start() {
+  const ticket = new URLSearchParams(location.search).get("ticket");
+  if (!ticket) { status("open this page with `sellee buyer`", true); return; }
+  try {
+    // Trade the one-shot ticket for the attended token, then drop it from the address bar so it
+    // does not linger in history — the same dance the tail page does.
+    const body = await api("/control/tail-exchange", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ticket}),
+    });
+    TOKEN = body.token;
+    history.replaceState(null, "", location.pathname);
+  } catch (err) {
+    status("could not authenticate: " + err.message, true);
+    return;
+  }
+  if (!(await loadItems())) return;
+  $("text").disabled = false;
+  $("send").disabled = false;
+  status("ready");
+  POLL = setInterval(refresh, 2000);
+  $("text").focus();
+})();
+</script>
+</body>
+</html>

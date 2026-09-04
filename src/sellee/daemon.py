@@ -21,6 +21,7 @@ import time
 
 from sellee import (
     __version__,
+    buyer_sim,
     clock,
     config,
     crosslist,
@@ -531,6 +532,11 @@ def run_daemon(*, once: bool) -> int:
         only a tool that intends to send acquires the browser (and starts Chrome, if that is all
         that is missing). The sink writes through the unscoped store: it stamps the intent it was
         handed, which the tool has already checked against the session's scope."""
+        if buyer_sim.enabled():
+            # Rehearsing against a simulated buyer, so there is no marketplace to type into and
+            # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
+            # rather than silently swallowing a real buyer's reply while the seller plays.
+            return buyer_sim.SimReplySink(bus=bus)
         return browser_sink.BrowserReplySink(
             client=browser_factory(),
             store=store,
