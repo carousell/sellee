@@ -32,7 +32,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse, urlsplit
 
-from sellee import __version__, passes
+from sellee import __version__, buyer_sim, passes
 from sellee.browser import connect as _connect
 from sellee.db import connect_reader
 from sellee.events import event_to_wire, latest_seq, query_events, routine_kinds
@@ -44,6 +44,7 @@ log = logging.getLogger(__name__)
 
 # The web tail's page: a packaged asset, not an inline string — it is a real HTML/CSS/JS document.
 _TAIL_PAGE = PACKAGE_DATA_DIR / "tail.html"
+_BUYER_PAGE = PACKAGE_DATA_DIR / "buyer.html"
 
 _LOCALHOST_NAMES = frozenset({"127.0.0.1", "localhost", "::1"})
 
@@ -440,6 +441,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_market_login()
         elif route == "/control/market-logins":
             self._handle_market_logins()
+        elif route == "/control/sim-inbound":
+            self._handle_sim_inbound()
         elif route == "/control/tail-ticket":
             self._handle_tail_ticket()
         elif route == "/control/tail-exchange":
@@ -467,6 +470,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(405, {"error": "method not allowed"})
         elif parsed.path == "/control/seller-basics":
             self._handle_seller_basics_read(parsed)
+        elif parsed.path == "/control/sim-items":
+            self._handle_sim_items(parsed)
+        elif parsed.path == "/control/sim-thread":
+            self._handle_sim_thread(parsed)
+        elif parsed.path == "/buyer":
+            self._handle_buyer()
         elif parsed.path == "/tail":
             self._handle_tail()
         else:
@@ -979,6 +988,114 @@ class _Handler(BaseHTTPRequestHandler):
         # on every poll for as long as the page stays open.
         last_seq = ceiling or (after_seq or 0)
         self._send_json(200, {"events": rows, "last_seq": last_seq})
+
+    def _handle_buyer(self) -> None:
+        # Same per-request read as the tail page, for the same reason: editing the asset and
+        # reloading is the dev loop. 404 when the simulator is off, so a daemon that was never
+        # told to simulate does not serve a page that cannot work.
+        if not buyer_sim.enabled():
+            self._send_json(404, {"error": "buyer simulator is not enabled"})
+            return
+        page = _BUYER_PAGE.read_bytes()
+        self.send_response(200)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(page)))
+        self.end_headers()
+        self.wfile.write(page)
+
+    def _handle_sim_inbound(self) -> None:
+        """One buyer message, from the seller playing buyer.
+
+        Writes the same two rows the browser inbox writes when it reads a real conversation, then
+        queues a reply pass directly rather than waiting for the reply lane's interval — the lane
+        also carries a no-send cooldown and a pacing gate that exist to look human on a real
+        marketplace and only get in the way here.
+        """
+        if not buyer_sim.enabled():
+            self._send_json(404, {"error": "buyer simulator is not enabled"})
+            return
+        body = self._attended_body()
+        if body is None:
+            return
+        item_id = str(body.get("item_id") or "").strip()
+        text = str(body.get("text") or "").strip()
+        handle = str(body.get("handle") or "sim-buyer").strip()
+        local_id = str(body.get("conversation") or "1").strip()
+        if not item_id or not text:
+            self._send_json(400, {"error": "item_id and text are required"})
+            return
+        try:
+            recorded = buyer_sim.record_buyer_message(
+                self._app.store, item_id=item_id, handle=handle, text=text, local_id=local_id
+            )
+        except Exception as exc:  # noqa: BLE001 - surfaced to the page as its own error
+            self._send_json(400, {"error": str(exc)})
+            return
+        pass_id = self._app.store.enqueue_pass(
+            "reply", {"thread_ids": [recorded["thread_id"]], "item_ids": [item_id]}
+        )
+        self._send_json(200, {**recorded, "pass_id": pass_id})
+
+    def _handle_sim_items(self, parsed) -> None:
+        """The items a simulated buyer could plausibly enquire about.
+
+        Only items already published on carousell.ai: the checkout tool refuses anything else, so
+        offering the rest would just be a way to reach a confusing refusal.
+        """
+        if not buyer_sim.enabled():
+            self._send_json(404, {"error": "buyer simulator is not enabled"})
+            return
+        if self._attended_query(parsed) is None:
+            return
+        out = []
+        for item in self._app.store.list_items():
+            urls = item.get("listing_urls") or {}
+            if not urls.get("carousell-ai"):
+                continue
+            out.append(
+                {
+                    "id": item.get("id"),
+                    "title": item.get("title"),
+                    "list_price": item.get("list_price"),
+                    "currency": item.get("currency"),
+                    "status": item.get("status"),
+                }
+            )
+        # The page needs this to decide whether a URL the agent produced may become a clickable
+        # anchor. Carried here rather than on the shared tail-exchange route, which the event tail
+        # also uses and has no business growing a checkout concern.
+        base = getattr(self._app.config, "carousell_ai_web_base_url", "") or ""
+        self._send_json(200, {"items": out, "checkout_base": base.rstrip("/")})
+
+    def _handle_sim_thread(self, parsed) -> None:
+        if not buyer_sim.enabled():
+            self._send_json(404, {"error": "buyer simulator is not enabled"})
+            return
+        if self._attended_query(parsed) is None:
+            return
+        thread_id = (parse_qs(parsed.query).get("thread_id") or [""])[0]
+        if not buyer_sim.is_sim_thread(thread_id):
+            self._send_json(400, {"error": "not a simulated thread"})
+            return
+        try:
+            messages = self._app.store.get_thread_messages(thread_id)
+        except Exception:
+            messages = []
+        self._send_json(
+            200,
+            {
+                "thread_id": thread_id,
+                "messages": [
+                    {
+                        "dir": m.get("dir"),
+                        "text": m.get("text"),
+                        "ts": m.get("ts"),
+                        "source": m.get("source"),
+                    }
+                    for m in messages
+                ],
+            },
+        )
 
     def _handle_tail(self) -> None:
         # Read per request rather than at import: the page is a packaged asset, and a versioned
