@@ -1,4 +1,7 @@
-"""The Telegram receive loop — a dedicated thread that owns ALL Bot API traffic.
+"""The Telegram receive loop — a dedicated thread that owns ALL getUpdates traffic.
+
+(Sends are not exclusive to it: the delivery lanes build their own clients. What is exclusive, and
+load-bearing, is the cursor.)
 
 Because it is the one consumer of getUpdates, "an unbound channel consumes nothing" is a property
 of this thread's state, not a convention spread across callers. Three states, derived from durable

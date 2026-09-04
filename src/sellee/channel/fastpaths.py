@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import marketplaces, prompt_data, settings
+from sellee import channel, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -618,7 +618,10 @@ def render_settings_card(store) -> str:
     lines = [
         "Here's where things stand:",
         f"• Agent: {paused}",
-        f"• Telegram: {bound}",
+        # Named from the row, never hardcoded: `bound` alone cannot tell a Telegram binding from a
+        # Discord one, and a card claiming a channel the seller never set up is the failure
+        # docs/channels.md calls out by name.
+        f"• {channel.display_name(ch['adapter'])}: {bound}",
         f"• Waiting on you: {escalations} decision(s), {notices} update(s)",
         _listings_line(store),
         "",
