@@ -72,6 +72,21 @@ _FAST_PATH_CALLBACKS = frozenset(
 )
 _WATCH_VALUE_FOR_CALLBACK = {CB_WATCH_ON: True, CB_WATCH_OFF: False}
 
+# Tokens that used to exist. Retiring one does not retire the buttons already sent — they sit in the
+# seller's scrollback forever, and nothing about an old button looks old. Answered here rather than
+# left to fall through, because a fall-through spends an LLM pass on a dead token and tells the
+# seller their button "can't be placed", which is ask-shaped language for something that was never
+# an ask.
+#
+# `watch` is the valueless toggle CB_WATCH_ON / CB_WATCH_OFF replaced. Its intent is genuinely
+# unrecoverable — the token never recorded which way it meant, which is exactly what it was retired
+# for — so the only honest answer is to change nothing and hand back buttons that work.
+RETIRED_CALLBACKS = frozenset({"watch"})
+RETIRED_NOTICE = (
+    "That button is from an older version of me, so I've left everything exactly as it is. Here "
+    "are the current ones — these work."
+)
+
 _CONNECT_MODE_FOR_CALLBACK = {
     CB_CONNECT_MARKET: CONNECT_MODE_OPEN,
     CB_CONNECT_PROBE: CONNECT_MODE_PROBE,
@@ -222,12 +237,17 @@ def is_settings_door(event: dict) -> bool:
 def is_fast_path(event: dict) -> bool:
     """True if `event` (a normalized inbox row's kind/text/payload) is one the daemon answers
     itself. A command matches on its exact first-word token; an action on its callback choice; a
-    settings door on its button token or exact text token."""
+    settings door on its button token or exact text token; a retired token on being one we used to
+    send, which is answered here so a dead button never costs a pass."""
     if event["kind"] == "command":
         return event["text"] in _FAST_PATH_COMMANDS
     if event["kind"] == "action":
         choice = (event.get("payload") or {}).get("choice")
-        return choice in _FAST_PATH_CALLBACKS or choice in settings.CALLBACK_CHOICES
+        return (
+            choice in _FAST_PATH_CALLBACKS
+            or choice in settings.CALLBACK_CHOICES
+            or choice in RETIRED_CALLBACKS
+        )
     return is_settings_door(event)
 
 
@@ -261,6 +281,8 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
     settings ledger publishes what it applied, and the window raise rides on that event.
     """
     token = event["text"] if event["kind"] == "command" else event["payload"]["choice"]
+    if token in RETIRED_CALLBACKS:
+        return RETIRED_NOTICE, _control_spec(store)
     if token == "/watch":
         # The command carries no argument, so it stays a flip — it is typed in the present moment,
         # which is the one case where "the opposite of now" is unambiguous.

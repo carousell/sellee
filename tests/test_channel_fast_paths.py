@@ -335,3 +335,28 @@ def test_skip_cta_tap_is_idempotent(store, bus, xdg_tmp) -> None:
         p.tick()
         assert len(api.outbox) == 2  # re-acked, harmless
     assert store.count_pending_inbox() == 0
+
+
+# --- buttons from an older release --------------------------------------------------------------
+
+
+def test_a_retired_button_changes_nothing_and_hands_back_a_working_one(store, bus, xdg_tmp) -> None:
+    """Retiring a token does not retire the buttons already sent — they sit in the scrollback
+    forever, and the seller cannot tell an old one by looking. `watch` was the valueless toggle
+    replaced by CB_WATCH_ON/CB_WATCH_OFF; every card carrying it is still in the chat.
+
+    Its intent is genuinely unrecoverable — the token never said which way it meant, which is the
+    bug it was retired for — so the only honest answer is to change nothing and offer live buttons.
+    """
+    _bound(store)
+    settings.set_now(store, bus, key="watch_browser", raw_value=False)
+    with FakeTelegramAPI() as api:
+        api.inject_tap("watch")
+        _poller(store, bus, api).tick()
+        msg = api.outbox[-1]
+
+    assert settings.get(store, "watch_browser") is False  # nothing flipped
+    assert "older version" in msg["text"]
+    assert _label_for(msg, CB_WATCH_ON) == WATCH_ON_LABEL  # a live button, right there
+    assert store.has_active_channel_pass() is False  # and no LLM pass spent on a dead token
+    assert store.count_pending_inbox() == 0
