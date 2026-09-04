@@ -29,6 +29,7 @@ from sellee.db import Database
 from sellee.store.helpers import (
     ItemRecord,
     StoreError,
+    _forget_thread_listings_in_txn,
     _insert_item_in_txn,
     _insert_notice,
     _item_from_row,
@@ -478,7 +479,7 @@ class SurveyMixin:
             # answers. Cleared in the same transaction: this is the one funnel every adoption
             # goes through, and a cache outliving the fact it was about is how a buyer goes
             # unanswered.
-            conn.execute("DELETE FROM thread_listing_lookups WHERE market = ?", (market,))
+            _forget_thread_listings_in_txn(conn, market)
         rows = self._db.query("SELECT * FROM items WHERE id = ?", (item_id,))
         if not rows:
             raise StoreError(f"item {item_id!r} vanished during adoption")

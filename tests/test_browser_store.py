@@ -466,3 +466,17 @@ def test_adopting_a_listing_forgets_that_markets_lookups(store) -> None:
     assert store.thread_listing_lookup("fb:4") is None
     # Scoped to the market that changed — Carousell learned nothing from a Facebook adoption.
     assert store.thread_listing_lookup("carousell:5") is not None
+
+
+def test_linking_an_existing_item_forgets_that_markets_lookups(store) -> None:
+    """The survey's twin-linking gives an item a market URL outside adoption entirely, and that URL
+    is what joins a buyer on that listing to that item. A remembered "none of ours" surviving it is
+    a buyer nobody ever looks at again."""
+    item = store.create_item(title="Fan", list_price=10.0, currency="SGD")
+    store.record_thread_listing("fb:6", "fb", "", "Fan")
+    store.record_thread_listing("carousell:7", "carousell", "", "Fan")
+
+    store.record_listing_url(item["id"], "fb", "https://fb/77")
+
+    assert store.thread_listing_lookup("fb:6") is None
+    assert store.thread_listing_lookup("carousell:7") is not None

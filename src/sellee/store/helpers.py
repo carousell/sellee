@@ -724,6 +724,17 @@ def _insert_notice(
     return notice_id
 
 
+def _forget_thread_listings_in_txn(conn, market: str) -> None:
+    """Forget what we learned about which listing a market's conversations are about.
+
+    Called by every writer that can turn "none of ours" into a match — an item gaining this
+    market's URL, however it gained it — and in that writer's own transaction, because a cache
+    outliving the fact it was about is how a buyer goes unanswered. Wholesale on purpose:
+    forgetting too much costs a page load, forgetting too little costs a buyer nobody answers.
+    """
+    conn.execute("DELETE FROM thread_listing_lookups WHERE market = ?", (market,))
+
+
 # A tappable ask's button token: `n<notice_id>:a<index>`. Providers split a callback datum on the
 # FIRST colon into (ref, choice), so the ref names the notice carrying the ask and the choice names
 # which option was tapped.
