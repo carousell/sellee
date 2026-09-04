@@ -421,11 +421,16 @@ def test_answering_an_ask_takes_its_buttons_away_on_discord(store, bus, xdg_tmp)
     assert api.callbacks == [{"type": 7, "data": {"components": []}}]
 
 
-def test_a_control_row_click_keeps_its_buttons_on_discord(store, bus, xdg_tmp) -> None:
+def test_a_control_row_click_is_spent_and_replaced_on_discord(store, bus, xdg_tmp) -> None:
+    """Same rule as an ask: a clicked row's labels were rendered from state the click just changed,
+    and the reply carries a fresh one."""
     _bound(store)
     with FakeDiscordAPI() as api:
         _gateway(store, bus, api)._handle_interaction(
             _interaction(fastpaths.CB_PAUSE), client=_client(api)
         )
+        replied = api.outbox[-1]
 
-    assert api.callbacks == [{"type": 6}]
+    assert api.callbacks == [{"type": 7, "data": {"components": []}}]
+    tokens = [b["custom_id"] for row in replied.get("components", []) for b in row["components"]]
+    assert fastpaths.CB_RESUME in tokens  # the live way back arrives with the reply

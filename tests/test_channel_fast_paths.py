@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import secrets, settings
 from sellee.channel import fastpaths
@@ -360,3 +362,49 @@ def test_a_retired_button_changes_nothing_and_hands_back_a_working_one(store, bu
     assert _label_for(msg, CB_WATCH_ON) == WATCH_ON_LABEL  # a live button, right there
     assert store.has_active_channel_pass() is False  # and no LLM pass spent on a dead token
     assert store.count_pending_inbox() == 0
+
+
+# --- every tapped keyboard is spent, so every reply has to leave a way forward -------------------
+
+# A tap takes the buttons off the message it was on (poller._spend_the_keyboard): a tapped row's
+# labels were rendered from state the tap has just changed, so what is left on screen is stale. That
+# makes "what does the seller hold afterwards" a property worth pinning rather than assuming.
+#
+# Most fast paths answer it by replying with a freshly rendered control row. These do not, and each
+# has a reason — a decision with nothing left to decide, or a lane that re-offers its own button on
+# the notice that follows. A NEW token landing here without a reason is the bug this catches.
+_NO_CONTROLS_ON_PURPOSE = {
+    fastpaths.CB_CONNECT_MARKET: "the connect lane re-offers Sign in / Check again on its notice",
+    fastpaths.CB_CONNECT_PROBE: "same lane, same notice",
+    fastpaths.CB_SURVEY_YES: "the adopt decision is made; a re-ask comes from the survey lane",
+    fastpaths.CB_SURVEY_NO: "the adopt decision is made",
+    fastpaths.CB_SKIP_CTA: "one-shot, and it is the seller declining to be asked again",
+}
+_REF_FOR = {
+    fastpaths.CB_ADD_MARKET: "fb",
+    fastpaths.CB_REMOVE_MARKET: "carousell",
+    fastpaths.CB_CONNECT_MARKET: "fb",
+    fastpaths.CB_CONNECT_PROBE: "fb",
+    fastpaths.CB_SURVEY_YES: "fb",
+    fastpaths.CB_SURVEY_NO: "fb",
+}
+
+
+@pytest.mark.parametrize(
+    "token", sorted(fastpaths._FAST_PATH_CALLBACKS | fastpaths.RETIRED_CALLBACKS)
+)
+def test_a_tapped_button_always_leaves_the_seller_holding_a_live_one(store, bus, token) -> None:
+    store.set_seller_config_section("basics", {"region": "SG"})
+    event = {
+        "kind": "action",
+        "text": token,
+        "payload": {"ref": _REF_FOR.get(token), "choice": token},
+    }
+
+    _text, controls = fastpaths.handle_fast_path(store, bus, event)
+
+    assert controls or token in _NO_CONTROLS_ON_PURPOSE, (
+        f"{token} strips its keyboard on tap and replies with none — the seller is left with "
+        "nothing to tap. Reply with _control_spec(store), or add it to _NO_CONTROLS_ON_PURPOSE "
+        "with the reason it is safe."
+    )

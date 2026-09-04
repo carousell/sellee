@@ -35,7 +35,7 @@ from sellee.channel.telegram.transport import (
     _normalize,
     commands_hash,
 )
-from sellee.store import ask_notice_id, bind_nonce_live
+from sellee.store import bind_nonce_live
 
 log = logging.getLogger(__name__)
 
@@ -261,30 +261,37 @@ class Poller:
                 client.answer_callback_query(cq_id)
             except ChannelError as exc:
                 log.warning("answerCallbackQuery failed: %s", exc)
-            self._retire_answered_ask(client, payload)
+            self._spend_the_keyboard(client, payload)
 
-    def _retire_answered_ask(self, client, payload: dict) -> None:
-        """Take the buttons off an ask the seller has just answered.
+    def _spend_the_keyboard(self, client, payload: dict) -> None:
+        """Take the buttons off the message that was just tapped. Every tap, not only an ask's.
 
-        Asks only — `ask_notice_id` is what tells one apart. The control row and the marketplace
-        switches are meant to be tapped again tomorrow, so stripping those would take the card away.
+        A tapped message is spent. An ask has been answered; a control row's labels were rendered
+        from state that the tap itself has just changed, so what is left on screen is a lie — it was
+        a stale "🌙 Work in background" that turned watch mode *on*. Either way, leaving the buttons
+        there invites the second tap this whole change exists to stop, and the seller cannot tell a
+        spent button from a live one by looking.
 
-        This is also the fastest feedback there is: the buttons disappear in the same tick, ahead of
-        the receipt the drain lane carries. A seller who saw nothing happen tapped again, and the
-        second tap is what stranded a row for four hours.
+        Nothing is lost by it. Every fast path that changes something replies with a freshly
+        rendered control row, the one-shot decisions (adopt, skip, approve) have nothing left to
+        decide, and the connect lane re-offers its own buttons on the notice that follows. What the
+        seller is left holding is always current.
 
-        Only the chat is touched; the notice's `controls` stay, so a tap from a copy of the ask
-        further up the scrollback still resolves to the words it meant.
+        This is also the fastest feedback there is — the buttons go in the same tick, ahead of the
+        receipt the drain lane carries.
+
+        Only the chat is touched. The notice's `controls` stay, so a tap on another copy of the same
+        ask further up the scrollback still resolves to the words it meant.
         """
         message_id = payload.get("message_id")
-        if message_id is None or ask_notice_id(payload.get("ref")) is None:
+        if message_id is None:
             return
         try:
             client.clear_inline_keyboard(self.store.get_channel()["chat_id"], message_id)
         except ChannelError as exc:
             # Two taps in one batch make the second edit a no-op, which Telegram calls a 400. The
             # batch is already ingested and about to be routed; a cosmetic edit cannot cost it that.
-            log.debug("clearing an answered ask's keyboard failed: %s", exc)
+            log.debug("clearing a spent keyboard failed: %s", exc)
 
     def _dispatch_fast_paths(self, client, chat_id, inserted) -> set:
         """Answer deterministic fast paths (/pause, /resume, /status, /catchup, /sellee and the

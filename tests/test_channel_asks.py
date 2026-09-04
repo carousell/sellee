@@ -257,6 +257,11 @@ def _inbox_rows(store):
     return store._db.query("SELECT text, status FROM channel_inbox ORDER BY id")
 
 
+def _label_for(msg, token):
+    buttons = [b for row in msg["reply_markup"]["inline_keyboard"] for b in row]
+    return next((b["text"] for b in buttons if b["callback_data"] == token), None)
+
+
 def _receipts(store):
     return [n["text"] for n in store.list_queued_notices() if n["text"].startswith("Got it:")]
 
@@ -436,15 +441,22 @@ def test_answering_an_ask_takes_its_buttons_away(store, bus, xdg_tmp) -> None:
         assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
 
 
-def test_the_control_row_keeps_its_buttons_forever(store, bus, xdg_tmp) -> None:
-    """Only an ask is answered once. Pause, watch and the marketplace switches are meant to be
-    tapped again tomorrow, so stripping them would take the card away."""
+def test_a_tapped_control_row_is_spent_and_replaced_rather_than_left_stale(
+    store, bus, xdg_tmp
+) -> None:
+    """Every tap spends its keyboard, not only an ask's. A control row's labels were rendered from
+    state the tap has just changed — the row that said "⏸ Pause" is looking at a paused agent the
+    moment it lands — so leaving it there offers the seller a button that lies about what it does.
+    That is the shape the watch bug took.
+
+    Nothing is lost: the reply carries a freshly rendered row, so what they hold is current."""
     _bound(store)
     with FakeTelegramAPI() as api:
         api.inject_tap(CB_PAUSE)
         _poller(store, bus, api).tick()
 
-        assert api.edited == []
+        assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
+        assert _label_for(api.outbox[-1], fastpaths.CB_RESUME) is not None  # the live way back
 
 
 def test_a_second_tap_on_a_stripped_ask_does_not_break_the_tick(store, bus, xdg_tmp) -> None:

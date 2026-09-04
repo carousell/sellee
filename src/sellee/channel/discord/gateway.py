@@ -41,7 +41,7 @@ from sellee.channel import asks, fastpaths, outbound, routing
 from sellee.channel.discord import transport as discord_transport
 from sellee.channel.discord.transport import ChannelError, DiscordClient
 from sellee.channel.discord.ws_client import ConnectionClosed, connect
-from sellee.store import ask_notice_id, bind_nonce_live
+from sellee.store import bind_nonce_live
 
 log = logging.getLogger(__name__)
 
@@ -386,9 +386,10 @@ class DiscordGateway:
         failed. A decision button routes to a pass rather than a fast path, so this has to run for
         those too. Best-effort: a failed ack is cosmetic and the reply still goes out.
 
-        An ask's answer takes its buttons away in the same call — an ask is answered once, and the
-        buttons vanishing is the fastest feedback there is. The control row and the marketplace
-        switches keep theirs: those are meant to be clicked again tomorrow."""
+        The click also takes the buttons away, in the same call. A clicked message is spent: an ask
+        has been answered, and a control row's labels were rendered from state the click has just
+        changed. Every fast path that changes something replies with a freshly rendered row, so what
+        the seller is left holding is always current."""
         for row in inserted:
             payload = row["payload"] or {}
             interaction_id = payload.get("interaction_id")
@@ -396,9 +397,7 @@ class DiscordGateway:
                 continue
             try:
                 client.acknowledge_interaction(
-                    interaction_id,
-                    payload["interaction_token"],
-                    clear_components=ask_notice_id(payload.get("ref")) is not None,
+                    interaction_id, payload["interaction_token"], clear_components=True
                 )
             except ChannelError as exc:
                 log.warning("interaction acknowledge failed: %s", exc)

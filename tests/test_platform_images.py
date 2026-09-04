@@ -14,7 +14,7 @@ from PIL import Image
 
 from sellee.platform.base import ImageToolUnavailable
 from sellee.platform.container import ContainerPlatform
-from sellee.platform.images import to_jpeg
+from sellee.platform.images import _prepare, to_jpeg
 from sellee.platform.macos import MacOSPlatform
 
 
@@ -25,6 +25,13 @@ def _exif_orientation(value: int) -> bytes:
 
 
 def _write(path: Path, size, *, fmt="JPEG", mode="RGB", color="red", orientation=None) -> Path:
+    if fmt == "HEIF":
+        # Writing HEIF needs the plugin Pillow only learns from `pillow_heif.register_heif_opener`,
+        # which `to_jpeg` registers lazily on its first call. Asked for here rather than assumed:
+        # a case that writes HEIC *before* converting anything used to pass only when some earlier
+        # test in the same process had already converted something, so it failed or passed on
+        # xdist's worker distribution rather than on the code.
+        _prepare()
     image = Image.new(mode, size, color)
     kwargs = {"exif": _exif_orientation(orientation)} if orientation is not None else {}
     image.save(path, format=fmt, **kwargs)
