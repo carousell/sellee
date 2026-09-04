@@ -52,8 +52,11 @@ register(
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "For a message that asks the seller to choose: the 2-4 "
-                    "concrete answers, each short enough for a button on a phone. Omit for an "
-                    "ordinary message — buttons on something that isn't a question read as one.",
+                    "concrete answers, each at most ~24 characters so it reads on a phone button "
+                    "without being truncated. Every option must settle the question on its own — a "
+                    "tap sends back only its label, so an answer needing a number or a sentence is "
+                    "not a button. Omit for an ordinary message: buttons on something that isn't a "
+                    "question read as one.",
                 },
             },
             "required": ["text"],

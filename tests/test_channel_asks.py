@@ -42,6 +42,30 @@ def test_strips_surrounding_whitespace() -> None:
 
 
 @pytest.mark.parametrize(
+    "options",
+    [
+        ["✅ Accept", "↔️ Counter", "❌ Decline"],
+        ["🔗 Send checkout link", "🤝 I'll handle it"],
+        ["👍 Not a scam — resume", "🛑 Keep it held"],
+        ["✅ Sold", "💔 Fell through", "⏳ Still on it"],
+    ],
+)
+def test_every_label_the_rulebook_pins_clears_the_legibility_cap(options) -> None:
+    """The cap is set by the copy that already exists, not the other way round: seller-comms.md
+    pins these exact answer sets, so a cap that rejected one of them would be the cap being wrong.
+    The widest is "👍 Not a scam — resume" at 23 columns."""
+    assert asks.validate_options(options) == options
+
+
+def test_an_emoji_label_is_measured_by_what_it_draws() -> None:
+    """Counting characters would let two more emoji through than fit. The cap is in columns, the
+    same measure the renderer packs rows by."""
+    assert asks.validate_options(["ok", "😀" * 12]) == ["ok", "😀" * 12]  # 24 columns exactly
+    with pytest.raises(ValueError):
+        asks.validate_options(["ok", "😀" * 13])
+
+
+@pytest.mark.parametrize(
     ("options", "because"),
     [
         (["Only one"], "a single button is not a decision"),
@@ -50,6 +74,8 @@ def test_strips_surrounding_whitespace() -> None:
         (["Accept", ""], "a blank label is an unreadable button"),
         (["Accept", "   "], "whitespace is a blank label"),
         (["Accept", "x" * 65], "an over-long label would be rejected at send"),
+        (["Accept", "Set floor and I'll respond"], "26 columns renders as an ellipsis on a phone"),
+        (["Accept", "I'll give you a price to counter with"], "and 37 is hopeless"),
         (["Accept", "two\nlines"], "a newline would forge a second line"),
         (["Accept", "Accept"], "two identical buttons are one unreachable door"),
         (["Accept", 7], "options are strings"),
