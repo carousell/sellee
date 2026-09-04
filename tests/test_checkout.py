@@ -28,6 +28,9 @@ _GUEST_REFUSAL = (
     "sign in before checkout links can be created"
 )
 _SIGNIN_URL = "https://www.carousell.ai/signin?flow=guest-promotion&promote=tok"
+_NO_MARKET_REFUSAL = (
+    "seller has no market; the seller must confirm where they sell before this can continue"
+)
 
 
 class FakeRail:
@@ -220,6 +223,27 @@ def test_guest_refusal_never_names_the_signin_tool_to_a_reply_pass(make_ctx, sto
 
 def test_guest_refusal_records_nothing_so_a_retry_mints_fresh(make_ctx, store) -> None:
     _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_GUEST_REFUSAL))
+    assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0
+
+
+def test_missing_market_asks_the_seller_where_they_sell(make_ctx, store) -> None:
+    """A seller who signed up on the web is left unplaced on purpose — carousell.ai runs one
+    payout account per market and the assignment is permanent — so the remedy is to ask, not to
+    retry."""
+    message = _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_NO_MARKET_REFUSAL))
+    assert "Singapore" in message
+    assert "United States" in message
+    assert "permanent" in message
+
+
+def test_missing_market_never_tells_the_buyer_about_the_seller(make_ctx, store) -> None:
+    message = _refused(make_ctx, store, TIER_PASS_REPLY, RailToolError(_NO_MARKET_REFUSAL))
+    assert "escalate" in message
+    assert "holding line" in message
+
+
+def test_missing_market_records_nothing_so_a_retry_mints_fresh(make_ctx, store) -> None:
+    _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_NO_MARKET_REFUSAL))
     assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0
 
 
