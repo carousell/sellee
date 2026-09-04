@@ -10,9 +10,10 @@ registry entry, not edits threaded through the layer — the same split `channel
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from typing import Callable
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell
+from sellee.browser.markets import carousell, facebook
 
 
 @dataclass(frozen=True)
@@ -63,10 +64,54 @@ class MarketAdapter:
     # Where the listing id sits in a permalink, as a regex with one group — what joins a
     # conversation to one of our items.
     listing_id_pattern: str = ""
+    # For a market whose inbox is a folder inside a general messages app: JS that marks the control
+    # opening it, and the selector that mark creates. The control ignores a click dispatched from
+    # the page, so the caller clicks the mark for real. Empty when the inbox is just a page.
+    inbox_folder_js: str = ""
+    inbox_folder_target: str = ""
+    # Which listing the open conversation is about, for a market that names it only there. Read
+    # once when first seen; empty when the list already carries `product_id`.
+    product_id_js: str = ""
+    # The trailing relative-time token this market's list rows carry ("2m", "Yesterday"), as a
+    # regex matched case-insensitively. Stripped before a row is compared with what it said last
+    # time, so a ticking clock is not a changed conversation. Moves with `product_id_js` — the
+    # comparison exists to keep that read's cached answer honest.
+    row_clock_pattern: str = ""
+    # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
+    # fixed address; the survey follows it before reading `my_listings_js`.
+    my_listings_entry_js: str = ""
+    # Publishing by driving the form rather than by a recipe a model reads. These move together: a
+    # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
+    # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
+    # what the form holds; `publish_options_js(wanted)` marks one dropdown option;
+    # `publish_result_js` names the listing that was made.
+    publish_fields_js: str = ""
+    publish_readback_js: str = ""
+    publish_result_js: str = ""
+    publish_target: Callable[[str], str] = lambda step: ""
+    publish_options_js: Callable[[str], str] = lambda wanted: ""
+    # Where a driver files a listing when nothing better is known — choosing a category from a
+    # title is the listing flow's judgement, not a driver's.
+    publish_default_category: str = ""
+    # This market's own word for an item's free-text condition — the vocabulary its condition
+    # dropdown offers is the market's, so the mapping lives with the market, not the driver.
+    publish_condition_for: Callable[[str], str] = lambda said: ""
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
     system_handles: frozenset = field(default_factory=frozenset)
+    # A row preview meaning the marketplace itself says there is nothing here to read, matched
+    # case-insensitively against the list row's preview. Without it, a withdrawn conversation is
+    # indistinguishable from one our own reader failed on, and the two want opposite answers.
+    empty_preview_pattern: str = ""
+    # This market's own wording for its verification wall (`blindness.CAUSE_VERIFY`) — what the
+    # wall asks for is the market's to name. Empty falls back to blindness.py's generic sentence.
+    verify_notice: str = ""
+    # The market's own responsive breakpoint: below this it is liable to serve a layout the
+    # readers cannot parse, and a failed read may be the window's fault rather than the market's.
+    # 0 means no width is too narrow. Only a floor — it never claims a read failed, it only
+    # reframes one that already did.
+    min_usable_width_px: int = 0
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -86,12 +131,46 @@ CAROUSELL = MarketAdapter(
     listing_id_pattern=carousell.LISTING_ID_PATTERN,
     composer=tuple(Selector(**row) for row in carousell.COMPOSER_DEFAULTS),
     system_handles=carousell.SYSTEM_HANDLES,
+    min_usable_width_px=carousell.MIN_USABLE_WIDTH_PX,
 )
 
-_ADAPTERS = {CAROUSELL.market: CAROUSELL}
+FACEBOOK = MarketAdapter(
+    market="fb",
+    conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
+    conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
+    login_js=facebook.LOGIN_JS,
+    my_listings_js=facebook.MY_LISTINGS_JS,
+    listing_detail_js=facebook.LISTING_DETAIL_JS,
+    my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
+    publish_fields_js=facebook.PUBLISH_FIELDS_JS,
+    publish_readback_js=facebook.PUBLISH_READBACK_JS,
+    publish_result_js=facebook.PUBLISH_RESULT_JS,
+    publish_target=facebook.publish_target,
+    publish_options_js=facebook.options_js,
+    publish_default_category=facebook.DEFAULT_CATEGORY,
+    publish_condition_for=facebook.condition_for,
+    listing_id_pattern=facebook.LISTING_ID_PATTERN,
+    inbox_folder_js=facebook.INBOX_FOLDER_JS,
+    inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
+    product_id_js=facebook.PRODUCT_ID_JS,
+    row_clock_pattern=facebook.ROW_CLOCK_PATTERN,
+    composer=tuple(Selector(**row) for row in facebook.COMPOSER_DEFAULTS),
+    system_handles=facebook.SYSTEM_HANDLES,
+    empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
+    verify_notice=facebook.VERIFY_NOTICE,
+    min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
+)
+
+_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
 
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"
+
+# The composer steps an adapter may ship selectors for, under REPLY_FLOW. `send_button` is
+# optional and the preferred commit where a marketplace has one: a real click needs no window
+# focus and carries no `isTrusted: false`. See `sink._commit` for the precedence.
+MESSAGE_BOX = "message_box"
+SEND_BUTTON = "send_button"
 
 
 def get_adapter(market: str) -> MarketAdapter | None:
@@ -112,8 +191,18 @@ def supported_markets() -> list:
     return [
         market
         for market in marketplaces.browser_markets()
-        if market in _ADAPTERS and marketplaces.listing_flow(market)
+        if market in _ADAPTERS and _has_a_publish_path(market)
     ]
+
+
+def _has_a_publish_path(market: str) -> bool:
+    """Whether anything at all knows how to put a listing on this marketplace.
+
+    Either a recipe skill a publish pass reads or the publish selectors `browser/publisher.py`
+    drives — asked of the code, never of a registry flag.
+    """
+    adapter = _ADAPTERS.get(market)
+    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish_fields_js))
 
 
 def surveyable_markets(region: str | None = None) -> list:
@@ -134,6 +223,34 @@ def can_survey(market: str, region: str | None = None) -> bool:
     if adapter is None or not adapter.my_listings_js or not adapter.listing_detail_js:
         return False
     return marketplaces.market_url(market, "my_listings", region) is not None
+
+
+def drivable_markets() -> list:
+    """Every browser market we have an adapter for, in registry order — regardless of seller.
+
+    A fact about the code, so a pure settings parser may ask it; where a given seller can be is
+    `connectable_markets`. Deliberately weaker than `supported_markets`: a market can be readable
+    long before anything can list to it, and connecting should not wait on a publish path.
+    """
+    return [market for market in marketplaces.browser_markets() if market in _ADAPTERS]
+
+
+def connectable_markets(region: str | None = None) -> list:
+    """The browser markets *this seller* can connect: one we can drive, on a site where they are.
+
+    A marketplace with a site in the seller's own country sorts first — registry order alone would
+    read as a recommendation. Sorted off the registry rather than a per-region list, so a
+    marketplace that adds a regional site sorts up on its own.
+    """
+    connectable = [
+        market
+        for market in drivable_markets()
+        if marketplaces.resolve_domain(market, region) is not None
+    ]
+    # Stable, so registry order still breaks ties within each group.
+    return sorted(
+        connectable, key=lambda market: not marketplaces.has_regional_site(market, region)
+    )
 
 
 def publishable_markets(region: str | None = None) -> list:

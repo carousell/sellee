@@ -50,17 +50,47 @@ def normalize(text: str) -> str:
 _TRUNCATION_FLOOR = 200
 
 
+# Characters a marketplace's renderer need not hand back the way we sent them. Facebook draws an
+# emoji as an element whose innerText is a line break, so a reply carrying one reads back with a
+# newline where the character was and the read-back check concludes our own message never arrived.
+_UNRENDERED = re.compile(
+    "[\U0001f000-\U0001faff"  # the emoji blocks proper
+    "\u2190-\u21ff"  # arrows
+    "\u2600-\u27bf"  # miscellaneous symbols and dingbats
+    "\u2b00-\u2bff"  # miscellaneous symbols and arrows
+    "\ufe0f\u200d]"  # variation selector, zero-width joiner
+)
+
+
 def same_text(left: str, right: str) -> bool:
     """Whether two message texts are the same message, tolerating one being a truncated read of
-    the other."""
+    the other, or drawn differently by the marketplace that rendered it."""
     return _same_normalized(normalize(left), normalize(right))
 
 
 def _same_normalized(a: str, b: str) -> bool:
+    if _same_or_truncated(a, b):
+        return True
+    # The same message, differently drawn — tried second because it discards real characters and
+    # must not be what decides two genuinely different messages are one.
+    left, right = _as_drawn(a), _as_drawn(b)
+    if not left or not right:
+        return False
+    return _same_or_truncated(left, right)
+
+
+def _same_or_truncated(a: str, b: str) -> bool:
     if a == b:
         return True
     shorter, longer = (a, b) if len(a) <= len(b) else (b, a)
     return len(shorter) >= _TRUNCATION_FLOOR and longer.startswith(shorter)
+
+
+def _as_drawn(text: str) -> str:
+    """`text` without the characters a renderer may drop or redraw — and without spacing, because a
+    dropped character may or may not leave a gap behind, so only what survives both can be
+    compared."""
+    return _UNRENDERED.sub("", text).replace(" ", "")
 
 
 def contains_outbound(tail, text: str) -> bool:
@@ -211,6 +241,49 @@ def new_rows(tail, recorded, *, now: float) -> list:
             }
         )
     return out
+
+
+# Trailing qualifiers a seller adds on one marketplace and not the other: a parenthetical or
+# bracketed aside, or an attribution tail.
+_QUALIFIER_RE = re.compile(r"\s*[\(\[].*?[\)\]]\s*|\s+(?:by|-|–|—)\s+.*$")
+_NON_ALNUM_RE = re.compile(r"[^a-z0-9]+")
+
+
+def same_thing_loosely(left: str, right: str) -> bool:
+    """Whether two titles are plausibly the same object, worded differently.
+
+    Used only to withhold or refuse, never to merge: a wrong merge puts two objects behind one item
+    and one floor, while a wrong withhold only leaves something un-cross-listed, which the seller
+    can ask for. This is why `items_for_same_listing` stays exact and this may be generous.
+    """
+    return bool(_loose_key(left)) and _loose_key(left) == _loose_key(right)
+
+
+def _loose_key(title: str) -> str:
+    stripped = _QUALIFIER_RE.sub(" ", normalize(title))
+    return _NON_ALNUM_RE.sub("", stripped)
+
+
+def items_for_same_listing(title: str, items, market: str, sold=()) -> list:
+    """Which of our items are already the thing this marketplace listing is, listed elsewhere.
+
+    No id spans marketplaces, so the title is the only evidence, and it is matched exactly and in
+    whole: a wrong merge puts two objects behind one item, while a missed match only leaves a
+    duplicate the seller can delete. Returns every candidate so the caller can refuse an ambiguous
+    merge. Items already holding a listing on this market are not candidates, and neither are sold
+    items: a listing URL landed on a closed sale would have every buyer on it answered "it's sold".
+    """
+    wanted = normalize(title)
+    if not wanted:
+        return []
+    closed = set(sold or ())
+    return [
+        item["id"]
+        for item in items
+        if normalize(item.get("title") or "") == wanted
+        and item["id"] not in closed
+        and not (item.get("listing_urls") or {}).get(market)
+    ]
 
 
 def matching_items(product_id: str | None, items, market: str, pattern: str) -> list:

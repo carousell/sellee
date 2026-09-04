@@ -57,6 +57,12 @@ def _detail(**overrides):
     return detail
 
 
+@pytest.fixture(autouse=True)
+def _one_market(carousell_only):
+    """Carousell alone — a lane tick drives every connected market, and these script Carousell's
+    artifacts only."""
+
+
 class StubClient:
     """A browser answering the survey artifacts from a script, recording where it was sent.
 
@@ -83,6 +89,10 @@ class StubClient:
 
     def exclusive(self):
         return self._Exclusive(self)
+
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
 
     def navigate(self, url):
         if self.fail == "navigate":
@@ -121,6 +131,10 @@ def _deps(store, bus, client=None, **overrides):
 def _ready(store):
     """A seller whose region resolves to a Carousell site, so the market is surveyable."""
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+
+
+def _notices(store):
+    return list(store.claim_queued_notices(10))
 
 
 def _events(bus, kind):
@@ -247,6 +261,31 @@ def test_a_pass_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
 
     assert store.get_market_survey(_MARKET)["state"] == "due"
     assert store.get_market_survey(_MARKET)["attempts"] == 0
+
+
+def test_a_sign_in_holding_the_tab_defers_the_whole_lane(store, bus) -> None:
+    """A sign-in hold defers the lane like a pass does — serving a survey down the shared tab
+    mid-password is the same offence, and no pass appears anywhere in that story."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.hold_browser("signin", "signing in to fb", 900.0)
+
+    survey.survey_lane(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
+
+    assert store.get_market_survey(_MARKET)["state"] == "due"
+    # Not an attempt either: the market did nothing wrong, and five unserved looks abandon it.
+    assert store.get_market_survey(_MARKET)["attempts"] == 0
+
+
+def test_a_hold_that_has_expired_does_not_defer_the_lane(store, bus) -> None:
+    """A claim that outlived its claimant must stop costing the agent anything."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.hold_browser("signin", "signing in to fb", ttl_sec=-1.0)
+
+    survey.survey_lane(_deps(store, bus, StubClient(listings={"listings": [_listing()]})))
+
+    assert store.get_market_survey(_MARKET)["state"] != "due"
 
 
 def test_listings_we_already_hold_are_not_offered_again(store, bus) -> None:
@@ -878,10 +917,42 @@ def test_a_partial_listings_read_never_closes_the_survey(store, bus) -> None:
 def test_the_ask_never_offers_to_relist_somewhere_it_already_is(store, bus) -> None:
     """A seller whose enabled marketplaces include the one being surveyed must not be told their
     Carousell listings will be put on Carousell."""
-    seed_setting(store, "crosslist_markets", [_MARKET])
+    seed_setting(store, "connected_markets", [_MARKET])
     _found(store, bus)
 
     text = store.list_queued_notices()[0]["text"]
 
     assert "list them on Carousell.ai too" in text
     assert "and Carousell too" not in text
+
+
+# --- when a market's listings cannot be read at all ---------------------------------------------
+
+
+def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) -> None:
+    """Abandonment must reach the seller and leave a door back, or the market quietly stops being
+    publishable with no explanation anywhere."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    for _ in range(survey.SURVEY_MAX_ATTEMPTS):
+        survey.discover_phase(deps)
+
+    assert store.get_market_survey(_MARKET)["state"] == "abandoned"
+    notices = _notices(store)
+    assert any("couldn't read your" in n["text"] for n in notices)
+    controls = [tuple(c) for n in notices for c in (n["controls"] or [])]
+    assert (fastpaths.LOOK_AGAIN_LABEL, f"{_MARKET}:{fastpaths.CB_SURVEY_YES}") in controls
+
+
+def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:
+    """The button has to reach a handler; it rides the yes token, which already reopens a
+    survey."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    store.abandon_market_survey(_MARKET)
+
+    _tap(store, bus, fastpaths.CB_SURVEY_YES)
+
+    assert store.get_market_survey(_MARKET)["state"] == "due"

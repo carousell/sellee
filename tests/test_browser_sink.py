@@ -67,6 +67,10 @@ class StubClient:
     def exclusive(self):
         return self._Exclusive(self)
 
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
+
     def navigate(self, url):
         self.calls.append(("navigate", url))
         if self.fail_on == "navigate":
@@ -81,7 +85,13 @@ class StubClient:
             raise BrowserToolError(f"{name} refused")
         if name == "browser_type":
             self.typed = arguments["text"]
-        if name == "browser_press_key" and self.echo_on_send and self.typed is not None:
+        # Both trusted commits — a real key press and a real click on a send control — make the
+        # page render the bubble.
+        if (
+            name in ("browser_press_key", "browser_click")
+            and self.echo_on_send
+            and self.typed is not None
+        ):
             self.bubbles.append({"text": self.typed, "side": "out", "y": 99})
         return "ok"
 
@@ -314,6 +324,67 @@ def test_a_tab_that_will_not_come_forward_stops_before_anything_is_typed(
     with pytest.raises(sink.SendNotAttempted):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
     assert "browser_type" not in [name for name, _ in client.calls]
+    assert _intent_status(store, intent) == "pending"
+
+
+# --- the market that ships a send button ---------------------------------------------------------
+
+_SEND_QUERY = "div[aria-label='Send']"
+
+
+@pytest.fixture
+def button_market(monkeypatch):
+    """A market whose composer has an addressable send control, so the send is a real click —
+    no window taken, no `isTrusted: false` event."""
+    import dataclasses
+
+    button = market_adapters.Selector(
+        step=market_adapters.SEND_BUTTON,
+        strategy="css",
+        query=_SEND_QUERY,
+        action_kind="click",
+        page_url_pattern="/inbox/",
+    )
+    with_button = dataclasses.replace(
+        market_adapters.CAROUSELL,
+        chat_message_submit_js="",
+        composer=market_adapters.CAROUSELL.composer + (button,),
+    )
+    monkeypatch.setattr(market_adapters, "get_adapter", lambda market: with_button)
+    return with_button
+
+
+def test_a_send_button_is_clicked_after_the_text_is_typed(store, bus, thread, button_market):
+    """Located after the type: a send control is typically inert until the composer holds
+    text."""
+    client = StubClient(matches={"textarea": 1, _SEND_QUERY: 1})
+    _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
+
+    names = [name for name, _ in client.calls]
+    assert names.index("browser_type") < names.index("browser_click")
+    assert "browser_press_key" not in names
+    assert "submit" not in names
+
+
+def test_clicking_a_send_button_never_takes_the_sellers_window(store, bus, thread, button_market):
+    """The whole reason to prefer a button: no window is taken."""
+    client = StubClient(matches={"textarea": 1, _SEND_QUERY: 1})
+    _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
+
+    assert "ensure_frontmost" not in [name for name, _ in client.calls]
+
+
+def test_a_send_button_that_cannot_be_found_stops_before_the_commit(
+    store, bus, thread, button_market
+):
+    """Still before the commit, so nothing was delivered and the intent stays retryable."""
+    client = StubClient(matches={"textarea": 1, _SEND_QUERY: 0})
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="send_button"):
+        _sink(store, bus, client).send(thread, "hi", "reply", intent)
+
+    assert "browser_click" not in [name for name, _ in client.calls]
     assert _intent_status(store, intent) == "pending"
 
 

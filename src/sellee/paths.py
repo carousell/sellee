@@ -174,6 +174,15 @@ def browser_output_dir() -> Path:
     return state_dir() / "browser-output"
 
 
+def publish_staging_dir() -> Path:
+    """Where a driven publish puts the photographs it is about to upload.
+
+    Must live under `browser_output_dir`: it is the browser server's `--output-dir`, the only
+    root it will read a file from — staged anywhere else, the upload is refused.
+    """
+    return browser_output_dir() / "publish"
+
+
 def passes_dir() -> Path:
     """Ephemeral per-pass workspaces, swept on pass end.
 

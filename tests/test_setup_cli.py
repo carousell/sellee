@@ -27,6 +27,7 @@ from sellee import (
     settings_cli,
     setup_cli,
 )
+from sellee.browser import markets as market_adapters
 from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
 
@@ -523,6 +524,41 @@ def test_a_timezone_outside_the_supported_countries_makes_no_guess(
     assert "No region recorded" in out
 
 
+def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
+    world, monkeypatch, capsys
+) -> None:
+    """A typo in the one free-text field re-asks instead of ending the install, carrying the
+    reason and the country's own zone."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    # country, a zone that does not exist, Enter for the proposed one, then the defaults.
+    _answer(monkeypatch, ["1", "gmt8+", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"] == {
+        "region": "SG",
+        "currency": "SGD",
+        "timezone": "Asia/Singapore",
+    }
+    out = capsys.readouterr().out
+    assert "unknown timezone 'gmt8+'" in out
+    assert "zone names look like Asia/Singapore" in out
+
+
+def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
+    world, monkeypatch, capsys
+) -> None:
+    """Singapore has exactly one zone, so the question has an answer in it already and Enter is
+    enough."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["1", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["timezone"] == "Asia/Singapore"
+    assert "Timezone? [Asia/Singapore]" in capsys.readouterr().out
+
+
 def test_provisioning_gets_the_region_that_was_recorded(world) -> None:
     setup_main("--yes", "--manual")
     assert world.calls["provisioned"] == "SG"
@@ -537,15 +573,23 @@ def test_nothing_is_provisioned_without_a_region(world, monkeypatch) -> None:
 # --- marketplaces --------------------------------------------------------------------------------
 
 
+def _pick(market: str, region: str = "SG") -> str:
+    """What to type to choose one marketplace, found by name — the offer is registry-ordered, so
+    a hard-coded "1" quietly becomes a different marketplace when one lands ahead of it."""
+    from sellee.browser import markets as market_adapters
+
+    return str(market_adapters.connectable_markets(region).index(market) + 1)
+
+
 def test_picking_a_marketplace_records_the_setting_then_signs_in(world, monkeypatch) -> None:
     # region confirmed, Carousell picked, window question defaulted, no chat channel
-    _answer(monkeypatch, ["y", "1", "", ""])
+    _answer(monkeypatch, ["y", _pick("carousell"), "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
     # The opt-in is recorded before the sign-in, so an interrupted sign-in still leaves the
     # seller's choice standing.
-    assert world.calls["settings"] == {"crosslist_markets": '["carousell"]'}
+    assert world.calls["settings"] == {"connected_markets": '["carousell"]'}
     assert world.calls["markets"] == ["carousell"]
 
 
@@ -565,9 +609,27 @@ def test_skip_markets_never_offers(world) -> None:
     assert world.calls["markets"] == []
 
 
-def test_a_region_with_no_marketplaces_says_so_rather_than_offering_an_empty_list(
-    world, capsys
+def test_a_us_seller_is_offered_facebook_rather_than_told_there_is_nothing(
+    world, monkeypatch, capsys
 ) -> None:
+    """Carousell runs no US site; Facebook serves everywhere, making it the one marketplace a US
+    seller can have."""
+    # region confirmed, nothing picked, window question defaulted, no chat channel
+    _answer(monkeypatch, ["y", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord", "--region", "US") == 0
+
+    out = capsys.readouterr().out
+    assert "Facebook Marketplace" in out
+    assert "none available in this region" not in out
+
+
+def test_a_region_with_no_marketplaces_says_so_rather_than_offering_an_empty_list(
+    world, capsys, monkeypatch
+) -> None:
+    """Pinned rather than reached through a region, because no region has nothing any more."""
+    monkeypatch.setattr(market_adapters, "connectable_markets", lambda region: [])
+
     assert setup_main("--yes", "--manual", "--region", "US") == 0
     assert "none available in this region" in capsys.readouterr().out
 
@@ -595,7 +657,7 @@ def test_the_browser_question_comes_after_the_marketplace_sign_in(
 ) -> None:
     """The first window of an install must always come forward — a sign-in window the seller
     cannot find is a wall — so the question that could turn that off is asked only afterwards."""
-    _answer(monkeypatch, ["y", "1", "n", ""])
+    _answer(monkeypatch, ["y", _pick("carousell"), "n", ""])
     assert setup_main("--manual", "--skip-discord") == 0
     assert world.calls["markets"] == ["carousell"]  # signed in under the raise-by-default
     out = capsys.readouterr().out

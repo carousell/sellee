@@ -37,14 +37,18 @@ PROPOSAL_TTL_SEC = 24 * 3600
 # Everything else appears on the card only once changed from its default (the card scales with
 # customization, not catalog size).
 #
-# crosslist_markets earns a place at its default because its default is "off" and nothing else on
-# the card would ever hint that listing elsewhere is possible; a knob that shapes wording is
-# discoverable from the wording, but a market the seller has never been told about is not.
+# connected_markets earns a place at its default because its default is "off" and nothing else on
+# the card would ever hint that other marketplaces are possible.
 #
 # watch_browser earns its place for the same reason and one more: where the work happens is not
 # something any wording the agent produces could hint at, and the card carries the button that
 # flips it — a toggle whose current state is not legible right above it is a coin toss.
-CARD_HEADLINE = ("quiet_hours", "crosslist_markets", "watch_browser")
+CARD_HEADLINE = ("quiet_hours", "watch_browser")
+
+# Settings the card renders in a section of their own, and which `card_lines` therefore leaves out.
+# connected_markets is the only one: the Connections block lists every marketplace with its state
+# and the buttons that change it — printing both would show the same fact twice.
+CARD_OWN_SECTION = frozenset({"connected_markets"})
 
 # The door tokens. A callback carries the change id and one of these choices (the channel encodes it
 # as "<change_id>:<choice>"); a text fast path is "<verb> <change_id>". Both are LLM-free doors: an
@@ -149,8 +153,8 @@ def check_for_seller(key: str, value: object, store) -> None:
     """Validate an already-parsed value against seller state, raising SettingError if it cannot
     apply. Most settings are valid or invalid on their own terms; a marketplace list is not, because
     which marketplaces exist depends on where the seller sells."""
-    if key == "crosslist_markets":
-        _check_crosslist_markets(value, store)
+    if key == "connected_markets":
+        _check_connected_markets(value, store)
 
 
 # --- discoverability renderers (F10) ---------------------------------------------------------
@@ -163,10 +167,11 @@ def card_lines(store) -> list[str]:
     shown = [
         spec
         for spec in _REGISTRY.values()
-        if spec.key in CARD_HEADLINE or not is_default(spec.key, values[spec.key])
+        if spec.key not in CARD_OWN_SECTION
+        and (spec.key in CARD_HEADLINE or not is_default(spec.key, values[spec.key]))
     ]
     lines = [f"• {spec.label}: {spec.render(values[spec.key])}" for spec in shown]
-    remaining = len(_REGISTRY) - len(shown)
+    remaining = len(_REGISTRY) - len(shown) - len(CARD_OWN_SECTION)
     if remaining > 0:
         plural = "settings" if remaining != 1 else "setting"
         lines.append(f"{remaining} more {plural} at defaults — ask me about settings.")
@@ -626,103 +631,130 @@ register(
 )
 
 
-# --- where a listing goes -----------------------------------------------------------------------
+# --- which marketplaces the agent works ------------------------------------------------------
 #
-# The marketplaces to list on *besides* carousell.ai. The rail is not a member: it is where every
-# listing goes, guaranteed by the flow itself, so naming it here would only be a value the validator
-# has to special-case. Empty — the default — means carousell.ai alone, so an upgrade changes
-# nobody's behaviour.
+# The marketplaces the seller has connected *besides* carousell.ai. The rail is not a member —
+# every listing goes there by the flow itself. Empty (the default) means carousell.ai alone.
 #
-# A market is accepted only if something can actually drive it (an adapter plus a publish recipe).
-# Refusing at write time rather than skipping at publish time keeps the failure where the seller can
-# see it: a setting that lists a market nothing publishes to reads as a promise being kept.
+# This list is the switch for everything the agent does on a marketplace — reading the inbox,
+# answering buyers, surveying, signing in — not only publishing. Every consumer reads it at its
+# own decision point, so removing a market stops work already queued.
+#
+# A market is accepted only if something can actually drive it. Refusing at write time keeps the
+# failure where the seller can see it.
 
 
 def _market_names(markets) -> str:
     return ", ".join(marketplaces.display_name(market) for market in markets)
 
 
-def _crosslist_help() -> str:
-    supported = market_adapters.supported_markets()
-    if not supported:
+def _connected_help() -> str:
+    drivable = market_adapters.drivable_markets()
+    if not drivable:
         return "no other marketplaces are supported yet — carousell.ai only"
-    return f"the only other marketplace I can list on is {_market_names(supported)}"
+    return f"the marketplaces I can work are {_market_names(drivable)}"
 
 
-def _parse_crosslist_markets(raw: object) -> list:
+def _parse_connected_markets(raw: object) -> list:
+    """Parse a marketplace list. Pure, per the settings contract: it knows what we can drive, which
+    is a fact about our code, and nothing about where this seller sells — that is
+    `_check_connected_markets`, which runs against the store."""
     if isinstance(raw, str):
         raw = [part.strip() for part in raw.split(",") if part.strip()]
     if not isinstance(raw, (list, tuple)):
-        raise SettingError(f"this must be a list of marketplaces — {_crosslist_help()}")
-    supported = market_adapters.supported_markets()
+        raise SettingError(f"this must be a list of marketplaces — {_connected_help()}")
+    drivable = market_adapters.drivable_markets()
     out = set()
     for entry in raw:
         market = str(entry).strip().lower()
         if not market:
             continue
-        if market not in supported:
-            raise SettingError(f"I can't list on {market!r} — {_crosslist_help()}")
+        if market not in drivable:
+            raise SettingError(f"I can't work {market!r} — {_connected_help()}")
         out.add(market)
     return sorted(out)
 
 
-def _check_crosslist_markets(value: object, store) -> None:
-    """Refuse a marketplace that exists but has nowhere to put this seller's listing.
+def _check_connected_markets(value: object, store) -> None:
+    """Refuse a marketplace that exists but has no site where this seller sells.
 
     Whether we can drive a marketplace is a fact about our code, which the parser settles. Whether
     it operates where the seller sells is a fact about them, so it is checked here — a US seller
-    cannot be listed on Carousell, which runs no US site.
+    cannot be connected to Carousell, which runs no US site.
+
+    A missing region is deliberately not refused on its own. A marketplace that serves everywhere
+    resolves without one, so the old blanket refusal would have turned away a market that is
+    genuinely available; a region only has to be known for the markets that actually need one, and
+    those fail below by being absent from `available`.
     """
     region = store.seller_region()
+    available = market_adapters.connectable_markets(region)
+    unavailable = [market for market in value if market not in available]
+    if not unavailable:
+        return
+    where = f"{region} accounts" if region else "an unset region"
+    if available:
+        raise SettingError(
+            f"{_market_names(unavailable)} isn't available for {where} — "
+            f"I can work {_market_names(available)}"
+        )
     if not region:
         raise SettingError(
             "I don't know which country you sell in yet, so I can't tell which marketplaces are "
             "available — tell me your region and I'll set this up"
         )
-    available = market_adapters.publishable_markets(region)
-    unavailable = [market for market in value if market not in available]
-    if not unavailable:
-        return
-    if available:
-        raise SettingError(
-            f"{_market_names(unavailable)} isn't available for {region} accounts — "
-            f"I can list on {_market_names(available)}"
-        )
     raise SettingError(
-        f"{_market_names(unavailable)} isn't available for {region} accounts, and no other "
+        f"{_market_names(unavailable)} isn't available for {where}, and no other "
         "marketplace is either yet — carousell.ai only"
     )
 
 
-def _render_crosslist_markets(value: object) -> str:
+def _render_connected_markets(value: object) -> str:
     if not value:
         return "none — carousell.ai only"
     return ", ".join(marketplaces.display_name(market) for market in value)
 
 
-def crosslist_markets(store) -> list:
-    """The external marketplaces the seller has enabled, filtered to the ones still publishable.
+def connected_markets(store) -> list:
+    """The marketplaces the seller has connected — their intent, exactly as stored.
 
-    The filter matters after the fact: a stored market can stop being publishable — an adapter
-    withdrawn, or the seller's region changed to one it does not serve — and a stale id must not
-    become an eligible publish.
+    This is the read-at-use answer to "does the seller want anything done on this marketplace at
+    all". Every lane, tool and door that touches one asks it at its own decision point, which is
+    what makes removing a market stop work already queued against it.
+
+    Deliberately *not* filtered through what we can currently drive, unlike `publish_markets`. The
+    two are different questions and the filter would conflate them: whether an adapter exists is
+    already answered where it matters (the lane skips a market without one, the sink refuses a send
+    on one), while quietly dropping a market here would make it vanish from the seller's own list of
+    connected marketplaces after a release withdrew an adapter, with nothing to tell them why. The
+    parser is what keeps nonsense out of the list in the first place.
+    """
+    return list(get(store, "connected_markets"))
+
+
+def publish_markets(store) -> list:
+    """The connected marketplaces we can also *publish* to — the ones with a recipe and a site.
+
+    Narrower than `connected_markets` on purpose: connecting a marketplace turns on reading it and
+    answering buyers, which needs no publish recipe. A market missing one is worked but not listed
+    to, rather than being unavailable entirely.
     """
     publishable = market_adapters.publishable_markets(store.seller_region())
-    return [market for market in get(store, "crosslist_markets") if market in publishable]
+    return [market for market in connected_markets(store) if market in publishable]
 
 
 register(
     SettingSpec(
-        key="crosslist_markets",
-        label="Enabled marketplaces",
-        parse=_parse_crosslist_markets,
-        render=_render_crosslist_markets,
+        key="connected_markets",
+        label="Connected marketplaces",
+        parse=_parse_connected_markets,
+        render=_render_connected_markets,
         default=[],
-        description="Other marketplaces to list on as well as carousell.ai. Each one is published "
-        "in the browser after the carousell.ai listing is live, and the link is sent over when it "
-        "is up. Empty means carousell.ai only.",
-        take_effect="applies to items listed from now on; anything already listed is picked up "
-        "too.",
+        description="Marketplaces I work as well as carousell.ai. On a connected one I read your "
+        "inbox, answer buyers, and — where I have a way to post there — list your items and send "
+        "the link over. Empty means carousell.ai only.",
+        take_effect="applies from now on: I start on a market you add and stop on one you remove, "
+        "including work already queued.",
         requires_approval=True,
     )
 )

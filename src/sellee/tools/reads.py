@@ -60,7 +60,25 @@ def _connect_hint(bound: bool, escalations: list, now: float) -> bool:
 def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     """The needs-me queue: open escalations and queued notices, with counts and channel/pause
     state. Handing the queued notices to this session IS their delivery, so they are stamped
-    delivered via catchup; escalations are never stamped by a read (they clear only on resolve)."""
+    delivered via catchup; escalations are never stamped by a read (they clear only on resolve).
+
+    With one exception, which is the whole reason this reads the channel before it stamps: a
+    notice carrying controls is a *question*, and its buttons are tappable only on a channel
+    message. Stamped with no channel bound, the question is answered by nobody and asked again by
+    nothing — the tap it was waiting for now has nowhere to happen.
+
+    That is not hypothetical. On 2026-09-01 an attended session opened on a fresh install swallowed
+    both "I found 20 things you're already selling" asks this way, forty minutes before the seller
+    bound Telegram. Their 36 listings stayed pending, so no item existed to join a buyer to, so
+    every Facebook conversation read as `unknown_listing` — 372 of them — and a real buyer went
+    unanswered with the agent reporting itself perfectly healthy. Nothing would have re-asked for
+    seven days.
+
+    So a question with no way to be answered stays queued, and the channel delivers it when there
+    is one. It is still *shown* here — the session should say what is waiting; it just may not be
+    the thing that makes it disappear. Same rule the pending settings below already follow: a read
+    never decides.
+    """
     escalations = ctx.store.list_open_escalations()
     notices = ctx.store.list_queued_notices()
     pending_settings = settings.pending_view(ctx.store)
@@ -68,6 +86,8 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     bound = channel["chat_id"] is not None
     hint = _connect_hint(bound, escalations, time.time())
     for notice in notices:
+        if notice.get("controls") and not bound:
+            continue
         ctx.store.mark_notice_delivered(notice["id"], "catchup")
     return {
         "escalations": escalations,

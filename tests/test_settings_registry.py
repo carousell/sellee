@@ -5,6 +5,7 @@ renderers (card lines, prompt block, describe)."""
 from __future__ import annotations
 
 import pytest
+from tests.conftest import seed_setting
 
 from sellee import settings
 from sellee.browser import markets as market_adapters
@@ -52,11 +53,11 @@ def test_default_is_night_window() -> None:
     assert settings.get_spec("quiet_hours").default == [2300, 800]
 
 
-# --- crosslist_markets -------------------------------------------------------------------------
+# --- connected_markets -------------------------------------------------------------------------
 
 
 def test_crosslist_parse_canonicalizes() -> None:
-    spec = settings.get_spec("crosslist_markets")
+    spec = settings.get_spec("connected_markets")
     assert spec.parse(["carousell", "carousell"]) == ["carousell"]  # de-duplicated
     assert spec.parse(" Carousell ") == ["carousell"]  # a bare name, case-folded
     assert spec.parse([]) == []
@@ -64,7 +65,7 @@ def test_crosslist_parse_canonicalizes() -> None:
 
 
 def test_crosslist_render() -> None:
-    spec = settings.get_spec("crosslist_markets")
+    spec = settings.get_spec("connected_markets")
     assert spec.render([]) == "none — carousell.ai only"
     assert spec.render(["carousell"]) == "Carousell"
 
@@ -72,7 +73,6 @@ def test_crosslist_render() -> None:
 @pytest.mark.parametrize(
     "bad",
     [
-        ["fb"],  # a real browser market with no adapter yet
         ["carousell-ai"],  # the rail is where everything goes; it is not a member of this list
         ["ebay"],  # an allowlist-only registry entry
         ["nope"],
@@ -81,14 +81,14 @@ def test_crosslist_render() -> None:
     ],
 )
 def test_crosslist_refuses_markets_it_cannot_publish_to(bad) -> None:
-    spec = settings.get_spec("crosslist_markets")
+    spec = settings.get_spec("connected_markets")
     with pytest.raises(settings.SettingError) as excinfo:
         spec.parse(bad)
     assert "Carousell" in str(excinfo.value)  # the refusal names what is supported
 
 
 def test_crosslist_default_is_rail_only() -> None:
-    spec = settings.get_spec("crosslist_markets")
+    spec = settings.get_spec("connected_markets")
     assert spec.default == []
     assert spec.requires_approval is True  # posting publicly as the seller goes through the door
 
@@ -98,36 +98,52 @@ def test_crosslist_helper_drops_a_no_longer_publishable_value(fresh_store, monke
     not serve it — must not leave an eligible publish behind."""
     from tests.conftest import seed_setting
 
-    seed_setting(fresh_store, "crosslist_markets", ["carousell"])
+    seed_setting(fresh_store, "connected_markets", ["carousell"])
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
-    assert settings.crosslist_markets(fresh_store) == ["carousell"]
+    assert settings.publish_markets(fresh_store) == ["carousell"]
 
     fresh_store.set_seller_config_section("basics", {"region": "US"})
-    assert settings.crosslist_markets(fresh_store) == []
+    assert settings.publish_markets(fresh_store) == []
 
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
-    assert settings.crosslist_markets(fresh_store) == []
+    assert settings.publish_markets(fresh_store) == []
 
 
-def test_check_for_seller_refuses_before_a_region_is_known(fresh_store) -> None:
+def test_check_for_seller_says_so_when_nothing_at_all_is_available(
+    fresh_store, monkeypatch
+) -> None:
+    """With no drivable market, the missing region is the thing the seller can act on, so that is
+    what the refusal says."""
+    monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
     with pytest.raises(settings.SettingError) as excinfo:
-        settings.check_for_seller("crosslist_markets", ["carousell"], fresh_store)
+        settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
     assert "which country you sell in" in str(excinfo.value)
+
+
+def test_a_market_needing_a_region_is_refused_but_offers_one_that_does_not(fresh_store) -> None:
+    """A missing region is not a blanket refusal: Facebook serves everywhere, so the seller is
+    pointed at what they *can* have."""
+    with pytest.raises(settings.SettingError) as excinfo:
+        settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
+
+    message = str(excinfo.value)
+    assert "Carousell isn't available" in message
+    assert "Facebook Marketplace" in message
 
 
 def test_check_for_seller_refuses_a_market_with_no_site_in_the_region(fresh_store) -> None:
     fresh_store.set_seller_config_section("basics", {"region": "US"})
     with pytest.raises(settings.SettingError) as excinfo:
-        settings.check_for_seller("crosslist_markets", ["carousell"], fresh_store)
+        settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
     assert "US accounts" in str(excinfo.value)
 
 
 def test_check_for_seller_passes_a_served_market(fresh_store) -> None:
     fresh_store.set_seller_config_section("basics", {"region": "SG"})
-    settings.check_for_seller("crosslist_markets", ["carousell"], fresh_store)
+    settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
     settings.check_for_seller(
-        "crosslist_markets", [], fresh_store
+        "connected_markets", [], fresh_store
     )  # clearing it never region-fails
 
 
@@ -135,7 +151,7 @@ def test_check_for_seller_normalizes_a_lowercase_region(fresh_store) -> None:
     """The registry keys its sites by code, so a seller recorded as "sg" must still resolve."""
     fresh_store.set_seller_config_section("basics", {"region": " sg "})
     assert fresh_store.seller_region() == "SG"
-    settings.check_for_seller("crosslist_markets", ["carousell"], fresh_store)
+    settings.check_for_seller("connected_markets", ["carousell"], fresh_store)
 
 
 def test_check_for_seller_ignores_settings_with_no_seller_dependency(fresh_store) -> None:
@@ -264,12 +280,20 @@ def test_effective_ignores_orphan_stored_key(fresh_store) -> None:
 
 
 def test_card_lists_headline_at_default(fresh_store) -> None:
+    # connected_markets is absent by design: the card renders it as its own Connections block,
+    # so a value line here would say it twice.
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
-        "• Enabled marketplaces: none — carousell.ai only",
         "• Watch mode: off — I work in the background",
         "3 more settings at defaults — ask me about settings.",
     ]
+
+
+def test_a_setting_with_its_own_card_section_is_not_also_a_value_line(fresh_store) -> None:
+    """Even once changed from its default — the rule is about where it is rendered."""
+    seed_setting(fresh_store, "connected_markets", ["carousell"])
+
+    assert not any("marketplace" in line.lower() for line in settings.card_lines(fresh_store))
 
 
 def test_card_shows_changed_value(fresh_store) -> None:

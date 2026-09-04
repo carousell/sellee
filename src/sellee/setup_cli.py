@@ -41,6 +41,7 @@ from sellee.installer import region as region_guess
 from sellee.installer import update as update_mod
 from sellee.installer.ui import Abort, Ui
 from sellee.platform import get_platform
+from sellee.store import HOLD_SETUP
 
 # How long the daemon gets to write its first heartbeat after being started. Startup is
 # migrations plus a bind, so seconds; this is the "something is wrong" boundary, not a target.
@@ -498,7 +499,7 @@ def _stored_basics(port: int, token: str) -> dict:
 
 def _basics_from_flag(args) -> dict:
     code = str(args.region).strip().upper()
-    basics = {"region": code, "timezone": region_guess.system_timezone()}
+    basics = {"region": code, "timezone": region_guess.default_zone(code)}
     currency = region_guess.CURRENCIES.get(code)
     if currency:
         basics["currency"] = currency
@@ -517,13 +518,33 @@ def _ask_basics(ui: Ui):
     supported = region_guess.supported()
     code = ui.choose("Which country do you sell in?", supported)
     region = supported[code]
-    timezone = ui.ask("Timezone?", default=region_guess.system_timezone(), lead=False).strip()
     basics = {
         "region": region,
         "currency": region_guess.CURRENCIES.get(region, ""),
-        "timezone": timezone,
+        "timezone": _ask_timezone(ui, region),
     }
     return {key: value for key, value in basics.items() if value}
+
+
+def _ask_timezone(ui: Ui, region: str) -> str:
+    """Ask for the timezone until the answer is one that can be stored, or until it is skipped.
+
+    Checked against the same rule the write door applies, so a typo is re-asked here with the
+    reason and an example rather than failing later. An empty answer still skips: the zone is a
+    convenience, and a seller who cannot name theirs is better served by a finished install.
+    """
+    default = region_guess.default_zone(region)
+    example = (region_guess.zones_for(region) or ["Asia/Singapore"])[0]
+    hint = "" if default else f" (e.g. {example})"
+    while True:
+        answer = ui.ask(f"Timezone?{hint}", default=default, lead=False).strip()
+        if not answer:
+            ui.note("no timezone recorded — ask Sellee to set one any time")
+            return ""
+        reason = region_guess.zone_error(answer)
+        if not reason:
+            return answer
+        ui.say(f"{reason} — zone names look like {example}.")
 
 
 # --- the rail ----------------------------------------------------------------------------------
@@ -554,25 +575,35 @@ def _provision_rail(ui: Ui, region) -> None:
 def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     """Offer the marketplaces this seller could list on, and sign in to the ones they pick.
 
-    This step *is* the opt-in to cross-listing: what they choose here becomes the setting the
-    fan-out reads. carousell.ai is never in the list — it is the rail every listing goes on, with
-    nothing to sign in to.
+    This step *is* the opt-in: what they choose here becomes the setting every lane reads.
+    carousell.ai is never in the list — it is the rail every listing goes on, with nothing to sign
+    in to.
+
+    Offered on `connectable_markets` rather than on `publishable_markets`: connecting also means
+    reading that market's inbox, answering its buyers, and adopting what is already listed there,
+    so a market we can drive but cannot yet publish to is still worth connecting.
+
+    A missing region does not skip the step — a marketplace can serve everywhere rather than
+    through a regional site.
     """
-    if args.skip_markets or not region:
+    if args.skip_markets:
         return
-    available = market_adapters.publishable_markets(region)
+    available = market_adapters.connectable_markets(region)
     ui.step("Other marketplaces")
     if not available:
         ui.say("none available in this region yet — carousell.ai only")
         return
 
-    ui.say("Listings can also be cross-posted to the marketplaces below. Sign-in happens in")
-    ui.say("Sellee's own Chrome window; it never signs in on your behalf. Skipping is fine —")
-    ui.say("add them later with `sellee connect <name>`.")
+    ui.say("Sellee can also work the marketplaces below: list to them, read their inbox, answer")
+    ui.say("buyers, and pick up what you already have listed. Sign-in happens in Sellee's own")
+    ui.say("Chrome window; it never signs in on your behalf. Skipping is fine — add them later")
+    ui.say("with `sellee connect <name>`.")
     names = [marketplaces.display_name(market) for market in available]
     picked = [
         available[index]
-        for index in ui.multiselect("Which marketplaces should Sellee list on?", names, lead=False)
+        for index in ui.multiselect(
+            "Which marketplaces should Sellee work for you?", names, lead=False
+        )
     ]
     if not picked:
         ui.say("carousell.ai only — change this any time from the /sellee menu")
@@ -580,13 +611,44 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
 
     # The setting first: it is what the seller opted into, and it holds even if a sign-in is
     # interrupted — the fan-out re-checks the login every time it publishes anyway.
-    if settings_cli.set_setting(port, token, "crosslist_markets", json.dumps(picked)) != 0:
+    if settings_cli.set_setting(port, token, "connected_markets", json.dumps(picked)) != 0:
         ui.warn("Those marketplaces could not be recorded — carousell.ai only for now.")
         return
 
+    # Claimed for the whole phase, not per sign-in: the survey lane will look at a newly connected
+    # market's listings within a minute, down the one shared tab the seller is signing in to the
+    # next marketplace on. Only a claim spanning all the sign-ins closes that gap.
+    _hold_browser(port, token, "signing in to marketplaces")
+    try:
+        _sign_in_markets(ui, port, token, picked)
+    finally:
+        # Released even on a Ctrl-C, so an abandoned setup does not leave the agent waiting out
+        # the full hold deadline.
+        _release_browser(port, token)
+
+
+def _sign_in_markets(ui: Ui, port: int, token: str, picked: list) -> None:
+    """Sign in to each picked marketplace in turn, under the phase's hold on the browser."""
     for market in picked:
         ui.say(f"opening {marketplaces.display_name(market)}…")
         connect_cli.market_flow(port, token, market, interactive=ui.interactive)
+
+
+def _hold_browser(port: int, token: str, reason: str) -> None:
+    """Ask the daemon to keep its lanes off the shared tab. Never fatal — stopping an install
+    over it is worse, and each sign-in still holds the tab for its own duration."""
+    try:
+        control.post(port, token, "/control/browser-hold", {"holder": HOLD_SETUP, "reason": reason})
+    except control.DaemonUnreachable:
+        pass
+
+
+def _release_browser(port: int, token: str) -> None:
+    """Give it back. Never fatal — an unreleased hold expires on its own."""
+    try:
+        control.post(port, token, "/control/browser-release", {"holder": HOLD_SETUP})
+    except control.DaemonUnreachable:
+        pass
 
 
 # --- the browser window -------------------------------------------------------------------------

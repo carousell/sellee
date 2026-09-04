@@ -11,3 +11,6 @@ dist/
 
 # SELLEE_DATA's default. Only this name is covered — point it outside the repo.
 sellee-data/
+
+# Stray artefacts that are not this project
+.gstack/

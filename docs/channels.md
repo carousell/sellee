@@ -21,6 +21,14 @@ a guard test enforces that the core imports no provider.
     and its control-row button flip the `watch_browser` setting through the settings
     ledger — the tap is the consent, so it applies rather than proposing, and the
     refreshed row (whose label now offers the opposite) is the way back.
+    `/sellee` also carries the **Connections** block: one line per marketplace
+    the agent could work for this seller, with whether it is on and a Connect or
+    Disconnect button. Each button names its market, and a stale tap re-acks
+    ("already on") rather than flipping something unseen. Connecting goes through
+    the settings ledger with the same validation as a proposed change, so a market
+    with no site in the seller's region is refused with the reason. The block
+    lists every *connectable* market, not just the connected ones — a switch you
+    can only see once it is on is not a switch anyone finds.
   - `asks` — tappable decisions: what a valid option list is (2–4 labels, checked
     at the tool boundary), and resolving a tap back to the *words* the seller
     tapped before ingest, so the durable row — and so the pass prompt, the

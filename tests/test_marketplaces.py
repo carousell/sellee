@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+
 from sellee import marketplaces
 from sellee.browser import markets as market_adapters
 from sellee.engines import hosts
@@ -63,26 +65,38 @@ def test_allowlist_covers_markets_without_adapters() -> None:
 
 
 def test_supported_markets_is_the_adapter_registry() -> None:
-    """Only carousell today — every other browser entry is a host the scanner needs, not a market
-    anything can drive."""
-    assert market_adapters.supported_markets() == ["carousell"]
+    """The markets something knows how to publish to — every other browser entry is a host the
+    scanner needs, not a market anything can drive."""
+    assert market_adapters.supported_markets() == ["fb", "carousell"]
 
 
-def test_supported_market_needs_both_an_adapter_and_a_recipe(monkeypatch) -> None:
+def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
+    """A recipe skill a pass reads, or the publish selectors the driver fills — both need an
+    adapter."""
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
-    assert market_adapters.supported_markets() == []
+    assert market_adapters.supported_markets() == ["fb"]
 
     monkeypatch.undo()
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
     assert market_adapters.supported_markets() == []
 
 
+def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypatch) -> None:
+    """The capability is read off the code that implements it: an adapter with neither is not
+    publishable."""
+    stripped = dataclasses.replace(market_adapters.FACEBOOK, publish_fields_js="")
+    monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
+    monkeypatch.setattr(market_adapters, "_ADAPTERS", {"fb": stripped})
+
+    assert market_adapters.supported_markets() == []
+
+
 def test_publishable_markets_follow_the_seller_region() -> None:
-    """Carousell runs no US site, so a US seller has nowhere to be listed there; with no region
-    recorded that is true of every marketplace."""
-    assert market_adapters.publishable_markets("SG") == ["carousell"]
-    assert market_adapters.publishable_markets("US") == []
-    assert market_adapters.publishable_markets(None) == []
+    """Carousell runs no US site, but Facebook serves everywhere, so a US seller still has one
+    marketplace."""
+    assert market_adapters.publishable_markets("SG") == ["fb", "carousell"]
+    assert market_adapters.publishable_markets("US") == ["fb"]
+    assert market_adapters.publishable_markets(None) == ["fb"]
 
 
 # --- region resolution: a domains map is exhaustive --------------------------------------------

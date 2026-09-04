@@ -74,6 +74,15 @@ def media_hosts(market: str) -> list:
     return list((get_marketplace(market) or {}).get("media_hosts") or [])
 
 
+def media_host_suffixes(market: str) -> list:
+    """Domains a market's listing photographs may sit under, matched on a dot boundary.
+
+    For image hosts generated per request, which `media_hosts` cannot enumerate. An entry with
+    neither this nor `media_hosts` fetches nothing.
+    """
+    return list((get_marketplace(market) or {}).get("media_host_suffixes") or [])
+
+
 def listing_flow(market: str) -> str:
     """The skill holding this market's publish recipe, or "" when it has none."""
     return str((get_marketplace(market) or {}).get("listing_flow") or "")
@@ -128,6 +137,18 @@ def market_home(market: str, region: str | None = None) -> str | None:
     """
     host = resolve_domain(market, region)
     return f"https://{host}/" if host else None
+
+
+def has_regional_site(market: str, region: str | None = None) -> bool:
+    """Whether this marketplace names a site for this region, rather than a catch-all.
+
+    `resolve_domain` deliberately collapses the two (either way there is a site to drive), so the
+    connect offer asks for the difference to put the home marketplace first.
+    """
+    entry = get_marketplace(market)
+    if entry is None:
+        return False
+    return bool((entry.get("domains") or {}).get(region))
 
 
 def resolve_domain(market: str, region: str | None = None) -> str | None:

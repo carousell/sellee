@@ -39,6 +39,11 @@ _ID_PARAMS = {"item_id": "item", "thread_id": "thread", "want_id": "want"}
 # Keyed by parameter, never by accessor alone: an accessor-wide exemption also blesses whatever id
 # that accessor grows next, which is the shape of gap this whole file exists to catch.
 _UNGUARDED_BY_DESIGN = {
+    ("record_driven_publish", "item_id"): (
+        "daemon-only: the fan-out lane writes it after driving a marketplace's own create form, "
+        "which is work no pass does — a driven market never spawns one — and no pass tier carries "
+        "a tool that reaches it"
+    ),
     ("set_crosslink_pushed", "item_id"): (
         "daemon-only: the crosslink lane writes it after the rail accepts a push, and no pass "
         "tier carries a tool that reaches it"
@@ -47,6 +52,14 @@ _UNGUARDED_BY_DESIGN = {
         "unvalidated provenance on a global signature bank, not a reference that reads or writes "
         "the thread — and the accessor has no missing-row behaviour to mirror, so a scope refusal "
         "would invent one and leak existence instead of hiding it"
+    ),
+    ("record_thread_listing", "thread_id"): (
+        "daemon-only: the inbox lane writes what it read off a conversation's own banner, before "
+        "any thread exists to be scoped to — and no pass tier carries a tool that reaches it"
+    ),
+    ("thread_listing_lookup", "thread_id"): (
+        "daemon-only: the inbox lane's own memory of a lookup it already performed, read before a "
+        "thread exists, and no pass tier carries a tool that reaches it"
     ),
     ("create_thread", "thread_id"): (
         "the new row's own natural key, not a reference to an existing thread — the insert "

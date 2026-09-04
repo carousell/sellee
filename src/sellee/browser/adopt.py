@@ -67,6 +67,11 @@ def adopt_phase(deps) -> None:
     if row is None:
         return
     market, listing_id = row["market"], row["listing_id"]
+    if market not in settings.connected_markets(deps.store):
+        # Disconnected after the seller accepted these listings. The row is left as it is, still
+        # accepted; reconnecting resumes it. Not `_fail`: an attempt would retire a good row
+        # while the market is off.
+        return
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
         # Retired here rather than filtered out of the query: a row whose last attempt committed
         # but whose retirement did not would be unreachable forever, holding up the batch summary.
@@ -100,6 +105,44 @@ def adopt_phase(deps) -> None:
         _summarise_if_drained(deps, market)
 
 
+# What a marketplace prints instead of a currency code, and what it means. Only unambiguous
+# symbols: a bare "$" is USD, SGD, AUD and more, which is why the seller's recorded currency is
+# the fallback rather than a guess.
+_CURRENCY_SYMBOLS = {
+    "RM": "MYR",
+    "NT$": "TWD",
+    "HK$": "HKD",
+    "S$": "SGD",
+    "Rp": "IDR",
+    "₱": "PHP",
+    "£": "GBP",
+    "€": "EUR",
+    "¥": "JPY",
+    "₹": "INR",
+    "฿": "THB",
+    "₫": "VND",
+}
+
+
+def _currency_for(store, detail: dict) -> str:
+    """Which currency a listing's price is in.
+
+    Most marketplaces print a symbol, not a code ("S$65"), so: the code when the page gives one,
+    then a known unambiguous symbol, then the seller's recorded currency — not a guess, since the
+    price is on their own listing in the country they told us they sell in.
+    """
+    said = str(detail.get("currency") or "").strip().upper()
+    if len(said) == 3 and said.isalpha():
+        return said
+    text = str(detail.get("price_text") or "")
+    # Longest first, so "S$" and "HK$" are never shadowed by a shorter symbol.
+    for symbol in sorted(_CURRENCY_SYMBOLS, key=len, reverse=True):
+        if symbol in text:
+            return _CURRENCY_SYMBOLS[symbol]
+    basics = store.get_seller_config_section("basics") or {}
+    return str(basics.get("currency") or "").strip().upper()
+
+
 def _adopt_one(deps, row: dict, adapter) -> None:
     market, listing_id = row["market"], row["listing_id"]
     relist = row["manage"] == MANAGE_RELIST
@@ -124,6 +167,50 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         _fail(deps, row, f"{len(existing)} items already claim this listing")
         return
 
+    # The same thing, already adopted from another marketplace: one desk on two markets is one
+    # item carrying both listing URLs, so buyers from either land on the same row. `rail_owed` is
+    # false whenever the twin already has a rail listing — that is what stops the second copy.
+    twins = reconcile.items_for_same_listing(
+        row["title"], deps.store.list_items(), market, deps.store.sold_item_ids()
+    )
+    if len(twins) == 1:
+        item = deps.store.get_item(twins[0])
+        owed = relist and not (item or {}).get("listing_urls", {}).get(marketplaces.RAIL)
+        deps.store.adopt_discovered_listing(
+            market, listing_id, item_id=twins[0], url=row["url"], rail_owed=owed
+        )
+        deps.bus.publish(
+            "survey.adopted",
+            {
+                "market": market,
+                "listing_id": listing_id,
+                "item_id": twins[0],
+                "linked": True,
+                "same_as": "title",
+            },
+        )
+        return
+    if twins:
+        # Several items share this title, so which one this listing *is* cannot be settled from the
+        # page. Left for the seller rather than merged into whichever came first.
+        _fail(deps, row, f"{len(twins)} items already have this title on another marketplace")
+        return
+
+    # No exact twin, but something plausibly the same object worded differently. Refused rather
+    # than merged: the loose rule is good enough to withhold on and never good enough to fuse two
+    # rows with — merging would make a second rail listing and then fan out onto the marketplace
+    # this listing is already on.
+    close = [
+        candidate["id"]
+        for candidate in deps.store.list_items()
+        if candidate["id"] not in deps.store.sold_item_ids()
+        and not (candidate.get("listing_urls") or {}).get(market)
+        and reconcile.same_thing_loosely(row["title"], candidate.get("title") or "")
+    ]
+    if close:
+        _fail(deps, row, "an item you already have looks like this listing under another name")
+        return
+
     client = deps.browser_factory()
     with client.exclusive():
         client.navigate(row["url"])
@@ -137,7 +224,8 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         # Sold or taken down since the ask. This check is what makes a late yes safe.
         _fail(deps, row, f"no longer for sale ({detail.get('availability') or 'unknown'})")
         return
-    price, currency = detail.get("price"), detail.get("currency")
+    price = detail.get("price")
+    currency = _currency_for(deps.store, detail)
     if not price or not currency:
         # carousell.ai refuses an item without both.
         _fail(deps, row, "the listing page shows no usable price")

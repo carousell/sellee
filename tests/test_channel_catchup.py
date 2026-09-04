@@ -43,6 +43,46 @@ def test_catchup_lists_and_stamps_notices_but_not_escalations(make_ctx, store) -
     assert again["counts"] == {"escalations": 1, "notices": 0, "pending_settings": 0}
 
 
+def test_a_question_nobody_can_answer_yet_is_shown_but_not_swallowed(make_ctx, store) -> None:
+    """A notice carrying controls is a question, and its buttons exist only on a channel message.
+    Stamped with no channel bound, it is answered by nobody and re-asked by nothing."""
+    store.queue_notice(
+        "I found 20 things you're already selling on Facebook Marketplace",
+        controls=[["Yes, manage them", "fb:adoptyes"], ["No thanks", "fb:adoptno"]],
+    )
+    ctx = make_ctx(TIER_ATTENDED)
+
+    res = dispatch("get_catchup", {}, ctx)
+
+    # Shown — the session must still say what is waiting.
+    assert res["counts"]["notices"] == 1
+    # But still queued, so the channel delivers it the moment there is one to deliver to.
+    assert store.count_queued_notices() == 1
+
+
+def test_a_plain_notice_is_still_delivered_by_being_handed_over(make_ctx, store) -> None:
+    """The exception is only for questions; a notice with nothing to tap is fully delivered by
+    being read out, bound or not."""
+    store.queue_notice("Listing went live.")
+    ctx = make_ctx(TIER_ATTENDED)
+
+    dispatch("get_catchup", {}, ctx)
+
+    assert store.count_queued_notices() == 0
+
+
+def test_a_bound_channel_stamps_a_question_as_before(make_ctx, store) -> None:
+    """With somewhere for the tap to happen, the channel remains the deliverer."""
+    store.arm_bind("sellee_test_bot", "n1")
+    store.complete_bind(999, update_offset=1, nonce=store.get_channel()["bind_nonce"])
+    store.queue_notice("I found 20 things", controls=[["Yes, manage them", "fb:adoptyes"]])
+    ctx = make_ctx(TIER_ATTENDED)
+
+    dispatch("get_catchup", {}, ctx)
+
+    assert store.count_queued_notices() == 0
+
+
 def test_connect_hint_only_when_unbound_and_escalation_aged(make_ctx, store, monkeypatch) -> None:
     _sell_thread(store)
 

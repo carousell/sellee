@@ -13,6 +13,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
+from tests.conftest import seed_setting
 
 import sellee.tools  # noqa: F401  tool registration
 from sellee import settings
@@ -53,6 +54,10 @@ class FakeBrowser:
                 return False
 
         return _Held()
+
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
 
     def navigate(self, url):
         self.visited.append(url)
@@ -152,10 +157,10 @@ def test_a_json_encoded_list_arrives_as_a_list(server, store) -> None:
         server,
         "POST",
         "/control/settings-set",
-        body={"key": "crosslist_markets", "value": '["carousell"]'},
+        body={"key": "connected_markets", "value": '["carousell"]'},
     )
     assert status == 200
-    assert settings.get(store, "crosslist_markets") == ["carousell"]
+    assert settings.get(store, "connected_markets") == ["carousell"]
     assert body["rendered"] == "Carousell"
 
 
@@ -200,15 +205,16 @@ def test_the_seller_state_check_runs_at_this_door_too(server, store) -> None:
     # A US seller cannot be listed on Carousell, which runs no US site. Refused here exactly as
     # it is refused when the model proposes it.
     store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", [])
     status, body = _call(
         server,
         "POST",
         "/control/settings-set",
-        body={"key": "crosslist_markets", "value": ["carousell"]},
+        body={"key": "connected_markets", "value": ["carousell"]},
     )
     assert status == 400
     assert "US" in body["error"]
-    assert settings.get(store, "crosslist_markets") == []
+    assert settings.get(store, "connected_markets") == []
 
 
 def test_settings_set_needs_the_attended_token(server) -> None:
@@ -348,7 +354,7 @@ def test_login_probes_never_touch_the_tab_order(server, store, browser, chrome_u
     from tests.conftest import seed_setting
 
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     _call(server, "POST", "/control/market-login", body={"market": "carousell"})
     _call(server, "POST", "/control/market-logins", body={})
     assert browser.fronted == []
@@ -437,7 +443,7 @@ def test_market_logins_reports_the_enabled_set_and_probes_when_chrome_is_up(
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: True)
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
 
     _status, body = _call(server, "POST", "/control/market-logins", body={})
 
@@ -457,7 +463,7 @@ def test_market_logins_never_opens_a_window_just_to_answer(
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: False)
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
 
     _status, body = _call(server, "POST", "/control/market-logins", body={})
 
@@ -475,7 +481,7 @@ def test_market_logins_names_the_pass_as_the_reason_not_a_closed_chrome(
     from tests.conftest import seed_setting
 
     store.set_seller_config_section("basics", {"region": "SG"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
     store.enqueue_pass("publish", {"item_id": "itm_1", "market": "carousell"})
 
     _status, body = _call(server, "POST", "/control/market-logins", body={})
@@ -495,7 +501,7 @@ def test_market_logins_filters_to_what_is_still_publishable(
 
     monkeypatch.setattr(chrome, "is_ready", lambda port, **kwargs: True)
     store.set_seller_config_section("basics", {"region": "US"})
-    seed_setting(store, "crosslist_markets", ["carousell"])
+    seed_setting(store, "connected_markets", ["carousell"])
 
     _status, body = _call(server, "POST", "/control/market-logins", body={})
 

@@ -65,6 +65,25 @@ def region_for_zone(zone: str):
     return found if found in supported() else None
 
 
+def zones_for(region: str) -> list:
+    """The zones this region is known by, in table order — the most populous first."""
+    return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
+
+
+def default_zone(region: str, zone: str | None = None) -> str:
+    """The timezone to propose once the country is known.
+
+    The machine's zone first — the clock check reads the stored zone as a claim about this
+    machine, not about where they sell. Otherwise the country's zone, but only when the country
+    has exactly one; several means the question must be asked.
+    """
+    zone = system_timezone() if zone is None else zone
+    if zone:
+        return zone
+    zones = zones_for(region)
+    return zones[0] if len(zones) == 1 else ""
+
+
 def system_timezone() -> str:
     """The machine's IANA zone name, or "" when it cannot be read.
 
@@ -73,7 +92,8 @@ def system_timezone() -> str:
     so the two disagree and the file is the one that is wrong.
 
     Otherwise where /etc/localtime points, rather than `time.tzname`, which gives an abbreviation
-    ("+08") that names no zone and cannot be stored or looked up.
+    ("+08") that names no zone and cannot be stored or looked up. Either way the answer is checked
+    against the zone database: a name that resolves to nothing is worse than none.
     """
     named = os.environ.get("TZ", "").strip().lstrip(":")
     if named and _zone_exists(named):
@@ -82,9 +102,23 @@ def system_timezone() -> str:
         resolved = os.path.realpath("/etc/localtime")
     except OSError:
         return ""
-    marker = "/zoneinfo/"
-    index = resolved.find(marker)
-    return resolved[index + len(marker) :] if index >= 0 else ""
+    zone = _zone_from_path(resolved)
+    return zone if _zone_exists(zone) else ""
+
+
+def _zone_from_path(resolved: str) -> str:
+    """The zone name inside a path to a compiled zone file, or "" when there is none.
+
+    The database directory is not always literally `zoneinfo` — macOS resolves /etc/localtime to
+    /usr/share/zoneinfo.default — so any directory whose name starts with `zoneinfo` counts. Read
+    from the right so an unrelated `zoneinfo` directory further up cannot claim the rest; the
+    caller checks the result against the zone database anyway.
+    """
+    parts = resolved.split("/")
+    for index in range(len(parts) - 2, -1, -1):
+        if parts[index].startswith("zoneinfo"):
+            return "/".join(parts[index + 1 :])
+    return ""
 
 
 def _zone_exists(name: str) -> bool:
@@ -97,6 +131,32 @@ def _zone_exists(name: str) -> bool:
     except Exception:  # noqa: BLE001 — malformed, unknown, or no database: none of them usable
         return False
     return True
+
+
+def zone_error(name: str) -> str:
+    """Why this timezone cannot be stored, or "" when it can.
+
+    The same rule `tools.seller.validate_basics` applies, so a typo is re-asked at the prompt
+    rather than rejected at the write door. That door stays the authority, so this must never be
+    stricter — hence a machine with no zone database vouches for nothing rather than rejecting
+    every name.
+    """
+    import zoneinfo
+
+    if not name:
+        return "a timezone is needed"
+    try:
+        zoneinfo.ZoneInfo(name)
+        return ""
+    except zoneinfo.ZoneInfoNotFoundError:
+        pass
+    except (ValueError, OSError):
+        return f"{name!r} is not a valid timezone name"
+    try:
+        zoneinfo.ZoneInfo("UTC")
+    except Exception:  # noqa: BLE001 — no zone database here, so there is nothing to check against
+        return ""
+    return f"unknown timezone {name!r}"
 
 
 def guess(zone: str | None = None):

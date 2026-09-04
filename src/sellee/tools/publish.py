@@ -210,7 +210,7 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
 
     # Enabling a marketplace is an approval-gated settings change, because it lets the agent post
     # publicly as the seller. A publish here rides on that approval rather than standing in for it.
-    if market not in settings.crosslist_markets(ctx.store):
+    if market not in settings.publish_markets(ctx.store):
         raise ToolError(f"{market!r} is not an enabled marketplace")
 
     urls = item["listing_urls"]
@@ -225,6 +225,15 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
         raise ToolError("item is not published on carousell.ai")
     if item_id in ctx.store.sold_item_ids():
         return {"status": "sold", "item_id": item_id, "market": market}
+
+    # The same two questions the lane asks, asked the same way, so a publish requested in
+    # conversation cannot post onto an unread market or a second copy of something the seller
+    # put there themselves.
+    region = ctx.store.seller_region()
+    if not crosslist.looked_first(ctx.store, market, region):
+        return {"status": "looking_first", "item_id": item_id, "market": market}
+    if crosslist.already_listed_by_hand(ctx.store, item, market):
+        return {"status": "already_there", "item_id": item_id, "market": market}
     if ctx.store.is_paused():
         raise ToolError("the agent is paused — resume before publishing")
     if _queued_for(ctx.store, item_id, market):
@@ -255,7 +264,11 @@ register(
         "on, for when the automatic cross-post failed and they ask you to try again. The publish "
         "runs in the background and reports its own outcome, so tell the seller it has started — "
         "never that the listing is up. Refuses a marketplace they have not turned on, and will "
-        "not queue a second publish of something already listed there or already under way.",
+        "not queue a second publish of something already listed there or already under way. "
+        "Two statuses mean 'not yet, and not an error': looking_first = we have not read what the "
+        "seller already has on that marketplace, so posting now could duplicate it — say we are "
+        "checking their existing listings first. already_there = they have that item on that "
+        "marketplace themselves, so there is nothing to post.",
         input_schema={
             "type": "object",
             "properties": {

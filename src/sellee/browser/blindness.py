@@ -18,6 +18,8 @@ So the causes are separated here, and each one only claims what the lane has evi
     refusing us, while an unreadable tail is our reader failing on a page Carousell served fine.
     One sentence covering both would blame the marketplace for our own drift, which is the same
     species of lie this module exists to delete.
+  * **viewport** — the window is too narrow for the marketplace to render the thing we read. The
+    one cause the *seller* can fix, so it is separated from `market`.
 
 None of them tells the seller to go and look at Chrome. That sentence lives on, once, in
 `chrome_hint` — for the one caller that reaches a state where it might be true.
@@ -35,6 +37,8 @@ from sellee import deployment
 CAUSE_PLUMBING = "plumbing"
 CAUSE_MARKET = "market"
 CAUSE_TAILS = "tails"
+CAUSE_VIEWPORT = "viewport"
+CAUSE_VERIFY = "verify"
 
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
 # the seller is signed in — no login probe ran, because the navigate before it failed. Not that the
@@ -86,22 +90,81 @@ CONTAINER_CHROME_CHECK = (
     "still logged in."
 )
 
+# The one the seller can fix, so it is the one that asks them to. Names the size because "wider"
+# alone invites a nudge of a few pixels.
+VIEWPORT_NOTICE = (
+    "I can't read your {name} inbox, and I think it's the window: my Chrome{where} is {width}px "
+    "wide and {name} needs about {needed}px to lay the page out the way I read it. Drag that "
+    "window wider — or full-screen it — and I'll pick up on my next look, in a few minutes. "
+    "Until then your {name} app has anything I've missed."
+)
+
+# Also the seller's to fix, and the only one where the marketplace is asking *them* a question —
+# a verification wall in front of the messages looks from the lane like the marketplace refusing
+# us. What the wall actually asks for is the market's own business, so an adapter that reports
+# this cause ships its own wording (`verify_notice`); this is the fallback for one that does not,
+# and it names only what any wall evidences.
+VERIFY_NOTICE = (
+    "I can't read your {name} messages — {name} is asking you to verify something before it will "
+    "show them. That one's yours to answer: open my Chrome{where}, do it there, and I'll pick "
+    "them up on my next look. Until then your {name} app has anything I've missed."
+)
+
 _NOTICES = {
     CAUSE_PLUMBING: PLUMBING_NOTICE,
     CAUSE_MARKET: MARKET_NOTICE,
     CAUSE_TAILS: TAILS_NOTICE,
+    CAUSE_VIEWPORT: VIEWPORT_NOTICE,
+    CAUSE_VERIFY: VERIFY_NOTICE,
 }
 
 
-def notice_for(cause: str, *, name: str, count: int = 0) -> str:
+def cause_for(cause: str, measured: dict | None, minimum: int = 0) -> str:
+    """Promote a failed read to `viewport` when the reader says the window was too narrow.
+
+    The lane cannot tell these apart by itself — an unreadable layout and a refusal both arrive as
+    "the list did not answer" — so this consults the width every reader reports against `minimum`,
+    the market's own responsive breakpoint (`MarketAdapter.min_usable_width_px`; 0 means no width
+    is too narrow for it). Only ever promotes, and only from a cause about the market: a plumbing
+    failure stays plumbing however narrow the window. A verification wall wins over the window,
+    because the width measured behind a PIN prompt is the prompt's.
+    """
+    if cause not in (CAUSE_MARKET, CAUSE_TAILS):
+        return cause
+    if (measured or {}).get("blocked") == CAUSE_VERIFY:
+        return CAUSE_VERIFY
+    width = (measured or {}).get("width")
+    if isinstance(width, bool) or not isinstance(width, (int, float)):
+        return cause
+    return CAUSE_VIEWPORT if 0 < width < minimum else cause
+
+
+def notice_for(
+    cause: str,
+    *,
+    name: str,
+    count: int = 0,
+    width: int = 0,
+    where: str = "",
+    needed: int = 0,
+    verify_notice: str = "",
+) -> str:
     """The sentence for one cause, addressed to the seller.
 
-    Falls back to the marketplace wording for an unknown cause: of the three it is the only one that
+    `verify_notice` is the market's own wording for its verification wall, used only on that
+    cause — the wall asks for something market-specific (Facebook: a Messenger PIN) that a shared
+    sentence cannot name without lying about the others.
+
+    Falls back to the marketplace wording for an unknown cause: of them all it is the only one that
     asserts nothing about our own machinery, so a cause nobody has taught this module yet cannot
     make us claim a fault we have not established.
     """
     template = _NOTICES.get(cause, MARKET_NOTICE)
-    return template.format(name=name, count=count)
+    if cause == CAUSE_VERIFY and verify_notice:
+        template = verify_notice
+    return template.format(
+        name=name, count=count, width=int(width or 0), needed=int(needed or 0), where=where
+    )
 
 
 def gap_text(seconds: float) -> str:

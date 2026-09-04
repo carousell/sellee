@@ -73,6 +73,47 @@ def test_the_allowed_host_is_allowed() -> None:
     assert photo_fetch.allowed_url(_URL, [_HOST]) is True
 
 
+# --- host suffixes, for a market whose image hosts cannot be enumerated -------------------------
+
+_SUFFIX = "fbcdn.net"
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "scontent-sin6-2.xx.fbcdn.net",  # the shape Facebook actually serves
+        "scontent.xx.fbcdn.net",
+        "fbcdn.net",  # the suffix itself
+    ],
+)
+def test_a_host_under_an_allowed_suffix_is_allowed(host) -> None:
+    assert photo_fetch.allowed_url(f"https://{host}/a.jpg", [], [_SUFFIX]) is True
+
+
+@pytest.mark.parametrize(
+    "host",
+    [
+        "fbcdn.net.evil.test",  # the attack the exact-match rule was written against
+        "notfbcdn.net",  # a suffix without the dot boundary is not a subdomain
+        "evil.test",
+    ],
+)
+def test_a_suffix_match_is_anchored_on_a_dot(host) -> None:
+    """A naive `endswith` would wave "fbcdn.net.evil.test" through; the leading dot is what
+    makes it not."""
+    assert photo_fetch.allowed_url(f"https://{host}/a.jpg", [], [_SUFFIX]) is False
+
+
+def test_a_suffix_does_not_relax_the_https_rule() -> None:
+    assert photo_fetch.allowed_url(f"http://scontent.xx.{_SUFFIX}/a.jpg", [], [_SUFFIX]) is False
+
+
+def test_exact_hosts_are_unaffected_by_the_suffix_mechanism() -> None:
+    """Adding suffixes must not loosen a market that only names exact hosts."""
+    assert photo_fetch.allowed_url("https://media.karousell.com.evil.test/a.jpg", [_HOST]) is False
+    assert photo_fetch.allowed_url("https://sub.media.karousell.com/a.jpg", [_HOST]) is False
+
+
 def test_a_market_with_no_media_hosts_fetches_nothing(tmp_path, opener) -> None:
     """No recorded hosts is not "fetch freely" — it is a market whose photographs we cannot bring
     across, which the caller reports rather than working around."""

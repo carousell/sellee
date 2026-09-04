@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import sqlite3
 
@@ -55,6 +56,9 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 13),
         ("data", 14),
         ("data", 15),
+        ("data", 16),
+        ("data", 17),
+        ("data", 18),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -74,6 +78,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "ui_cache")
     assert _table_exists(data_db, "crosslink_pushes")
     assert _table_exists(data_db, "market_connect_requests")
+    assert _table_exists(data_db, "browser_holds")
+    assert _table_exists(data_db, "thread_listing_lookups")
     assert _table_exists(data_db, "market_surveys")
     assert _table_exists(data_db, "discovered_listings")
     assert _table_exists(events_db, "events")
@@ -93,6 +99,9 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         13,
         14,
         15,
+        16,
+        17,
+        18,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -121,9 +130,8 @@ def test_events_db_recreated_after_deletion(tmp_path) -> None:
 
 
 def test_channel_adapter_column_takes_any_non_empty_name(tmp_path) -> None:
-    """The adapter column carries no enumerating CHECK, only a non-empty one: adding a third
-    provider is a code change (store.KNOWN_ADAPTERS), not another recreate-copy-swap of the whole
-    table — which is the only way SQLite can widen a CHECK."""
+    """The adapter column carries only a non-empty CHECK, not an enumeration: adding a third
+    provider stays a code change, not a table recreate."""
     data_db, events_db = _make_dbs(tmp_path)
     _run(tmp_path, data_db, events_db)
 
@@ -136,11 +144,9 @@ def test_channel_adapter_column_takes_any_non_empty_name(tmp_path) -> None:
 
 
 def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
-    """0010 recreates the channel table, so the singleton row has to survive the copy: a returning
-    seller's bound channel — cursor, greeting stamp and all — must not be reset by an upgrade.
-    Driven by applying the real migrations with 0010 withheld, binding a channel, then letting
-    0010 land on top of it. 0011 is withheld with it: it adds a column to the table 0010 recreates,
-    so applying them out of order would leave a schema no real install ever has."""
+    """0010 recreates the channel table, so the singleton row must survive the copy. 0011 is
+    withheld with it: it adds a column to the table 0010 recreates, so applying them out of order
+    would leave a schema no real install ever has."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
@@ -177,9 +183,8 @@ def test_0010_preserves_the_existing_channel_row(tmp_path, monkeypatch) -> None:
 
 
 def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeypatch) -> None:
-    """A nonce armed before the TTL existed gets no expiry from the upgrade — the column is
-    nullable and NULL, which the store reads as already expired. Failing closed is the point: those
-    are the unbounded nonces the column was added to retire."""
+    """A nonce armed before the TTL existed upgrades to NULL, which the store reads as already
+    expired — failing closed is the point."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)
@@ -209,11 +214,136 @@ def test_0011_leaves_an_upgraded_rows_nonce_without_a_deadline(tmp_path, monkeyp
     assert store.bind_nonce_live(_channel_from_row(row)) is False
 
 
+def _withhold(tmp_path, monkeypatch, prefix):
+    """Apply every shipped migration except the one under test, and answer where the real ones are:
+    bring a database up to the release before a migration, then let that one land on top."""
+    real_data = migrations._MIGRATIONS_ROOT / "data"
+    root = tmp_path / "migrations"
+    (root / "data").mkdir(parents=True)
+    (root / "events").mkdir(parents=True)
+    for src in sorted(real_data.glob("*.sql")):
+        if not src.name.startswith(prefix):
+            shutil.copy(src, root / "data" / src.name)
+    for src in (migrations._MIGRATIONS_ROOT / "events").glob("*.sql"):
+        shutil.copy(src, root / "events" / src.name)
+    monkeypatch.setattr(migrations, "_MIGRATIONS_ROOT", root)
+    return real_data, root
+
+
+def _apply_0016(tmp_path, real_data, root, data_db, events_db):
+    shutil.copy(real_data / "0016_connected_markets.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+
+def _connected(data_db):
+    rows = data_db.query("SELECT value FROM settings WHERE key = 'connected_markets'")
+    return json.loads(rows[0]["value"]) if rows else None
+
+
+def _seed_read_thread(conn, thread_id="carousell:1", market="carousell", source="browser_read"):
+    conn.execute(
+        "INSERT OR IGNORE INTO items (id, title, status, created_ts, updated_ts)"
+        " VALUES ('item_x', 'Teak lamp', 'ready', 100.0, 100.0)"
+    )
+    conn.execute(
+        "INSERT INTO threads (thread_id, side, market, item_id, counterpart_handle, status,"
+        " source, created_ts, updated_ts)"
+        " VALUES (?, 'sell', ?, 'item_x', 'bob', 'active', ?, 100.0, 100.0)",
+        (thread_id, market, source),
+    )
+
+
+def test_0016_moves_the_setting_and_its_whole_ledger(tmp_path, monkeypatch) -> None:
+    """The ledger key has to move with the setting: `settings.decide` looks a change's spec up by
+    the stored key, so a rename that touched only the settings row would break Approve and Undo."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0016")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_ts) VALUES"
+            " ('crosslist_markets', '[\"carousell\"]', 100.0)"
+        )
+        conn.execute(
+            "INSERT INTO pending_setting_changes (change_id, key, value, status, proposed_ts)"
+            " VALUES ('chg_pending', 'crosslist_markets', '[\"carousell\"]', 'pending', 100.0)"
+        )
+        conn.execute(
+            "INSERT INTO pending_setting_changes (change_id, key, value, status, proposed_ts)"
+            " VALUES ('chg_applied', 'crosslist_markets', '[\"carousell\"]', 'applied', 100.0)"
+        )
+
+    _apply_0016(tmp_path, real_data, root, data_db, events_db)
+
+    assert _connected(data_db) == ["carousell"]
+    assert data_db.query("SELECT 1 FROM settings WHERE key = 'crosslist_markets'") == []
+    keys = {
+        r["change_id"]: r["key"]
+        for r in data_db.query("SELECT change_id, key FROM pending_setting_changes")
+    }
+    assert keys == {"chg_pending": "connected_markets", "chg_applied": "connected_markets"}
+
+
+def test_0016_connects_a_market_that_was_being_read_with_the_setting_empty(
+    tmp_path, monkeypatch
+) -> None:
+    """Reading was never gated by the setting, so a seller mid-conversation would be connected to
+    nothing by a plain rename."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0016")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        _seed_read_thread(conn)
+
+    _apply_0016(tmp_path, real_data, root, data_db, events_db)
+
+    assert _connected(data_db) == ["carousell"]
+
+
+def test_0016_unions_rather_than_replaces_a_cleared_list(tmp_path, monkeypatch) -> None:
+    """A seller who turned cross-listing off still has their inbox read; the evidence is unioned
+    in, because someone who wants it off can turn it off again but a stranded seller cannot."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0016")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO settings (key, value, updated_ts)"
+            " VALUES ('crosslist_markets', '[]', 100.0)"
+        )
+        _seed_read_thread(conn)
+
+    _apply_0016(tmp_path, real_data, root, data_db, events_db)
+
+    assert _connected(data_db) == ["carousell"]
+
+
+@pytest.mark.parametrize(
+    "market,source,why",
+    [
+        ("not-a-market", "browser_read", "an arbitrary identifier is not a marketplace"),
+        ("carousell", "manual", "a thread we did not read off the market proves nothing"),
+    ],
+)
+def test_0016_backfills_only_from_markets_we_demonstrably_read(
+    tmp_path, monkeypatch, market, source, why
+) -> None:
+    """`create_thread` does not check its market against the registry, so the evidence is narrowed
+    to a thread the read lane itself adopted."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0016")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        _seed_read_thread(conn, thread_id=f"{market}:1", market=market, source=source)
+
+    _apply_0016(tmp_path, real_data, root, data_db, events_db)
+
+    assert _connected(data_db) is None, why
+
+
 def test_0015_starts_existing_rows_unchecked_and_unrestorable(tmp_path, monkeypatch) -> None:
-    """An intent and a thread that predate the self-settling loop must upgrade to the safe reading:
-    verify_attempts 0 means "no lane has looked yet" (so the sweep's ceiling still covers it), and a
-    NULL escalated_from_status means "we do not know what to restore" rather than a guessed
-    `active`, which on an `agreed` thread would re-open a closed deal."""
+    """verify_attempts 0 means "no lane has looked yet", and a NULL escalated_from_status means
+    "do not know what to restore" — a guessed `active` would re-open a closed deal."""
     real_data = migrations._MIGRATIONS_ROOT / "data"
     root = tmp_path / "migrations"
     (root / "data").mkdir(parents=True)

@@ -12,7 +12,7 @@ import pytest
 from tests.conftest import seed_setting
 
 from sellee.browser import connect
-from sellee.browser.markets import carousell as carousell_market
+from sellee.browser import markets as market_adapters
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.store import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -42,6 +42,10 @@ class StubClient:
     def exclusive(self):
         return self._Exclusive(self)
 
+    def navigate_visible(self, url):
+        """A read brings the tab forward first; for a stub that is just a navigation."""
+        self.navigate(url)
+
     def navigate(self, url):
         if self.fail == "navigate":
             from sellee.browser.client import BrowserToolError
@@ -53,7 +57,8 @@ class StubClient:
         self.frontmost.append(url)
 
     def evaluate(self, function, **kwargs):
-        if function == carousell_market.LOGIN_JS:
+        # Every market's login probe: this file is about the lane's scheduling, not one DOM.
+        if function in {adapter.login_js for adapter in market_adapters.adapters()}:
             return {"state": self.login}
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
@@ -185,8 +190,13 @@ def test_connect_and_the_buttons_are_answered_without_a_pass(store) -> None:
 # --- /connect resolving the market ---------------------------------------------------------------
 
 
-def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
-    seed_setting(store, "crosslist_markets", ["carousell"])
+def test_connect_with_one_market_to_offer_just_opens_it(store, bus, monkeypatch) -> None:
+    """One connectable marketplace is not a choice, so it is not offered as one; the set is
+    pinned because the registry answer grows with every adapter."""
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "connectable_markets", lambda region: ["carousell"]
+    )
+    seed_setting(store, "connected_markets", ["carousell"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
@@ -195,28 +205,32 @@ def test_connect_with_one_market_switched_on_just_opens_it(store, bus) -> None:
     assert "Carousell" in text
 
 
-def test_connect_with_several_switched_on_asks_which(store, bus, monkeypatch) -> None:
+def test_connect_with_several_to_offer_asks_which(store, bus, monkeypatch) -> None:
     """The command carries no argument — providers normalize a command to its first word — so an
-    ambiguous answer has to be a question, and buttons make it a tap rather than a spelling.
-
-    Carousell is the only market with a browser adapter today, so the second one is stubbed in:
-    this is the branch that has to already work when the next adapter lands.
-    """
-    monkeypatch.setattr(fastpaths.market_adapters, "supported_markets", lambda: ["carousell", "fb"])
-    seed_setting(store, "crosslist_markets", ["carousell", "fb"])
+    ambiguous answer has to be a question, and buttons make it a tap rather than a spelling."""
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "connectable_markets", lambda region: ["carousell", "other"]
+    )
+    monkeypatch.setattr(
+        fastpaths.market_adapters, "drivable_markets", lambda: ["carousell", "other"]
+    )
+    seed_setting(store, "connected_markets", ["carousell", "other"])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
     assert store.pending_market_connects() == []
     assert text == fastpaths.CONNECT_PICK
-    assert controls == [
-        ("Carousell", f"carousell:{fastpaths.CB_CONNECT_MARKET}"),
-        ("Facebook Marketplace", f"fb:{fastpaths.CB_CONNECT_MARKET}"),
+    assert [ref for _label, ref in controls] == [
+        f"carousell:{fastpaths.CB_CONNECT_MARKET}",
+        f"other:{fastpaths.CB_CONNECT_MARKET}",
     ]
 
 
-def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
-    seed_setting(store, "crosslist_markets", [])
+def test_connect_with_no_marketplace_we_can_drive_says_so(store, bus, monkeypatch) -> None:
+    """Nothing connectable is a different thing from nothing switched on: only a seller we could
+    open nothing for is told so."""
+    monkeypatch.setattr(fastpaths.market_adapters, "connectable_markets", lambda region: [])
+    seed_setting(store, "connected_markets", [])
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
@@ -228,12 +242,15 @@ def test_connect_with_nothing_switched_on_says_so(store, bus) -> None:
 def test_connect_never_offers_carousell_ai(store, bus) -> None:
     """carousell.ai is reached with an API key, so there is no window to open and nothing for the
     seller to type into."""
-    seed_setting(store, "crosslist_markets", ["carousell-ai", "carousell"])
+    seed_setting(store, "connected_markets", ["carousell-ai", "carousell"])
 
     _text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    assert controls is None  # resolved to the one browser market, not a two-way picker
-    assert store.pending_market_connects()[0]["market"] == "carousell"
+    # Asserted on the refs: the drivable set grows with every adapter, and none of that may put
+    # the rail among them.
+    offered = [ref.split(":", 1)[0] for _label, ref in controls or []]
+    assert "carousell-ai" not in offered
+    assert "carousell" in offered
 
 
 # --- the lane -------------------------------------------------------------------------------------

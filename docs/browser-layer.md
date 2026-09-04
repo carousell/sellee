@@ -824,20 +824,58 @@ re-arming them errs toward reading more rather than less.
 
 ## Adding a marketplace
 
-1. **A registry entry** in `data/marketplaces.json`: `connector.type: "browser"`,
-   `status: "active"`, the `domains` map for its regions, and `urls` templates for
-   at least `inbox` and `thread`.
-1b. Nothing else: `sellee connect <market>` picks the new id up from the
-   adapter registry, and so does the healthcheck's per-market login line.
-2. **An adapter module** under `browser/markets/`, exporting the JS artifacts,
-   the composer defaults, the listing-id pattern and its system handles — then one
-   line in that package's `_ADAPTERS` registry.
-3. **Decide the submit mechanism.** Leave `chat_message_submit_js` empty unless
-   someone has decided that market's account can afford a page-dispatched
-   keystroke.
-4. **A publish recipe skill**, if the market should be publishable, pointed at by
-   the registry's `listing_flow`. Steps 2 and 4 together are what make the market
-   selectable in `crosslist_markets` — there is no separate switch to remember.
+**Connecting is one promise.** A seller who switches a marketplace on is told
+Sellee will list to it, read its inbox, answer its buyers, and adopt what they
+already have listed there. The unit of work is those four surfaces, plus signing
+back in and being offered at onboarding — not "an adapter".
+
+A market can exist in the registry and still deliver none of the four. The guard
+against that is `tests/test_marketplace_surfaces.py`: it derives each surface from
+the code that implements it, and a gap must be declared as a subtractive waiver
+naming the reason. Closing the gap fails the build until the waiver is deleted.
+
+### The surfaces
+
+1. **Offered at onboarding** — a registry entry plus an adapter.
+2. **Connect / disconnect** — free once 1 exists.
+3. **Listing to it** — a publish recipe, or the selectors the deterministic
+   driver needs.
+4. **Adopting existing listings** — a read of the seller's own listings, a
+   listing-page read, and permission to fetch its photos.
+5. **Inbox and replies** — a conversation list, a message read, a composer, and a
+   way to name the listing a conversation is about.
+6. **Signing back in** — a login probe. Every adapter must have one.
+
+Leave the page-dispatched submit mechanism empty unless someone has decided that
+market's account can afford it.
+
+### What it costs
+
+- **Check the window first.** Some marketplaces serve a different site below a
+  minimum width. Verify layout at width before writing selectors.
+- **Read with the tab visible.** A hidden tab throttles lazy loading without an
+  error, and the read passes for a small inventory. Every artifact reports its
+  visibility so this is diagnosable.
+- **Find the marketplace's own total** — its stated count of listings or
+  conversations — and compare against it. Otherwise a partial render cannot be
+  told from a small inventory.
+- **Prove a scroll scrolled.** Assert the count grew; a scroll can be a no-op.
+- **Read the page before querying it.** Dump text and structure first. Most
+  "missing" facts are in the page already.
+- **Settle thread identity early.** If the scoped inbox carries no thread ids,
+  the read lane's navigate-by-URL model does not fit.
+- **Some controls only answer a real click.** Where a page-dispatched click is
+  ignored, the artifact marks the control and the lane clicks the mark.
+- **Liveness fails closed.** A listing that cannot be proven live is treated as
+  not live; the failure is relisting something already sold.
+- **One thing on two marketplaces is one thing.** Merge on exact identity and
+  refuse ambiguity: a wrong merge negotiates against the wrong floor.
+- **Capture, never guess.** Artifacts written from memory are wrong. Work from
+  what the page actually served.
+- **A publish is irreversible**, so it carries the send bracket: nothing created
+  means retryable; a listing may exist means never re-driven. Read the form back
+  before pressing anything, refuse to publish with a paid boost on, and confirm
+  the listing from a page that names it.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.

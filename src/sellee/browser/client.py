@@ -606,6 +606,21 @@ class BrowserClient:
             if self._follow:
                 self._follow_page(url)
 
+    def navigate_visible(self, url: str) -> None:
+        """Navigate, and put our tab in front before anything reads the page.
+
+        A hidden tab is throttled (IntersectionObserver, requestAnimationFrame), and marketplaces
+        build their lists that way — so a read on a background tab can be served a fraction of the
+        page and no error at all. Bringing the tab forward is best-effort: it must not fail a read
+        that might still succeed. This is a tab select inside the agent's own Chrome, not a window
+        raise, so a read tick never raises the seller's window.
+        """
+        self.navigate(url)
+        try:
+            self.ensure_frontmost(url)
+        except BrowserError:
+            log.debug("could not bring our tab forward before reading %s", url, exc_info=True)
+
     def _follow_page(self, url: str) -> None:
         """Bring our tab forward so the seller can watch. Best-effort: it must never fail a
         navigation, because watch mode is a view onto the work and not part of it.
@@ -652,10 +667,10 @@ class BrowserClient:
         is what makes the failure so quiet: the text lands, the key that would commit it never
         arrives, and nothing reports an error.
 
-        Only what needs typing needs this: a scripted read runs fine on a background tab, which is
-        what keeps the read lane out of the seller's way. Nothing happens when the tab is already
-        active — the steady state on the agent's own Chrome — so its window comes forward at most
-        once rather than on every send.
+        Typing is not the only caller — `navigate_visible` also brings the tab forward, for pages
+        that only build themselves while visible. Nothing happens when the tab is already active —
+        the steady state on the agent's own Chrome — so its window comes forward at most once
+        rather than on every call.
 
         Selecting is by index, and an index is a position that renumbers whenever any tab opens or
         closes; worse, selecting repoints every later call at whatever was chosen. So the page is

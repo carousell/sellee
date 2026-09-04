@@ -36,6 +36,35 @@ class PassesMixin:
             )
         return pass_id
 
+    def record_driven_publish(self, item_id: str, market: str, *, status: str, origin: str) -> str:
+        """Ledger one publish that a driver did itself, without a pass ever being queued.
+
+        A driven market spawns no model pass, so it would otherwise leave no trace — and the
+        fan-out's entire memory of what it has tried is this table. Without a row, a publish that
+        may have gone through would be retried on the next tick, and the seller would end up with
+        two listings for one item.
+
+        Written already terminal, because nothing is going to run it: a `queued` row would be
+        claimed by the pass runner and told to publish something already published.
+
+        `reported` stays 0 and `origin` is the caller's, so the row owes the seller a report just as
+        a pass row does. Written as `reported=1` it was invisible to `unreported_crosslist_passes` —
+        a Facebook listing went live with nobody told, which is the one failure the fan-out's
+        reporting exists to prevent.
+        """
+        if status not in _PASS_TERMINAL:
+            raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
+        pass_id = _new_id("pass")
+        payload = {"item_id": item_id, "market": market, "origin": origin}
+        now = _now()
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO passes (pass_id, type, payload, status, requested_ts, started_ts, "
+                "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 0)",
+                (pass_id, json.dumps(payload, sort_keys=True), status, now, now, now),
+            )
+        return pass_id
+
     def claim_queued_pass(self) -> ClaimedPass | None:
         """Claim the oldest queued pass, stamping it running in the same transaction so two
         claimers never take the same row. Returns None when the queue is empty."""
@@ -242,14 +271,16 @@ class PassesMixin:
         return [{"type": r["type"], "payload": json.loads(r["payload"])} for r in rows]
 
     def publish_pass_index(self) -> list[dict]:
-        """Every publish pass ever queued, as {market, item_id, status, origin}.
+        """Every publish pass ever queued, as {market, item_id, status, origin, finished_ts}.
 
-        The fan-out's whole memory of what it has tried. A publish is attempted once per item and
-        marketplace: rows are never pruned, so the history is the attempt counter and there is no
-        second piece of state to keep in step with it. Markets are decided by the caller — the store
-        holds no marketplace knowledge.
+        The fan-out's whole memory of what it has tried. Rows are never pruned, so the history *is*
+        the attempt counter and there is no second piece of state to keep in step with it — which
+        is what lets the caller both count attempts and space them. Markets are decided by the
+        caller; the store holds no marketplace knowledge.
         """
-        rows = self._db.query("SELECT payload, status FROM passes WHERE type = 'publish'")
+        rows = self._db.query(
+            "SELECT payload, status, finished_ts FROM passes WHERE type = 'publish'"
+        )
         out = []
         for row in rows:
             payload = json.loads(row["payload"])
@@ -259,6 +290,9 @@ class PassesMixin:
                     "item_id": payload.get("item_id"),
                     "origin": payload.get("origin"),
                     "status": row["status"],
+                    # When it settled, so the caller can space retries. None while it is still
+                    # queued or running, which is what `publish_in_flight` reads.
+                    "finished_ts": row["finished_ts"],
                 }
             )
         return out
@@ -297,12 +331,18 @@ class PassesMixin:
                 conn.executemany("UPDATE passes SET reported = 1 WHERE pass_id = ?", owes_nothing)
         return out
 
-    def report_crosslist_pass(self, pass_id: str, text: str, *, ref: str | None = None) -> bool:
+    def report_crosslist_pass(
+        self, pass_id: str, text: str | None, *, ref: str | None = None
+    ) -> bool:
         """Tell the seller how a fan-out publish went and flag the pass, or do neither.
 
         One transaction, and the flag is only cleared-to-set once, so a crash mid-sweep cannot
         announce a listing twice or swallow the announcement. Returns whether this call was the one
         that reported it.
+
+        `text=None` closes the row without saying anything — for a failure the lane intends to try
+        again, where the seller is not the one who acts on it. The flag still moves, so the sweep
+        stays bounded by work owed rather than by history; what is withheld is the message.
         """
         with self._db.transaction() as conn:
             cur = conn.execute(
@@ -310,7 +350,8 @@ class PassesMixin:
             )
             if cur.rowcount == 0:
                 return False
-            _insert_notice(conn, text, ref=ref)
+            if text is not None:
+                _insert_notice(conn, text, ref=ref)
         return True
 
     def sold_item_ids(self) -> set:

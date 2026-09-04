@@ -23,12 +23,14 @@ import logging
 import time
 from dataclasses import dataclass
 from typing import Callable
+from urllib.parse import urljoin
 
 from sellee import marketplaces, settings
 from sellee.browser import adopt, inbox, reconcile
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
+from sellee.store import StoreError
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +63,13 @@ STALE_NOTICE = (
     "That list is out of date, so I'd rather not act on it — let me take a fresh look at what you "
     "have on {name} and I'll come back to you."
 )
+# Said out loud because nothing else ever revisits an abandoned survey: silence here would be a
+# market that quietly stops working with no explanation anywhere.
+ABANDONED_NOTICE = (
+    "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
+    "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
+    "again."
+)
 ALREADY_MANAGING_NOTICE = (
     "I've already taken over {count} on {name} and I'm answering buyers on them. Tell me which "
     "ones you'd rather I left and I'll stop."
@@ -86,7 +95,7 @@ def survey_lane(deps: SurveyDeps) -> None:
     expired = deps.store.expire_stale_decisions(DECISION_TTL_SEC, now=deps.now())
     if expired:
         deps.bus.publish("survey.expired", {"listings": expired})
-    if inbox.browser_pass_running(deps.store):
+    if inbox.browser_busy(deps.store):
         return
     discover_phase(deps)
     adopt.adopt_phase(deps)
@@ -96,12 +105,19 @@ def survey_lane(deps: SurveyDeps) -> None:
 def discover_phase(deps: SurveyDeps) -> None:
     """Serve every market still owed a look at what the seller already has listed."""
     region = deps.store.seller_region()
+    connected = settings.connected_markets(deps.store)
     for request in deps.store.pending_market_surveys():
         market = request["market"]
         if not market_adapters.can_survey(market, region):
-            # No later tick could serve this — abandon rather than retry.
+            # Not surveyable by any later tick either — an adapter withdrawn, or no site in the
+            # seller's region — so it stops being owed rather than being retried. Checked before
+            # the connection test because it is the permanent condition of the two.
             deps.store.abandon_market_survey(market)
             deps.bus.publish("survey.abandoned", {"market": market, "reason": "not_surveyable"})
+            continue
+        if market not in connected:
+            # Disconnected since the look was owed — left owed rather than abandoned, because
+            # reconnecting is a later tick that can serve it.
             continue
         try:
             _survey(deps, market, region)
@@ -118,18 +134,41 @@ def discover_phase(deps: SurveyDeps) -> None:
             _unserved(deps, market, f"browser error: {exc}")
 
 
+def _follow_to_listings(client, adapter, current: str) -> bool:
+    """Take the one hop to the page a seller's listings are actually on, where it is not the one we
+    navigated to.
+
+    Facebook's selling page gives listings no id; the ids are on the seller's public profile, whose
+    address contains their own account id and so is read off the page rather than stored. Answers
+    whether the reader is somewhere it can read from — False is reported as an unserved survey
+    rather than letting the artifact answer "nothing listed" from a page that was never the right
+    one.
+    """
+    if not adapter.my_listings_entry_js:
+        return True
+    answer = client.evaluate(adapter.my_listings_entry_js) or {}
+    target = answer.get("url")
+    if not target:
+        return False
+    client.navigate_visible(urljoin(current, str(target)))
+    return True
+
+
 def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     """Read one market's listings and ask about them, or record why we could not."""
     adapter = market_adapters.get_adapter(market)
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
     with client.exclusive():
-        client.navigate(url)
+        client.navigate_visible(url)
         login = client.evaluate(adapter.login_js) or {}
         if login.get("state") != "logged_in":
             # Signed out again. The read lane owns that notice; a second voice about a survey the
             # seller never asked for is noise.
             _unserved(deps, market, f"login state {login.get('state')!r}")
+            return
+        if not _follow_to_listings(client, adapter, url):
+            _unserved(deps, market, "could not reach the seller's listings page")
             return
         answer = client.evaluate(adapter.my_listings_js)
 
@@ -167,6 +206,16 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
             f"read {len(answer['listings'])} of {answer.get('active_count')} live listings",
         )
         return
+    if answer.get("unreadable"):
+        # Rows that were on the page but would not parse. `truncated` does not catch this — a
+        # dropped row counts as read — and an unread row leaves no trace anywhere, which the
+        # fan-out reads as "not listed there" and answers by posting a duplicate.
+        _unserved(
+            deps,
+            market,
+            f"{answer['unreadable']} of {answer.get('active_count')} listings would not read",
+        )
+        return
     if not fresh:
         # Surveyed, with nothing to ask about. Recorded as done so it is not asked again.
         deps.store.record_survey_result(market, [])
@@ -183,12 +232,16 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
 
 
 def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) -> list:
-    """Drop the listings we already hold: an item recording this URL, or an earlier look's row.
+    """Drop the listings we already hold: an item recording this URL, an earlier look's row, or the
+    same thing already managed from another marketplace.
 
     Everything the agent published itself is on that page too; re-adopting it would make a second
-    item for one listing.
+    item for one listing, and asking again about a cross-listed thing already being managed reads
+    as though the first answer was lost. The adopt phase still checks for itself, because the
+    seller answers in between.
     """
     items = deps.store.list_items()
+    sold = deps.store.sold_item_ids()
     known = {row["listing_id"] for row in deps.store.list_discovered_listings(market)}
     fresh = []
     for row in listings:
@@ -197,8 +250,48 @@ def _not_already_ours(deps: SurveyDeps, market: str, adapter, listings: list) ->
             continue
         if reconcile.matching_items(listing_id, items, market, adapter.listing_id_pattern):
             continue
+        twins = reconcile.items_for_same_listing(row.get("title") or "", items, market, sold)
+        if twins and _link_twin(deps, market, row, twins):
+            continue
+        # Either nothing matched or the link could not be written down — both go into the ask,
+        # because a listing recorded nowhere is the absence the fan-out reads as "not listed there"
+        # and duplicates.
         fresh.append(row)
     return fresh
+
+
+def _link_twin(deps: SurveyDeps, market: str, row: dict, twins: list) -> bool:
+    """Record that an item we already manage is also listed here.
+
+    The URL is what was just read off the seller's own listings page — the same standard
+    `record_listing_url` asks of every caller — and it is what joins a buyer on this listing to
+    this item; without it, everything downstream still believes the item is absent from this
+    market. Only ever on a single match, exactly as adoption refuses an ambiguous merge: guessing
+    between two same-titled items would put a buyer on the wrong item's floor.
+
+    Answers whether the link was written. A False sends the listing into the ask rather than
+    dropping it, because a row neither linked nor asked about is recorded nowhere, and the fan-out
+    reads that as an absence and posts a second copy.
+    """
+    if len(twins) != 1:
+        deps.bus.publish(
+            "survey.twin_ambiguous",
+            {"market": market, "listing_id": row.get("listing_id"), "items": len(twins)},
+        )
+        return False
+    url = str(row.get("url") or "")
+    if not url:
+        return False
+    try:
+        deps.store.record_listing_url(twins[0], market, url)
+    except StoreError as exc:
+        log.warning("could not link %s to %s: %s", row.get("listing_id"), twins[0], exc)
+        return False
+    deps.bus.publish(
+        "survey.linked",
+        {"market": market, "listing_id": row.get("listing_id"), "item_id": twins[0], "url": url},
+    )
+    return True
 
 
 def _found_text(deps: SurveyDeps, market: str, listings: list) -> str:
@@ -233,7 +326,7 @@ def relist_targets(store, market: str) -> str:
     rail = marketplaces.display_name(marketplaces.RAIL)
     others = [
         marketplaces.display_name(enabled)
-        for enabled in settings.crosslist_markets(store)
+        for enabled in settings.publish_markets(store)
         if enabled not in (marketplaces.RAIL, market)
     ]
     if not others:
@@ -257,6 +350,10 @@ def stale_text(market: str) -> str:
     return STALE_NOTICE.format(name=marketplaces.display_name(market))
 
 
+def abandoned_text(market: str) -> str:
+    return ABANDONED_NOTICE.format(name=marketplaces.display_name(market))
+
+
 def already_managing_text(market: str, count: int) -> str:
     return ALREADY_MANAGING_NOTICE.format(
         count=_listings(count), name=marketplaces.display_name(market)
@@ -276,3 +373,6 @@ def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
     if attempts >= SURVEY_MAX_ATTEMPTS:
         deps.store.abandon_market_survey(market)
         deps.bus.publish("survey.abandoned", {"market": market, "reason": reason[:200]})
+        deps.store.queue_notice(
+            abandoned_text(market), controls=fastpaths.look_again_controls(market)
+        )

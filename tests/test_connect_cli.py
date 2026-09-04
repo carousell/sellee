@@ -450,6 +450,7 @@ def stub_market_daemon(monkeypatch):
     calls = {
         "posts": [],
         "probes": [],
+        "holds": [],
         "state": "logged_in",
         "post_status": 200,
         "raised": [],
@@ -462,6 +463,10 @@ def stub_market_daemon(monkeypatch):
         if route == "/control/market-login":
             calls["probes"].append((route, body))
             return calls.get("probe_status", 200), {"state": calls["state"]}
+        if route in ("/control/browser-hold", "/control/browser-release"):
+            # Claims on the shared tab, recorded apart from the navigations.
+            calls["holds"].append((route, body.get("holder")))
+            return 200, {}
         calls["posts"].append((route, body))
         return calls["post_status"], calls.get(
             "post_body",

@@ -15,9 +15,14 @@
         "type": "browser"
       },
       "status": "active",
+      "media_host_suffixes": [
+        "fbcdn.net"
+      ],
       "urls": {
-        "inbox": "/marketplace/inbox/",
-        "my_listings": "/marketplace/you/selling"
+        "inbox": "/messages/",
+        "thread": "/messages/t/{thread_id}/",
+        "my_listings": "/marketplace/you/selling",
+        "sell": "/marketplace/create/item"
       }
     },
     {

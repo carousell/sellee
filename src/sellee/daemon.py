@@ -38,6 +38,7 @@ from sellee import (
 from sellee.browser import chrome, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
+from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
@@ -280,6 +281,35 @@ def recycle_browser_client(bus, holder: dict, reason: str, *, now) -> None:
         stale.close(graceful=DETACHED_MARKER not in reason)
 
 
+def _widen_window(bus, port: int, store) -> None:
+    """Keep the agent's Chrome wide enough for marketplaces to serve their desktop layout.
+
+    Wide enough for the most demanding *connected* market — each adapter names its own breakpoint,
+    and a market the seller has not connected asks nothing of the window. Run on every acquisition,
+    not once at launch: `--restore-last-session` restores the last width. Never fatal — a
+    too-narrow window is a read that may still succeed, and a real failure is promoted to
+    `CAUSE_VIEWPORT` by the reader's own measurements. The event fires only when a resize was
+    needed, so the steady state stays silent.
+    """
+    minimum = max(
+        (
+            adapter.min_usable_width_px
+            for adapter in map(market_adapters.get_adapter, settings.connected_markets(store))
+            if adapter is not None
+        ),
+        default=0,
+    )
+    if not minimum:
+        return
+    try:
+        width = chrome.ensure_window_width(port, minimum)
+    except Exception:  # noqa: BLE001 — never let a cosmetic fix fail an acquisition
+        log.debug("could not check the agent's Chrome window width", exc_info=True)
+        return
+    if 0 < width < minimum:
+        bus.publish("browser.window_narrow", {"width": width, "needed": minimum})
+
+
 def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
@@ -316,6 +346,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
         browser_client.ensure_available(cfg.playwright_mcp_cmd or [browser_client.SERVER_BINARY])
         port = ensure_chrome(cfg, store, bus, should_stop)
         _notice_window_reopening(store, bus, holder, port)
+        _widen_window(bus, port, store)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
             browser_client.cdp_endpoint(port)
         )
@@ -333,7 +364,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
             # client's own mutex, so replacing its server mid-flow abandons a half-filled listing
             # form and starts the whole thing again from nothing. Asked only once there is a reason
             # to act, so the steady state does not pay for a query about passes on every send.
-            if reason is not None and not inbox.browser_pass_running(store):
+            if reason is not None and not inbox.browser_busy(store):
                 if DETACHED_MARKER in reason:
                     # Marked before the recycle is attempted, not after. If the cooldown declines to
                     # replace it we hand the same client back, and it has to fail fast and name the

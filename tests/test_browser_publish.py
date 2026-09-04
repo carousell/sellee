@@ -254,7 +254,7 @@ def test_a_market_that_cannot_be_published_to_fails_the_payload(store, xdg_tmp) 
     than eighty turns of a model discovering it has no browser and no recipe."""
     store.set_seller_config_section("basics", {"region": "SG"})
     item = _item_with_photos(store, count=1)
-    for market in ("carousel", "fb", "ebay"):
+    for market in ("carousel", "mercari", "ebay"):
         with pytest.raises(passes.PassPayloadError):
             passes.validate_payload("publish", {"item_id": item["id"], "market": market}, store)
 

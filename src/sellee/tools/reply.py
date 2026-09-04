@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import settings
+from sellee import marketplaces, settings
 from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
 from sellee.store import StoreError
@@ -57,6 +57,29 @@ def _refused(side: str, status: str, kind: str) -> bool:
     return kind == "followup" and status == "agreed"
 
 
+# The verdict that stops a send outright. "suspicious" deliberately does not: it is common enough
+# that refusing on it would mute ordinary haggling, and the prompt already carries it so the model
+# can be careful. "scam" is the one the seller should answer themselves.
+_SCAM_VERDICT = "scam"
+
+
+def _answering_a_scam(store, params: dict) -> bool:
+    """Whether the message this reply answers was flagged as a scam.
+
+    Keyed on the specific inbound message the pass is answering when it names one, because a thread
+    can hold one scam attempt among ordinary messages and a blanket refusal would silence the whole
+    conversation. With no `in_msg_id` — a nudge, a follow-up — the latest inbound stands in, which
+    is the message any unprompted reply is effectively about.
+    """
+    rows = store.get_thread_messages(params["thread_id"], limit=20) or []
+    inbound = [row for row in rows if row.get("dir") == "in"]
+    if not inbound:
+        return False
+    wanted = params.get("in_msg_id")
+    answering = next((row for row in inbound if row.get("msg_id") == wanted), inbound[-1])
+    return (answering.get("scam_verdict") or "") == _SCAM_VERDICT
+
+
 def _send_reply(ctx: ToolContext, params: dict) -> dict:
     # A paused agent acts on nothing — even an attended session's send respects the pause. Refuse
     # before any thread load or reserve so nothing is recorded.
@@ -66,6 +89,33 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     thread = ctx.store.get_thread(params["thread_id"])
     if thread is None:
         raise ToolError(f"no thread with id {params['thread_id']!r}")
+    if _answering_a_scam(ctx.store, params):
+        # A gate, not prompt guidance: the seller is the right party to answer a scam, whatever
+        # the model decides.
+        return {
+            "status": "scam_held",
+            "delivered": _NOT,
+            "thread_id": params["thread_id"],
+            "detail": "the message being answered was flagged as a scam — escalate to the seller",
+        }
+    # The market, read at the moment of sending: a reply composed against a connected market can
+    # reach here after the seller disconnected it, and stopping work already in flight is the
+    # whole promise of that switch. Refused with the pause, before any reserve or intent, so
+    # nothing is recorded and nothing is left for the stale sweep to escalate.
+    #
+    # Sell threads only, and the rail never: a buy thread approaches someone else's listing,
+    # which that switch has never governed, and the rail is where every listing lives.
+    if (
+        thread["side"] == "sell"
+        and thread["market"] != marketplaces.RAIL
+        and thread["market"] not in settings.connected_markets(ctx.store)
+    ):
+        return {
+            "status": "not_connected",
+            "delivered": _NOT,
+            "thread_id": params["thread_id"],
+            "market": thread["market"],
+        }
     if _refused(thread["side"], thread["status"], kind):
         raise ToolError(
             f"thread is {thread['status']!r} — not eligible for a {kind} "
@@ -179,7 +229,10 @@ register(
         "and do not report it to the seller. "
         "unverified_open = delivered no, because an earlier send on this thread is still "
         "unsettled; wait for it rather than talking past it. "
-        "paused / no_send_path = delivered no, nothing was recorded.",
+        "paused / no_send_path = delivered no, nothing was recorded. "
+        "scam_held = delivered no: the message you are answering was flagged as a scam, so the "
+        "send is refused in code. Do not rephrase and retry — raise it with the seller and let "
+        "them decide.",
         input_schema={
             "type": "object",
             "properties": {

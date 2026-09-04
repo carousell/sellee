@@ -9,10 +9,17 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from pathlib import Path
 from xml.sax.saxutils import escape
 
 from sellee.platform.base import Platform
+
+# How long `unregister` waits for `bootout` to finish letting go of a job. It is asynchronous, and
+# a job that still answers `print` is a job a following `start` will decline to start. Bounded: a
+# launchctl that will not release is better reported by the next command failing than by hanging.
+_BOOTOUT_TIMEOUT_SEC = 10.0
+_BOOTOUT_POLL_SEC = 0.1
 
 _DEFAULT_LABEL = "com.sellee.agent"
 
@@ -95,7 +102,18 @@ class MacOSPlatform(Platform):
         self._launchctl("bootstrap", self._domain(), str(config_path))
 
     def unregister(self, label: str) -> None:
+        """Take the job out, and do not return until launchctl agrees it is out.
+
+        `bootout` returns before the job is actually gone, and a job that still answers `print`
+        makes a following `start` decline ("already running") then find nothing left. The wait
+        belongs here, on the method whose contract it protects ("it stays stopped until
+        re-registered"), so every caller inherits it. Bounded by a deadline: if launchctl will
+        not let go, the caller is better off failing visibly than hanging.
+        """
         self._launchctl("bootout", f"{self._domain()}/{label}")
+        deadline = time.monotonic() + _BOOTOUT_TIMEOUT_SEC
+        while self.is_registered(label) and time.monotonic() < deadline:
+            time.sleep(_BOOTOUT_POLL_SEC)
 
     def is_registered(self, label: str) -> bool:
         return self._launchctl("print", f"{self._domain()}/{label}").returncode == 0

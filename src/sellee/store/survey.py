@@ -22,6 +22,7 @@ the slot was busy is remembered here or it is lost.
 
 from __future__ import annotations
 
+import json
 from typing import TypedDict
 
 from sellee.db import Database
@@ -404,9 +405,14 @@ class SurveyMixin:
         """Turn one discovered listing into an item, in a single transaction.
 
         The item is inserted **carrying the marketplace URL it was read from**, and the row is
-        advanced in the same transaction — that is the whole reason this is one call. Pass
-        `item_id` to link to an item that already records this URL: the idempotent path a retry
-        takes after a crash.
+        advanced in the same transaction — that is the whole reason this is one call.
+
+        Pass `item_id` to link rather than insert. Two callers do: a retry after a crash, where the
+        item already records this URL, and a listing that turns out to be something the seller
+        already has on another marketplace, where it does not. So the URL is recorded on the linked
+        item when it is missing, in the same transaction — without it the item would be the twin's
+        listing only, and the read lane could never join this market's buyers to it, which is the
+        whole point of merging them.
 
         `rail_owed` marks that a carousell.ai publish is still owed; it is written here because
         nothing downstream could derive it — an item with no rail URL is indistinguishable from one
@@ -441,6 +447,23 @@ class SurveyMixin:
                     status="ready",
                     listing_urls={market: url},
                 )
+            elif url:
+                # Linking. Merge this market's URL in rather than replacing the map: the item is
+                # keeping its other marketplaces, and this is the one write that gives a merged item
+                # its second listing. Left alone when the URL is already there, so the retry path
+                # stays a no-op.
+                stored = conn.execute(
+                    "SELECT listing_urls FROM items WHERE id = ?", (item_id,)
+                ).fetchone()
+                if stored is None:
+                    raise StoreError(f"item {item_id!r} vanished during adoption")
+                urls = json.loads(stored["listing_urls"])
+                if urls.get(market) != url:
+                    urls[market] = url
+                    conn.execute(
+                        "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
+                        (json.dumps(urls, sort_keys=True), now, item_id),
+                    )
             moved = conn.execute(
                 "UPDATE discovered_listings SET status = 'adopted', item_id = ?, adopted_ts = ?, "
                 "rail_state = ?, last_error = NULL "
@@ -451,6 +474,11 @@ class SurveyMixin:
                 # Declined, re-asked or deleted while this was being read. Raising rolls back the
                 # item insert — an item with no row behind it could never be published.
                 raise ListingGone(f"{listing_id!r} on {market} is no longer waiting to be adopted")
+            # A new item can turn "none of ours" into a match, and the read lane caches those
+            # answers. Cleared in the same transaction: this is the one funnel every adoption
+            # goes through, and a cache outliving the fact it was about is how a buyer goes
+            # unanswered.
+            conn.execute("DELETE FROM thread_listing_lookups WHERE market = ?", (market,))
         rows = self._db.query("SELECT * FROM items WHERE id = ?", (item_id,))
         if not rows:
             raise StoreError(f"item {item_id!r} vanished during adoption")

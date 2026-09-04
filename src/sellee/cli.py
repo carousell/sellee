@@ -172,6 +172,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     prun.add_argument("--follow", action="store_true", help="tail the pass's events until it ends")
 
+    # Pause and resume from a terminal: the chat buttons need something alive to receive the tap,
+    # so the way out of a dead-agent state cannot go through them. Writes the flag the lanes read
+    # at use.
+    sub.add_parser("pause", help="stop the agent acting (same flag as the chat button)")
+    sub.add_parser("resume", help="let the agent act again (works with the daemon down)")
+
     sub.add_parser("chat", help="talk to Sellee in this terminal")
 
     harness = sub.add_parser("harness", help="harness configuration")
@@ -204,10 +210,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="seconds to wait for the bind DM (default: 300 interactive, 120 piped)",
     )
     # One per marketplace we can actually drive, so `connect --help` lists what exists rather
-    # than accepting any word and failing at the door.
+    # than accepting any word and failing at the door. Driving is the right test, not publishing:
+    # signing in is what this command does, and a market whose publish recipe is still to come is
+    # signed in to the same way.
     from sellee.browser import markets as _markets
 
-    for market in _markets.supported_markets():
+    for market in _markets.drivable_markets():
         consub.add_parser(market, help=f"sign in to {market} in the agent's browser")
 
     settings_cmd = sub.add_parser("settings", help="view and change seller settings")
@@ -238,6 +246,30 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _set_paused(paused: bool) -> int:
+    """Set the pause flag straight on the store, with nothing else in the way.
+
+    Deliberately not routed through the daemon's control port — that port is served by the very
+    process this command exists to work around. The flag is read at use, so it takes effect on the
+    next tick whenever the daemon comes back.
+    """
+    from sellee import paths
+    from sellee.db import Database
+    from sellee.store import Store
+
+    store = Store(Database(paths.data_dir() / "sellee.db"))
+    store.set_paused(paused, source="cli")
+    print("paused" if paused else "resumed")
+    if not paused:
+        from sellee import supervisor
+
+        st = supervisor.gather_status()
+        if not st.process_alive:
+            # A flag nobody will read until the daemon starts — say so rather than implying it took.
+            print("note: the daemon is not running — start it with `sellee daemon start`")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     import sys
 
@@ -261,6 +293,9 @@ def main(argv: list[str] | None = None) -> int:
         from sellee.installer import update as update_cli
 
         return update_cli.run(args)
+
+    if args.command in ("pause", "resume"):
+        return _set_paused(args.command == "pause")
 
     if args.command == "uninstall":
         from sellee import uninstall_cli
