@@ -10,7 +10,7 @@ import time
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import passes, secrets
-from sellee.channel import outbound
+from sellee.channel import outbound, routing
 from sellee.channel.prompt import (
     TRANSCRIPT_CHAR_CAP,
     _format_transcript,
@@ -134,6 +134,33 @@ def test_second_batch_waits_while_a_pass_is_active(store, bus, xdg_tmp) -> None:
     queued = [e for e in bus.store.read() if e.kind == "pass.queued"]
     assert len(queued) == 1  # coalesced — no second pass
     assert store.count_pending_inbox() == 1  # the second message waits
+
+
+def test_a_row_left_waiting_is_routed_once_the_pass_it_waited_for_settles(store, bus) -> None:
+    """The strand: routing only ever ran from a provider's ingest path, so a message that arrived
+    while a pass was in flight sat `pending` until the seller happened to speak again. One row was
+    stranded for 3h52m in the field. The lane derives from durable rows, so it heals every shape of
+    this — including a crash between ingest (which already advanced the cursor) and routing."""
+    store.ingest_updates([_ev(1, text="first")], 2)
+    routing.route_channel_pass(store, bus)
+    claimed = store.claim_queued_pass()
+    store.ingest_updates([_ev(2, text="second")], 3)  # lands mid-pass
+    routing.route_channel_pass(store, bus)
+    assert store.count_pending_inbox() == 1  # coalesced away, as designed
+
+    store.finish_pass(claimed.pass_id, status="done", rc=0)
+    routing.route_channel_pass(store, bus)  # the lane's tick, with no new seller message
+
+    assert store.count_pending_inbox() == 0
+    assert store.has_active_channel_pass() is True
+
+
+def test_the_routing_lane_is_silent_when_there_is_nothing_waiting(store, bus) -> None:
+    """It ticks every couple of seconds forever; a no-op tick must enqueue nothing and say nothing."""
+    routing.route_channel_pass(store, bus)
+
+    assert store.has_active_channel_pass() is False
+    assert [e for e in bus.store.read() if e.kind == "pass.queued"] == []
 
 
 # --- the pass carries a full-scope, pass:channel token ---------------------------------------
