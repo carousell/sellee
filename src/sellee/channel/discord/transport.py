@@ -25,6 +25,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sellee import __version__
+from sellee.channel import controls
 
 # Required, in this documented shape, and enforced at the edge: urllib's default
 # `Python-urllib/x.y` is blocklisted, so the API and the CDN both 403 (Cloudflare 1010) before the
@@ -37,7 +38,9 @@ _ACTION_ROW = 1
 _BUTTON = 2
 _BUTTON_STYLE_PRIMARY = 1
 # Discord's own cap: an action row holds at most five buttons, and a sixth is a rejected message,
-# not a wrapped one. Enforced at build so an over-long spec is chunked here rather than on the wire.
+# not a wrapped one. The shared legibility cap in `channel.controls` is stricter, so in practice
+# this never binds — it stays because it is the API's limit rather than our taste, and
+# `build_components` takes the tighter of the two so raising the shared one can never reach it.
 MAX_BUTTONS_PER_ROW = 5
 
 
@@ -63,12 +66,14 @@ def chunk_text(text: str, limit: int = MAX_TEXT_LEN) -> list:
 def build_components(spec: list) -> list:
     """A provider-neutral (label, custom_id) control spec into action rows of buttons.
 
-    Chunked because Discord rejects an action row holding more than five buttons, and the
-    marketplace picker is as long as the seller's enabled list. Chunking rather than truncating:
-    a control the core emitted is always rendered, or the seller is looking at a door they cannot
-    open.
+    Wrapped rather than truncated: a control the core emitted is always rendered, or the seller is
+    looking at a door they cannot open. Discord also rejects an action row holding more than five
+    buttons, and the marketplace picker is as long as the seller's enabled list.
+
+    The packing itself is `channel.controls.wrap` — shared with Telegram, because how wide a label
+    reads is a property of the label, not of the provider, and two copies of that judgement drift.
     """
-    rows = [spec[i : i + MAX_BUTTONS_PER_ROW] for i in range(0, len(spec), MAX_BUTTONS_PER_ROW)]
+    rows = controls.wrap(spec, max_per_row=min(controls.MAX_BUTTONS_PER_ROW, MAX_BUTTONS_PER_ROW))
     return [
         {
             "type": _ACTION_ROW,

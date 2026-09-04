@@ -133,15 +133,19 @@ def test_send_message_records_content_and_components() -> None:
         assert api.outbox[-1]["components"][0]["components"][0]["custom_id"] == "pause"
 
 
-def test_components_wrap_at_discords_five_button_row_cap() -> None:
+def test_components_never_exceed_discords_action_row_cap() -> None:
     """Discord rejects an action row holding a sixth button — the whole message, not just the
-    button. The marketplace picker is as long as the seller's enabled list, so this has to chunk
-    rather than trust the spec to be short."""
-    spec = [(f"m{i}", f"m{i}:connectmkt") for i in range(6)]
+    button. The marketplace picker is as long as the seller's enabled list, so this has to wrap
+    rather than trust the spec to be short.
+
+    The cap, not a row count: the shared legibility packing (channel/controls.py) decides how many
+    actually land in a row, and it is stricter than Discord's limit. What this pins is that the
+    limit can never be crossed however that packing is tuned."""
+    spec = [(f"m{i}", f"m{i}:connectmkt") for i in range(9)]
 
     rows = transport.build_components(spec)
 
-    assert [len(row["components"]) for row in rows] == [5, 1]
+    assert rows and all(len(row["components"]) <= transport.MAX_BUTTONS_PER_ROW for row in rows)
     assert [b["custom_id"] for row in rows for b in row["components"]] == [t for _l, t in spec]
 
 
