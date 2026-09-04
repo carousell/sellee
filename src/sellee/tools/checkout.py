@@ -46,12 +46,32 @@ _MARKET = "carousell-ai"
 # degraded (it still says the seller must sign in), never wrong.
 _GUEST_GATE_CLAUSE = "belongs to a guest account"
 _ALREADY_SIGNED_IN_CLAUSE = "already a seller"
+_NO_MARKET_CLAUSE = "seller has no market"
 
 _GUEST_GATE_SELLER_GUIDANCE = (
     "the seller hasn't done their one-time carousell.ai sign-in yet, so checkout links are "
     "refused. Mint a sign-in link with carousell_ai_create_signin_link and send it to the seller "
     "with a one-line why; once they say they've signed in, call this tool again"
 )
+# carousell.ai runs one Stripe account per market and a seller belongs to exactly
+# one of them, permanently: the account it mints for them cannot change country
+# and cannot be moved. Sellers set up through this agent confirm their region
+# during setup, so they arrive placed; a seller who signed up on the web does
+# not, and is deliberately left unplaced rather than guessed at. They cannot be
+# paid until they say where they sell, so the remedy is to ask, not to retry.
+_NO_MARKET_SELLER_GUIDANCE = (
+    "carousell.ai does not know which country the seller sells from, and it decides which "
+    "account pays them out, so no checkout link can be minted. Ask the seller whether they sell "
+    "in Singapore or the United States, tell them it is permanent once their payout account "
+    "exists, and once they answer call this tool again"
+)
+_NO_MARKET_REPLY_GUIDANCE = (
+    "carousell.ai does not know which country the seller sells from, so no checkout link can be "
+    "minted yet. Post the buyer a neutral holding line — never mention the seller or their "
+    "account — then escalate to the seller asking whether they sell in Singapore or the United "
+    "States; the seller's own channel handles it"
+)
+
 _GUEST_GATE_REPLY_GUIDANCE = (
     "the seller hasn't completed a one-time carousell.ai sign-in, so no checkout link can be "
     "minted yet. Post the buyer a neutral holding line — never mention the seller or their "
@@ -87,6 +107,14 @@ def _rail(ctx: ToolContext):
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
+
+
+def _no_market_guidance(ctx: ToolContext) -> str:
+    """Worded per tier, like _guest_gate_guidance: the reply tier must not name the seller to a
+    buyer, so it gets the escalate route instead of the direct ask."""
+    if ctx.session.tier == TIER_PASS_REPLY:
+        return _NO_MARKET_REPLY_GUIDANCE
+    return _NO_MARKET_SELLER_GUIDANCE
 
 
 def _guest_gate_guidance(ctx: ToolContext) -> str:
@@ -145,6 +173,8 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     except RailToolError as exc:
         if _GUEST_GATE_CLAUSE in str(exc):
             raise ToolError(_guest_gate_guidance(ctx)) from exc
+        if _NO_MARKET_CLAUSE in str(exc):
+            raise ToolError(_no_market_guidance(ctx)) from exc
         raise ToolError(str(exc)) from exc
     except RailError as exc:
         raise ToolError(str(exc)) from exc
