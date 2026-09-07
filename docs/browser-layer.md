@@ -645,8 +645,8 @@ key because it thought the box was empty all look like success from outside. Onl
 our own words in an outbound bubble count (`reconcile.contains_outbound`, the one
 definition of that question, shared with the inbox lane's settle pass).
 
-The read-back **polls** rather than asking once (`_VERIFY_WINDOW_SEC`, 6s at 1s
-intervals). The chat commits the message to its own server and re-renders
+The read-back **polls** rather than asking once (`config.send_verify_window_sec`,
+20s at 1s intervals). The chat commits the message to its own server and re-renders
 afterwards, so a single read taken the instant after the submit is a read of the
 page as it was *before* the send. The adapter's own polling cannot cover this: it
 waits for a tail to become non-empty, and after a send the tail is never empty, so
@@ -678,8 +678,14 @@ not the first:
 2. The **inbox lane settles it**. `store.unsettled_intents()` lists every intent in
    `pending` / `sent_unverified` / `unconfirmed`, and a thread holding one is opened
    whatever its status and whatever the list preview claims — bypassing both
-   `_ACTIVE_STATUSES` and `_can_skip`. With the conversation on screen the lane
-   asks the same question the read-back asked:
+   `_ACTIVE_STATUSES` and `_can_skip`, and **whatever the conversation list said**:
+   `_chase_unsettled` opens by thread URL anything the list did not name. A list is a
+   window onto the folder, not the folder — Messenger unmounts rows far outside the
+   viewport, so the reader takes one pass at each end and never returns the middle. A
+   conversation it cannot open is not counted as blindness on that market: the list
+   read succeeded, and a conversation the marketplace deleted is unreadable forever.
+   With the conversation on screen the lane asks the same question the read-back
+   asked:
    - **found** → `settle_intent_from_read` commits the intent exactly as a verified
      send would have (the deterministic `out|{intent_id}` msg_id makes it a no-op if
      anything commits it again), withdraws any `unconfirmed_send` escalation, and
@@ -691,8 +697,11 @@ not the first:
    ceiling so a merely-jittered send cannot look like a stall) **and** only once
    `verify_attempts >= MIN_VERIFY_ATTEMPTS` (2) — or `HARD_GRACE_SEC` (1h) has
    passed, the backstop for a lane that cannot run at all. Only then does the thread
-   become `escalated` and the ask reach the seller, worded **in code**
-   (`UNCONFIRMED_SEND_ASK`) so a pass cannot raise it early.
+   become `escalated` and the ask reach the seller, worded **in code** so a pass
+   cannot raise it early — `UNCONFIRMED_SEND_ASK` when the attempts were made, and
+   `UNCHECKED_SEND_ASK` on the hard-grace path, because "even after re-checking the
+   chat" is a claim about work nobody did when the attempt count is still zero. Same
+   kind and same buttons either way, so a later read still withdraws it.
 4. On the seller's answer: "it's there" → resolve and reactivate. "nothing there" →
    resolve and reactivate **first** (sends are refused while a thread is escalated),
    then send again. The framing lives in the `seller-comms` skill.
@@ -849,6 +858,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
 | `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
+| `send_verify_window_sec` | `20.0` | how long the send read-back keeps looking for its own bubble. Every send that runs out of window here becomes work for the settle lane and, eventually, a question for the seller |
 | `RECYCLE_AFTER_FAILURES` | `3` (code) | consecutive tool failures that, with Chrome answering, mean the server has lost it |
 | `BROWSER_RECYCLE_MAX` / `_WINDOW_SEC` / `_COOLDOWN_SEC` | `3` / `3600` / `120` (code) | how often a server may be replaced before we stop and say so |
 | `BROWSER_RECYCLE_AGE_SEC` | `43200` (code) | a server is swapped at this age even when nothing is wrong with it; the swap is graceful, so it costs no window |
@@ -856,7 +866,9 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 
 Lane counters (tick count, consecutive failures, which notices are already
 queued) live **in process** on purpose: they are all counters, and a restart
-re-arming them errs toward reading more rather than less.
+re-arming them errs toward reading more rather than less. The exception is the
+unplaceable-conversations notice, whose "already said" is about people rather
+than about this process, and is a table.
 
 ## Adding a marketplace
 
