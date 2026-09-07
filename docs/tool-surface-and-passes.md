@@ -86,6 +86,15 @@ the LLM surface: a stdlib MCP client over `urllib` (the guest key travels only i
 the Authorization header), a fail-closed live listing-URL verify, and guest-key
 provisioning. `mcp_proxy.py` is a stdio↔HTTP forwarder so a stdio-only harness
 reaches the same server — the HTTP server stays the single implementation.
+The rail also exposes Stripe payout onboarding, and no tool wraps it. That is a
+decision, not an omission: carousell.ai's `/account/wallet` page is where a
+seller starts or finishes onboarding, and a second surface for it would be a
+second thing to keep correct. A tool that minted onboarding links existed
+briefly in September 2026 and was removed once the page landed. If a seller asks
+their agent how to get paid, the answer is that page — see
+`carousell/bazaar` `docs/2026-09-07-payout-surfaces.md` for which stream owns
+what.
+
 `rail.update_listing` has two callers with disjoint arguments: the
 `carousell_ai_update_listing` tool (take-down) passes status only, and the daemon's
 cross-link push passes `external_urls` only — that field is daemon-owned, and no
