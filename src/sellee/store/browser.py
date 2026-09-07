@@ -11,7 +11,7 @@ from __future__ import annotations
 from typing import TypedDict
 
 from sellee.db import Database
-from sellee.store.helpers import _now
+from sellee.store.helpers import UNPLACEABLE_REPORTED_META, _insert_notice, _now
 
 # What the lane should do for a request. `open` is the seller asking to be signed in: navigate,
 # pull the tab forward, and raise the window. `probe` is them saying they already have — re-read
@@ -139,6 +139,31 @@ class BrowserMixin:
             return conn.execute(
                 "DELETE FROM thread_listing_lookups WHERE market = ?", (market,)
             ).rowcount
+
+    def report_unplaceable_once(self, market: str, text: str) -> bool:
+        """Tell the seller buyers are waiting in conversations we cannot place — once per market.
+
+        Returns whether this queued the notice. The guard is the `meta` row's primary key, the same
+        way `request_market_survey` lets the key decide: two lanes racing, or a lane that keeps
+        finding the same buyers every sweep, cannot spend the ask twice.
+
+        Once, not once per set: keying on which conversations were unplaceable meant a tenth buyer
+        arriving re-sent the whole notice, and on 2026-09-04 nine became twenty-one in six minutes
+        and the seller was told twice about something they had already decided. The count is not
+        what makes it worth a message; the fact is, and the fact does not change.
+
+        One transaction, because saying it and recording that we said it are one event — split in
+        two, a crash between them sends the notice a second time on the next sweep.
+        """
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO meta (key, value) VALUES (?, ?) ON CONFLICT (key) DO NOTHING",
+                (UNPLACEABLE_REPORTED_META.format(market=market), str(_now())),
+            )
+            if not cur.rowcount:
+                return False
+            _insert_notice(conn, text)
+            return True
 
     def browser_hold_reason(self, now: float | None = None) -> str:
         """Why the browser is spoken for, or "" when it is free.

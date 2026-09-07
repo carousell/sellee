@@ -419,6 +419,41 @@ that event is what answers "why is nobody answering this buyer", and one label f
 all of them would make the ordinary case (a listing the seller made outside the
 agent) read like the alarming one (two items claiming the same listing).
 
+**Buyers nobody can place get one sentence, ever.** `browser.unmatched` is the log
+half of that refusal; the person half is a single notice per market, guarded by a
+`meta` row rather than lane state so a daemon restart cannot re-send it. It was
+once keyed on *which* conversations were unplaceable, which meant every extra
+buyer re-sent it: on 2026-09-04 nine became twenty-one in six minutes and the
+seller was told twice about something they had already decided. The count is not
+what makes it worth a message, the fact is, and the fact does not change. A set
+that grows, a set that empties and refills, and a restart all say nothing more.
+The one way back through the guard is the seller asking for a fresh look at that
+market's listings — the same door the notice's own last sentence points at, and
+the one `reopen_market_survey` opens (it clears both guards in one transaction).
+
+It also *waits* for the market's own listings to stop being an open question — a
+survey still owed a look, an ask the seller hasn't answered, or an accepted
+listing still being adopted. All three are about to change the set, and the one
+notice is worth more spent on what is left over than on a count that is about to
+shrink. Nothing is lost by waiting: the set is recomputed every sweep, unanswered
+asks expire after a week, and a market no adapter can survey is never held at all.
+
+The lookup that decides all this is cached on the conversation's **listing title**
+alone (`_listing_key`). It once included the row's last-message preview, so every
+new buyer message re-opened the conversation to re-read a banner that had not
+moved — twenty-one chatting buyers on listings we don't manage cost a page load
+apiece, every sweep, for an answer already on file.
+
+That preview was also, accidentally, the only thing that re-examined a "none of
+ours" after it stopped being true. So invalidation is now explicit and lives with
+the write that causes it: **every writer that gives an item this market's URL
+forgets the market's lookups in its own transaction** —
+`_forget_thread_listings_in_txn`, called by `adopt_discovered_listing` and by
+`record_listing_url`. The second matters most: the survey's twin-linking links an
+existing item to a listing the seller already had, outside adoption entirely, and
+the buyer waiting in that conversation is exactly the one nobody would look at
+again.
+
 **Scam pre-scan.** Every inbound row is scanned by the deterministic offline
 engine as it is written, so the verdict is on the row before any model sees the
 text.
@@ -483,7 +518,8 @@ publish    rail_state 'owed' -> the one publish slot -> watch the pass -> done |
 **The ask happens once per market.** That is the survey row's primary key, not a flag anyone has to
 remember to set — both triggers insert unconditionally and let the key decide. The one way back
 through it is a seller acting on a list that has gone stale, which *reopens* the survey rather than
-adopting from an old one.
+adopting from an old one — and un-mutes the unplaceable-buyers notice in the same transaction,
+since that notice tells them to ask for exactly this.
 
 **Two transactions carry the whole crash story**, and both exist because the alternative is silent:
 

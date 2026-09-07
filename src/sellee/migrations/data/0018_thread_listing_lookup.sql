@@ -14,11 +14,16 @@
 -- `product_id` empty means "we looked and there was nothing", which is the whole point: a negative
 -- is as worth remembering as a positive, and is the case that was costing the most.
 --
--- `row_key` is what the row said when we looked — its title and last message, with the trailing
--- relative-time token stripped, since a ticking clock ("2m" becoming "1h") is not new information.
--- Any change to it re-opens the conversation, which is what keeps a stale answer bounded to a
--- single sweep in either direction: a negative that should now match, and a positive whose
--- conversation moved to a different listing after a relist.
+-- `row_key` is which listing the row said it was about when we looked — its title, and only that.
+-- A change to it re-opens the conversation, which bounds a positive whose conversation moved to a
+-- different listing after a relist. It once carried the last message too, so that any new message
+-- re-opened the conversation; that made the answer self-heal in both directions, but it also meant
+-- a chatting buyer on a listing we do not manage cost a page load per sweep for an answer that
+-- cannot change — the exact cost this table exists to remove.
+--
+-- A negative that should now match is bounded instead by the write that changes it: every writer
+-- that gives an item this market's URL forgets the market's rows in its own transaction, via
+-- `_forget_thread_listings_in_txn`. Nothing else can turn "none of ours" into a match.
 --
 -- Growth is decided rather than left to chance: one row per conversation ever seen, never pruned,
 -- tens of bytes each. Bounded by how many people actually message a seller — tens to low thousands

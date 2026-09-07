@@ -909,26 +909,26 @@ def test_a_conversation_we_could_not_place_is_not_reopened_next_sweep(store, bus
     assert len(_kinds(bus, "browser.unmatched")) == 2
 
 
-def test_a_changed_row_asks_again(store, bus, seeded) -> None:
-    """A cached answer is trusted only while the row still says what it said."""
+def test_a_row_that_names_another_listing_asks_again(store, bus, seeded) -> None:
+    """A cached answer is trusted only while the row still names the listing it was about."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
     inbox.inbox_lane(deps)
-    client.conversations = [_conv(last_message="Gerry: what about the desk?")]
+    client.conversations = [_conv(title="Black office chair")]
     inbox.inbox_lane(deps)
 
     assert client.product_id_reads == 2
 
 
-def test_a_ticking_clock_is_not_a_change(store, bus, seeded) -> None:
-    """A relative time ticking over in the preview is not a new message."""
-    client = StubClient(conversations=[_conv(last_message="Gerry: is this still available? 2m")])
-    client.product_id = None
+def test_a_buyer_writing_again_does_not_reopen_the_conversation(store, bus, seeded) -> None:
+    """The answer is about the listing, not the last message: a buyer typing again is not a reason
+    to spend a page load re-reading a banner that has not moved."""
+    client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
     inbox.inbox_lane(deps)
-    client.conversations = [_conv(last_message="Gerry: is this still available? 1h")]
+    client.conversations = [_conv(last_message="Gerry: what about the desk?")]
     inbox.inbox_lane(deps)
 
     assert client.product_id_reads == 1
@@ -948,12 +948,44 @@ def test_adopting_a_listing_makes_the_lane_ask_again(store, bus, seeded) -> None
     assert store.get_thread("fb:99") is not None
 
 
+def test_linking_an_item_to_this_listing_reaches_the_buyer_already_waiting(store, bus) -> None:
+    """The survey's twin-linking writes the URL outside adoption, and the buyer is already here.
+
+    The cached "none of ours" is only as good as the fact behind it: the moment an item is linked to
+    this listing, the conversation is ours and the lane has to see that without waiting for anything
+    the buyer does.
+    """
+    store.set_seller_config_section("basics", {"region": "SG"})
+    item = store.create_item(title="White study desk", list_price=65.0, currency="SGD")
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+    inbox.inbox_lane(deps)
+    assert store.get_thread("fb:99") is None
+
+    store.record_listing_url(item["id"], "fb", _LISTING)  # what the survey's twin link does
+    client.product_id = _PRODUCT_ID
+    inbox.inbox_lane(deps)
+
+    assert store.get_thread("fb:99") is not None, "the buyer was left in a conversation nobody read"
+
+
 # --- saying so, once ---------------------------------------------------------------------------
+
+
+def _surveyed(store):
+    """Settle the market's own listings, which the report waits for.
+
+    The lane requests a survey the moment it sees a signed-in market, so without this every test
+    below would be sitting behind an ask the seller has not answered — which is the production
+    behaviour one test down asserts on purpose.
+    """
+    store.record_survey_result("fb", [])
 
 
 def test_buyers_nobody_can_place_are_reported(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
+    _surveyed(store)
 
     inbox.inbox_lane(deps)
 
@@ -966,6 +998,7 @@ def test_buyers_nobody_can_place_are_reported(store, bus, seeded) -> None:
 def test_the_same_buyers_are_not_reported_every_sweep(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
+    _surveyed(store)
 
     inbox.inbox_lane(deps)
     inbox.inbox_lane(deps)
@@ -973,25 +1006,27 @@ def test_the_same_buyers_are_not_reported_every_sweep(store, bus, seeded) -> Non
     assert len(_notice_texts(store)) == 1
 
 
-def test_a_new_unplaceable_buyer_is_reported_even_after_the_first(store, bus, seeded) -> None:
-    """A growing set of unplaceable buyers must be reported again, not swallowed by a once-only
-    notice."""
+def test_more_unplaceable_buyers_do_not_earn_a_second_notice(store, bus, seeded) -> None:
+    """A growing set is the same fact, not a new one. Nine buyers became twenty-one in six minutes
+    once, and the seller was told twice about something they had already decided."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
+    _surveyed(store)
     inbox.inbox_lane(deps)
 
     client.conversations = [_conv(), _conv(thread_id="100", handle="Muhd")]
     inbox.inbox_lane(deps)
 
     texts = _notice_texts(store)
-    assert len(texts) == 2
-    assert "2 people are messaging you" in texts[1]
+    assert len(texts) == 1
+    assert "1 person is messaging you" in texts[0]
 
 
-def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
-    """The notice re-arms when the set empties, so the next unplaceable buyer is announced."""
+def test_the_report_does_not_re_arm_when_the_set_empties(store, bus, seeded) -> None:
+    """A set that empties and refills is the flapping the once-guard exists to swallow."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
+    _surveyed(store)
     inbox.inbox_lane(deps)
 
     client.conversations = []  # everyone placed, or gone
@@ -999,7 +1034,54 @@ def test_the_report_re_arms_once_everyone_is_placed(store, bus, seeded) -> None:
     client.conversations = [_conv()]
     inbox.inbox_lane(deps)
 
+    assert len(_notice_texts(store)) == 1
+
+
+def test_the_report_survives_a_restart(store, bus, seeded) -> None:
+    """The guard is durable, not lane state: a daemon restart must not re-send it."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    _surveyed(store)
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    inbox.inbox_lane(_deps(store, bus, client))  # a fresh process, same database
+
+    assert len(_notice_texts(store)) == 1
+
+
+def test_asking_for_a_fresh_look_re_arms_the_report(store, bus, seeded) -> None:
+    """The notice tells the seller to ask me to look at their listings again; doing so is the one
+    thing that lets me say it a second time."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+    _surveyed(store)
+    inbox.inbox_lane(deps)
+
+    store.reopen_market_survey("fb")
+    _surveyed(store)  # the fresh look ran and found nothing to adopt
+    inbox.inbox_lane(deps)
+
     assert len(_notice_texts(store)) == 2
+
+
+def test_nothing_is_reported_while_the_seller_is_still_being_asked(store, bus, seeded) -> None:
+    """A survey that has not run, or found listings nobody has answered about, is about to change
+    this set — the one notice is not spent on a count that is about to shrink."""
+    client = StubClient(conversations=[_conv()], product_id=None)
+    deps = _deps(store, bus, client)
+
+    store.request_market_survey("fb")  # due, not yet run
+    inbox.inbox_lane(deps)
+    assert _notice_texts(store) == []
+
+    store.record_survey_result(
+        "fb", [{"listing_id": "1", "url": _LISTING, "title": "Desk", "price": 65.0}]
+    )
+    inbox.inbox_lane(deps)
+    assert _notice_texts(store) == [], "reported while the seller had not answered the ask"
+
+    store.decide_discovered_listings("fb", decision="decline")
+    inbox.inbox_lane(deps)
+    assert len(_notice_texts(store)) == 1
 
 
 # --- a message the marketplace itself says is gone ---------------------------------------------
