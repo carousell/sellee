@@ -79,9 +79,12 @@ register(
                     "type": "array",
                     "items": {"type": "string"},
                     "description": "The 2-4 concrete answers, in the order the question names "
-                    "them, each short enough for a button on a phone (e.g. "
-                    '["Send checkout link", "I\'ll handle it"]). Never a guessed number — a '
-                    "value-carrying answer is a button plus a follow-up question.",
+                    "them, each at most ~24 characters so it reads on a phone button without "
+                    'being truncated (e.g. ["Send checkout link", "I\'ll handle it"]). Every '
+                    "option must settle the question on its own: a tap sends back only its label, "
+                    "so an answer needing a number or a sentence is not a button — leave that to "
+                    "the typed reply. Never a guessed number either; a value-carrying answer is a "
+                    "button plus a follow-up question.",
                 },
             },
             "required": ["thread_id", "open_question"],

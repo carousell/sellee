@@ -30,6 +30,7 @@ class FakeDiscordAPI:
         self.outbox: list = []
         self.typing_pulses: list = []
         self.acknowledged: list = []
+        self.callbacks: list = []
         self.user_agents: list = []
         self.files: dict = {"/attachments/fake.jpg": b"\xff\xd8\xff\xe0fake-jpeg-bytes"}
         self._server = ThreadingHTTPServer(("127.0.0.1", 0), self._make_handler())
@@ -130,6 +131,8 @@ class FakeDiscordAPI:
                     "/callback"
                 ):
                     api.acknowledged.append(self.path)
+                    # The body too: type 6 acks the click, type 7 acks it and strips the buttons.
+                    api.callbacks.append(body)
                     self._reply(204, {})
                 else:
                     self._reply(404, {"message": "unknown"})

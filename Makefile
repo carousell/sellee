@@ -27,6 +27,20 @@ test:
 test-serial:
 	$(RUN) python -m pytest
 
+# Open the buyer simulator against a daemon started by buyer-daemon below. Runs the CLI from
+# this checkout, which matters: the installed release on PATH is a different build.
+buyer-sim:
+	PYTHONPATH=src $(RUN) python -c "from sellee import cli; cli.main()" buyer
+
+# The daemon the simulator needs, in the foreground, from this checkout.
+#
+# Two reasons it cannot be `sellee daemon start`. That command runs the *installed* release, which
+# will not carry unreleased code; and the simulator is switched on by an environment variable, so
+# it has to be set on the daemon process itself rather than on whatever asks it for a page.
+# Stop any running daemon first — it holds the HTTP port.
+buyer-daemon:
+	SELLEE_BUYER_SIM=1 PYTHONPATH=src $(RUN) python -c "from sellee import cli; cli.main()" daemon run
+
 # Regenerate all diagrams (SVG + PNG) under docs/.
 diagrams:
 	docs/generate-diagrams.sh

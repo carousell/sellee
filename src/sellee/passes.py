@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from sellee import marketplaces, paths, settings, skills
+from sellee import channel, marketplaces, paths, settings, skills
 from sellee import reply_prompt as reply_prompt_mod
 from sellee.browser import chrome
 from sellee.browser import client as browser_client
@@ -237,7 +237,10 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
     claimed = store.inbox_for_pass(pass_id)
     transcript = store.recent_transcript(channel_prompt_mod.TRANSCRIPT_WINDOW_LIMIT)
     return channel_prompt_mod.build_channel_prompt(
-        claimed, transcript, settings_block=settings.prompt_block(store)
+        claimed,
+        transcript,
+        settings_block=settings.prompt_block(store),
+        channel_name=channel.display_name(store.get_channel()["adapter"]),
     )
 
 

@@ -19,6 +19,7 @@ from sellee.store.helpers import (
     ItemNotFound,
     ItemRecord,
     StoreError,
+    _forget_thread_listings_in_txn,
     _insert_item_in_txn,
     _item_from_row,
     _now,
@@ -141,6 +142,13 @@ class ItemsMixin:
         The only writer that adds a URL to an item that already exists. The others are
         `archive_listing_url` below, and `adopt_discovered_listing`, which writes the URL in the
         same INSERT as the item so the two cannot be separated by a crash.
+
+        The URL is what joins a buyer on this listing to this item, so writing it can turn a
+        conversation the read lane filed as "none of ours" into one of ours — the lane's cached
+        answers for this market go in the same transaction. The survey's twin-linking is why this
+        is here and not only in adoption: it links an existing item to a listing the seller already
+        had, outside adoption entirely, and a buyer already waiting in that conversation would
+        otherwise never be looked at again.
         """
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -152,6 +160,7 @@ class ItemsMixin:
                 "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
                 (json.dumps(urls, sort_keys=True), _now(), item_id),
             )
+            _forget_thread_listings_in_txn(conn, market)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     # --- Q&A bank ---------------------------------------------------------------------------

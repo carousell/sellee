@@ -724,6 +724,37 @@ def _insert_notice(
     return notice_id
 
 
+# The durable record that a market's sellers have already been told buyers are waiting in
+# conversations we cannot place. A `meta` key rather than lane state, because the lane's own
+# dict re-arms on every daemon restart and this is a thing to say once, not once per process.
+#
+# Here rather than in either mixin because two of them share it: browser.py sets it, survey.py
+# clears it when the seller asks for a fresh look, and neither mixin may import the other.
+UNPLACEABLE_REPORTED_META = "unplaceable_reported:{market}"
+
+
+def _forget_thread_listings_in_txn(conn, market: str) -> None:
+    """Forget what we learned about which listing a market's conversations are about.
+
+    Called by every writer that can turn "none of ours" into a match — an item gaining this
+    market's URL, however it gained it — and in that writer's own transaction, because a cache
+    outliving the fact it was about is how a buyer goes unanswered. Wholesale on purpose:
+    forgetting too much costs a page load, forgetting too little costs a buyer nobody answers.
+    """
+    conn.execute("DELETE FROM thread_listing_lookups WHERE market = ?", (market,))
+
+
+def _clear_unplaceable_report_in_txn(conn, market: str) -> None:
+    """Let the agent say once more that buyers are waiting on listings it does not manage.
+
+    The one door back through that guard, and it is the seller's: they asked for a fresh look at
+    what they have listed, so the answer may genuinely have changed.
+    """
+    conn.execute(
+        "DELETE FROM meta WHERE key = ?", (UNPLACEABLE_REPORTED_META.format(market=market),)
+    )
+
+
 # A tappable ask's button token: `n<notice_id>:a<index>`. Providers split a callback datum on the
 # FIRST colon into (ref, choice), so the ref names the notice carrying the ask and the choice names
 # which option was tapped.

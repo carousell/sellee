@@ -22,8 +22,15 @@ log = logging.getLogger(__name__)
 
 NOTICE_DRAIN_INTERVAL_SEC = 2.0
 INBOX_FOLD_INTERVAL_SEC = 2.0
-# Telegram's typing indicator lasts ~5s; a pulse a little under that keeps it alive while a
-# channel pass is in flight. Providers without a typing action simply pass a no-op.
+# Telegram's typing indicator lasts ~5s. This is a *lower bound* only: the scheduler evaluates
+# due-ness at tick boundaries, so a lane declaring less than `tick_interval_sec` (5.0) runs once per
+# tick. Measured over 32,961 pulses the real cadence is ~5.14s, which is fractionally longer than
+# the indicator lives — so it blinks off once a cycle rather than being held open, and no interval
+# below 5.0 can change that without the tick changing too.
+#
+# Left as-is because the indicator is a secondary signal: it is a header subtitle with no bubble, no
+# notification and no scrollback, and it closes ~5s of a 30s-15min wait. The receipt
+# (channel/acks.py) is what actually tells the seller anything.
 TYPING_PULSE_INTERVAL_SEC = 4.0
 _NOTICE_DRAIN_BATCH = 10
 

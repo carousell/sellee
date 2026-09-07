@@ -4,7 +4,10 @@ and the response framing Playwright MCP actually uses."""
 from __future__ import annotations
 
 import json
+import os
+import signal
 import sys
+import time
 from pathlib import Path
 
 import pytest
@@ -39,6 +42,8 @@ def _throwaway_profile(xdg_tmp):
 
 
 FAKE = Path(__file__).parent / "fake_playwright_mcp.py"
+# The same server, reached through a launcher that leaves a child behind — the npx -> node shape.
+CHILD_FAKE = Path(__file__).parent / "fake_mcp_with_child.py"
 
 
 @pytest.fixture(autouse=True)
@@ -1000,6 +1005,38 @@ def test_a_healthy_client_still_tidies_its_tab_away(make_client) -> None:
         {"action": "new"},
         {"action": "close"},
     ]
+
+
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="POSIX process groups")
+def test_closing_a_client_ends_the_server_it_launched_too(tmp_path) -> None:
+    """The real command is `npx @playwright/mcp`, so the process we hold is a launcher and the
+    server that holds Chrome is its child. Signalling only what we hold left that child alive and
+    still connected: on one install 18 of them accumulated, each holding the CDP endpoint, and the
+    replacement they were making room for could no longer initialize against Chrome at all — the
+    recycle meant to cure a wedged server was manufacturing the wedge.
+    """
+    script = tmp_path / "script.json"
+    script.write_text(json.dumps({"tools": {"browser_tabs": {"text": "ok"}}}))
+    pidfile = tmp_path / "child.pid"
+    client = BrowserClient(
+        command=[sys.executable, str(CHILD_FAKE), str(pidfile), str(FAKE), str(script)],
+        timeout_sec=10.0,
+    )
+    client.ensure_tab()  # a handshake, so there is a live server to end
+    child_pid = int(pidfile.read_text())
+    os.kill(child_pid, 0)  # it is running
+
+    client.close()
+
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            os.kill(child_pid, 0)
+        except ProcessLookupError:
+            return
+        time.sleep(0.05)
+    os.kill(child_pid, signal.SIGKILL)  # do not leak it out of the test either
+    pytest.fail("the server the client launched outlived the client that launched it")
 
 
 def test_a_closed_client_never_starts_another_server(make_client) -> None:

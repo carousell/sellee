@@ -72,11 +72,6 @@ class MarketAdapter:
     # Which listing the open conversation is about, for a market that names it only there. Read
     # once when first seen; empty when the list already carries `product_id`.
     product_id_js: str = ""
-    # The trailing relative-time token this market's list rows carry ("2m", "Yesterday"), as a
-    # regex matched case-insensitively. Stripped before a row is compared with what it said last
-    # time, so a ticking clock is not a changed conversation. Moves with `product_id_js` — the
-    # comparison exists to keep that read's cached answer honest.
-    row_clock_pattern: str = ""
     # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
@@ -153,7 +148,6 @@ FACEBOOK = MarketAdapter(
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
     product_id_js=facebook.PRODUCT_ID_JS,
-    row_clock_pattern=facebook.ROW_CLOCK_PATTERN,
     composer=tuple(Selector(**row) for row in facebook.COMPOSER_DEFAULTS),
     system_handles=facebook.SYSTEM_HANDLES,
     empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,

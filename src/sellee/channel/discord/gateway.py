@@ -346,8 +346,8 @@ class DiscordGateway:
         inserted = self.store.ingest_updates([event], 0)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
-        self._dispatch_fast_paths(client, ch["chat_id"], inserted)
-        routing.route_channel_pass(self.store, self.bus)
+        handled = self._dispatch_fast_paths(client, ch["chat_id"], inserted)
+        self._settle(client, ch["chat_id"], inserted, handled)
 
     def _handle_interaction(self, data: dict, *, client: DiscordClient) -> None:
         if data.get("type") != 3:  # only MESSAGE_COMPONENT (button) interactions
@@ -365,28 +365,49 @@ class DiscordGateway:
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
         self._ack_taps(client, inserted)
-        self._dispatch_fast_paths(client, ch["chat_id"], inserted)
-        routing.route_channel_pass(self.store, self.bus)
+        handled = self._dispatch_fast_paths(client, ch["chat_id"], inserted)
+        self._settle(client, ch["chat_id"], inserted, handled)
+
+    def _settle(self, client: DiscordClient, channel_id, inserted, handled: set) -> None:
+        """The shared ingest tail: route, receipt, pulse. Same call on both entry points, because
+        Discord splits into two handlers where Telegram has one loop and a receipt owed on a tap is
+        owed on a typed message too."""
+        routing.settle_batch(
+            self.store,
+            self.bus,
+            [row for row in inserted if row["id"] not in handled],
+            reply=lambda text, ctrl: client.send_message(channel_id, text, components=ctrl),
+            typing=client.trigger_typing,
+        )
 
     def _ack_taps(self, client: DiscordClient, inserted) -> None:
         """Acknowledge every button interaction, fast path or not — Discord requires the REST
         callback even for a Gateway-delivered interaction, and reports an unacknowledged one as
         failed. A decision button routes to a pass rather than a fast path, so this has to run for
-        those too. Best-effort: a failed ack is cosmetic and the reply still goes out."""
+        those too. Best-effort: a failed ack is cosmetic and the reply still goes out.
+
+        The click also takes the buttons away, in the same call. A clicked message is spent: an ask
+        has been answered, and a control row's labels were rendered from state the click has just
+        changed. Every fast path that changes something replies with a freshly rendered row, so what
+        the seller is left holding is always current."""
         for row in inserted:
             payload = row["payload"] or {}
             interaction_id = payload.get("interaction_id")
             if not interaction_id:
                 continue
             try:
-                client.acknowledge_interaction(interaction_id, payload["interaction_token"])
+                client.acknowledge_interaction(
+                    interaction_id, payload["interaction_token"], clear_components=True
+                )
             except ChannelError as exc:
                 log.warning("interaction acknowledge failed: %s", exc)
 
-    def _dispatch_fast_paths(self, client: DiscordClient, channel_id, inserted) -> None:
+    def _dispatch_fast_paths(self, client: DiscordClient, channel_id, inserted) -> set:
         """Answer deterministic fast paths instantly, before any pass routing, so /pause is heard
         even mid-pass. Everything else stays pending for the channel pass. Interactions are already
-        acknowledged by `_ack_taps`, which covers the ones that route."""
+        acknowledged by `_ack_taps`, which covers the ones that route.
+
+        Returns the ids it answered, so `_settle` receipts only what is still going to a pass."""
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}
@@ -404,6 +425,7 @@ class DiscordGateway:
             self.bus.publish("channel.handled", {"kind": row["kind"], "by": "fast_path"})
         if handled:
             self.store.mark_inbox_handled(handled, "fast_path")
+        return set(handled)
 
     def _download_photo(self, client: DiscordClient, event: dict) -> list:
         url = event["payload"].get("url")

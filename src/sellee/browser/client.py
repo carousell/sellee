@@ -28,7 +28,7 @@ import time
 from collections import deque
 from contextlib import contextmanager
 
-from sellee import paths
+from sellee import paths, proc_tree
 
 log = logging.getLogger(__name__)
 
@@ -325,6 +325,10 @@ class BrowserClient:
                 stderr=subprocess.PIPE,
                 text=True,
                 bufsize=1,
+                # Its own process group, so `_kill` can end the whole launcher tree. Load-bearing
+                # in both directions: without it the server shares the daemon's group, and the
+                # group signal that ends a leaked child would take the daemon with it.
+                start_new_session=True,
             )
         except (OSError, ValueError) as exc:
             raise BrowserUnavailable(
@@ -360,15 +364,21 @@ class BrowserClient:
             raise
 
     def _kill(self, proc) -> None:
-        """End a server process without asking it anything. Used where it cannot answer."""
-        try:
-            proc.terminate()
-            proc.wait(timeout=_SHUTDOWN_JOIN_SEC)
-        except (OSError, subprocess.TimeoutExpired):
-            try:
-                proc.kill()
-            except OSError:
-                pass
+        """End a server and everything it launched, without asking it anything.
+
+        The whole group, never just the process we hold: the real command is `npx
+        @playwright/mcp`, so what we hold is a launcher and the server that actually holds Chrome
+        is its child. `terminate()` reached only the launcher, and the child was reparented to
+        init still attached to the CDP endpoint — one leak per recycle, on a path the age ceiling
+        and the failure allowance both make routine. Eighteen of them accumulated on one install
+        in a day, and a replacement could no longer initialize against Chrome at all, which the
+        lane reported as the market being blind: the recycle meant to cure a wedged server was
+        manufacturing the wedge.
+
+        `proc_tree.confirm_dead` is the same discipline the pass runner already uses on the same
+        shape of problem, and this is why `_start` opens a session of its own.
+        """
+        proc_tree.confirm_dead(proc, grace=_SHUTDOWN_JOIN_SEC)
 
     def _read_stdout(self, proc, lines: queue.Queue) -> None:
         try:
