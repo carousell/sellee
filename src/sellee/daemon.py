@@ -42,7 +42,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
-from sellee.channel import outbound
+from sellee.channel import outbound, routing
 from sellee.channel.discord import provider as discord_provider
 from sellee.channel.manager import ChannelManager
 from sellee.channel.telegram import provider as telegram_provider
@@ -752,6 +752,20 @@ def run_daemon(*, once: bool) -> int:
             name="inbox_fold",
             interval_sec=outbound.INBOX_FOLD_INTERVAL_SEC,
             func=lambda: outbound.fold_settled_passes(store=store),
+        )
+    )
+    # Route pending inbox rows that no ingest tick could route. `enqueue_channel_pass` coalesces —
+    # it refuses while a channel pass is already in flight — and routing used to be called ONLY
+    # from a provider's receive loop, so a message that arrived mid-pass stayed pending until the
+    # seller happened to send another one. In the field that stranded a tapped answer for 3h52m.
+    # Off durable rows (pending rows + no active pass), the same discipline as inbox_fold, so it
+    # also heals a crash between the ingest transaction — which has already advanced the provider's
+    # cursor, putting redelivery out of reach — and the routing call that should have followed it.
+    scheduler.register(
+        Task(
+            name="channel_route",
+            interval_sec=outbound.INBOX_FOLD_INTERVAL_SEC,
+            func=lambda: routing.route_channel_pass(store, bus),
         )
     )
     # One first-listing nudge, ever, for a seller who connected a day ago and never listed.

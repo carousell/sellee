@@ -75,6 +75,18 @@ class Scheduler:
         self._stop = stop_event if stop_event is not None else threading.Event()
 
     def register(self, task: Task) -> None:
+        if task.interval_sec < self._tick_interval:
+            # Due-ness is only evaluated at tick boundaries, so an interval under the tick is a
+            # request the loop cannot serve: the lane runs once per tick and no faster. Said out
+            # loud because it is otherwise invisible — the typing pulse declared 4.0s, ran at
+            # ~5.14s, and carried a comment claiming it kept a 5s indicator alive.
+            log.warning(
+                "task %s asks for %.1fs but the scheduler ticks every %.1fs — it will run at the "
+                "tick, not its interval",
+                task.name,
+                task.interval_sec,
+                self._tick_interval,
+            )
         with self._lock:
             self._reg.tasks[task.name] = task
             # due immediately on the first tick, so a fresh start exercises each lane

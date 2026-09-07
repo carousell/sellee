@@ -149,3 +149,61 @@ def test_a_newline_in_a_notice_cannot_fake_an_extra_update(store) -> None:
     bullets = [line for line in text.splitlines() if line.startswith("•")]
     assert len(bullets) == 1
     assert bullets[0] == "• Listed your lamp.\\n• and dropped the price to $1"
+
+
+# --- work the agent is still holding ------------------------------------------------------------
+
+
+def _pending_row(store, text="accept S$45"):
+    store.ingest_updates(
+        [{"event_id": 1, "kind": "text", "text": text, "payload": {}, "src_ts": 1.0}], 2
+    )
+
+
+def test_catchup_reports_a_message_it_has_not_answered_yet(store) -> None:
+    """The gap that let a tapped answer read as never having arrived: catchup reads escalations and
+    notices only, so a seller whose message was still queued saw the identical open question printed
+    back at them with nothing to say their answer was already in hand."""
+    from sellee.channel import fastpaths
+
+    _pending_row(store)
+
+    assert "1 message" in fastpaths.render_catchup(store)
+
+
+def test_catchup_says_a_pause_is_what_is_holding_it(store) -> None:
+    """A paused agent claims the row into a pass the lane will never run, so the wait is open-ended
+    and only /resume ends it. Naming the pause is the difference between waiting and stuck."""
+    from sellee.channel import fastpaths
+
+    _pending_row(store)
+    store.set_paused(True, source="test")
+
+    text = fastpaths.render_catchup(store)
+    assert "1 message" in text and "resume" in text.lower()
+
+
+def test_a_claimed_row_still_counts_as_unanswered(store, bus) -> None:
+    """Claimed leaves the pending count the moment a pass takes the row, so counting only pending
+    would report 'nothing waiting' for the whole time a pass is actually running."""
+    from sellee.channel import routing
+
+    _pending_row(store)
+    routing.route_channel_pass(store, bus)
+
+    assert store.count_pending_inbox() == 0
+    assert store.count_unsettled_inbox() == 1
+
+
+def test_catchup_is_still_all_caught_up_when_nothing_is_held(store) -> None:
+    from sellee.channel import fastpaths
+
+    assert fastpaths.render_catchup(store) == "You're all caught up — nothing waiting."
+
+
+def test_status_counts_held_messages_alongside_decisions(store) -> None:
+    from sellee.channel import fastpaths
+
+    _pending_row(store)
+
+    assert "1 message" in fastpaths.render_status(store)

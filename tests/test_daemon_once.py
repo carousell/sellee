@@ -60,7 +60,16 @@ def test_run_once_migrates_heartbeats_and_ledgers(xdg_tmp) -> None:
     # Every lane is registered and survives a tick against an empty store. A lane that is built but
     # never scheduled is the failure this pins: the browser publish shipped that way.
     ran = _tasks_run(paths.events_db())
-    assert {"pass_lane", "inbox_read", "reply_lane", "crosslist_lane"} <= ran
+    # channel_route is here for the same reason: routing used to run only from a provider's ingest
+    # path, so a message that arrived mid-pass sat pending until the seller happened to speak again.
+    assert {
+        "pass_lane",
+        "inbox_read",
+        "reply_lane",
+        "crosslist_lane",
+        "inbox_fold",
+        "channel_route",
+    } <= ran
     # The release check is deliberately absent: every task's first tick is immediate, so having it
     # here would reach the release host from a smoke run — and from this test.
     assert "update_probe" not in ran

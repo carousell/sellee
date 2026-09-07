@@ -29,6 +29,10 @@ from pathlib import Path
 MAX_TEXT_LEN = 4096
 MAX_CALLBACK_BYTES = 64
 
+# Headroom over the long poll's own timeout, so the socket outlives the poll the API is holding
+# open rather than racing it.
+LONG_POLL_SLACK_SEC = 15.0
+
 # A Telegram bot token is `<bot_id>:<auth>` — digits, a colon, ~35 chars of [A-Za-z0-9_-]. A cheap
 # offline pre-check so an obviously-wrong paste fails clearly before the network; getMe is the
 # authoritative test.
@@ -103,7 +107,15 @@ def _normalize(update: dict, authorized_chat: int | None) -> tuple:
                 "event_id": update["update_id"],
                 "kind": "action",
                 "text": choice,
-                "payload": {"ref": ref, "choice": choice, "callback_query_id": cq.get("id")},
+                "payload": {
+                    "ref": ref,
+                    "choice": choice,
+                    "callback_query_id": cq.get("id"),
+                    # The message the button sits on, so an answered ask can have its keyboard
+                    # taken away. Carried on the row rather than looked up later: the notice never
+                    # records the message id it was delivered as, and the tap already knows it.
+                    "message_id": cq.get("message", {}).get("message_id"),
+                },
                 "src_ts": cq.get("message", {}).get("date"),
             },
             chat,
@@ -168,12 +180,14 @@ class TelegramClient:
         self._api_base = api_base.rstrip("/")
         self._timeout = timeout
 
-    def _api(self, method: str, params: dict) -> object:
+    def _api(self, method: str, params: dict, *, timeout: float | None = None) -> object:
         url = f"{self._api_base}/bot{self._token}/{method}"
         data = json.dumps(params).encode("utf-8")
         req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"})
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 our URL
+            with urllib.request.urlopen(  # noqa: S310 our URL
+                req, timeout=self._timeout if timeout is None else timeout
+            ) as resp:
                 payload = json.loads(resp.read())
         except urllib.error.HTTPError as exc:
             # The URL carries the token; never echo it. Report only the method and status.
@@ -191,9 +205,14 @@ class TelegramClient:
         return self._api("getMe", {})
 
     def get_updates(self, offset: int, timeout: int, allowed_updates: list) -> list:
+        """Long-poll for updates. The socket timeout is derived from the poll rather than taken
+        from the client's, because a client tuned short for its *sends* — the poller's is, since
+        those run on the one thread consuming this — would otherwise abort the poll early and turn
+        every long poll into a reconnect."""
         return self._api(
             "getUpdates",
             {"offset": offset, "timeout": timeout, "allowed_updates": allowed_updates},
+            timeout=timeout + LONG_POLL_SLACK_SEC,
         )
 
     def send_message(self, chat_id: int, text: str, *, reply_markup: dict | None = None) -> list:
@@ -215,6 +234,17 @@ class TelegramClient:
 
     def answer_callback_query(self, callback_query_id: str) -> None:
         self._api("answerCallbackQuery", {"callback_query_id": callback_query_id})
+
+    def clear_inline_keyboard(self, chat_id: int, message_id: int) -> None:
+        """Take the buttons off a message, leaving its text alone.
+
+        An empty `inline_keyboard` rather than an omitted `reply_markup`: omitting it is "change
+        nothing", which is not what an answered ask wants to say.
+        """
+        self._api(
+            "editMessageReplyMarkup",
+            {"chat_id": chat_id, "message_id": message_id, "reply_markup": {"inline_keyboard": []}},
+        )
 
     def set_my_commands(self, commands: list) -> None:
         self._api("setMyCommands", {"commands": commands})

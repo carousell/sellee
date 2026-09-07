@@ -262,6 +262,19 @@ class ChannelMixin:
         rows = self._db.query("SELECT COUNT(*) AS n FROM channel_inbox WHERE status = 'pending'")
         return rows[0]["n"]
 
+    def count_unsettled_inbox(self) -> int:
+        """How many of the seller's messages the agent still owes an answer for — waiting to be
+        routed, or claimed by a pass that has not settled.
+
+        Both halves count, because from the seller's side they are one thing ("you haven't got back
+        to me yet") and neither is visible anywhere else: a claimed row leaves the pending count the
+        moment a pass takes it, and a pass held by a pause never settles at all. This is what
+        `/status` and `/catchup` report, so silence is never mistaken for nothing-happening."""
+        rows = self._db.query(
+            "SELECT COUNT(*) AS n FROM channel_inbox WHERE status IN ('pending', 'claimed')"
+        )
+        return rows[0]["n"]
+
     def recent_transcript(self, limit: int) -> list[TranscriptEntry]:
         """The recent conversational window: inbound inbox rows (any status) interleaved with the
         agent's own outbound notices, ordered by the local clock, the most-recent `limit` entries

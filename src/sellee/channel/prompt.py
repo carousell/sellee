@@ -18,12 +18,16 @@ from sellee.proc_tree import PASS_PROMPT_MARKER
 TRANSCRIPT_WINDOW_LIMIT = 40
 TRANSCRIPT_CHAR_CAP = 8000
 
+# Only reachable with no channel bound, which no channel pass can be — rows arrive through a bound
+# provider. It exists so a caller with no row to read from still produces a true sentence.
+DEFAULT_CHANNEL_NAME = "chat"
+
 # The task framing: who is talking, what jobs are on the table, and how to pick between them. This
 # is the residue of the legacy intent gate — the routing that survived once the choreography around
 # it became code.
 _INSTRUCTIONS = (
-    "The seller is messaging you over Telegram. Read the messages below and handle them, replying "
-    "with send_message.\n"
+    "The seller is messaging you over {channel_name}. Read the messages below and handle them, "
+    "replying with send_message.\n"
     "What they'll want, in practice: listing something new (follow the listing flow), answering a "
     "question you escalated to them, changing a setting, or asking how things stand. Work out "
     'which from what they actually wrote — a short reply like "yes" or "80" almost always '
@@ -118,13 +122,21 @@ def _format_pending(rows: list) -> str:
 
 
 def build_channel_prompt(
-    claimed_rows: list, transcript: list, settings_block: str | None = None
+    claimed_rows: list,
+    transcript: list,
+    settings_block: str | None = None,
+    channel_name: str = DEFAULT_CHANNEL_NAME,
 ) -> str:
     """Assemble the pass prompt from the claimed pending rows and the recent-transcript window, plus
     a compact settings block (the LLM's near-context vocabulary for what it can propose). History
     and the work-to-do are clearly separated so a follow-up like "yes, do that" resolves against the
-    prior turn without confusing it for a new instruction."""
-    parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS]
+    prior turn without confusing it for a new instruction.
+
+    `channel_name` is read off the bound row rather than written in: this prompt runs on every
+    provider, and a Discord seller told they are on Telegram gets told it back — the agent writes
+    "I'll message you on Telegram" to someone who has never used it.
+    """
+    parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS.format(channel_name=channel_name)]
     if settings_block:
         parts.append(settings_block)
     claimed_media = {path for row in claimed_rows for path in (row.get("media_paths") or [])}

@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import threading
 
+import pytest
+
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import secrets, settings
 from sellee.channel import fastpaths
@@ -15,7 +17,8 @@ from sellee.channel.fastpaths import (
     CB_PAUSE,
     CB_RESUME,
     CB_SKIP_CTA,
-    CB_WATCH,
+    CB_WATCH_OFF,
+    CB_WATCH_ON,
     WATCH_OFF_LABEL,
     WATCH_ON_LABEL,
 )
@@ -33,6 +36,21 @@ def _poller(store, bus, api):
         client_factory=lambda token: TelegramClient(FAKE_TOKEN, api_base=api.base_url),
         poll_timeout=0,
     )
+
+
+def _buttons(msg) -> list:
+    """Every button on a sent message, flattened. Which row a button lands on is a legibility
+    decision owned by channel/controls.py, so these tests read the keyboard flat and assert on the
+    token — an index into row 0 pinned the packing as a side effect of testing something else."""
+    return [b for row in msg["reply_markup"]["inline_keyboard"] for b in row]
+
+
+def _tokens(msg) -> list:
+    return [b["callback_data"] for b in _buttons(msg)]
+
+
+def _label_for(msg, token) -> str | None:
+    return next((b["text"] for b in _buttons(msg) if b["callback_data"] == token), None)
 
 
 def _bound(store):
@@ -136,13 +154,13 @@ def test_sellee_card_shows_state_and_control_row(store, bus, xdg_tmp) -> None:
     assert "where things stand" in msg["text"]
     assert "plain language" in msg["text"]  # the free-text invitation, not a numbered menu
     assert "Marketplaces I can work for you" in msg["text"]
-    # The row is the three agent controls then one per marketplace; only the leading three are
-    # pinned — the connector buttons have their own tests.
-    buttons = msg["reply_markup"]["inline_keyboard"][0]
-    assert [b["callback_data"] for b in buttons][:3] == [
+    # The spec is the three agent controls then one per marketplace; only the leading three are
+    # pinned — the connector buttons have their own tests. Read flat rather than per row: how the
+    # buttons pack onto rows is a legibility decision (channel/controls.py) and not this test's.
+    assert _tokens(msg)[:3] == [
         CB_PAUSE,
         CB_NEEDS_ME,
-        CB_WATCH,
+        CB_WATCH_ON,
     ]  # active -> Pause toggle; watch off -> the button offers to watch
 
 
@@ -223,16 +241,62 @@ def test_watch_command_toggles_back_off(store, bus, xdg_tmp) -> None:
     assert settings.get(store, "watch_browser") is False
 
 
-def test_watch_tap_flips_whatever_is_set_when_it_lands(store, bus, xdg_tmp) -> None:
-    # The button carries no value, so a tap from old scrollback flips the live state rather than
-    # restoring the one that was true when the message was sent.
+def test_watch_tap_applies_the_value_its_label_promised(store, bus, xdg_tmp) -> None:
+    # The button carries its own intent, so it does what it says whenever it lands.
     _bound(store)
     settings.set_now(store, bus, key="watch_browser", raw_value=True)
     with FakeTelegramAPI() as api:
-        api.inject_tap(CB_WATCH)
+        api.inject_tap(CB_WATCH_OFF)
         _poller(store, bus, api).tick()
         assert api.answered == ["cbq1"]  # the spinner was cleared
     assert settings.get(store, "watch_browser") is False
+
+
+def test_a_stale_watch_tap_re_acks_instead_of_flipping_the_state_back(store, bus, xdg_tmp) -> None:
+    """The reported bug, from the field. These buttons live in the scrollback forever, so a seller
+    tapping "🌙 Work in background" on a card from an hour ago must get what it says — not the
+    reverse because the state moved underneath it.
+
+    It used to be a valueless toggle: two taps 71 minutes apart, on two different messages, turned
+    watch mode ON and then back off, and the seller reported the button as not working."""
+    _bound(store)
+    settings.set_now(store, bus, key="watch_browser", raw_value=False)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_WATCH_OFF)  # a stale card offering what is already true
+        _poller(store, bus, api).tick()
+        text = api.outbox[-1]["text"]
+
+    assert settings.get(store, "watch_browser") is False  # never flipped on
+    assert "already" in text.lower()
+
+
+def test_a_stale_watch_on_tap_is_idempotent_too(store, bus, xdg_tmp) -> None:
+    _bound(store)
+    settings.set_now(store, bus, key="watch_browser", raw_value=True)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_WATCH_ON)
+        _poller(store, bus, api).tick()
+        text = api.outbox[-1]["text"]
+
+    assert settings.get(store, "watch_browser") is True
+    assert "already" in text.lower()
+
+
+def test_the_watch_button_offers_the_state_the_seller_is_not_in(store, bus, xdg_tmp) -> None:
+    """Each label names what tapping does, and now the token agrees with it — so the pair can be
+    read off one another rather than one being a promise the other may break."""
+    _bound(store)
+    with FakeTelegramAPI() as api:
+        api.inject_tap(CB_NEEDS_ME)
+        _poller(store, bus, api).tick()
+        off_state = api.outbox[-1]
+        api.inject_tap(CB_WATCH_ON)
+        _poller(store, bus, api).tick()
+        on_state = api.outbox[-1]
+
+    assert _label_for(off_state, CB_WATCH_ON) == WATCH_ON_LABEL
+    assert _label_for(off_state, CB_WATCH_OFF) is None  # only ever one of the two
+    assert _label_for(on_state, CB_WATCH_OFF) == WATCH_OFF_LABEL
 
 
 def test_watch_button_confirms_once_and_offers_the_way_back(store, bus, xdg_tmp) -> None:
@@ -241,21 +305,11 @@ def test_watch_button_confirms_once_and_offers_the_way_back(store, bus, xdg_tmp)
     # undo: its label now offers the opposite.
     _bound(store)
     with FakeTelegramAPI() as api:
-        api.inject_tap(CB_WATCH)
+        api.inject_tap(CB_WATCH_ON)
         _poller(store, bus, api).tick()
-        buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
+        msg = api.outbox[-1]
     assert store.list_queued_notices() == []
-    # Index rather than [-1]: the connector buttons follow the three agent controls.
-    assert buttons[2] == {"text": WATCH_OFF_LABEL, "callback_data": CB_WATCH}
-
-
-def test_control_row_watch_button_reflects_the_setting(store, bus, xdg_tmp) -> None:
-    _bound(store)
-    with FakeTelegramAPI() as api:
-        api.inject_tap(CB_NEEDS_ME)
-        _poller(store, bus, api).tick()
-        buttons = api.outbox[-1]["reply_markup"]["inline_keyboard"][0]
-    assert buttons[2] == {"text": WATCH_ON_LABEL, "callback_data": CB_WATCH}  # off -> offers on
+    assert _label_for(msg, CB_WATCH_OFF) == WATCH_OFF_LABEL
 
 
 def test_watch_state_is_on_the_sellee_card_at_its_default(store, bus, xdg_tmp) -> None:
@@ -283,3 +337,74 @@ def test_skip_cta_tap_is_idempotent(store, bus, xdg_tmp) -> None:
         p.tick()
         assert len(api.outbox) == 2  # re-acked, harmless
     assert store.count_pending_inbox() == 0
+
+
+# --- buttons from an older release --------------------------------------------------------------
+
+
+def test_a_retired_button_changes_nothing_and_hands_back_a_working_one(store, bus, xdg_tmp) -> None:
+    """Retiring a token does not retire the buttons already sent — they sit in the scrollback
+    forever, and the seller cannot tell an old one by looking. `watch` was the valueless toggle
+    replaced by CB_WATCH_ON/CB_WATCH_OFF; every card carrying it is still in the chat.
+
+    Its intent is genuinely unrecoverable — the token never said which way it meant, which is the
+    bug it was retired for — so the only honest answer is to change nothing and offer live buttons.
+    """
+    _bound(store)
+    settings.set_now(store, bus, key="watch_browser", raw_value=False)
+    with FakeTelegramAPI() as api:
+        api.inject_tap("watch")
+        _poller(store, bus, api).tick()
+        msg = api.outbox[-1]
+
+    assert settings.get(store, "watch_browser") is False  # nothing flipped
+    assert "older version" in msg["text"]
+    assert _label_for(msg, CB_WATCH_ON) == WATCH_ON_LABEL  # a live button, right there
+    assert store.has_active_channel_pass() is False  # and no LLM pass spent on a dead token
+    assert store.count_pending_inbox() == 0
+
+
+# --- every tapped keyboard is spent, so every reply has to leave a way forward -------------------
+
+# A tap takes the buttons off the message it was on (poller._spend_the_keyboard): a tapped row's
+# labels were rendered from state the tap has just changed, so what is left on screen is stale. That
+# makes "what does the seller hold afterwards" a property worth pinning rather than assuming.
+#
+# Most fast paths answer it by replying with a freshly rendered control row. These do not, and each
+# has a reason — a decision with nothing left to decide, or a lane that re-offers its own button on
+# the notice that follows. A NEW token landing here without a reason is the bug this catches.
+_NO_CONTROLS_ON_PURPOSE = {
+    fastpaths.CB_CONNECT_MARKET: "the connect lane re-offers Sign in / Check again on its notice",
+    fastpaths.CB_CONNECT_PROBE: "same lane, same notice",
+    fastpaths.CB_SURVEY_YES: "the adopt decision is made; a re-ask comes from the survey lane",
+    fastpaths.CB_SURVEY_NO: "the adopt decision is made",
+    fastpaths.CB_SKIP_CTA: "one-shot, and it is the seller declining to be asked again",
+}
+_REF_FOR = {
+    fastpaths.CB_ADD_MARKET: "fb",
+    fastpaths.CB_REMOVE_MARKET: "carousell",
+    fastpaths.CB_CONNECT_MARKET: "fb",
+    fastpaths.CB_CONNECT_PROBE: "fb",
+    fastpaths.CB_SURVEY_YES: "fb",
+    fastpaths.CB_SURVEY_NO: "fb",
+}
+
+
+@pytest.mark.parametrize(
+    "token", sorted(fastpaths._FAST_PATH_CALLBACKS | fastpaths.RETIRED_CALLBACKS)
+)
+def test_a_tapped_button_always_leaves_the_seller_holding_a_live_one(store, bus, token) -> None:
+    store.set_seller_config_section("basics", {"region": "SG"})
+    event = {
+        "kind": "action",
+        "text": token,
+        "payload": {"ref": _REF_FOR.get(token), "choice": token},
+    }
+
+    _text, controls = fastpaths.handle_fast_path(store, bus, event)
+
+    assert controls or token in _NO_CONTROLS_ON_PURPOSE, (
+        f"{token} strips its keyboard on tap and replies with none — the seller is left with "
+        "nothing to tap. Reply with _control_spec(store), or add it to _NO_CONTROLS_ON_PURPOSE "
+        "with the reason it is safe."
+    )
