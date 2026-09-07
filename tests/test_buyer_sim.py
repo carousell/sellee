@@ -162,6 +162,24 @@ def test_routes_are_absent_unless_the_simulator_is_enabled(bus, store, disabled,
         server.stop()
 
 
+def test_a_disabled_flag_and_an_older_build_are_told_apart(bus, store, disabled, xdg_tmp):
+    """Both faults answer 404, and `sellee buyer` distinguishes them by the body alone: a build
+    without the simulator never registers the route, so it falls through to the router's generic
+    reply. Getting this wrong sends someone hunting for a flag on a daemon that has no simulator
+    in it at all, so the two strings are a contract rather than cosmetics.
+    """
+    server = _server(bus, store)
+    try:
+        _, disabled_body = _post(server, "/control/sim-inbound", {"item_id": "x", "text": "hi"})
+        _, absent_body = _post(server, "/control/no-such-route", {})
+    finally:
+        server.stop()
+
+    assert disabled_body["error"] == "buyer simulator is not enabled"
+    assert absent_body["error"] == "not found"
+    assert disabled_body["error"] != absent_body["error"]
+
+
 def test_inbound_route_records_the_message_and_queues_a_reply(bus, store, enabled, xdg_tmp):
     """Queued directly rather than left to the reply lane: the lane's cooldown and pacing gate
     exist to look human on a real marketplace and only get in the way of a rehearsal."""

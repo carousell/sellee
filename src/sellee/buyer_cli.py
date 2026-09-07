@@ -34,13 +34,29 @@ def run(args: argparse.Namespace) -> int:
         )
         return 1
     if status == 404:
-        print(
-            "sellee: this daemon was not started with the buyer simulator enabled. Restart it "
-            "with `SELLEE_BUYER_SIM=1 sellee daemon start`.\n"
-            "  While it is on, replies to real marketplace threads are refused rather than "
-            "delivered — it is a rehearsal mode, not something to leave running.",
-            file=sys.stderr,
-        )
+        # Two very different faults both answer 404, and telling them apart is the difference
+        # between a one-word fix and an afternoon: the route exists but the flag is off, or the
+        # daemon is a build that has no simulator in it at all. The handlers name themselves when
+        # they refuse, so the body is what separates them — the router's generic "not found" means
+        # the route was never registered.
+        if body.get("error") == "buyer simulator is not enabled":
+            print(
+                "sellee: this daemon is running the simulator's code but was not started with it "
+                "enabled.\n"
+                "  Restart the daemon with SELLEE_BUYER_SIM set — see `make buyer-daemon`.\n"
+                "  While it is on, replies to real marketplace threads are refused rather than "
+                "delivered; it is a rehearsal mode, not something to leave running.",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                "sellee: this daemon has no buyer simulator in it — the route is not registered, "
+                "so it is an older build rather than a disabled flag.\n"
+                "  `sellee daemon start` runs the installed release, which will not have it; the "
+                "simulator has to be the daemon you are developing.\n"
+                "  Stop that daemon and run one from this checkout: `make buyer-daemon`.",
+                file=sys.stderr,
+            )
         return 1
     if status != 200:
         print(f"sellee: {body.get('error', f'HTTP {status}')}", file=sys.stderr)
