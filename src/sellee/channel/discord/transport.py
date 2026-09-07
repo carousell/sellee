@@ -34,6 +34,9 @@ from sellee.channel import controls
 USER_AGENT = f"DiscordBot (https://github.com/carousell/sellee, {__version__})"
 
 MAX_TEXT_LEN = 2000
+# Message flag 1<<2: tells Discord not to fetch URLs to build link embeds.
+_SUPPRESS_EMBEDS = 1 << 2
+
 _ACTION_ROW = 1
 _BUTTON = 2
 _BUTTON_STYLE_PRIMARY = 1
@@ -204,7 +207,11 @@ class DiscordClient:
         chunks = chunk_text(text)
         message_id = None
         for i, chunk in enumerate(chunks):
-            body: dict = {"content": chunk}
+            # SUPPRESS_EMBEDS, for the reason Telegram's preview is disabled: Discord
+            # fetches URLs to build an embed, and that fetch redeems a single-use link — a
+            # payout-setup link, a sign-in link, a ship or confirm magic link — before the
+            # seller can use it.
+            body: dict = {"content": chunk, "flags": _SUPPRESS_EMBEDS}
             if components is not None and i == len(chunks) - 1:
                 body["components"] = build_components(components)
             result = self._request("POST", f"/channels/{channel_id}/messages", body)

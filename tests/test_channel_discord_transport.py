@@ -133,6 +133,18 @@ def test_send_message_records_content_and_components() -> None:
         assert api.outbox[-1]["components"][0]["components"][0]["custom_id"] == "pause"
 
 
+def test_link_embeds_are_suppressed_on_every_chunk() -> None:
+    """Discord fetches URLs to build an embed, and this channel carries single-use links — a
+    Stripe payout-setup link, a carousell.ai sign-in link, a ship or confirm magic link. That
+    fetch redeems the link before the seller can use it. Asserted per chunk, because a long
+    message is split and a link can land in any of them."""
+    with FakeDiscordAPI() as api:
+        _client(api).send_message(CHANNEL_ID, "a" * 4500)
+        assert len(api.outbox) == 3
+        for sent in api.outbox:
+            assert sent["flags"] & (1 << 2), "SUPPRESS_EMBEDS must be set"
+
+
 def test_components_never_exceed_discords_action_row_cap() -> None:
     """Discord rejects an action row holding a sixth button — the whole message, not just the
     button. The marketplace picker is as long as the seller's enabled list, so this has to wrap
