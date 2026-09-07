@@ -202,7 +202,17 @@ class TelegramClient:
         chunks = chunk_text(text)
         message_ids: list = []
         for i, chunk in enumerate(chunks):
-            params = {"chat_id": chat_id, "text": chunk}
+            # Link previews off, always. Telegram builds a preview card by fetching every
+            # URL in the message from its own servers, and much of what this channel carries
+            # is single-use: a Stripe payout-setup link, a carousell.ai sign-in link, a ship
+            # or confirm magic link. That fetch redeems the link, so the seller taps one that
+            # has already been spent and is told it expired. A preview adds nothing to any of
+            # these anyway — they are all one-time URLs with nothing to preview.
+            params = {
+                "chat_id": chat_id,
+                "text": chunk,
+                "link_preview_options": {"is_disabled": True},
+            }
             if reply_markup is not None and i == len(chunks) - 1:
                 params["reply_markup"] = reply_markup
             result = self._api("sendMessage", params)

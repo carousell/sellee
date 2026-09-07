@@ -174,6 +174,7 @@ class FakeTelegramAPI:
                                 "chat_id": p.get("chat_id"),
                                 "text": p.get("text", ""),
                                 "reply_markup": p.get("reply_markup"),
+                                "link_preview_options": p.get("link_preview_options"),
                             }
                         )
                     return self._reply(

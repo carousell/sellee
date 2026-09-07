@@ -182,6 +182,20 @@ def test_send_message_chunks_and_keyboard_on_last() -> None:
         assert api.outbox[1]["reply_markup"] == kb
 
 
+def test_link_previews_are_disabled_on_every_chunk() -> None:
+    """Telegram builds a preview by fetching every URL from its own servers, and this channel
+    carries single-use links — a Stripe payout-setup link, a carousell.ai sign-in link, a ship or
+    confirm magic link. That fetch redeems the link, so the seller taps one already spent and is
+    told it expired. Asserted per chunk, because a long message is split and a link can land in
+    any of them."""
+    with FakeTelegramAPI() as api:
+        client = TelegramClient(FAKE_TOKEN, api_base=api.base_url)
+        client.send_message(CHAT_ID, "a" * 5000)
+        assert len(api.outbox) == 2
+        for sent in api.outbox:
+            assert sent["link_preview_options"] == {"is_disabled": True}
+
+
 def test_get_updates_and_actions() -> None:
     with FakeTelegramAPI() as api:
         api.inject_text("hello")
