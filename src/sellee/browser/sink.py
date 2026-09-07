@@ -48,10 +48,12 @@ _SEND_BUTTON = market_adapters.SEND_BUTTON
 _SEND_KEY = "Enter"
 
 # How long the read-back keeps looking for its own bubble, and how often. The window is generous
-# against a slow chat round-trip and still short against the pacing delay between two sends, so a
-# poll can never be what makes a thread look stalled. Both are only ever spent on a send that has
-# not confirmed yet — a bubble already on the page returns on the first read.
-_VERIFY_WINDOW_SEC = 6.0
+# against a slow chat round-trip and still short against the stale-intent grace, so a poll can never
+# be what makes a thread look stalled. Both are only ever spent on a send that has not confirmed yet
+# — a bubble already on the page returns on the first read — but the whole window is spent holding
+# the browser exclusively, so a market's other lanes wait it out. The default here is the floor an
+# operator knob raises or lowers; `config.send_verify_window_sec` is what the daemon passes.
+_VERIFY_WINDOW_SEC = 20.0
 _VERIFY_POLL_SEC = 1.0
 
 

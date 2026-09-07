@@ -99,6 +99,12 @@ class Config:
     # Consecutive failed marketplace reads before one needs-me escalation. A market that cannot be
     # seen must never look like a market with no news.
     browser_blind_after: int = 3
+    # How long the send read-back keeps looking for its own bubble before giving up and calling the
+    # send unverified. A chat that commits the message to its server and re-renders afterwards is
+    # slower than it looks, and every send that runs out of window here becomes work for the settle
+    # lane and, eventually, a question for the seller. Held well under the stale-intent grace so a
+    # send still being confirmed can never look like a stalled one.
+    send_verify_window_sec: float = 20.0
     # Pacing knobs. The cap is per marketplace account per hour; the delay pairs are the
     # post-go anti-automation jitter ranges ([min, max] seconds — unattended vs attended).
     # Stored already clamped to the hard ceilings above.
@@ -304,6 +310,14 @@ def _validate(raw: dict) -> Config:
         if not _is_real_int(every) or every < 1:
             raise ConfigError(f"inbox_full_sweep_every must be an integer >= 1, got {every!r}")
         values["inbox_full_sweep_every"] = every
+
+    if "send_verify_window_sec" in raw:
+        window = raw["send_verify_window_sec"]
+        if not _is_real_number(window) or window < 0:
+            raise ConfigError(
+                f"send_verify_window_sec must be a non-negative number, got {window!r}"
+            )
+        values["send_verify_window_sec"] = float(window)
 
     if "browser_blind_after" in raw:
         blind = raw["browser_blind_after"]
