@@ -160,6 +160,12 @@ def _build_parser() -> argparse.ArgumentParser:
         help="open the rendered web tail in a browser (needs the daemon)",
     )
 
+    # Rehearsal surface: only useful against a daemon started with SELLEE_BUYER_SIM=1, which the
+    # command itself explains when that is not the case.
+    sub.add_parser(
+        "buyer", help="open the buyer simulator (daemon must run with SELLEE_BUYER_SIM=1)"
+    )
+
     pass_cmd = sub.add_parser("pass", help="pass lifecycle")
     psub = pass_cmd.add_subparsers(dest="pass_command", required=True)
     prun = psub.add_parser("run", help="enqueue a pass via the running daemon")
@@ -311,6 +317,11 @@ def main(argv: list[str] | None = None) -> int:
         from sellee import logs_cli
 
         return logs_cli.run(args)
+
+    if args.command == "buyer":
+        from sellee import buyer_cli
+
+        return buyer_cli.run(args)
 
     if args.command == "pass":
         from sellee import pass_cli
