@@ -59,7 +59,7 @@ _NO_MARKET_SELLER_GUIDANCE = (
     "carousell.ai does not know which country the seller sells from, and it decides which "
     "account pays them out, so no checkout link can be minted. Ask the seller whether they sell "
     "in Singapore or the United States, tell them it is permanent once their payout account "
-    "exists, and once they answer call this tool again"
+    "exists, record their answer with carousell_ai_set_market, and then call this tool again"
 )
 _NO_MARKET_REPLY_GUIDANCE = (
     "carousell.ai does not know which country the seller sells from, so no checkout link can be "
@@ -247,6 +247,50 @@ register(
         "no longer needs it.",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_create_signin_link,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
+    )
+)
+
+
+_MARKET_ALREADY_SETTLED_CLAUSE = "already has a Stripe account"
+
+
+def _set_market(ctx: ToolContext, params: dict) -> dict:
+    # The schema's enum is the gate: a near-miss is refused before it reaches here rather than
+    # normalised into a guess, because the wrong market is permanent once payouts exist.
+    market = str(params["market"])
+
+    rail = _rail(ctx)
+    try:
+        recorded = rail.set_seller_market(market)
+    except RailToolError as exc:
+        if _MARKET_ALREADY_SETTLED_CLAUSE in str(exc):
+            raise ToolError(
+                "the seller's payout account already exists, so their market is permanent and "
+                "cannot be changed here — escalate to a human"
+            ) from exc
+        raise ToolError(str(exc)) from exc
+    except RailError as exc:
+        raise ToolError(str(exc)) from exc
+
+    return {"market": recorded["market"]}
+
+
+register(
+    ToolSpec(
+        name="carousell_ai_set_market",
+        description="Record which country the seller sells from, after they have told you. "
+        "Needed only when carousell.ai could not work it out and refused to mint a checkout "
+        "link. `market` is SG (Singapore) or US (United States) — ask the seller, never guess: "
+        "it decides which account holds and pays out their money, and it is permanent once "
+        "their payout account exists. Create the checkout link again once this succeeds.",
+        input_schema={
+            "type": "object",
+            "properties": {"market": {"type": "string", "enum": ["SG", "US"]}},
+            "required": ["market"],
+            "additionalProperties": False,
+        },
+        handler=_set_market,
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )

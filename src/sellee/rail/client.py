@@ -216,6 +216,17 @@ class RailClient:
             raise RailToolError("create_promotion_url returned no promotion URL")
         return {"promotion_url": url}
 
+    def set_seller_market(self, market: str) -> dict:
+        """Record which market the seller sells in, for an account the rail could not place.
+        Returns {market} as the rail canonicalised it. A seller who already has a payout account
+        surfaces as RailToolError — the market is permanent by then, and interpreting that refusal
+        is the caller's job."""
+        result = self.call_tool("set_seller_market", {"market": market})
+        recorded = (result.get("market") or "").strip()
+        if not recorded:
+            raise RailToolError("set_seller_market returned no market")
+        return {"market": recorded}
+
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
         200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""

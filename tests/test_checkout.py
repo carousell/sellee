@@ -34,16 +34,24 @@ _NO_MARKET_REFUSAL = (
 
 
 class FakeRail:
-    def __init__(self, *, url=_URL, checkout_error=None):
+    def __init__(self, *, url=_URL, checkout_error=None, market_error=None):
         self.url = url
         self.calls = 0
         self._checkout_error = checkout_error
+        self._market_error = market_error
+        self.markets_set: list[str] = []
 
     def create_checkout(self, args):
         self.calls += 1
         if self._checkout_error is not None:
             raise self._checkout_error
         return {"checkout_url": self.url}
+
+    def set_seller_market(self, market):
+        if self._market_error is not None:
+            raise self._market_error
+        self.markets_set.append(market)
+        return {"market": market}
 
 
 def _published_item(store, *, list_price=100.0, floor=None):
@@ -244,6 +252,52 @@ def test_missing_market_never_tells_the_buyer_about_the_seller(make_ctx, store) 
 def test_missing_market_records_nothing_so_a_retry_mints_fresh(make_ctx, store) -> None:
     _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_NO_MARKET_REFUSAL))
     assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0
+
+
+def test_missing_market_names_the_tool_that_records_the_answer(make_ctx, store) -> None:
+    """Without this the pass is told to ask and then retry, and the retry fails identically —
+    the loop the guidance exists to prevent."""
+    message = _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_NO_MARKET_REFUSAL))
+    assert "carousell_ai_set_market" in message
+
+
+def test_missing_market_never_names_the_market_tool_to_a_reply_pass(make_ctx, store) -> None:
+    message = _refused(make_ctx, store, TIER_PASS_REPLY, RailToolError(_NO_MARKET_REFUSAL))
+    assert "carousell_ai_set_market" not in message
+
+
+def test_set_market_records_the_sellers_answer(make_ctx, store) -> None:
+    rail = FakeRail()
+    res = dispatch("carousell_ai_set_market", {"market": "US"}, _ctx(make_ctx, rail))
+    assert res["market"] == "US"
+    assert rail.markets_set == ["US"]
+
+
+def test_set_market_refuses_a_market_we_do_not_run(make_ctx, store) -> None:
+    """A near-miss must not be normalised into a guess: the wrong market puts the seller's money
+    on a platform that can never pay them, permanently. The schema enum refuses before the rail
+    is touched, so the pass is told the two legal values rather than half-succeeding."""
+    rail = FakeRail()
+    with pytest.raises(ToolError, match=r"must be one of"):
+        dispatch("carousell_ai_set_market", {"market": "MY"}, _ctx(make_ctx, rail))
+    assert rail.markets_set == []
+
+
+def test_set_market_after_onboarding_escalates_rather_than_retrying(make_ctx, store) -> None:
+    rail = FakeRail(market_error=RailToolError("this seller already has a Stripe account, so ..."))
+    with pytest.raises(ToolError, match="escalate") as exc:
+        dispatch("carousell_ai_set_market", {"market": "US"}, _ctx(make_ctx, rail))
+    assert "permanent" in str(exc.value)
+
+
+def test_set_market_is_invisible_to_the_buyer_facing_tier() -> None:
+    """The reply tier is talking to a buyer; it must never touch the seller's account state."""
+    from sellee.tools.registry import tools_for_tier
+
+    reply_tools = {spec.name for spec in tools_for_tier(TIER_PASS_REPLY)}
+    assert "carousell_ai_set_market" not in reply_tools
+    channel_tools = {spec.name for spec in tools_for_tier(TIER_PASS_CHANNEL)}
+    assert "carousell_ai_set_market" in channel_tools
 
 
 def test_another_rail_tool_error_keeps_the_generic_wrap(make_ctx, store) -> None:
