@@ -11,7 +11,7 @@
 
 Sellee is a marketplace agent. It helps you list items on peer-to-peer marketplaces, negotiate with buyers, and close sales. It runs locally on your machine.
 
-- **Supported marketplaces**: Carousell
+- **Supported marketplaces**: Carousell, Facebook Marketplace
 - **Interact with Sellee using**: Telegram, Discord, Claude Code
 
 ## Features
@@ -62,4 +62,8 @@ sellee uninstall --preserve-data   # --preserve-data will uninstall Sellee but k
 You interact with Sellee through **control surfaces** — chat apps like Telegram, and agent harnesses like Claude Code. Behind those sits the **Sellee daemon**, a single local process holding all of the core logic: a SQLite store, an event bus for scheduling, and an MCP server that everything the agent does goes through. The **agent harness and browser** are the only components outside the daemon; the harness drives the browser with Playwright, and the browser is where you are signed into your **marketplaces** and where buyers interact with your listings. That browser is a dedicated Chrome profile driven over loopback only — see [the trust boundary](docs/browser-layer.md#trust-boundary) for what that does and does not protect.
 
 For the full details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
+## License
+
+Sellee is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted under the same license.
 
