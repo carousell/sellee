@@ -1,45 +1,35 @@
 #!/usr/bin/env bash
 # Regenerate all diagrams under docs/. Entry point: `make diagrams`.
 #
-# Per-diagram handling lives here. Currently only pikchr diagrams exist:
-# each is rendered to PNG (the committed artifact — font-stable across
-# devices, unlike SVG whose text rendering varies with the viewer's fonts).
-# The intermediate SVG is piped straight into the converter, never written
-# to disk.
+# Per-diagram handling lives here. Currently only d2 diagrams exist: each is
+# rendered to PNG (the committed artifact — font-stable across devices, unlike
+# SVG whose text rendering varies with the viewer's fonts). d2 rasterizes
+# natively, so no intermediate SVG or external converter is involved.
 set -euo pipefail
 
 cd "$(dirname "$0")"
 
-# rsvg-convert (librsvg) is required for SVG -> PNG; not auto-installed.
-if ! command -v rsvg-convert >/dev/null 2>&1; then
-	echo "error: rsvg-convert not found in PATH — install librsvg and re-run" >&2
+# d2 with the TALA layout engine is required; not auto-installed. The diagrams
+# rely on TALA's fixed positioning (top/left), which the bundled dagre/elk
+# engines ignore. See https://d2lang.com/tour/install.
+if ! command -v d2 >/dev/null 2>&1; then
+	echo "error: d2 not found in PATH — install d2 and re-run" >&2
+	exit 1
+fi
+if ! d2 layout 2>/dev/null | grep -q '^tala '; then
+	echo "error: d2 has no TALA layout engine — install a TALA-enabled d2 and re-run" >&2
 	exit 1
 fi
 
-# pikchr is a single-file C program; build and install it if missing.
-if ! command -v pikchr >/dev/null 2>&1; then
-	echo "pikchr not found in PATH; building from source..." >&2
-	tmp=$(mktemp -d)
-	trap 'rm -rf "$tmp"' EXIT
-	curl -fsSL \
-		"https://pikchr.org/home/raw/157276b22395ca1423bce1532e07d56fc3597cc813bf5cd46294c32181bbe1dc?at=pikchr.c" \
-		> "$tmp/pikchr.c"
-	gcc -O2 -DPIKCHR_SHELL -o "$tmp/pikchr" "$tmp/pikchr.c" -lm
-	mv "$tmp/pikchr" /usr/local/bin/pikchr
-	echo "installed pikchr to /usr/local/bin/pikchr" >&2
-fi
-
-# render_pikchr <basename> <png-width-px>
+# render_d2 <basename>
 #
-# PNG width is per-diagram deliberately — diagrams differ in size and detail,
-# so a global scale isn't worth generalizing yet. rsvg-convert renders the
-# vector directly at the target width (height follows the aspect ratio).
-render_pikchr() {
-	local name=$1 width=$2
-	pikchr --svg-only "$name.pikchr" \
-		| rsvg-convert --width "$width" --background-color white -o "$name.png"
+# d2 renders PNGs at 2x the diagram's nominal pixel size, which suits
+# high-DPI displays; --pad trims d2's default 100px margin.
+render_d2() {
+	local name=$1
+	d2 --layout=tala --pad 20 "$name.d2" "$name.png"
 	optimize_png "$name.png"
-	echo "rendered $name.png (${width}px wide, $(du -h "$name.png" | cut -f1))"
+	echo "rendered $name.png ($(du -h "$name.png" | cut -f1))"
 }
 
 # PNG optimization; neither tool is auto-installed. pngquant first (palette
@@ -60,4 +50,4 @@ optimize_png() {
 	fi
 }
 
-render_pikchr architecture-master 800
+render_d2 architecture-master
