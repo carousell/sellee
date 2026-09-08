@@ -65,7 +65,8 @@ dist:
 	@mkdir -p $(STAGE)
 	@cp -R bin src $(STAGE)/
 	@cp README.md $(STAGE)/ 2>/dev/null || true
-	@cp LICENSE $(STAGE)/ 2>/dev/null || true
+# Not conditional: a release artifact without its license terms should fail to build, not ship.
+	@cp LICENSE NOTICE $(STAGE)/
 	@cp setup $(STAGE)/
 # The runtime description travels with the release: without these a version cannot install its
 # own dependencies. Kept in step with VERSION_FILES in installer/materialize.py, which a test pins.

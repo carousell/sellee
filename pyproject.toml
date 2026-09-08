@@ -1,10 +1,14 @@
 [build-system]
-requires = ["setuptools>=61"]
+# >=77 is the first setuptools that understands PEP 639's SPDX license string below.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "sellee"
 description = "Local single-tenant agent that sells/buys on P2P marketplaces from the user's own machine"
+license = "Apache-2.0"
+# Both ride along in any wheel/sdist build; tests/guard/test_license.py keeps this honest.
+license-files = ["LICENSE", "NOTICE"]
 # uv pins the interpreter (see .python-version), so this floor describes the code, not a
 # precondition a user's machine could fail to meet.
 requires-python = ">=3.14"

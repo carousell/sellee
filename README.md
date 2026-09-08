@@ -11,7 +11,7 @@
 
 Sellee is a marketplace agent. It helps you list items on peer-to-peer marketplaces, negotiate with buyers, and close sales. It runs locally on your machine.
 
-- **Supported marketplaces**: Carousell
+- **Supported marketplaces**: Carousell, Facebook Marketplace
 - **Interact with Sellee using**: Telegram, Discord, Claude Code
 
 ## Features
@@ -63,3 +63,6 @@ You interact with Sellee through **control surfaces** — chat apps like Telegra
 
 For the full details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+## License
+
+Sellee is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted under the same license.

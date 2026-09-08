@@ -375,8 +375,6 @@ def test_the_release_archive_carries_what_a_version_directory_needs() -> None:
     makefile = (Path(__file__).resolve().parents[1] / "Makefile").read_text()
     packed = " ".join(line for line in makefile.splitlines() if line.strip().startswith("@cp"))
     for name in materialize.VERSION_FILES:
-        if name == "LICENSE":
-            continue  # copied conditionally; absent from the repo today
         assert name in packed, f"{name} is staged into a version but not packed by `make dist`"
     for name in materialize.VERSION_DIRS:
         assert name in packed, name
