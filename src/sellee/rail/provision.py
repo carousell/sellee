@@ -31,6 +31,19 @@ def _normalize_region(region: str | None) -> str:
     return region.strip().upper()
 
 
+def _refusal(exc) -> str:
+    """The rail's own words when it refuses, falling back to the status code.
+    A 400 is usually actionable — an unserved country — and "HTTP 400" is not."""
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+        message = str(body.get("error") or "").strip()
+    except Exception:
+        message = ""
+    if not message:
+        return f"guests API returned HTTP {exc.code}"
+    return message[:400]
+
+
 def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAULT_TIMEOUT_SEC):
     """POST the guests endpoint and return the validated response dict. Rejects a malformed key
     (whitespace/control chars) rather than storing something that would clobber the secret file."""
@@ -50,7 +63,7 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise ProvisionError(f"guests API returned HTTP {exc.code}") from exc
+        raise ProvisionError(_refusal(exc)) from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise ProvisionError(f"guests API unreachable: {type(exc).__name__}") from exc
     if not isinstance(payload, dict):

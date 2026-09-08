@@ -97,3 +97,31 @@ def test_malformed_key_rejected(xdg_tmp, guests_server) -> None:
     status = provision.ensure("SG", api_base=base)
     assert status["status"] == "error" and status["defer"] is True
     assert secrets.read_carousell_ai_api_key() is None
+
+
+# carousell.ai refuses a country it cannot pay out to, and the refusal names the countries it does
+# serve and the waitlist. Reporting "HTTP 400" would throw all of that away.
+def test_a_refusal_reaches_the_seller_in_the_rails_own_words(xdg_tmp, guests_server) -> None:
+    server, base = guests_server
+    server.status = 400
+    server.response = {
+        "error": "carousell.ai cannot pay sellers in MY yet \u2014 it serves SG and US. "
+        "Join the waitlist at /waitlist to be told when that changes"
+    }
+
+    status = provision.ensure("my", api_base=base)
+
+    assert status["status"] != "ok"
+    assert "waitlist" in status["error"]
+    assert "SG and US" in status["error"]
+
+
+def test_a_refusal_without_a_body_still_names_the_status(xdg_tmp, guests_server) -> None:
+    server, base = guests_server
+    server.status = 503
+    server.response = {}
+
+    status = provision.ensure("sg", api_base=base)
+
+    assert status["status"] != "ok"
+    assert "503" in status["error"]
