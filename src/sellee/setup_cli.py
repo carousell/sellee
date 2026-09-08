@@ -48,6 +48,12 @@ from sellee.store import HOLD_SETUP
 DAEMON_READY_TIMEOUT_SEC = 60.0
 # How much of the daemon's stderr to show when it does not come up — enough for a traceback.
 _LOG_TAIL_LINES = 20
+# Said before the question, not after: carousell.ai fixes the payout account from this answer and
+# nothing can move it afterwards, so it has to be known while the answer is still open.
+PLACEMENT_IS_PERMANENT = (
+    "This decides which carousell.ai account pays you out, and it cannot be changed later — "
+    "moving would mean a new seller account."
+)
 
 
 def run(args) -> int:
@@ -469,10 +475,14 @@ def _seller_region(ui: Ui, args, port: int, token: str):
         return known["region"]
 
     basics = _basics_from_flag(args) if args.region else region_guess.guess()
-    if args.region:
-        ui.step("Where you sell")
-    elif basics and not ui.confirm(
-        f"You sell in {region_guess.render(basics)}, correct?", default=True
+    ui.step("Where you sell")
+    ui.say(PLACEMENT_IS_PERMANENT)
+    if (
+        not args.region
+        and basics
+        and not ui.confirm(
+            f"You sell in {region_guess.render(basics)}, correct?", default=True, lead=False
+        )
     ):
         basics = None
     if basics is None:

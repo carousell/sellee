@@ -489,6 +489,40 @@ def test_the_region_is_proposed_from_the_machines_timezone(world, capsys) -> Non
     assert "You sell in SG · SGD · Asia/Singapore, correct?" in capsys.readouterr().out
 
 
+def test_the_country_question_says_the_answer_is_permanent_before_asking(world, capsys) -> None:
+    """carousell.ai fixes the payout account from this answer and nothing can move it, so the
+    seller has to know that while the answer is still open — not once it has been recorded."""
+    assert setup_main("--yes", "--manual") == 0
+
+    out = capsys.readouterr().out
+    assert setup_cli.PLACEMENT_IS_PERMANENT in out
+    assert out.index(setup_cli.PLACEMENT_IS_PERMANENT) < out.index("You sell in SG · SGD")
+
+
+def test_the_permanence_is_said_when_the_country_is_asked_outright(
+    world, monkeypatch, capsys
+) -> None:
+    """The machine implies nothing, so there is no proposal to decline — the numbered list is the
+    first thing the seller sees, and the caution still has to come before it."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["1", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    out = capsys.readouterr().out
+    assert out.index(setup_cli.PLACEMENT_IS_PERMANENT) < out.index("Which country do you sell in?")
+
+
+def test_a_re_run_does_not_re_state_a_permanence_it_can_no_longer_offer(world, capsys) -> None:
+    """Once the region is recorded the question is not asked again, so repeating the caution
+    would read as a warning about a choice the seller no longer has."""
+    setup_main("--yes", "--manual")
+    capsys.readouterr()
+
+    assert setup_main("--yes", "--manual") == 0
+    assert setup_cli.PLACEMENT_IS_PERMANENT not in capsys.readouterr().out
+
+
 def test_the_region_flag_wins_over_the_guess(world) -> None:
     assert setup_main("--yes", "--manual", "--region", "us") == 0
     assert world.calls["basics"]["region"] == "US"
