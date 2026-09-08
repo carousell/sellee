@@ -31,6 +31,25 @@ def _normalize_region(region: str | None) -> str:
     return region.strip().upper()
 
 
+def _refusal(exc: urllib.error.HTTPError) -> str:
+    """The rail's own words when it refuses, falling back to the status code.
+    A 400 is usually actionable — an unserved country — and "HTTP 400" is not.
+    The words are remote and ui.warn prints them raw, so control characters are
+    flattened to spaces: an escape sequence or newline in the body must not be
+    able to retitle the terminal or forge a line that looks like ours — the same
+    reason a non-printable api_key is rejected below."""
+    try:
+        body = json.loads(exc.read().decode("utf-8"))
+        raw = str(body.get("error") or "")
+    except (ValueError, AttributeError, OSError):
+        # Unreadable, non-JSON, or non-object body — a proxy's error page, not a refusal.
+        raw = ""
+    message = " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())
+    if not message:
+        return f"guests API returned HTTP {exc.code}"
+    return message[:400]
+
+
 def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAULT_TIMEOUT_SEC):
     """POST the guests endpoint and return the validated response dict. Rejects a malformed key
     (whitespace/control chars) rather than storing something that would clobber the secret file."""
@@ -50,7 +69,7 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
         with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
-        raise ProvisionError(f"guests API returned HTTP {exc.code}") from exc
+        raise ProvisionError(_refusal(exc)) from exc
     except (urllib.error.URLError, OSError, ValueError) as exc:
         raise ProvisionError(f"guests API unreachable: {type(exc).__name__}") from exc
     if not isinstance(payload, dict):
