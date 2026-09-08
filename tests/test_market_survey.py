@@ -168,6 +168,9 @@ def test_a_clean_read_asks_once_and_records_the_listings(store, bus) -> None:
     survey.discover_phase(_deps(store, bus, client))
 
     rows = store.list_discovered_listings(_MARKET)
+    # The survey reads in the background like the inbox does, and its tab needs the same
+    # re-assertion — Chrome re-hides a minimized window's tab on its own schedule.
+    assert client.prepared >= 1
     assert [r["listing_id"] for r in rows] == ["111", "222"]
     assert {r["status"] for r in rows} == {"pending"}
     assert store.get_market_survey(_MARKET)["state"] == "done"

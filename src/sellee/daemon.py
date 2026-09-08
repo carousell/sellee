@@ -350,7 +350,10 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
         _widen_window(bus, port, store)
         # Same reason as the width: applied per tab and kept by Chrome, so this is here to catch
         # tabs opened since the last acquisition rather than to set it once.
-        chrome.enable_background_operation(port)
+        try:
+            chrome.enable_background_operation(port)
+        except Exception:  # noqa: BLE001 — best-effort: a failed preparation must not fail a lane
+            log.debug("could not prepare the agent's tabs for background work", exc_info=True)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
             browser_client.cdp_endpoint(port)
         )

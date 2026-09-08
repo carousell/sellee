@@ -650,7 +650,8 @@ class BrowserClient:
 
         So the raise is spent only on those. Returns None when the tab could not be brought
         forward, which the callers already read as "still blind" — the same answer the quiet read
-        gave them, and never a claim the page was empty.
+        gave them, and never a claim the page was empty. The re-read after a successful raise
+        still raises like any read; None only ever means the raise itself failed.
 
         The page the select is checked against is read back from the tab itself rather than taken
         from the caller. A folder that opens only when its rail row is clicked moves the page

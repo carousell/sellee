@@ -254,13 +254,14 @@ def enable_background_operation(port: int, *, timeout_sec: float = _PROBE_TIMEOU
 
     try:
         with urllib.request.urlopen(version_url(port), timeout=timeout_sec) as resp:
-            endpoint = json.loads(resp.read().decode("utf-8", "replace")).get(
-                "webSocketDebuggerUrl"
-            )
+            version = json.loads(resp.read().decode("utf-8", "replace"))
         with urllib.request.urlopen(list_url(port), timeout=timeout_sec) as resp:
             targets = json.loads(resp.read().decode("utf-8", "replace"))
     except (urllib.error.URLError, OSError, ValueError):
         return 0
+    # Whatever answered may not be our Chrome: a squatter on the port, or Chrome mid-start, can
+    # send any valid JSON — and the daemon calls this on every acquisition, bare.
+    endpoint = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
     if not endpoint or not isinstance(targets, list):
         return 0
     pages = [t.get("id") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
@@ -272,7 +273,10 @@ def enable_background_operation(port: int, *, timeout_sec: float = _PROBE_TIMEOU
         with ws_connect(endpoint, open_timeout=timeout_sec, close_timeout=timeout_sec) as ws:
             counter = 0
 
-            def call(method: str, params: dict, session: str | None = None) -> dict:
+            def call(method: str, params: dict, session: str | None = None) -> dict | None:
+                """One CDP round trip; None when the browser answered with an error. An old
+                Chrome that does not speak a method says so here, and a tab it refused must
+                fall back to the raise rather than count as prepared."""
                 nonlocal counter
                 counter += 1
                 message: dict = {"id": counter, "method": method, "params": params}
@@ -282,16 +286,19 @@ def enable_background_operation(port: int, *, timeout_sec: float = _PROBE_TIMEOU
                 while True:
                     answer = json.loads(ws.recv(timeout=timeout_sec))
                     if answer.get("id") == counter:
+                        if "error" in answer:
+                            return None
                         return answer.get("result") or {}
 
             for target_id in pages:
-                session = call(
-                    "Target.attachToTarget", {"targetId": target_id, "flatten": True}
-                ).get("sessionId")
+                attached = call("Target.attachToTarget", {"targetId": target_id, "flatten": True})
+                session = (attached or {}).get("sessionId")
                 if not session:
                     continue
-                call("Emulation.setFocusEmulationEnabled", {"enabled": True}, session)
-                call("Page.setWebLifecycleState", {"state": "active"}, session)
+                if call("Emulation.setFocusEmulationEnabled", {"enabled": True}, session) is None:
+                    continue
+                if call("Page.setWebLifecycleState", {"state": "active"}, session) is None:
+                    continue
                 prepared += 1
     except Exception:  # noqa: BLE001 — a tab that will not take this must not fail a read
         log.debug("could not prepare the agent's tabs for background work", exc_info=True)

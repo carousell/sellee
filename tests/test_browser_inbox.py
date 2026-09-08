@@ -219,6 +219,9 @@ def test_a_readable_sweep_never_brings_the_window_forward(store, bus, seeded) ->
 
     assert client.navigations == [_INBOX, "https://www.carousell.sg/inbox/99/"]
     assert client.forwards == []
+    # The other half of the quiet read: Chrome re-hides a minimized window's tab on its own
+    # schedule, so a read that skipped the re-assertion is a read that starves and raises.
+    assert client.prepared >= 1
 
 
 def test_a_starved_list_read_is_retried_with_the_tab_forward(store, bus, seeded) -> None:

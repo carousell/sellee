@@ -428,6 +428,55 @@ def test_a_tab_that_stays_hidden_is_an_error_but_stays_ours(make_client) -> None
     assert client._tab_opened is True  # noqa: SLF001 — the handle is the thing under test
 
 
+# --- read_forward: the retry behind a starved quiet read -------------------------------------
+
+
+def test_read_forward_raises_the_tab_against_its_own_address_and_reads_again(make_client) -> None:
+    """The page is read back out of the tab itself: a folder that opens on click moves the page
+    without a navigate, so an address the caller still holds can be one this tab left long ago —
+    and checking the select against that stale address would reject our own tab."""
+    client = make_client(
+        {
+            "tools": {
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": _URL}},  # where the tab actually is
+                    {"result": {"visible": False, "url": _URL}},  # frontmost's own check
+                    {"result": {"visible": True, "url": _URL}},  # visible after the select
+                    {"result": {"conversations": ["row"]}},  # the re-read, now fed
+                ],
+                "browser_tabs": [_TAB_LIST, {"text": "ok"}],
+            }
+        }
+    )
+    assert client.read_forward("() => rows()") == {"conversations": ["row"]}
+    tabs = [call["arguments"] for call in tool_calls(client) if call["tool"] == "browser_tabs"]
+    assert tabs == [{"action": "list"}, {"action": "select", "index": 1}]
+
+
+def test_read_forward_abstains_when_the_page_state_is_unreadable(make_client) -> None:
+    """No address means no safe select. None is "still blind" — the same answer the quiet read
+    gave — and never a claim the page was empty."""
+    client = make_client({"tools": {"browser_evaluate": {"result": None}}})
+    assert client.read_forward("() => rows()") is None
+    assert [call["tool"] for call in tool_calls(client)] == ["browser_evaluate"]
+
+
+def test_read_forward_abstains_when_the_select_lands_on_another_page(make_client) -> None:
+    client = make_client(
+        {
+            "tools": {
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": _URL}},
+                    {"result": {"visible": False, "url": _URL}},
+                    {"result": {"visible": True, "url": "https://www.carousell.sg/sell/"}},
+                ],
+                "browser_tabs": [_TAB_LIST, {"text": "ok"}],
+            }
+        }
+    )
+    assert client.read_forward("() => rows()") is None
+
+
 def test_the_visibility_read_after_selecting_waits_for_the_change(make_client) -> None:
     """Chrome tells the renderer it became visible asynchronously, so reading the state straight
     after selecting reports the old value and a healthy tab looks like it would not come forward."""

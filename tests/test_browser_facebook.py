@@ -221,6 +221,8 @@ def test_a_folder_market_is_read_without_bringing_the_window_forward(store, bus,
     inbox.inbox_lane(_deps(store, bus, client))
 
     assert client.visible_navigations == []
+    # Without the re-assertion the folder's Enter goes nowhere and the read raises the window.
+    assert client.prepared >= 1
 
 
 def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
@@ -344,6 +346,7 @@ class SurveyStub:
         self.entry_url = entry_url
         self.listings = listings if listings is not None else {"listings": [], "active_count": 0}
         self.navigations: list = []
+        self.prepared = 0
 
     class _Exclusive:
         def __init__(self, client):

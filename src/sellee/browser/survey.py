@@ -160,6 +160,7 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
     with client.exclusive():
+        client.prepare_background()
         client.navigate(url)
         login = client.evaluate(adapter.login_js) or {}
         if login.get("state") != "logged_in":
