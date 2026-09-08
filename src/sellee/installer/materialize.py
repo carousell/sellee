@@ -31,6 +31,7 @@ VERSION_FILES = (
     "setup",
     "README.md",
     "LICENSE",
+    "NOTICE",
     "pyproject.toml",
     "uv.lock",
     ".python-version",

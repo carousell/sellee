@@ -66,4 +66,3 @@ For the full details, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 ## License
 
 Sellee is licensed under the [Apache License 2.0](LICENSE). Contributions are accepted under the same license.
-

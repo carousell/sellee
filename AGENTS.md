@@ -252,7 +252,8 @@ introduced later. Isolate generated/mechanical churn from hand-written diffs.
 The project is Apache-2.0. Contributions land under the same license, no CLA:
 submitting a change is agreeing to those terms (the license's own §5 says so).
 `LICENSE` must stay the canonical text and `NOTICE` must keep its copyright
-line — release tarballs are git archives so both ride along from the root, and
-`license-files` in pyproject puts them into any wheel. All of this is enforced
-by `tests/guard/test_license.py`; change the licensing posture there first, or
-not at all.
+line — both are in `VERSION_FILES` (`installer/materialize.py`), which is what
+`make dist` packs and `./setup` stages, so they travel with every release
+tarball; `license-files` in pyproject covers the wheel case besides. All of
+this is enforced by `tests/guard/test_license.py`; change the licensing
+posture there first, or not at all.

@@ -13,6 +13,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from sellee.installer.materialize import VERSION_FILES
+
 ROOT = Path(__file__).resolve().parents[2]
 
 # Phrases that appear in the canonical text from https://www.apache.org/licenses/LICENSE-2.0.txt
@@ -22,6 +24,10 @@ CANONICAL_LICENSE_MARKERS = (
     "Apache License",
     "Version 2.0, January 2004",
     "4. Redistribution.",
+    # §4(d) and §5 are the clauses the repo's own docs lean on (NOTICE preservation,
+    # inbound = outbound), so a targeted paraphrase of either must fail here too.
+    '(d) If the Work includes a "NOTICE" text file as part of its',
+    "5. Submission of Contributions. Unless You explicitly state otherwise,",
     'distributed under the License is distributed on an "AS IS" BASIS,',
     "APPENDIX: How to apply the Apache License to your work.",
 )
@@ -57,6 +63,17 @@ def test_pyproject_declares_the_license_and_ships_both_files() -> None:
     )
     assert 'license-files = ["LICENSE", "NOTICE"]' in text, (
         "pyproject [project].license-files must list LICENSE and NOTICE so wheel builds ship them"
+    )
+
+
+def test_the_release_artifact_carries_the_terms() -> None:
+    """Users get `make dist` tarballs (never wheels — tool.uv.package is false), so the license
+    travels only if the staging list carries it. The Makefile side is pinned by
+    tests/test_installer_materialize.py, which asserts `make dist` packs every VERSION_FILES entry.
+    """
+    missing = {"LICENSE", "NOTICE"} - set(VERSION_FILES)
+    assert not missing, (
+        f"{sorted(missing)} staged nowhere — a release tarball would ship without its terms"
     )
 
 
