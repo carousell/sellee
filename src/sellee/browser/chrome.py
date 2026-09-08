@@ -231,6 +231,73 @@ def page_targets(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int |
     return sum(1 for target in payload if isinstance(target, dict) and target.get("type") == "page")
 
 
+def enable_background_operation(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int:
+    """Let the agent's tabs be driven without the window ever coming to the front. Answers how many
+    tabs were prepared, 0 when nothing could be.
+
+    Chrome tells a background tab it is hidden and unfocused, and both answers cost us something.
+    Unfocused is why the one control Facebook's folder answers to — `el.focus()` then a real Enter —
+    goes nowhere unless the tab is frontmost. Hidden is why `ensure_frontmost` selects the tab back,
+    and a select activates the whole Chrome window on macOS, which is the seller losing their focus
+    every few minutes to a lane that is only reading.
+
+    `Emulation.setFocusEmulationEnabled` answers the first and `Page.setWebLifecycleState` the
+    second: together the page reports `visible` and `hasFocus()`, so keys land and the visibility
+    guard stops firing — while the window itself never moves. The settings that raise it on purpose
+    (`raise_browser` for a sign-in, `watch_browser` for watching) are untouched and still do.
+
+    Applied per target and kept by Chrome after this connection closes, so re-applying is only for
+    tabs opened since. Best-effort throughout: a tab that will not take it falls back to the old
+    behaviour — a raise — which is worse for the seller but never a failed read.
+    """
+    from websockets.sync.client import connect as ws_connect
+
+    try:
+        with urllib.request.urlopen(version_url(port), timeout=timeout_sec) as resp:
+            endpoint = json.loads(resp.read().decode("utf-8", "replace")).get(
+                "webSocketDebuggerUrl"
+            )
+        with urllib.request.urlopen(list_url(port), timeout=timeout_sec) as resp:
+            targets = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return 0
+    if not endpoint or not isinstance(targets, list):
+        return 0
+    pages = [t.get("id") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+    if not pages:
+        return 0
+
+    prepared = 0
+    try:
+        with ws_connect(endpoint, open_timeout=timeout_sec, close_timeout=timeout_sec) as ws:
+            counter = 0
+
+            def call(method: str, params: dict, session: str | None = None) -> dict:
+                nonlocal counter
+                counter += 1
+                message: dict = {"id": counter, "method": method, "params": params}
+                if session is not None:
+                    message["sessionId"] = session
+                ws.send(json.dumps(message))
+                while True:
+                    answer = json.loads(ws.recv(timeout=timeout_sec))
+                    if answer.get("id") == counter:
+                        return answer.get("result") or {}
+
+            for target_id in pages:
+                session = call(
+                    "Target.attachToTarget", {"targetId": target_id, "flatten": True}
+                ).get("sessionId")
+                if not session:
+                    continue
+                call("Emulation.setFocusEmulationEnabled", {"enabled": True}, session)
+                call("Page.setWebLifecycleState", {"state": "active"}, session)
+                prepared += 1
+    except Exception:  # noqa: BLE001 — a tab that will not take this must not fail a read
+        log.debug("could not prepare the agent's tabs for background work", exc_info=True)
+    return prepared
+
+
 def ensure_window_width(port: int, minimum: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int:
     """Widen the agent's Chrome windows to at least `minimum` px, answering the narrowest seen.
 
@@ -333,6 +400,13 @@ def launch_command(port: int | None, *, chrome_bin: str | None = None) -> list:
     `--disable-backgrounding-occluded-windows` keeps a window the seller has covered with another
     app from counting as hidden, which spares every send the work of raising a tab that was already
     active.
+
+    The session is deliberately *not* restored. Sign-ins live in the profile, not in reopened tabs,
+    so restoring bought nothing but a growing pile — and the pile is what costs the seller their
+    focus: only one tab in a window is the active one, so every extra tab is another sweep that
+    finds the agent's own tab backgrounded and selects it back, which activates the whole window on
+    macOS. The one thing restoring did carry over was the window width, and `_widen_window` already
+    re-establishes that on every acquisition.
     """
     return [
         resolve_binary(chrome_bin),
@@ -341,7 +415,6 @@ def launch_command(port: int | None, *, chrome_bin: str | None = None) -> list:
         "--disable-backgrounding-occluded-windows",
         "--no-first-run",
         "--no-default-browser-check",
-        "--restore-last-session",
         "--hide-crash-restore-bubble",
         "--window-position=80,80",
         "--window-size=1200,900",

@@ -76,6 +76,7 @@ class StubClient:
         self.detail = detail
         self.fail = fail
         self.navigations: list = []
+        self.prepared = 0
 
     class _Exclusive:
         def __init__(self, client):
@@ -91,8 +92,16 @@ class StubClient:
         return self._Exclusive(self)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation."""
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on."""
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+        self.prepared += 1
 
     def navigate(self, url):
         if self.fail == "navigate":

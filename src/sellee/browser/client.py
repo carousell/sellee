@@ -25,10 +25,12 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.parse
 from collections import deque
 from contextlib import contextmanager
 
 from sellee import paths, proc_tree
+from sellee.browser import chrome
 
 log = logging.getLogger(__name__)
 
@@ -190,6 +192,8 @@ _AWAIT_VISIBLE_JS = f"""async () => {{
 
 # A line of the server's tab listing, marking the tab our own calls act on: `- 2: (current) [t](u)`.
 _CURRENT_TAB_RE = re.compile(r"^-\s*(\d+):\s*\(current\)")
+# Any line of that listing, current or not — how the strays are found.
+_TAB_LINE_RE = re.compile(r"^-\s*(\d+):")
 
 
 def same_page(left: str, right: str) -> bool:
@@ -617,19 +621,52 @@ class BrowserClient:
                 self._follow_page(url)
 
     def navigate_visible(self, url: str) -> None:
-        """Navigate, and put our tab in front before anything reads the page.
+        """Navigate, and put our tab in front before anything acts on the page.
 
-        A hidden tab is throttled (IntersectionObserver, requestAnimationFrame), and marketplaces
-        build their lists that way — so a read on a background tab can be served a fraction of the
-        page and no error at all. Bringing the tab forward is best-effort: it must not fail a read
-        that might still succeed. This is a tab select inside the agent's own Chrome, not a window
-        raise, so a read tick never raises the seller's window.
+        For the paths that type. Chrome routes key events only to a visible renderer, so a fill or
+        a keypress against a background tab is swallowed in silence — the tab has to be forward
+        before the work starts, not after it fails.
+
+        Reads do not belong here. Bringing a tab forward selects it, and on macOS a select
+        (`Target.activateTarget`) activates the whole Chrome window — so a read lane calling this
+        every few minutes takes the seller's focus over and over. `read_forward` is the read path's
+        version: the same raise, kept as the retry rather than the precondition.
         """
         self.navigate(url)
         try:
             self.ensure_frontmost(url)
         except BrowserError:
-            log.debug("could not bring our tab forward before reading %s", url, exc_info=True)
+            log.debug("could not bring our tab forward before acting on %s", url, exc_info=True)
+
+    def read_forward(self, function: str):
+        """Bring our tab forward and read again — the retry behind a quiet read that came back
+        starved.
+
+        A background tab is throttled, not blinded: most marketplace reads answer fine from one,
+        and the launch flags already keep a window the seller has covered from counting as hidden.
+        What a background tab cannot survive is a page that only builds itself while visible, which
+        is a minority of reads and is detectable after the fact — the list reader and the tail
+        reader both abstain rather than inventing an empty page.
+
+        So the raise is spent only on those. Returns None when the tab could not be brought
+        forward, which the callers already read as "still blind" — the same answer the quiet read
+        gave them, and never a claim the page was empty.
+
+        The page the select is checked against is read back from the tab itself rather than taken
+        from the caller. A folder that opens only when its rail row is clicked moves the page
+        without going through `navigate`, so the address a reader still holds can be one this tab
+        left long ago — and checking a select against that stale address rejects our own tab,
+        abandons the handle, and reports a blindness the page never had.
+        """
+        try:
+            current = (self.evaluate(_PAGE_STATE_JS) or {}).get("url")
+            if not current:
+                return None
+            self.ensure_frontmost(str(current))
+        except BrowserError:
+            log.debug("could not bring our tab forward to re-read", exc_info=True)
+            return None
+        return self.evaluate(function)
 
     def _follow_page(self, url: str) -> None:
         """Bring our tab forward so the seller can watch. Best-effort: it must never fail a
@@ -667,6 +704,42 @@ class BrowserClient:
                 return
             self.call_tool("browser_tabs", {"action": "new"})
             self._tab_opened = True
+            self.prepare_background()
+
+    def prepare_background(self) -> None:
+        """Tell Chrome to treat this client's tab as focused and visible, wherever its window is.
+
+        Called at the head of every read, not once. A minimized window — which is what a seller does
+        with a window that keeps interrupting them — puts its tab in `hidden`, and Chrome re-applies
+        that on its own schedule, so a preparation from one acquisition ago is not reliably still in
+        force. Re-asserting costs one local WebSocket round trip and buys the read a tab that is
+        visible and focused without the window moving at all.
+
+        This is the difference between reading Facebook and raising the seller's window to do it:
+        with the tab hidden the folder's Enter goes nowhere and the visibility guard raises the
+        window to get it back.
+
+        Best-effort and silent. A server driving something other than a CDP endpoint of ours has no
+        port to prepare, which is the normal answer under test and not a fault.
+        """
+        port = self._cdp_port()
+        if port is None:
+            return
+        try:
+            chrome.enable_background_operation(port)
+        except Exception:  # noqa: BLE001 — a tab that will not take this must not fail a read
+            log.debug("could not prepare the new tab for background work", exc_info=True)
+
+    def _cdp_port(self) -> int | None:
+        """The port this client's server drives, read back out of its own command."""
+        command = [str(part) for part in (self._command or [])]
+        if "--cdp-endpoint" not in command:
+            return None
+        index = command.index("--cdp-endpoint") + 1
+        if index >= len(command):
+            return None
+        port = urllib.parse.urlparse(command[index]).port
+        return int(port) if port else None
 
     def ensure_frontmost(self, url: str) -> None:
         """Make the tab this client drives the active tab of its window, so keys reach it.
@@ -677,10 +750,13 @@ class BrowserClient:
         is what makes the failure so quiet: the text lands, the key that would commit it never
         arrives, and nothing reports an error.
 
-        Typing is not the only caller — `navigate_visible` also brings the tab forward, for pages
-        that only build themselves while visible. Nothing happens when the tab is already active —
-        the steady state on the agent's own Chrome — so its window comes forward at most once
-        rather than on every call.
+        Typing is not the only caller — `read_forward` brings the tab forward too, for the pages
+        that only build themselves while visible. Nothing happens when the tab is already active,
+        so a window comes forward at most once rather than on every call. That guard is weaker than
+        it looks: with more than one tab open only one of them is active, so alternating lanes each
+        find their own tab backgrounded and select it back. Selecting activates the whole Chrome
+        window on macOS, which is why the read paths reach this through `read_forward` — after a
+        quiet read has already come back starved — and never on every navigation.
 
         Selecting is by index, and an index is a position that renumbers whenever any tab opens or
         closes; worse, selecting repoints every later call at whatever was chosen. So the page is
@@ -700,6 +776,52 @@ class BrowserClient:
                 )
             if not state.get("visible"):
                 raise BrowserToolError(f"our tab would not come forward — {url!r} is still hidden")
+
+    def close_stray_tabs(self) -> int:
+        """Close every tab in the agent's Chrome but the one this client drives. Answers how many.
+
+        A window has exactly one active tab, and Chrome calls every other tab in it hidden. That is
+        the whole reason the read lane took the seller's focus: with leftovers in the window the
+        agent's own tab kept coming up hidden, so it selected itself back — and a select activates
+        the window on macOS. Down to one tab there is nothing to select and nothing to raise, and
+        the tab is genuinely visible, which is also what lets Facebook's folder open from a read
+        that never comes to the front.
+
+        The pile is not incidental. A tab handle rejected by `ensure_frontmost` is abandoned rather
+        than closed and the next call opens a fresh one, so left alone it grows all day; it reached
+        seventeen tabs in an afternoon.
+
+        Never opens a tab to do it: with no tab of our own there is nothing to keep, and asking the
+        server to list would make it create one. Callers must hold `browser_busy` clear — a tab that
+        is not ours may be a sign-in the seller is part-way through.
+        """
+        with self._lock:
+            if not self._tab_opened:
+                return 0
+            self._start()
+            current = None
+            indices = []
+            for line in self.call_tool("browser_tabs", {"action": "list"}).splitlines():
+                text = line.strip()
+                found = _TAB_LINE_RE.match(text)
+                if not found:
+                    continue
+                index = int(found.group(1))
+                indices.append(index)
+                if _CURRENT_TAB_RE.match(text):
+                    current = index
+            if current is None:
+                return 0
+            closed = 0
+            # Highest index first: closing one renumbers every tab above it, so descending order
+            # leaves the indices we have not reached — and the current tab — where we found them.
+            for index in sorted((i for i in indices if i != current), reverse=True):
+                try:
+                    self.call_tool("browser_tabs", {"action": "close", "index": index})
+                    closed += 1
+                except BrowserError:
+                    log.debug("could not close a stray tab at index %s", index, exc_info=True)
+            return closed
 
     def _current_tab_index(self) -> int:
         """Where the server currently numbers the tab our calls act on."""

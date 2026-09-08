@@ -240,6 +240,49 @@ def test_the_client_opens_its_own_tab_once(make_client) -> None:
     assert "select" not in json.dumps(tool_calls(client))  # never re-selected by index
 
 
+def test_stray_tabs_are_closed_leaving_the_one_we_drive(make_client) -> None:
+    """The window is left holding exactly our tab, because that is what stops the raising.
+
+    A window has one active tab and Chrome calls the rest hidden, so leftovers are why the agent's
+    own tab kept reading as hidden and selecting itself back — and a select activates the window.
+    Closed highest-index first: closing a tab renumbers every tab above it.
+    """
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": {
+                    "text": (
+                        "### Open tabs\n"
+                        "- 0: [old](https://www.facebook.com/)\n"
+                        "- 1: (current) [ours](https://www.carousell.sg/inbox/)\n"
+                        "- 2: [leaked](https://www.facebook.com/messages/t/9/)\n"
+                    )
+                },
+                "browser_navigate": {"text": "ok"},
+            }
+        }
+    )
+    client.navigate("https://www.carousell.sg/inbox/")
+
+    assert client.close_stray_tabs() == 2
+    tabs = [c["arguments"] for c in tool_calls(client) if c["tool"] == "browser_tabs"]
+    assert tabs == [
+        {"action": "new"},
+        {"action": "list"},
+        {"action": "close", "index": 2},
+        {"action": "close", "index": 0},
+    ]
+
+
+def test_stray_tabs_are_never_pruned_before_we_have_a_tab(make_client) -> None:
+    """With no tab of our own there is nothing to keep — and asking the server to list would make
+    it create one, which on a Chrome the seller closed means a window popping up to be tidied."""
+    client = make_client({"tools": {"browser_tabs": {"text": "### Open tabs\n- 0: about:blank"}}})
+
+    assert client.close_stray_tabs() == 0
+    assert tool_calls(client) == []
+
+
 # --- a tab that carries modal state --------------------------------------------------------------
 
 # What the real server answers with while the tab it is pointed at has a dialog or a file chooser
@@ -539,6 +582,16 @@ def test_an_unpinned_launch_lets_chrome_choose_the_port(xdg_tmp) -> None:
 def test_a_pinned_launch_still_asks_for_that_exact_port(xdg_tmp) -> None:
     """A seller who pinned a port meant it — the container's forwarder is agreed on a number."""
     assert "--remote-debugging-port=9333" in chrome.launch_command(9333, chrome_bin="/bin/chrome")
+
+
+def test_the_launch_command_does_not_restore_the_last_session(xdg_tmp) -> None:
+    """A restored pile of tabs is what costs the seller their focus.
+
+    Only one tab in a window is the active one, so every tab carried over from last time is another
+    sweep that finds the agent's own tab backgrounded and selects it back — and a select activates
+    the whole window on macOS. Sign-ins survive in the profile either way.
+    """
+    assert "--restore-last-session" not in chrome.launch_command(9222, chrome_bin="/bin/chrome")
 
 
 def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_tmp) -> None:

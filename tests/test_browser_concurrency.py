@@ -39,8 +39,17 @@ class SlowClient:
             self.log.append(entry)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation."""
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on — it still holds the tab, so it is recorded
+        against the same lock the rest of the lane runs under."""
+        self.ensure_frontmost(self.url)
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        pass
 
     def navigate(self, url):
         self._record(("navigate", url))

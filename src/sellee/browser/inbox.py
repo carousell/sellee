@@ -178,6 +178,16 @@ def inbox_lane(deps: InboxDeps) -> None:
     _clear_notice(deps, "unavailable")
 
 
+def _list_unreadable(answer) -> bool:
+    """Whether a conversations-list read abstained rather than handing back rows.
+
+    An abstention is not an empty inbox, and the two must never collapse into each other: the
+    adapter answers with an `error` mapping when it cannot find the list at all, and with a
+    `conversations` list — possibly empty — when it can.
+    """
+    return not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list)
+
+
 def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     market = adapter.market
     inbox_url = marketplaces.market_url(market, "inbox", region)
@@ -185,7 +195,12 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         log.warning("no recorded inbox URL for %s — skipping", market)
         return
 
-    client.navigate_visible(inbox_url)
+    # Quiet for every market, folder or not — nothing in a read brings the window forward any more.
+    client.navigate(inbox_url)
+    # Re-asserted per read, and this is what keeps the lane quiet: a minimized window puts its tab
+    # in `hidden`, which stops Facebook's folder opening and makes the visibility guard raise the
+    # window to get the tab back. Told it is visible, the tab reads fine and the window never moves.
+    client.prepare_background()
     login = client.evaluate(adapter.login_js) or {}
     state = login.get("state")
     if state == "logged_out":
@@ -211,7 +226,12 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     _open_inbox_folder(client, adapter)
 
     answer = client.evaluate(adapter.conversations_list_js)
-    if not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list):
+    if _list_unreadable(answer):
+        # The quiet read abstained. A list that only builds itself while visible is the one read a
+        # background tab cannot serve, so the tab is brought forward here — and only here, once the
+        # cheap read has already said it was not enough.
+        answer = client.read_forward(adapter.conversations_list_js)
+    if _list_unreadable(answer):
         # The list came back as a failure rather than content; unlike a DOM read that finds
         # nothing, this cannot be mistaken for an empty inbox. Everything the artifact measured
         # travels with it — candidate element counts, viewport width, tab visibility — which is
@@ -416,7 +436,10 @@ def _with_product_id(
     if url is None:
         return row
     try:
-        client.navigate_visible(url)
+        # Quiet on purpose, with no forward retry: a thread whose listing cannot be resolved is an
+        # ordinary `unknown_listing`, not a starved read, and those repeat on every sweep. Spending
+        # a window raise on them would reinstate the focus theft this path exists to avoid.
+        client.navigate(url)
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
         # Not remembered: a failed read is not an answer, and caching it would hide the
@@ -671,8 +694,12 @@ def _read_thread(
     if url is None:
         log.warning("no recorded thread URL template for %s", market)
         return None
-    client.navigate_visible(url)
+    client.navigate(url)
     raw = client.evaluate(adapter.conversation_tail_js)
+    if reconcile.unreadable_reason(raw) is not None:
+        # Same bargain as the list read: the quiet read is tried first and the tab is only brought
+        # forward for the one that abstained, so a sweep of readable threads never takes focus.
+        raw = client.read_forward(adapter.conversation_tail_js)
     unreadable = reconcile.unreadable_reason(raw)
     if unreadable is not None:
         # Carry the reader's measurements up to the market's blind count: they are what tells a

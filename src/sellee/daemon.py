@@ -287,10 +287,10 @@ def _widen_window(bus, port: int, store) -> None:
 
     Wide enough for the most demanding *connected* market — each adapter names its own breakpoint,
     and a market the seller has not connected asks nothing of the window. Run on every acquisition,
-    not once at launch: `--restore-last-session` restores the last width. Never fatal — a
-    too-narrow window is a read that may still succeed, and a real failure is promoted to
-    `CAUSE_VIEWPORT` by the reader's own measurements. The event fires only when a resize was
-    needed, so the steady state stays silent.
+    not once at launch: Chrome reopens at the size it last had, and the seller may have resized it
+    since. Never fatal — a too-narrow window is a read that may still succeed, and a real failure is
+    promoted to `CAUSE_VIEWPORT` by the reader's own measurements. The event fires only when a
+    resize was needed, so the steady state stays silent.
     """
     minimum = max(
         (
@@ -348,6 +348,9 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
         port = ensure_chrome(cfg, store, bus, should_stop)
         _notice_window_reopening(store, bus, holder, port)
         _widen_window(bus, port, store)
+        # Same reason as the width: applied per tab and kept by Chrome, so this is here to catch
+        # tabs opened since the last acquisition rather than to set it once.
+        chrome.enable_background_operation(port)
         command = cfg.playwright_mcp_cmd or browser_client.default_command(
             browser_client.cdp_endpoint(port)
         )
@@ -379,6 +382,16 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
             holder["client"] = client
             holder["command"] = command
         client.set_follow(bool(settings.get(store, browser_window.WATCH_SETTING)))
+        # Leftover tabs are what made the read lane take the seller's focus: with company in the
+        # window the agent's own tab reads as hidden, so it selects itself back and the select
+        # activates the window. Pruned here because the factory is the one place that is always
+        # between operations, and never while anything else may hold a tab — a tab that is not ours
+        # can be a sign-in the seller is part-way through.
+        if not inbox.browser_busy(store):
+            try:
+                client.close_stray_tabs()
+            except browser_client.BrowserError:
+                log.debug("could not prune the agent's stray tabs", exc_info=True)
         return client
 
     return browser_factory
