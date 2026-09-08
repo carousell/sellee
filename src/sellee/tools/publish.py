@@ -14,8 +14,9 @@ from sellee import settings
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
-from sellee.rail.client import RailUnprovisioned
+from sellee.rail.client import RailToolError, RailUnprovisioned
 from sellee.store import StoreError
+from sellee.tools.rail_gates import NO_MARKET_CLAUSE
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -32,6 +33,27 @@ _MARKET = "carousell-ai"
 _MEDIA_TYPE_IMAGE = 1
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
+
+# An unplaced seller is refused here too, and this is the wall they meet FIRST: listing is
+# refused before a checkout link is ever asked for, so the ask belongs on both paths.
+_NO_MARKET_SELLER_GUIDANCE = (
+    "carousell.ai does not know which country the seller sells from, and it decides the currency "
+    "their listings are priced in, so nothing can be published yet. Ask the seller whether they "
+    "sell in Singapore or the United States, tell them it is permanent once their payout account "
+    "exists, record their answer with carousell_ai_set_market, and then call this tool again"
+)
+# The publish pass talks to no one and cannot see carousell_ai_set_market, so naming either the
+# seller or the tool would send it at something it cannot do.
+_NO_MARKET_PUBLISH_GUIDANCE = (
+    "carousell.ai does not know which country the seller sells from, so nothing can be published "
+    "yet. This pass cannot ask them — escalate; the seller's own channel handles it"
+)
+
+
+def _no_market_guidance(ctx: ToolContext) -> str:
+    if ctx.session.tier == TIER_PASS_PUBLISH:
+        return _NO_MARKET_PUBLISH_GUIDANCE
+    return _NO_MARKET_SELLER_GUIDANCE
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -109,6 +131,10 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
+    except RailToolError as exc:
+        if NO_MARKET_CLAUSE in str(exc):
+            raise ToolError(_no_market_guidance(ctx)) from exc
+        raise ToolError(str(exc)) from exc
     except Exception as exc:  # RailError subclasses carry caller-safe, secret-free messages
         raise ToolError(str(exc)) from exc
 

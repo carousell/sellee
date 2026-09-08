@@ -28,6 +28,7 @@ from sellee.rail.client import (
     listing_id_from_url,
 )
 from sellee.store import StoreError
+from sellee.tools.rail_gates import NO_MARKET_CLAUSE
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -46,7 +47,6 @@ _MARKET = "carousell-ai"
 # degraded (it still says the seller must sign in), never wrong.
 _GUEST_GATE_CLAUSE = "belongs to a guest account"
 _ALREADY_SIGNED_IN_CLAUSE = "already a seller"
-_NO_MARKET_CLAUSE = "seller has no market"
 
 _GUEST_GATE_SELLER_GUIDANCE = (
     "the seller hasn't done their one-time carousell.ai sign-in yet, so checkout links are "
@@ -169,7 +169,7 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     except RailToolError as exc:
         if _GUEST_GATE_CLAUSE in str(exc):
             raise ToolError(_guest_gate_guidance(ctx)) from exc
-        if _NO_MARKET_CLAUSE in str(exc):
+        if NO_MARKET_CLAUSE in str(exc):
             raise ToolError(_no_market_guidance(ctx)) from exc
         raise ToolError(str(exc)) from exc
     except RailError as exc:
