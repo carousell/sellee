@@ -31,14 +31,20 @@ def _normalize_region(region: str | None) -> str:
     return region.strip().upper()
 
 
-def _refusal(exc) -> str:
+def _refusal(exc: urllib.error.HTTPError) -> str:
     """The rail's own words when it refuses, falling back to the status code.
-    A 400 is usually actionable — an unserved country — and "HTTP 400" is not."""
+    A 400 is usually actionable — an unserved country — and "HTTP 400" is not.
+    The words are remote and ui.warn prints them raw, so control characters are
+    flattened to spaces: an escape sequence or newline in the body must not be
+    able to retitle the terminal or forge a line that looks like ours — the same
+    reason a non-printable api_key is rejected below."""
     try:
         body = json.loads(exc.read().decode("utf-8"))
-        message = str(body.get("error") or "").strip()
-    except Exception:
-        message = ""
+        raw = str(body.get("error") or "")
+    except (ValueError, AttributeError, OSError):
+        # Unreadable, non-JSON, or non-object body — a proxy's error page, not a refusal.
+        raw = ""
+    message = " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())
     if not message:
         return f"guests API returned HTTP {exc.code}"
     return message[:400]

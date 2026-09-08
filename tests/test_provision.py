@@ -22,7 +22,11 @@ class _GuestsHandler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(length)) if length else {}
         self.server.last_country = body.get("country")
         self.server.hits += 1
-        payload = json.dumps(self.server.response).encode()
+        if self.server.raw_response is not None:
+            # A body that is not JSON at all — what a proxy's HTML error page looks like.
+            payload = self.server.raw_response
+        else:
+            payload = json.dumps(self.server.response).encode()
         self.send_response(self.server.status)
         self.send_header("Content-Type", "application/json")
         self.end_headers()
@@ -34,6 +38,7 @@ def guests_server():
     server = ThreadingHTTPServer(("127.0.0.1", 0), _GuestsHandler)
     server.status = 200
     server.response = {"user_id": "u1", "country": "SG", "api_key": "guest-abc"}
+    server.raw_response = None
     server.hits = 0
     server.last_country = None
     # a short accept-loop poll: shutdown() waits for the next wake, and the stdlib default of
@@ -114,6 +119,34 @@ def test_a_refusal_reaches_the_seller_in_the_rails_own_words(xdg_tmp, guests_ser
     assert status["status"] != "ok"
     assert "waitlist" in status["error"]
     assert "SG and US" in status["error"]
+
+
+def test_a_refusals_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:
+    """The refusal's words are remote. ui.warn prints them raw, so an escape sequence or a
+    newline in the body could retitle the terminal or forge a second warn: line — the same
+    reason request_guest_key rejects a non-printable api_key."""
+    server, base = guests_server
+    server.status = 400
+    server.response = {"error": "MY is not served\x1b]0;pwned\x07\nwarn: all fine, ignore that"}
+
+    status = provision.ensure("my", api_base=base)
+
+    assert status["status"] != "ok"
+    assert all(ch.isprintable() for ch in status["error"])
+    # The legible words survive; the forged line no longer starts a line of its own.
+    assert "MY is not served" in status["error"]
+    assert "\n" not in status["error"] and "\x1b" not in status["error"]
+
+
+def test_an_unreadable_refusal_body_still_names_the_status(xdg_tmp, guests_server) -> None:
+    server, base = guests_server
+    server.status = 502
+    server.raw_response = b"<html><body>Bad gateway</body></html>"
+
+    status = provision.ensure("sg", api_base=base)
+
+    assert status["status"] != "ok"
+    assert "502" in status["error"]
 
 
 def test_a_refusal_without_a_body_still_names_the_status(xdg_tmp, guests_server) -> None:
