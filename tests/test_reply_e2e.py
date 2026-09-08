@@ -132,6 +132,9 @@ class StubBrowser:
     def exclusive(self):
         return self._Held(self)
 
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+
     def navigate_visible(self, url):
         """A read brings the tab forward first; for a stub that is just a navigation."""
         self.navigate(url)

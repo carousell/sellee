@@ -304,6 +304,10 @@ class FakeClient:
     def mark_detached(self, reason):
         self.detached_as = reason
 
+    def close_stray_tabs(self):
+        """Pruned on every acquisition; a stub has no window to keep tidy."""
+        return 0
+
     def set_follow(self, follow):
         self.follow = follow
 
@@ -495,7 +499,7 @@ def test_a_chrome_that_cannot_be_asked_says_nothing(store, bus, factory_bits, mo
 # --- the window has to be wide enough for the desktop layout --------------------------------------
 
 
-def _factory(store, bus, monkeypatch, width, calls):
+def _factory(store, bus, monkeypatch, width, calls, prepared=None):
     """A browser factory whose Chrome is ready and whose window reports `width`."""
     monkeypatch.setattr(daemon.chrome, "ensure_running", lambda port, **kw: (chrome.READY, 9222))
     monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)
@@ -504,8 +508,16 @@ def _factory(store, bus, monkeypatch, width, calls):
         "ensure_window_width",
         lambda port, minimum, **kw: calls.append((port, minimum)) or width,
     )
+    monkeypatch.setattr(
+        daemon.chrome,
+        "enable_background_operation",
+        lambda port, **kw: (prepared.append(port) if prepared is not None else None) or 1,
+    )
 
     class _Stub:
+        def close_stray_tabs(self):
+            return 0
+
         def set_follow(self, on):
             pass
 
@@ -519,9 +531,20 @@ def _factory(store, bus, monkeypatch, width, calls):
     return daemon.make_browser_factory(Config(), store, bus, {})
 
 
+def test_every_acquisition_prepares_the_tabs_for_background_work(store, bus, monkeypatch) -> None:
+    """Chrome keeps this per tab once set, so the repeat is for tabs opened since the last
+    acquisition — and a tab that missed it is a tab that raises the seller's window to be read."""
+    prepared: list = []
+    factory = _factory(store, bus, monkeypatch, 1600, [], prepared)
+    factory()
+    factory()
+
+    assert prepared == [9222, 9222]
+
+
 def test_every_acquisition_checks_the_window_width(store, bus, monkeypatch) -> None:
-    """Not once at launch: --restore-last-session brings back whatever width the window last
-    had."""
+    """Not once at launch: a window the seller resized keeps that width across acquisitions, and
+    Chrome restores the last window size on its own even with the session left behind."""
     calls: list = []
     factory = _factory(store, bus, monkeypatch, 1600, calls)
     factory()

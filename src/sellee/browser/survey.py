@@ -150,7 +150,7 @@ def _follow_to_listings(client, adapter, current: str) -> bool:
     target = answer.get("url")
     if not target:
         return False
-    client.navigate_visible(urljoin(current, str(target)))
+    client.navigate(urljoin(current, str(target)))
     return True
 
 
@@ -160,7 +160,8 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
     with client.exclusive():
-        client.navigate_visible(url)
+        client.prepare_background()
+        client.navigate(url)
         login = client.evaluate(adapter.login_js) or {}
         if login.get("state") != "logged_in":
             # Signed out again. The read lane owns that notice; a second voice about a survey the
@@ -171,6 +172,11 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
             _unserved(deps, market, "could not reach the seller's listings page")
             return
         answer = client.evaluate(adapter.my_listings_js)
+        if not isinstance(answer, dict) or not isinstance(answer.get("listings"), list):
+            # The quiet read abstained; retry with the tab forward, against whatever page the
+            # follow above landed on. Still inside the hold — a raise after releasing it would be
+            # re-reading a tab another lane is entitled to have moved.
+            answer = client.read_forward(adapter.my_listings_js)
 
     if not isinstance(answer, dict) or not isinstance(answer.get("listings"), list):
         # A failure, not an empty page: an empty list means "nothing listed", which is what stops

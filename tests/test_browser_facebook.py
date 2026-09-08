@@ -50,8 +50,10 @@ class StubClient:
         self.tails = tails or {}
         self.click_fails = click_fails
         self.navigations: list = []
+        self.prepared = 0
         self.clicks: list = []
         self.calls: list = []
+        self.visible_navigations: list = []
         # Counted apart from navigations: an adopted thread is navigated again to read its tail,
         # which is not the lane re-deriving the listing.
         self.product_id_reads = 0
@@ -71,8 +73,18 @@ class StubClient:
         return self._Exclusive(self)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation —
+        recorded apart, because Facebook's folder click is the one read that needs it."""
+        self.visible_navigations.append(url)
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on."""
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+        self.prepared += 1
 
     def navigate(self, url):
         self.navigations.append(url)
@@ -190,6 +202,27 @@ def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_o
     inbox.inbox_lane(_deps(store, bus, client))
 
     assert client.clicks == []
+    # And it is never brought forward either: a market with no folder to click is read quietly,
+    # which is what keeps the lane out of the seller's way.
+    assert client.visible_navigations == []
+
+
+def test_a_folder_market_is_read_without_bringing_the_window_forward(store, bus, seeded) -> None:
+    """Facebook's folder answers to focus and a real Enter, and it opens from a read that never
+    comes to the front — as long as the agent's tab is the active tab of its window.
+
+    That last part is the whole fix, and it was mistaken for "Facebook needs the window frontmost"
+    for a while. A window has one active tab; with leftovers in it the agent's tab reads as hidden,
+    the folder stays shut, and the lane raises the window to get its own tab back. Pruned to one
+    tab, the same read succeeds quietly — so what this holds is that no market asks for the raise.
+    """
+    client = StubClient(conversations=[_conv()])
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.visible_navigations == []
+    # Without the re-assertion the folder's Enter goes nowhere and the read raises the window.
+    assert client.prepared >= 1
 
 
 def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
@@ -313,6 +346,7 @@ class SurveyStub:
         self.entry_url = entry_url
         self.listings = listings if listings is not None else {"listings": [], "active_count": 0}
         self.navigations: list = []
+        self.prepared = 0
 
     class _Exclusive:
         def __init__(self, client):
@@ -328,8 +362,16 @@ class SurveyStub:
         return self._Exclusive(self)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation."""
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on."""
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+        self.prepared += 1
 
     def navigate(self, url):
         self.navigations.append(url)

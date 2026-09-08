@@ -76,6 +76,7 @@ class StubClient:
         self.detail = detail
         self.fail = fail
         self.navigations: list = []
+        self.prepared = 0
 
     class _Exclusive:
         def __init__(self, client):
@@ -91,8 +92,16 @@ class StubClient:
         return self._Exclusive(self)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation."""
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on."""
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+        self.prepared += 1
 
     def navigate(self, url):
         if self.fail == "navigate":
@@ -159,6 +168,9 @@ def test_a_clean_read_asks_once_and_records_the_listings(store, bus) -> None:
     survey.discover_phase(_deps(store, bus, client))
 
     rows = store.list_discovered_listings(_MARKET)
+    # The survey reads in the background like the inbox does, and its tab needs the same
+    # re-assertion — Chrome re-hides a minimized window's tab on its own schedule.
+    assert client.prepared >= 1
     assert [r["listing_id"] for r in rows] == ["111", "222"]
     assert {r["status"] for r in rows} == {"pending"}
     assert store.get_market_survey(_MARKET)["state"] == "done"

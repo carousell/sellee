@@ -41,6 +41,12 @@ class StubClient:
         self.tails = tails or {}
         self.fail = fail
         self.navigations: list = []
+        self.prepared = 0
+        # Every page the lane brought the tab forward for. Whether this stays empty is the
+        # difference between a read lane that takes the seller's focus and one that does not.
+        self.forwards: list = []
+        self.heals_on_forward = False
+        self.forward_blocked = False
         self.url = ""
 
     class _Exclusive:
@@ -57,8 +63,23 @@ class StubClient:
         return self._Exclusive(self)
 
     def navigate_visible(self, url):
-        """A read brings the tab forward first; for a stub that is just a navigation."""
+        """The typing path: the tab is brought forward before the work. Here, a navigation."""
         self.navigate(url)
+
+    def read_forward(self, function):
+        """The retry a starved read falls back on — the only read path that costs the seller's
+        focus, so the stub records every one of them. The page is the one the tab is on, which is
+        what the real client reads back rather than trusting an address the caller still holds."""
+        self.forwards.append(self.url)
+        if self.forward_blocked:
+            return None
+        if self.heals_on_forward:
+            self.error = None
+        return self.evaluate(function)
+
+    def prepare_background(self):
+        """Re-asserted at the head of every read; a stub has no window to tell anything."""
+        self.prepared += 1
 
     def navigate(self, url):
         if self.fail == "navigate":
@@ -182,6 +203,63 @@ def test_the_read_navigates_only_recorded_urls(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()], tails={"99": [_bubble("hi")]})
     inbox.inbox_lane(_deps(store, bus, client))
     assert client.navigations == [_INBOX, "https://www.carousell.sg/inbox/99/"]
+
+
+def test_a_readable_sweep_never_brings_the_window_forward(store, bus, seeded) -> None:
+    """The regression this path exists for.
+
+    Bringing a tab forward activates the whole Chrome window on macOS, and the read lane runs every
+    few minutes — so a sweep that raises once per readable thread takes the seller's focus all day.
+    Neither watch mode nor the browser-window setting gated the old raise, which is what made it
+    unanswerable from the chat.
+    """
+    _thread(store, seeded)
+    client = StubClient(conversations=[_conv()], tails={"99": [_bubble("still available?")]})
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.navigations == [_INBOX, "https://www.carousell.sg/inbox/99/"]
+    assert client.forwards == []
+    # The other half of the quiet read: Chrome re-hides a minimized window's tab on its own
+    # schedule, so a read that skipped the re-assertion is a read that starves and raises.
+    assert client.prepared >= 1
+
+
+def test_a_starved_list_read_is_retried_with_the_tab_forward(store, bus, seeded) -> None:
+    """The other half of the bargain: a page that only builds itself while visible still gets read,
+    at the cost of one raise rather than one per navigation."""
+    _thread(store, seeded)
+    client = StubClient(
+        conversations=[_conv()],
+        tails={"99": [_bubble("still available?")]},
+        error="no_conversation_list",
+    )
+    client.heals_on_forward = True
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.forwards == [_INBOX]
+    assert [m["text"] for m in store.get_thread("carousell:99")["messages"]] == ["still available?"]
+
+
+def test_a_starved_tail_read_is_retried_with_the_tab_forward(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    client = StubClient(conversations=[_conv()], tails={"99": None})
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.forwards == ["https://www.carousell.sg/inbox/99/"]
+
+
+def test_a_tab_that_will_not_come_forward_stays_blind_rather_than_reading_empty(
+    store, bus, seeded
+) -> None:
+    """A refused raise must not turn into "the conversation is over" — the failure the abstain
+    shapes exist to keep distinguishable."""
+    _thread(store, seeded)
+    client = StubClient(conversations=[_conv()], tails={"99": None})
+    client.forward_blocked = True
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert client.forwards == ["https://www.carousell.sg/inbox/99/"]
+    assert store.get_thread("carousell:99")["messages"] == []
 
 
 def test_a_scam_message_is_stamped_before_any_model_sees_it(store, bus, seeded) -> None:
