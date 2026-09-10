@@ -89,13 +89,13 @@ def test_the_read_lane_skips_a_disconnected_market_entirely(store, bus) -> None:
 def test_a_pending_sign_in_for_a_disconnected_market_is_dropped(store, bus) -> None:
     """The market can be disconnected after the tap; the row is cleared rather than left to fire on
     an unrelated reconnect."""
-    store.request_market_connect(_MARKET, CONNECT_MODE_OPEN)
+    store.request_connect(_MARKET, CONNECT_MODE_OPEN)
     _disconnect(store)
     deps = connect.ConnectDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
 
     connect.connect_lane(deps)
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_a_stale_sign_in_button_says_the_market_is_off_rather_than_unknown(store, bus) -> None:
@@ -108,7 +108,7 @@ def test_a_stale_sign_in_button_says_the_market_is_off_rather_than_unknown(store
     )
 
     assert "isn't connected" in text
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 # --- the survey and the adoption ----------------------------------------------------------------
@@ -280,7 +280,7 @@ def test_connecting_from_the_card_applies_immediately_with_an_undo(store, bus) -
     # Connecting opens the sign-in too; leaving the seller to find that step would make the switch
     # appear to do nothing.
     assert "sign in" in text
-    assert store.pending_market_connects()[0]["market"] == _MARKET
+    assert store.pending_connects()[0]["target"] == _MARKET
     applied = [c for c in store.list_pending_changes() if c["key"] == "connected_markets"]
     assert applied == [] or applied[0]["status"] == "applied"  # never left awaiting approval
 

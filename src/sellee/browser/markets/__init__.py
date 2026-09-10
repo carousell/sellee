@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell, facebook
+from sellee.browser.markets import carousell, craigslist, facebook
 
 
 @dataclass(frozen=True)
@@ -155,7 +155,27 @@ FACEBOOK = MarketAdapter(
     min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
 )
 
-_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
+CRAIGSLIST = MarketAdapter(
+    market="craigslist",
+    # There is no on-site inbox to read: craigslist routes buyers to an anonymised relay email.
+    # These are the honest answer rather than placeholders — see `markets/craigslist.py`. The market
+    # still carries an `inbox` URL, because the read lane's login probe and the survey backfill ride
+    # on that same navigation, and losing them costs more than the tick does.
+    conversations_list_js=craigslist.CONVERSATIONS_LIST_JS,
+    conversation_tail_js=craigslist.CONVERSATION_TAIL_JS,
+    login_js=craigslist.LOGIN_JS,
+    my_listings_js=craigslist.MY_LISTINGS_JS,
+    listing_detail_js=craigslist.LISTING_DETAIL_JS,
+    listing_id_pattern=craigslist.LISTING_ID_PATTERN,
+    # No `composer`, no `chat_message_submit_js`: there is nothing to type into. Publishing is the
+    # `listing-flow-craigslist` recipe, so none of the `publish_*` driver fields are set either.
+)
+
+_ADAPTERS = {
+    CAROUSELL.market: CAROUSELL,
+    FACEBOOK.market: FACEBOOK,
+    CRAIGSLIST.market: CRAIGSLIST,
+}
 
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"
@@ -217,6 +237,103 @@ def can_survey(market: str, region: str | None = None) -> bool:
     if adapter is None or not adapter.my_listings_js or not adapter.listing_detail_js:
         return False
     return marketplaces.market_url(market, "my_listings", region) is not None
+
+
+def answers_buyers_in_browser(market: str) -> bool:
+    """Whether this marketplace's buyers can be read and replied to *in the browser*.
+
+    A question about the browser lane specifically: is there a conversation to open and a composer
+    to type into. Craigslist has neither — its buyers reach a seller by anonymised relay email — so
+    the browser lane must not go looking, and its own copy must not speak for that market.
+
+    This is **not** the question the seller-facing copy asks. See `answers_buyers`.
+    """
+    adapter = _ADAPTERS.get(market)
+    if adapter is None:
+        return False
+    return bool(adapter.composer_step(MESSAGE_BOX) and marketplaces.urls(market).get("thread"))
+
+
+def reads_buyers(market: str) -> bool:
+    """Whether the agent can *read* this marketplace's buyers, by any transport.
+
+    True for a browser inbox, and true for craigslist — whose buyers arrive as mail, which
+    `sellee/mail/` reads. Separate from answering them, because for craigslist those two questions
+    have different answers and the difference is measured.
+    """
+    if answers_buyers_in_browser(market):
+        return True
+    from sellee.connectables import MAIL_MARKETS
+
+    return market in MAIL_MARKETS
+
+
+# Markets whose buyers can be read but **not replied to**, with the evidence. A capability flag
+# rather than an architectural claim, so it flips back with one line if the evidence changes.
+#
+# **Craigslist: measured 2026-09-10, one posting (id 7963439877), one seller account.**
+#
+#   buyer -> seller, `<hex>@sale.craigslist.org`      worked 3 times out of 3
+#   seller -> buyer, `<hex>@reply.craigslist.org`     accepted, no bounce, never arrived  (2x)
+#   seller -> buyer, `<hex>@sale.craigslist.org`      accepted, no bounce, never arrived  (1x)
+#   seller -> buyer, a **hand-typed** reply, no automation in the path, never arrived     (1x)
+#   seller -> buyer, a *stale* hex                    bounced 550 "get a current reply email
+#                                                     address" — so the relay is not a blind
+#                                                     catch-all; it has routing state and chose to
+#                                                     accept and discard the live ones
+#
+# The hand-typed control is what makes this a fact about craigslist rather than about this code.
+# Nothing craigslist documents predicts it: their help page says contact information "passes
+# through unaltered" and that threads "continue for up to 4 months", and their relay-error page
+# lists no silent-drop case. Both relay domains resolve the same MX (`mxia.craigslist.org`), so it
+# is not a send-only domain either.
+#
+# So the promise is withdrawn rather than kept badly: reading a craigslist buyer is real and
+# useful — the seller hears about them in chat instead of watching an inbox — and replying is
+# theirs. If a clean account is later observed replying successfully, delete the entry.
+READ_ONLY_BUYERS = ("craigslist",)
+
+
+def answers_buyers(market: str) -> bool:
+    """Whether the agent can answer this marketplace's buyers **at all**, by any transport.
+
+    Connecting a marketplace has always promised four things — list to it, read its inbox, answer
+    its buyers, adopt what is already there. Craigslist keeps three: its relay carries a buyer's
+    message to the seller and has never been observed carrying a reply back, including from a
+    hand-typed send with none of this code involved (see `READ_ONLY_BUYERS`).
+
+    A *capability* question, about the code and what has been measured of the marketplace. Whether
+    a given seller's buyers can be answered right now also needs their mailbox connected, which is
+    `can_answer_buyers`. Copy shown to a seller asks that one.
+    """
+    if market in READ_ONLY_BUYERS:
+        return False
+    return reads_buyers(market)
+
+
+def can_answer_buyers(market: str, store) -> bool:
+    """Whether *this seller's* buyers on this market can be answered right now.
+
+    **This is the predicate every seller-facing promise branches on**, and it is a function of
+    state rather than of code alone. Craigslist can answer buyers — but only once the mailbox those
+    buyers email has been signed in to, scoped and confirmed. Before that, the honest thing to say
+    is that their replies are theirs.
+
+    Mechanised deliberately. The alternative is a set of strings someone has to remember to flip in
+    the same commit that wires the transport, and getting that wrong is the same bug in either
+    direction: promising replies that do not happen, or disclaiming replies the agent is sending.
+    """
+    if not answers_buyers(market):
+        # No transport has ever been observed answering this market's buyers, so no amount of
+        # seller state makes it true.
+        return False
+    if answers_buyers_in_browser(market):
+        return True
+    from sellee.connectables import MAIL_MARKETS
+
+    if market not in MAIL_MARKETS:
+        return False
+    return bool(store.mail_ready(market))
 
 
 def drivable_markets() -> list:

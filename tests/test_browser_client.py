@@ -1162,3 +1162,69 @@ def test_a_handshake_that_fails_leaves_nothing_behind_to_block_the_next_try(make
     with pytest.raises(BrowserUnavailable):
         client.call_tool("browser_click", {})
     assert client._proc is None
+
+
+# --- a tab that has shown nothing else -----------------------------------------------------------
+
+
+def test_a_fresh_tab_is_opened_and_closed_by_index(make_client) -> None:
+    """The primitive the mail transport's scope guarantee rests on.
+
+    Measured on 2026-09-10: Gmail keeps rendered list rows in the DOM across hash navigations, so a
+    tab that had shown `#inbox` still held 34 of the seller's personal emails inside a correctly
+    scoped search — right hash, title "Search results". A fresh tab was clean. So the guarantee is
+    a property of the tab, not of the URL.
+
+    Closed by **explicit index**, not as "the current tab": the server re-points its notion of
+    current whenever a tab closes, and closing by current could leave later calls acting on a tab
+    the seller owns. The original is reselected for the same reason.
+    """
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": {
+                    "text": (
+                        "### Open tabs\n- 0: (current) [ours](https://www.carousell.sg/inbox/)\n"
+                    )
+                },
+                "browser_navigate": {"text": "ok"},
+                "browser_evaluate": {"result": {"conversations": []}},
+            }
+        }
+    )
+    client.navigate("https://www.carousell.sg/inbox/")
+
+    with client.fresh_tab():
+        client.navigate("https://mail.google.com/mail/u/0/#search/x")
+
+    tabs = [c["arguments"] for c in tool_calls(client) if c["tool"] == "browser_tabs"]
+    # The first `new` is `ensure_tab`'s own; the second is the fresh one.
+    assert tabs[0] == {"action": "new"}
+    assert {"action": "close", "index": 0} in tabs
+    assert {"action": "select", "index": 0} in tabs
+    assert tabs.index({"action": "close", "index": 0}) < tabs.index(
+        {"action": "select", "index": 0}
+    )
+
+
+def test_a_fresh_tab_is_closed_even_when_the_body_raises(make_client) -> None:
+    """The caller's error is the one worth reporting, and a leftover tab is what
+    `close_stray_tabs` is for — so neither failure in the cleanup may mask what the body raised."""
+    client = make_client(
+        {
+            "tools": {
+                "browser_tabs": {
+                    "text": "### Open tabs\n- 0: (current) [ours](https://example.com/)\n"
+                },
+                "browser_navigate": {"text": "ok"},
+            }
+        }
+    )
+    client.navigate("https://example.com/")
+
+    with pytest.raises(RuntimeError, match="the read blew up"):
+        with client.fresh_tab():
+            raise RuntimeError("the read blew up")
+
+    tabs = [c["arguments"] for c in tool_calls(client) if c["tool"] == "browser_tabs"]
+    assert {"action": "close", "index": 0} in tabs

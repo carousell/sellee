@@ -146,6 +146,7 @@
     {
       "id": "craigslist",
       "display_name": "Craigslist",
+      "listing_flow": "listing-flow-craigslist",
       "listing_url": {
         "host": "craigslist.org",
         "path": "/d/"
@@ -153,7 +154,19 @@
       "connector": {
         "type": "browser"
       },
-      "status": "active"
+      "status": "active",
+      "domains": {
+        "US": "www.craigslist.org"
+      },
+      "media_hosts": [
+        "images.craigslist.org"
+      ],
+      "urls": {
+        "home": "https://accounts.craigslist.org/login/home",
+        "inbox": "https://accounts.craigslist.org/login/home",
+        "my_listings": "https://accounts.craigslist.org/login/home",
+        "sell": "https://post.craigslist.org/c/{area}"
+      }
     }
   ]
 }

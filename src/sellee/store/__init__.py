@@ -54,6 +54,7 @@ from sellee.store.helpers import (
     ui_cache_is_stale,
 )
 from sellee.store.items import ItemsMixin
+from sellee.store.mail import MailMixin
 from sellee.store.negotiation import NegotiationMixin
 from sellee.store.passes import PassesMixin
 from sellee.store.scam import ScamMixin
@@ -92,6 +93,7 @@ __all__ = [
 class Store(
     ItemsMixin,
     BrowserMixin,
+    MailMixin,
     ThreadsMixin,
     WantsMixin,
     NegotiationMixin,

@@ -25,6 +25,7 @@ from sellee.store.helpers import (
     _now,
     _term_overlap,
     _ui_cache_from_row,
+    normalize_title,
     validate_photos,
 )
 
@@ -60,7 +61,8 @@ class ItemsMixin:
         condition: str | None = None,
         photos: list | None = None,
     ) -> ItemRecord:
-        if not title or not title.strip():
+        title = normalize_title(title)
+        if not title:
             raise StoreError("title must be non-empty")
         stored_photos = validate_photos(photos or [])
         ts = _now()
@@ -96,6 +98,13 @@ class ItemsMixin:
             )
         if not fields:
             raise StoreError("no fields to update")
+        if "title" in fields:
+            # The same boundary as creation, and creation was not the only door: the channel pass
+            # that stored `case &amp; pouch` created the item and then updated its title twice.
+            title = normalize_title(fields["title"])
+            if not title:
+                raise StoreError("title must be non-empty")
+            fields = dict(fields, title=title)
         if "photos" in fields:
             fields = dict(fields, photos=json.dumps(validate_photos(fields["photos"])))
 

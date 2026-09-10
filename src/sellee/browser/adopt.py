@@ -48,14 +48,34 @@ ORIGIN = "adopt"
 
 RELISTED_NOTICE = "{title} is now on {market}: {url}"
 NO_PHOTOS_NOTICE = (
-    "I've taken over {title} on {name} — I'll answer buyers on it from here. I couldn't bring its "
-    "photos across, so it isn't on {rail}; send me a photo and I'll list it there too."
+    "I've taken over {title} on {name}. {buyers} I couldn't bring its photos across, so it isn't "
+    "on {rail}; send me a photo and I'll list it there too."
 )
 RAIL_FAILED_NOTICE = (
-    "I couldn't get {title} onto {rail}, so for now it's only on {name}. I'm still answering "
-    "buyers on it. Ask me and I'll have another go."
+    "I couldn't get {title} onto {rail}, so for now it's only on {name}. {buyers} Ask me and I'll "
+    "have another go."
+)
+# The clause both of those take. Branched rather than hardcoded, because a market whose buyers
+# arrive as mail cannot be answered until that mailbox is connected — and saying otherwise is the
+# same bug in the other direction from never saying it at all.
+ANSWERING_BUYERS = "I'll answer buyers on it from here."
+NOT_ANSWERING_BUYERS = (
+    "I'll pass on anything its buyers email you, though answering them stays yours."
 )
 SUMMARY_NOTICE = "Done with your {name} listings: {parts}."
+
+
+def _answering_clause(market: str, store) -> str:
+    """Whether we can honestly say we will answer this listing's buyers.
+
+    Asked of state, not of a market name: craigslist's buyers arrive as mail and cannot be answered
+    until that mailbox is connected. Promising it anyway is the same bug as never promising it.
+    """
+    from sellee.browser import markets as market_adapters
+
+    if market_adapters.can_answer_buyers(market, store):
+        return ANSWERING_BUYERS
+    return NOT_ANSWERING_BUYERS
 
 
 # --- phase two: a yes becomes items ---------------------------------------------------------
@@ -262,6 +282,7 @@ def _adopt_one(deps, row: dict, adapter) -> None:
                 title=item["title"],
                 name=marketplaces.display_name(market),
                 rail=marketplaces.display_name(marketplaces.RAIL),
+                buyers=_answering_clause(market, deps.store),
             )
         )
 
@@ -403,6 +424,7 @@ def _settle_queued(deps) -> None:
                 title=title,
                 rail=marketplaces.display_name(marketplaces.RAIL),
                 name=marketplaces.display_name(row["market"]),
+                buyers=_answering_clause(row["market"], deps.store),
             ),
         )
         deps.bus.publish(

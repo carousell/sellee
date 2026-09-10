@@ -64,7 +64,8 @@ FIRST_LISTING_NUDGE_INTERVAL_SEC = 3600.0
 # two buyers waited from 03:14 with no reply and no word to the seller.
 BUYER_WAITING_TEXT = (
     "Heads up{about}: they've been waiting {minutes} minutes for a reply and I haven't been able "
-    "to send one. You may want to answer them in the app."
+    "to send one. You may want to answer them yourself — in the marketplace's app, or in your "
+    "email if that is where they wrote."
 )
 BUYER_WAITING_REF = "buyer-waiting"
 # Long enough that an ordinary reply in flight is never reported — a pass takes seconds and the

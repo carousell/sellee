@@ -2,8 +2,9 @@
 
 A handoff between two threads, not a history. The provider's receive loop writes a row when the
 seller taps **Sign in on desktop** (it must not drive Chrome itself — that loop answers every other
-message), and `browser.connect`'s lane reads it, serves it, and deletes it. The durable record of
-what happened is the notice queued back to the seller, never a row left behind here.
+message), and `browser.connect`'s lane reads it, serves it, and deletes it. A request names a
+*target* — a marketplace, or a marketplace's mailbox — because Craigslist needs both. The durable
+record of what happened is the notice queued back to the seller, never a row left behind here.
 """
 
 from __future__ import annotations
@@ -31,8 +32,10 @@ HOLD_SETUP = "setup"
 BROWSER_HOLD_TTL_SEC = 900.0
 
 
-class MarketConnectRequest(TypedDict):
-    market: str
+class ConnectRequest(TypedDict):
+    # A market id (`craigslist`) or a market's mailbox (`craigslist-mail`) — resolved by
+    # `sellee.connectables`. The lane keys its per-market notices off `connectables.market_of`.
+    target: str
     mode: str
     requested_ts: float
 
@@ -41,39 +44,46 @@ class BrowserMixin:
     # Bound by Store.__init__; declared so a checker resolves it inside each mixin.
     _db: Database
 
-    def request_market_connect(self, market: str, mode: str = CONNECT_MODE_OPEN) -> None:
-        """Ask the connect lane to sign the seller in to `market`.
+    def request_connect(self, target: str, mode: str = CONNECT_MODE_OPEN) -> None:
+        """Ask the connect lane to sign the seller in to `target`.
 
-        Idempotent per market by the row's primary key: a seller who taps the button twice (or
+        A target is a marketplace or a marketplace's mailbox — Craigslist needs both, and the
+        mailbox is deliberately not a market of its own (see `sellee.connectables`).
+
+        Idempotent per target by the row's primary key: a seller who taps the button twice (or
         taps Check again while an open is still pending) replaces the request they already have
         rather than queueing a second navigation of the daemon's one shared tab. The newest tap
         wins, including its mode — it is the one that reflects what they are looking at now.
+
+        Per *target* rather than per market, so a pending Craigslist sign-in and a pending mailbox
+        sign-in coexist: the two-part connect asks for them in order, and collapsing them would
+        drop whichever the seller had not got to yet.
         """
         if mode not in CONNECT_MODES:
-            raise ValueError(f"unknown market connect mode: {mode!r}")
+            raise ValueError(f"unknown connect mode: {mode!r}")
         with self._db.transaction() as conn:
             conn.execute(
-                "INSERT INTO market_connect_requests (market, mode, requested_ts) "
-                "VALUES (?, ?, ?) ON CONFLICT (market) DO UPDATE SET "
+                "INSERT INTO connect_requests (target, mode, requested_ts) "
+                "VALUES (?, ?, ?) ON CONFLICT (target) DO UPDATE SET "
                 "mode = excluded.mode, requested_ts = excluded.requested_ts",
-                (market, mode, _now()),
+                (target, mode, _now()),
             )
 
-    def pending_market_connects(self) -> list[MarketConnectRequest]:
+    def pending_connects(self) -> list[ConnectRequest]:
         """Every outstanding request, oldest first — the order the lane serves them in."""
         rows = self._db.query(
-            "SELECT market, mode, requested_ts FROM market_connect_requests "
-            "ORDER BY requested_ts ASC, market ASC"
+            "SELECT target, mode, requested_ts FROM connect_requests "
+            "ORDER BY requested_ts ASC, target ASC"
         )
         return [
-            MarketConnectRequest(market=r["market"], mode=r["mode"], requested_ts=r["requested_ts"])
+            ConnectRequest(target=r["target"], mode=r["mode"], requested_ts=r["requested_ts"])
             for r in rows
         ]
 
-    def clear_market_connect_request(self, market: str) -> None:
+    def clear_connect_request(self, target: str) -> None:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""
         with self._db.transaction() as conn:
-            conn.execute("DELETE FROM market_connect_requests WHERE market = ?", (market,))
+            conn.execute("DELETE FROM connect_requests WHERE target = ?", (target,))
 
     # --- holds on the one shared tab ---------------------------------------------------------
 

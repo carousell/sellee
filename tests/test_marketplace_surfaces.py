@@ -20,7 +20,38 @@ from sellee.browser import markets as market_adapters
 
 # A gap someone has looked at and decided to ship without, with the reason. Delete the entry when
 # the gap closes — this test fails while a waiver describes a surface that now works.
-WAIVERS: dict = {}
+WAIVERS: dict = {
+    ("craigslist", "answers_buyers"): (
+        "Craigslist's relay carries a buyer's message to the seller and has never been observed "
+        "carrying a reply back. Measured 2026-09-10 on one live posting: inbound worked 3 times "
+        "out of 3; outbound failed 4 times — twice to `<hex>@reply.craigslist.org`, once to "
+        "`<hex>@sale.craigslist.org`, and once from a **hand-typed** reply with none of this code "
+        "in the path. No bounce was produced by any of them, while a *stale* hex did bounce 550 "
+        '"get a current reply email address" — so the relay is not a blind catch-all: it has '
+        "routing state and chose to accept and discard the live ones.\n\n"
+        "Nothing craigslist documents predicts this. Their help page says contact information "
+        '"passes through unaltered" and that threads "continue for up to 4 months"; their '
+        "relay-error page lists no silent-drop case; and both relay domains resolve the same MX, "
+        "so it is not a send-only domain.\n\n"
+        "**So the promise is withdrawn rather than kept badly.** What the transport does deliver "
+        "is real: it reads the buyer and passes their words to the seller in chat, instead of the "
+        "seller watching an inbox. `market_adapters.READ_ONLY_BUYERS` is where this lives, and it "
+        "is a capability flag with the evidence attached — if a clean account is later observed "
+        "replying successfully, delete the entry and this waiver with it."
+    ),
+    ("craigslist", "inbox"): (
+        "Craigslist has no on-site messaging to read or reply in: a buyer's only route to a "
+        "seller is an anonymised relay email, and the account page shows no replies at all. So "
+        "this gap is not work waiting to be done — the surface does not exist to implement, and "
+        "the adapter's conversation artifacts say so rather than pretending.\n\n"
+        "**Its buyers are answered anyway**, by the mail transport in `sellee/mail/`: a scoped "
+        "read of the mailbox they email, and a reply sent from it. That is graded by the "
+        "`answers_buyers` surface — which is *also* waived here, for a different and measured "
+        "reason (see that entry). This entry waives only the *browser* mechanism. Both exist "
+        "because grading one for the other is what made a delivered surface read as a permanent "
+        "gap; that reasoning still holds, and reading buyers is still delivered."
+    ),
+}
 
 
 def _a_region_it_serves(market: str) -> str | None:
@@ -67,6 +98,12 @@ def _surfaces(market: str) -> dict:
         # 6 — getting back in when the session drops; `login_js` has no default, so an adapter
         # cannot be built without one.
         "signin": bool(adapter.login_js),
+        # 7 — answering buyers **by any transport**, which is the promise connecting a marketplace
+        # actually makes. Added because grading `inbox` alone graded the *mechanism*: craigslist
+        # has no on-site inbox and never will, so that entry is permanently waived — and a
+        # permanent waiver on a surface that is in fact delivered reads as a gap forever. This is
+        # the promise, and craigslist keeps it through `sellee/mail/`.
+        "answers_buyers": market_adapters.answers_buyers(market),
     }
 
 

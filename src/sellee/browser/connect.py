@@ -25,11 +25,13 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import deployment, marketplaces, settings
+from sellee import connectables, deployment, marketplaces, settings
 from sellee.browser import blindness, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
+from sellee.mail import connect as mail_connect
+from sellee.mail import gmail
 from sellee.store.browser import CONNECT_MODE_OPEN
 
 log = logging.getLogger(__name__)
@@ -46,8 +48,12 @@ class BrowserDown(Exception):
     signed out; the lane turns it into a notice that says the same thing in chat."""
 
 
-def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool = False):
-    """Put the market's own page in front of the seller and read back whether they are in.
+def open_and_probe(*, store, browser_factory, target, bring_tab_forward: bool = False):
+    """Put the target's own sign-in page in front of the seller and read back whether they are in.
+
+    A target is a marketplace **or** a marketplace's mailbox (`sellee.connectables`). Craigslist
+    needs both, and generalising here rather than at each door is what stops six sign-in surfaces
+    each growing their own mailbox case.
 
     Held exclusively across the navigate and the probe: the read lane shares this one tab, and a
     probe that ran after it moved on would be answering about a different page.
@@ -56,15 +62,14 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     asked to sign in: being asked to open a marketplace is being asked for a window, while a read
     probe that reordered tabs would elbow the seller mid-browse.
 
-    Returns (state, url) where state is logged_in | logged_out | unknown.
+    Returns (state, url, answer) where state is logged_in | logged_out | unknown. The raw `answer`
+    comes back too because a mailbox probe reports one more thing that decides the outcome — which
+    provider the seller actually signed into.
     """
     region = store.seller_region()
-    url = marketplaces.market_home(adapter.market, region)
+    url = target.url
     if url is None:
-        raise BrowserDown(
-            f"{marketplaces.display_name(adapter.market)} has no site for "
-            f"{region or 'an unset region'}"
-        )
+        raise BrowserDown(f"{target.display_name} has no site for {region or 'an unset region'}")
     try:
         client = browser_factory()
         with client.exclusive():
@@ -81,7 +86,7 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
                     # which is what the probe has to be answering about.
                     log.debug("could not bring the connect tab forward", exc_info=True)
                     client.navigate(url)
-            answer = client.evaluate(adapter.login_js) or {}
+            answer = client.evaluate(target.login_js) or {}
     except BrowserDetached:
         # Deliberately not flattened into BrowserDown. Everything below answers the seller's tap,
         # and the only honest answer to "am I signed in?" while our own server has lost Chrome is
@@ -91,7 +96,7 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     except BrowserError as exc:
         raise BrowserDown(str(exc)) from exc
     state = answer.get("state")
-    return (state if state in ("logged_in", "logged_out") else "unknown"), url
+    return (state if state in ("logged_in", "logged_out") else "unknown"), url, answer
 
 
 # --- the lane -----------------------------------------------------------------------------------
@@ -99,6 +104,12 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
 # Copy. Every one of these is read on a phone and acted on at a desktop, so each says where the
 # window is rather than assuming the seller is sitting in front of it.
 SIGNED_IN_NOTICE = "✅ Signed in to {name} — I'm reading that market again."
+# The same, for a market whose buyers arrive as mail: the site sign-in is only half of it, and the
+# happy path must not say "I'm reading that market again" about a market it reads by mailbox.
+SIGNED_IN_NOTICE_MAIL_NEXT = (
+    "✅ Signed in to {name}. One more step: {name} buyers email you, so I need to sign in to the "
+    "mailbox that receives it. Opening that next."
+)
 SIGN_IN_HERE_NOTICE = (
     "{name}'s sign-in page is open in my Chrome window{where}. Sign in there, then tap Check again."
 )
@@ -155,42 +166,46 @@ def connect_lane(deps: ConnectDeps) -> None:
     unavailable *for a reason that passes*: a pass driving the tab. Anything else is reported.
     """
     connected = settings.connected_markets(deps.store)
-    for request in deps.store.pending_market_connects():
-        market = request["market"]
-        adapter = market_adapters.get_adapter(market)
-        if adapter is None:
-            # A market id with no adapter can only come from a stale button or a withdrawn
+    region = deps.store.seller_region()
+    for request in deps.store.pending_connects():
+        target_id = request["target"]
+        target = connectables.resolve(target_id, region)
+        if target is None:
+            # An id with nothing to sign in to can only come from a stale button or a withdrawn
             # registry entry. Clear it — retrying would never start working.
-            deps.store.clear_market_connect_request(market)
-            deps.store.queue_notice(NO_ADAPTER_NOTICE.format(market=market))
+            deps.store.clear_connect_request(target_id)
+            deps.store.queue_notice(NO_ADAPTER_NOTICE.format(market=target_id))
             continue
-        if market not in connected:
+        # A mailbox belongs to a market, and it is the *market's* opt-in that decides whether any
+        # of this is wanted. So both halves of a two-part connect are gated on the same setting.
+        if target.market not in connected:
             # The row is durable, so the market may have been disconnected since it was written.
             # Cleared rather than left pending: waiting cannot make it servable.
-            deps.store.clear_market_connect_request(market)
+            deps.store.clear_connect_request(target_id)
             continue
         if inbox.browser_busy(deps.store):
             # A pass mid-drive owns the tab. Navigating it now would pull the page out from under
             # a half-filled composer, and the seller asked to sign in, not to lose a listing.
             if deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
-                deps.store.clear_market_connect_request(market)
+                deps.store.clear_connect_request(target_id)
                 deps.store.queue_notice(
-                    STALE_NOTICE.format(name=marketplaces.display_name(market)),
-                    controls=fastpaths.signin_controls(market),
+                    STALE_NOTICE.format(name=target.display_name),
+                    controls=fastpaths.signin_controls(target_id),
                 )
             continue
-        _serve(deps, market, adapter, request["mode"])
+        _serve(deps, target, request["mode"])
 
 
-def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
-    """Open (or just re-probe) one market and tell the seller what came back."""
-    name = marketplaces.display_name(market)
+def _serve(deps: ConnectDeps, target, mode: str) -> None:
+    """Open (or just re-probe) one target and tell the seller what came back."""
+    market = target.market
+    name = target.display_name
     opening = mode == CONNECT_MODE_OPEN
     try:
-        state, _url = open_and_probe(
+        state, _url, answer = open_and_probe(
             store=deps.store,
             browser_factory=deps.browser_factory,
-            adapter=adapter,
+            target=target,
             bring_tab_forward=opening,
         )
     except BrowserDetached:
@@ -200,23 +215,33 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
         # The staleness sweep above is what stops it waiting forever.
         return
     except (BrowserDown, BrowserUnavailable) as exc:
-        deps.store.clear_market_connect_request(market)
+        deps.store.clear_connect_request(target.target)
         deps.store.queue_notice(
             CANT_OPEN_NOTICE.format(
                 name=name,
-                market=market,
+                market=target.target,
                 reason=exc,
                 chrome_check=_chrome_check(isinstance(exc, BrowserUnavailable)),
                 where=_shell_where(),
             ).replace("  ", " "),
-            controls=fastpaths.signin_controls(market),
+            controls=fastpaths.signin_controls(target.target),
         )
         return
 
-    deps.store.clear_market_connect_request(market)
-    deps.bus.publish("browser.login", {"market": market, "state": state})
+    deps.store.clear_connect_request(target.target)
+    deps.bus.publish("browser.login", {"market": market, "target": target.target, "state": state})
+    if target.is_mail:
+        _served_mailbox(deps, target, state, answer, opening=opening)
+        return
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
+        mail_target = connectables.mail_target_for(market)
+        if mail_target and not deps.store.mail_ready(market):
+            # The second half of a two-part connect, chained here rather than left to the seller to
+            # discover: a Craigslist that is signed in and has no mailbox answers nobody.
+            deps.store.request_connect(mail_target, CONNECT_MODE_OPEN)
+            deps.store.queue_notice(SIGNED_IN_NOTICE_MAIL_NEXT.format(name=name))
+            return
         deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
         return
     if opening:
@@ -224,7 +249,53 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     template = SIGN_IN_HERE_NOTICE if opening else STILL_OUT_NOTICE
     deps.store.queue_notice(
         template.format(name=name, where=window.where()),
-        controls=fastpaths.check_again_controls(market),
+        controls=fastpaths.check_again_controls(target.target),
+    )
+
+
+def _served_mailbox(deps: ConnectDeps, target, state: str, answer: dict, *, opening: bool) -> None:
+    """Tell the seller what came back from a *mailbox* sign-in.
+
+    Separate from the market path because a mailbox is a second session behind the same market, and
+    every market notice speaks as though there were one ("I'm reading that market again"). A seller
+    whose site is in and whose mailbox is out has to be told which of the two needs them.
+
+    The provider is checked even on a successful sign-in: the seller may have signed a different
+    account into that window, and driving a webmail this transport has never been measured against
+    would mean guessing at their buyers' messages.
+    """
+    market = target.market
+    market_name = marketplaces.display_name(market)
+    if state == "logged_in":
+        if mail_connect.probe_provider(answer) != mail_connect.PROVIDER_OK:
+            found = str((answer or {}).get("host") or "another provider")
+            deps.store.record_mail_probe(market, provider="unknown", signed_in=False)
+            deps.store.queue_notice(
+                mail_connect.WRONG_PROVIDER_NOTICE.format(
+                    found=found, expected=gmail.PROVIDER.title(), name=market_name
+                )
+            )
+            return
+        deps.store.record_mail_probe(market, provider=gmail.PROVIDER, signed_in=True)
+        # The view and the handoff are the two steps that still have to pass, and both need the
+        # browser again. Deliberately **not** requested as a row: `store.mail_ready` already says
+        # what is missing, so the mail lane derives the work from state rather than from a queue
+        # that could be lost, duplicated, or left behind by a restart.
+        deps.store.queue_notice(mail_connect.MAIL_SIGNED_IN_NOTICE.format(name=market_name))
+        return
+
+    deps.store.record_mail_probe(market, provider=gmail.PROVIDER, signed_in=False)
+    if opening:
+        _raise_window(deps)
+    if opening:
+        deps.store.queue_notice(
+            mail_connect.MAIL_SIGN_IN_HERE_NOTICE.format(name=market_name, where=window.where()),
+            controls=fastpaths.check_again_controls(target.target),
+        )
+        return
+    deps.store.queue_notice(
+        mail_connect.MAIL_STILL_OUT_NOTICE,
+        controls=fastpaths.check_again_controls(target.target),
     )
 
 

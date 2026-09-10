@@ -157,3 +157,44 @@ def test_tools_on_attended_and_channel_only() -> None:
     for tier in (TIER_ATTENDED, TIER_PASS_CHANNEL):
         names = {s.name for s in tools_for_tier(tier)}
         assert {"propose_setting_change", "get_settings"} <= names
+
+
+def test_a_craigslist_publish_is_refused_before_it_starts_without_a_postal_code(store) -> None:
+    """Craigslist's map step is mandatory and will not accept a posting without a ZIP, and no item
+    record carries one. Discovered mid-flow this costs a whole browser pass — 44 model turns and a
+    tokenised wizard session — to learn something knowable at enqueue. So it is knowable at enqueue.
+    """
+    from sellee import passes
+
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    item = store.create_item(title="Desk lamp", list_price=15.0, currency="USD")
+
+    # The mailbox is checked first and refused with its own reason — an ad whose replies nobody
+    # reads is the worse of the two problems — so it is satisfied here to isolate the postal code.
+    with pytest.raises(passes.PassPayloadError) as caught:
+        passes.validate_payload("publish", {"item_id": item["id"], "market": "craigslist"}, store)
+    assert "mailbox" in str(caught.value).lower()
+
+    store.record_mail_probe("craigslist", provider="gmail", signed_in=True)
+    store.record_mail_view("craigslist", "https://mail.google.com/mail/u/0/#search/x")
+    store.record_mail_handoff("craigslist", "you+cl@example.com", verified=True)
+
+    with pytest.raises(passes.PassPayloadError) as caught:
+        passes.validate_payload("publish", {"item_id": item["id"], "market": "craigslist"}, store)
+    assert "postal code" in str(caught.value).lower()
+
+    seed_setting(store, "craigslist_postal_code", "94103")
+    passes.validate_payload("publish", {"item_id": item["id"], "market": "craigslist"}, store)
+
+
+def test_the_postal_code_reaches_the_recipe(store) -> None:
+    """The recipe cannot read a seller-level fact off the item, so it arrives in the prompt beside
+    the composer URL — the same way the recipe is told never to type a URL from memory."""
+    from sellee import passes
+
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "craigslist_postal_code", "94103")
+    item = store.create_item(title="Desk lamp", list_price=15.0, currency="USD")
+    prompt = passes.publish_prompt(item["id"], "craigslist", postal_code="94103")
+    assert "94103" in prompt

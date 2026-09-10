@@ -803,3 +803,187 @@ def test_a_driven_publish_never_runs_while_a_pair_is_ineligible(store, bus, monk
     crosslist.enqueue_next(_deps(store, bus, browser_factory=_HeldClient))
 
     assert published == []
+
+
+# --- craigslist: one attempt, because a second posting is a rule violation ----------------------
+
+
+def _mailbox_connected(store, market: str = "craigslist") -> None:
+    """A connected mailbox for a market whose buyers arrive as mail.
+
+    Required now, and required on purpose: `settings.publish_markets` refuses a mail market whose
+    mailbox is not connected, because publishing to Craigslist puts a public ad up with an email
+    address on it and a mailbox nobody reads means every buyer gets silence. That gate is what
+    closes the publish tool, the shell verb, the crosslist backfill and the MCP proxy at once.
+    """
+    store.record_mail_probe(market, provider="gmail", signed_in=True)
+    store.record_mail_view(market, "https://mail.google.com/mail/u/0/#search/x")
+    store.record_mail_handoff(market, "you+cl@example.com", verified=True)
+
+
+@pytest.fixture
+def craigslist_enabled(store):
+    """A US seller who has asked for Craigslist, one item live on the rail, past the look gate."""
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    _mailbox_connected(store)
+    store.record_survey_result("craigslist", [])
+    item = store.create_item(title="Yamaha keyboard", list_price=230.0, currency="USD")
+    store.record_listing_url(item["id"], "carousell-ai", _RAIL_URL)
+    return store.get_item(item["id"])
+
+
+def test_craigslist_gets_one_attempt_and_no_more(store, bus, craigslist_enabled) -> None:
+    """The default three attempts are three *postings* here. Craigslist asks for no more than one
+    post per item per 48 hours and answers a breach by hiding the account's listings without saying
+    so — and a publish that went through but could not read its own permalink back looks exactly
+    like a failure worth retrying. So the retry that protects every other market is the thing that
+    burns this one.
+    """
+    assert crosslist.attempts_allowed("craigslist") == 1
+    assert crosslist.attempts_allowed("carousell") == crosslist.PUBLISH_MAX_ATTEMPTS
+
+    pass_id = crosslist.enqueue_next(_deps(store, bus))
+    assert pass_id
+    store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
+
+    # However long we wait, there is no second posting.
+    deps = _deps(store, bus)
+    deps.now = _later(crosslist.PUBLISH_RETRY_AFTER_SEC * 1000)
+    assert crosslist.enqueue_next(deps) is None
+
+
+def test_craigslist_is_reported_after_its_single_attempt(store, bus, craigslist_enabled) -> None:
+    """A pair with attempts left is deliberately not announced as failed, so a one-attempt market
+    has to be *out* of attempts the moment its first pass settles — otherwise the seller is never
+    told, and the item sits unpublished and unmentioned."""
+    pass_id = crosslist.enqueue_next(_deps(store, bus))
+    store.finish_pass(pass_id, status="error", rc=1, cls="error", summary="error")
+
+    crosslist.report_settled(_deps(store, bus))
+    assert any("Craigslist" in text for text in _notices(store))
+
+
+# --- an item told to be listed, that nothing was ever queued for --------------------------------
+
+
+def test_a_ready_item_nothing_was_queued_for_gets_the_work_started(store, bus) -> None:
+    """The mirror of the rule this lane already keeps, and the recovery for it.
+
+    Outcomes are reported from the rows a pass wrote rather than from what a model said, because
+    "asking a model to remember to send a message is how a listing went live once with nobody told".
+    Spent the other way, the same trust is how a listing never goes up at all while the seller is
+    told it did — observed live: a channel pass looked up `queue_marketplace_publish`, never called
+    it, and sent "going up on Craigslist. I'll send the link once it's live."
+
+    The seller already confirmed the item, so finishing the job is what they asked for: the lane
+    queues the publish itself rather than telling them to ask again.
+    """
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    seed_setting(store, "craigslist_postal_code", "94103")
+    _mailbox_connected(store)
+    store.record_survey_result("craigslist", [])
+    item = store.create_item(title="DJI Mic Mini", list_price=30.0, currency="USD")
+    store.update_item(item["id"], {"status": "ready"})
+
+    assert crosslist.report_unlisted(_deps(store, bus)) == 1
+
+    queued = [row for row in store.publish_pass_index() if row.get("item_id") == item["id"]]
+    assert queued, "the item was reported but no work was started"
+    assert queued[0]["market"] == "craigslist"
+    assert any("DJI Mic Mini" in text for text in _notices(store))
+
+
+def test_the_work_is_started_once_not_every_tick(store, bus) -> None:
+    """The lane ticks every 30 seconds. A second queue for the same pair would be a second posting,
+    which on craigslist is the over-posting rule broken by our own recovery."""
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    seed_setting(store, "craigslist_postal_code", "94103")
+    _mailbox_connected(store)
+    store.record_survey_result("craigslist", [])
+    item = store.create_item(title="DJI Mic Mini", list_price=30.0, currency="USD")
+    store.update_item(item["id"], {"status": "ready"})
+
+    deps = _deps(store, bus)
+    assert crosslist.report_unlisted(deps) == 1
+    assert crosslist.report_unlisted(deps) == 0
+    assert len([r for r in store.publish_pass_index() if r.get("item_id") == item["id"]]) == 1
+
+
+def test_an_item_that_cannot_be_published_anywhere_is_explained_not_queued(store, bus) -> None:
+    """Craigslist will not take a posting without a postal code, and no item carries one. Queuing
+    a pass that must fail would spend the item's single attempt to tell the seller something
+    knowable now.
+
+    The mailbox is connected here so this isolates the postal-code reason — with it missing too,
+    the mailbox is reported first (see the next test), because an ad whose replies nobody reads is
+    the worse of the two.
+    """
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    _mailbox_connected(store)
+    store.record_survey_result("craigslist", [])
+    item = store.create_item(title="No postcode", list_price=30.0, currency="USD")
+    store.update_item(item["id"], {"status": "ready"})
+
+    assert crosslist.report_unlisted(_deps(store, bus)) == 1
+    assert not [r for r in store.publish_pass_index() if r.get("item_id") == item["id"]]
+    assert any("postal code" in text.lower() for text in _notices(store))
+
+
+def test_a_mail_market_with_no_mailbox_is_explained_rather_than_disappearing(store, bus) -> None:
+    """The gate that closes every publish door, and the reason it needed a second list.
+
+    `settings.publish_markets` excludes a mail market whose mailbox is not connected, which is what
+    stops the publish tool, the shell verb, the crosslist backfill and the MCP proxy all at once.
+    But an excluded market is an *invisible* one, and this lane's whole job is to say why nothing
+    went up — so it asks the wider question and reports the refusal.
+    """
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    seed_setting(store, "craigslist_postal_code", "94103")
+    store.record_survey_result("craigslist", [])
+    item = store.create_item(title="Nobody home", list_price=30.0, currency="USD")
+    store.update_item(item["id"], {"status": "ready"})
+
+    assert "craigslist" not in settings.publish_markets(store), "the door must be shut"
+    assert crosslist.report_unlisted(_deps(store, bus)) == 1
+    assert not [r for r in store.publish_pass_index() if r.get("item_id") == item["id"]]
+    said = " ".join(_notices(store)).lower()
+    assert "mailbox" in said, said
+
+
+def test_it_is_said_once_not_every_tick(store, bus) -> None:
+    """The lane ticks every 30 seconds. A stalled item that reported itself each time would bury
+    the seller in the same sentence."""
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    item = store.create_item(title="DJI Mic Mini", list_price=30.0, currency="USD")
+    store.update_item(item["id"], {"status": "ready"})
+
+    deps = _deps(store, bus)
+    assert crosslist.report_unlisted(deps) == 1
+    assert crosslist.report_unlisted(deps) == 0
+
+
+def test_an_item_with_a_publish_already_queued_is_not_reported(store, bus, enabled) -> None:
+    """The ordinary case: the work exists, so the lane's own reporting will speak for it."""
+    store.update_item(enabled["id"], {"status": "ready"})
+    store.enqueue_pass("publish", {"item_id": enabled["id"], "market": "carousell"})
+
+    assert crosslist.report_unlisted(_deps(store, bus)) == 0
+
+
+def test_a_draft_is_not_reported(store, bus) -> None:
+    """A draft is mid-conversation — the seller has not confirmed it, so nothing is owed yet."""
+    seed_setting(store, "connected_markets", ["craigslist"])
+    store.create_item(title="Half-finished thing", list_price=10.0, currency="USD")
+
+    assert crosslist.report_unlisted(_deps(store, bus)) == 0
+
+
+def test_an_item_already_listed_somewhere_is_not_reported(store, bus, enabled) -> None:
+    store.update_item(enabled["id"], {"status": "ready"})
+    assert crosslist.report_unlisted(_deps(store, bus)) == 0

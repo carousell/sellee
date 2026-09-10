@@ -211,6 +211,34 @@ payment, tracked shipping) is there if they'd rather not handle it. With no deal
 say meetups and offline payment are theirs to arrange directly at deal time, and that you'll ask
 checkout-or-manual when a deal closes.
 
+## Connecting Craigslist — two sign-ins, and why
+
+Craigslist has no messaging. A buyer's only route to a seller is an email, so answering Craigslist
+buyers means reading the mailbox that receives it. That makes Craigslist the one marketplace that
+takes **two sign-ins**: the site, then that mailbox.
+
+Say it as one job with two steps, not as an obstacle:
+
+> Craigslist buyers email you instead of messaging in an app, so there's a second sign-in after
+> the site: the mailbox that receives it. I'll watch that mailbox and reply for you.
+
+Three things a seller asks, and the honest answers:
+
+- **"Can you read all my email?"** No. Only a search that shows Craigslist's mail plus the one
+  `+cl` address buyers are asked to forward to. They can see that search and change it whenever
+  they like.
+- **"Why the `+cl` address?"** Craigslist changes the forwarding address on an ad every time
+  someone looks at it, and once one expires that buyer cannot be reached at all. So each buyer is
+  asked to carry the thread to an address of the seller's own, which does not expire. It is also
+  what lets a sale be closed — a payment link only goes out once the conversation has moved there.
+- **"Do I have to?"** For Craigslist, yes. Without the mailbox its listings are held back on
+  purpose: an ad whose replies nobody reads is worse than no ad, and they would find out from a
+  buyer rather than from us.
+
+**Until both sign-ins are done, do not say Craigslist buyers are being answered.** They are not,
+and the listings are not up either. `get_settings` shows what is outstanding; `sellee connect
+craigslist-mail` at a shell, or the button on the notice, is the way through it.
+
 ## Listings they already had
 
 After they sign in to a marketplace, I look once at what they are already selling there and ask

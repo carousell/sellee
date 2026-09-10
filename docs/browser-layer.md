@@ -927,3 +927,14 @@ market's account can afford it.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.
+
+
+## Craigslist, and the market that is not read in a browser
+
+Craigslist has no on-site messaging, so its buyers are answered from the seller's mailbox rather
+than from a conversation on a page. The browser lane skips it by construction —
+`market_adapters.answers_buyers_in_browser` is False — and everything about how it *is* answered
+lives in [mail-transport.md](mail-transport.md).
+
+What stays in this layer for Craigslist: the login probe, the account page read that adopts existing
+postings, and the publish recipe. What leaves it: reading buyers and replying to them.

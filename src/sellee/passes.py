@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
-from sellee import channel, marketplaces, paths, settings, skills
+from sellee import channel, connectables, marketplaces, paths, settings, skills
 from sellee import reply_prompt as reply_prompt_mod
 from sellee.browser import chrome
 from sellee.browser import client as browser_client
@@ -98,6 +98,7 @@ def publish_prompt(
     *,
     photos: tuple = (),
     composer_url: str | None = None,
+    postal_code: str | None = None,
 ) -> str:
     where = (
         "to carousell.ai, following the listing flow's publish step"
@@ -108,12 +109,16 @@ def publish_prompt(
     # names them; the recipe never types a marketplace URL, so the composer arrives here too.
     staged = f"Its photos are in your working directory: {', '.join(photos)}\n" if photos else ""
     composer = f"The composer is at {composer_url}\n" if composer_url else ""
+    # Seller state a form may require that no item carries — craigslist's map step will not
+    # advance without a postal code, and the recipe is right to refuse to invent one.
+    postal = f"The seller's postal code is {postal_code}\n" if postal_code else ""
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Publish item {item_id} {where}.\n"
         f"Read the item with get_item. It has already been confirmed with the seller, so do not "
         f"re-confirm and do not change its title, price, or description — publish what is there.\n"
         f"{composer}"
+        f"{postal}"
         f"{staged}"
         f"Report the live listing URL when it is up, or say what failed."
     )
@@ -161,6 +166,40 @@ def _publish_market_error(market: str, store) -> str | None:
         return f"cannot publish to {market!r} (publishable here: {supported})"
     if market not in settings.connected_markets(store):
         return f"{market!r} isn't connected — turn it back on and ask me again"
+    return _market_prerequisite_error(market, store)
+
+
+def _market_prerequisite_error(market: str, store) -> str | None:
+    """Per-market seller state a publish cannot proceed without, checked before it starts.
+
+    Craigslist's posting wizard will not advance past its details step without a postal code, and
+    no item record carries one — it places the posting on a map, so it is seller state. The recipe
+    correctly refuses to invent a location, which means without this the pass walks the whole
+    wizard and then stops: a live run cost 44 model turns to discover a fact knowable here. Also
+    the area, without which there is no composer URL to navigate to at all.
+    """
+    if market not in connectables.MAIL_MARKETS:
+        return None
+    # Publishing here puts a real, public advertisement up with an email address on it. With no
+    # mailbox connected every buyer who writes gets silence, so the listing is worse than no
+    # listing — and the seller finds out from a buyer rather than from us. Checked before the pass
+    # rather than during it, because craigslist allows one attempt per item and spending it to
+    # discover something knowable now is the mistake this whole function exists to avoid.
+    if not store.mail_ready(market):
+        name = marketplaces.display_name(market)
+        return (
+            f"{name} buyers email you, and I can't read that mailbox yet — an ad there would get "
+            f"replies nobody sees. Finish connecting the mailbox and I'll put it up"
+        )
+    if market != "craigslist":
+        return None
+    if not settings.craigslist_area(store):
+        return "I don't know which Craigslist city to post in yet — set that and ask me again"
+    if not settings.craigslist_postal_code(store):
+        return (
+            "Craigslist won't take a posting without a postal code — it puts the listing on a map "
+            "— and I won't guess where you are. Give me your postal code and ask me again"
+        )
     return None
 
 
@@ -188,7 +227,16 @@ def _publish_prompt(payload: dict, store, pass_id: str) -> str:
         item_id,
         market,
         photos=staged_photo_names(item_id, market, store),
-        composer_url=marketplaces.market_url(market, "sell", store.seller_region()),
+        # Some markets' composer URLs carry per-seller state — craigslist posts to one of hundreds
+        # of city sites — and `market_url` formats unconditionally, so a market whose field is unset
+        # resolves to None and the recipe reports that rather than navigating a placeholder.
+        composer_url=marketplaces.market_url(
+            market,
+            "sell",
+            store.seller_region(),
+            **settings.market_url_fields(market, store),
+        ),
+        postal_code=settings.craigslist_postal_code(store) if market == "craigslist" else None,
     )
 
 

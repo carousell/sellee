@@ -707,6 +707,53 @@ class BrowserClient:
             self._tab_opened = True
             self.prepare_background()
 
+    @contextmanager
+    def fresh_tab(self):
+        """Work in a tab that has shown nothing else, and close it on the way out.
+
+        **Why this exists, measured rather than reasoned.** Gmail keeps rendered list rows in the
+        DOM across hash navigations, so a tab that has displayed `#inbox` still holds those rows
+        after navigating to a scoped search. On 2026-09-10 one tab was measured three ways: a first
+        load of the scoped search saw none of the seller's other mail; after visiting `#inbox` and
+        navigating back, **34 of their personal emails were in the DOM** of a search whose hash was
+        correct and whose title said "Search results"; a fresh tab was clean again. The same cache
+        also rendered one conversation as two rows.
+
+        So a mailbox read in a reused tab silently converts the transport's scope guarantee into a
+        hope. `mail/relay.py`'s sender check is what actually held when that happened — it ran on
+        all 34 and let none of their subjects out of the page — but a guard is the second line, not
+        the design.
+
+        Closed by **explicit index**, not as "the current tab": the server re-points its notion of
+        current whenever a tab closes, and closing by current could leave our calls acting on a tab
+        the seller owns. The fresh tab is the highest index, so closing it renumbers nothing below
+        it and the original selection is still valid.
+
+        Must be entered inside `exclusive()` by callers that also read — the lock is reentrant, and
+        holding it across the whole open/read/close is what stops the read lane and a publish pass
+        interleaving on this server.
+        """
+        with self._lock:
+            self.ensure_tab()
+            original = self._current_tab_index()
+            self.call_tool("browser_tabs", {"action": "new"})
+            # Focused-and-visible, so the read does not need the seller's window.
+            self.prepare_background()
+            opened = self._current_tab_index()
+            try:
+                yield self
+            finally:
+                # Neither failure here may mask what the body raised: the caller's error is the
+                # one worth reporting, and a leftover tab is what `close_stray_tabs` is for.
+                try:
+                    self.call_tool("browser_tabs", {"action": "close", "index": opened})
+                except BrowserError:
+                    log.debug("could not close the fresh tab at index %s", opened, exc_info=True)
+                try:
+                    self.call_tool("browser_tabs", {"action": "select", "index": original})
+                except BrowserError:
+                    log.debug("could not reselect our own tab at index %s", original, exc_info=True)
+
     def prepare_background(self) -> None:
         """Tell Chrome to treat this client's tab as focused and visible, wherever its window is.
 

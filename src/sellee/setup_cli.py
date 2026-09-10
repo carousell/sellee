@@ -598,6 +598,30 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     ui.say("buyers, and pick up what you already have listed. Sign-in happens in Sellee's own")
     ui.say("Chrome window; it never signs in on your behalf. Skipping is fine — add them later")
     ui.say("with `sellee connect <name>`.")
+    # A marketplace whose buyers arrive as mail needs a second sign-in, and the seller has to hear
+    # that before they pick it rather than after. Sellee *does* answer those buyers — it reads the
+    # mailbox they email — so this says what the extra step is for, not that replies are theirs.
+    for market in available:
+        if market_adapters.answers_buyers_in_browser(market):
+            continue
+        name = marketplaces.display_name(market)
+        ui.say("")
+        ui.say(f"{name} has no inbox of its own — buyers email you instead. I'll watch the")
+        ui.say(f"mailbox that receives it and pass on what they say, so {name} needs a second")
+        ui.say("sign-in: the site, then that mailbox. I only ever look at a search in it that")
+        ui.say(f"shows your {name} mail, and you can see and change it whenever you like.")
+        ui.say(f"{name} doesn't carry my replies back to buyers — I've tested it — so")
+        ui.say("answering them stays yours.")
+    # What is already on, shown before the picker. Re-running setup writes whatever is ticked over
+    # the whole list, so a seller who ran it again to add one market and ticked only that one would
+    # silently disconnect the rest — and nothing anywhere would say so. `_offer_channel` already
+    # earned this by printing what it found; this is the same courtesy for a value that is a list.
+    already = _connected_markets(port, token)
+    if already:
+        shown = ", ".join(marketplaces.display_name(market) for market in already)
+        ui.say("")
+        ui.say(f"already on: {shown}")
+        ui.say("Ticking a smaller set below turns the rest off — tick everything you want kept.")
     names = [marketplaces.display_name(market) for market in available]
     picked = [
         available[index]
@@ -627,11 +651,23 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
         _release_browser(port, token)
 
 
+def _connected_markets(port: int, token: str) -> list:
+    """The marketplaces already switched on, or `[]` if the daemon could not be asked.
+
+    `[]` on a failed read is safe here and only here: it suppresses a courtesy line. Every *write*
+    path treats an unreadable value as "we do not know" and leaves it alone.
+    """
+    found = settings_cli.read_setting(port, token, "connected_markets")
+    return list(found) if isinstance(found, list) else []
+
+
 def _sign_in_markets(ui: Ui, port: int, token: str, picked: list) -> None:
     """Sign in to each picked marketplace in turn, under the phase's hold on the browser."""
     for market in picked:
         ui.say(f"opening {marketplaces.display_name(market)}…")
-        connect_cli.market_flow(port, token, market, interactive=ui.interactive)
+        # `enable=False`: the picked list was written in one go above, and re-adding per market
+        # would issue a settings change per sign-in for a value that is already correct.
+        connect_cli.market_flow(port, token, market, interactive=ui.interactive, enable=False)
 
 
 def _hold_browser(port: int, token: str, reason: str) -> None:

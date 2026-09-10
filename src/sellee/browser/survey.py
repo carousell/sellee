@@ -48,12 +48,30 @@ FOUND_BULLETS = 10
 # Copy. Read on a phone, so it names the listings rather than counting them.
 FOUND_NOTICE = (
     "I found {count} you're already selling on {name}:\n{bullets}\n\n"
-    "Want me to manage these? I'd answer buyers on them here, and list them on {where} too."
+    "Want me to manage these? {promise}"
 )
 ACCEPTED_NOTICE = (
-    "On it — I've got your {count} on {name}. I'll answer buyers on them from now on, and start "
-    "putting them on {where}; I'll send each link as it goes up. When a buyer makes an offer I'll "
+    "On it — I've got your {count} on {name}. {promise} When a buyer makes an offer I'll "
     "check the lowest price you'd take before I decide anything."
+)
+
+# What managing a market's listings actually gets the seller. The two halves are not always both
+# true: a marketplace with no inbox (craigslist — buyers email the seller directly) can be listed
+# from and picked up from, but its buyers are not ours to answer. Promising otherwise here is how a
+# seller finds out by a buyer going unanswered.
+FOUND_PROMISE = "I'd answer buyers on them here, and list them on {where} too."
+FOUND_PROMISE_NO_INBOX = (
+    "I'd list them on {where} too, and pass on anything {name} buyers email you. {name} won't "
+    "carry my replies back to them, so answering stays yours."
+)
+ACCEPTED_PROMISE = (
+    "I'll answer buyers on them from now on, and start putting them on {where}; I'll send each "
+    "link as it goes up."
+)
+ACCEPTED_PROMISE_NO_INBOX = (
+    "I'll start putting them on {where} and send each link as it goes up. When a {name} buyer "
+    "emails you I'll pass on what they said — {name} won't carry my reply back, so answering is "
+    "yours."
 )
 DECLINED_NOTICE = (
     "Understood — I'll leave your {name} listings alone. Send me a photo whenever you want "
@@ -67,12 +85,22 @@ STALE_NOTICE = (
 # market that quietly stops working with no explanation anywhere.
 ABANDONED_NOTICE = (
     "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
-    "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
-    "again."
+    "stopped for now. This is only the list of what you have up; {buyers} Tap below when you'd "
+    "like me to try again."
 )
+# Two endings for that sentence, because "I'm still reading your messages" is about a marketplace
+# inbox and craigslist has none — for it the honest reassurance names the mailbox instead, and only
+# once that mailbox is actually connected.
+ABANDONED_STILL_ANSWERING = "I'm still answering the buyers who write to you."
+ABANDONED_NOT_ANSWERING = "I'll still pass on anything a buyer emails you."
 ALREADY_MANAGING_NOTICE = (
     "I've already taken over {count} on {name} and I'm answering buyers on them. Tell me which "
     "ones you'd rather I left and I'll stop."
+)
+ALREADY_MANAGING_NOTICE_QUIET = (
+    "I've already taken over {count} on {name} and I'll pass on anything its buyers email you — "
+    "{name} won't carry my replies back, so answering them is yours. Tell me which ones you'd "
+    "rather I left."
 )
 
 
@@ -310,7 +338,7 @@ def _found_text(deps: SurveyDeps, market: str, listings: list) -> str:
         count=_things(len(listings)),
         name=name,
         bullets=bullets,
-        where=relist_targets(deps.store, market),
+        promise=_promise(FOUND_PROMISE, FOUND_PROMISE_NO_INBOX, deps.store, market, name),
     )
 
 
@@ -340,11 +368,24 @@ def relist_targets(store, market: str) -> str:
     return f"{rail} and {', '.join(others)}"
 
 
+def _promise(both: str, no_inbox: str, store, market: str, name: str) -> str:
+    """What we can honestly say we'll do with this market's listings, filled in.
+
+    Branches on `can_answer_buyers` — the code *and* this seller's state — not on a list of market
+    names. So a marketplace that grows an inbox starts being promised one without anybody editing
+    copy, and a Craigslist seller who has not finished connecting their mailbox is told the truth
+    until they have.
+    """
+    template = both if market_adapters.can_answer_buyers(market, store) else no_inbox
+    return template.format(where=relist_targets(store, market), name=name)
+
+
 def accepted_text(store, market: str, count: int) -> str:
+    name = marketplaces.display_name(market)
     return ACCEPTED_NOTICE.format(
         count=_listings(count),
-        name=marketplaces.display_name(market),
-        where=relist_targets(store, market),
+        name=name,
+        promise=_promise(ACCEPTED_PROMISE, ACCEPTED_PROMISE_NO_INBOX, store, market, name),
     )
 
 
@@ -356,14 +397,25 @@ def stale_text(market: str) -> str:
     return STALE_NOTICE.format(name=marketplaces.display_name(market))
 
 
-def abandoned_text(market: str) -> str:
-    return ABANDONED_NOTICE.format(name=marketplaces.display_name(market))
+def abandoned_text(market: str, store=None) -> str:
+    """Why the listings look failed, and — separately — whether buyers are still being answered.
 
-
-def already_managing_text(market: str, count: int) -> str:
-    return ALREADY_MANAGING_NOTICE.format(
-        count=_listings(count), name=marketplaces.display_name(market)
+    Two different things, and the old wording conflated them: "I'm still reading your messages" is
+    about a marketplace inbox, and craigslist has none. `store` is optional so the many callers
+    that only want the wording keep working; without it the reassurance is left off rather than
+    guessed at.
+    """
+    answering = store is not None and market_adapters.can_answer_buyers(market, store)
+    return ABANDONED_NOTICE.format(
+        name=marketplaces.display_name(market),
+        buyers=ABANDONED_STILL_ANSWERING if answering else ABANDONED_NOT_ANSWERING,
     )
+
+
+def already_managing_text(market: str, count: int, store=None) -> str:
+    answering = store is not None and market_adapters.can_answer_buyers(market, store)
+    template = ALREADY_MANAGING_NOTICE if answering else ALREADY_MANAGING_NOTICE_QUIET
+    return template.format(count=_listings(count), name=marketplaces.display_name(market))
 
 
 def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
@@ -380,5 +432,6 @@ def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
         deps.store.abandon_market_survey(market)
         deps.bus.publish("survey.abandoned", {"market": market, "reason": reason[:200]})
         deps.store.queue_notice(
-            abandoned_text(market), controls=fastpaths.look_again_controls(market)
+            abandoned_text(market, deps.store),
+            controls=fastpaths.look_again_controls(market),
         )

@@ -32,6 +32,7 @@ from sellee import (
     migrations,
     passes,
     paths,
+    reply_sink,
     retention,
     secrets,
     settings,
@@ -51,6 +52,8 @@ from sellee.db import Database
 from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
+from sellee.mail import lane as mail_lane
+from sellee.mail import transport as mail_transport
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
@@ -543,16 +546,8 @@ def run_daemon(*, once: bool) -> int:
     browser_factory = make_browser_factory(cfg, store, bus, browser_holder, stop.is_set)
     warm_browser_server(cfg, once=once)
 
-    def reply_sink_factory():
-        """The marketplace send, built when a send actually needs it — never at context build, so
-        only a tool that intends to send acquires the browser (and starts Chrome, if that is all
-        that is missing). The sink writes through the unscoped store: it stamps the intent it was
-        handed, which the tool has already checked against the session's scope."""
-        if buyer_sim.enabled():
-            # Rehearsing against a simulated buyer, so there is no marketplace to type into and
-            # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
-            # rather than silently swallowing a real buyer's reply while the seller plays.
-            return buyer_sim.SimReplySink(bus=bus)
+    def browser_reply_sink():
+        """The marketplace send: type into the market's own chat and read our words back."""
         return browser_sink.BrowserReplySink(
             client=browser_factory(),
             store=store,
@@ -560,6 +555,30 @@ def run_daemon(*, once: bool) -> int:
             region=inbox.seller_region(store),
             on_drive=lambda: browser_window.raise_if_watching(cfg, store),
             verify_window_sec=cfg.send_verify_window_sec,
+        )
+
+    def reply_sink_factory():
+        """The send path, built when a send actually needs it — never at context build, so only a
+        tool that intends to send acquires the browser (and starts Chrome, if that is all that is
+        missing). The sink writes through the unscoped store: it stamps the intent it was handed,
+        which the tool has already checked against the session's scope.
+
+        A composite rather than one sink, because not every marketplace has a chat to type into.
+        Craigslist's buyers arrive as relay email, so answering them is a different transport
+        entirely — and it is routed per thread rather than chosen here, since one seller can have
+        both kinds connected at once. The leaves stay lazy inside the composite: a craigslist reply
+        must not start Chrome to send an email.
+        """
+        if buyer_sim.enabled():
+            # Rehearsing against a simulated buyer, so there is no marketplace to type into and
+            # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
+            # rather than silently swallowing a real buyer's reply while the seller plays.
+            return buyer_sim.SimReplySink(bus=bus)
+        return reply_sink.CompositeReplySink(
+            default_factory=browser_reply_sink,
+            by_market=mail_transport.sink_factories(
+                store=store, bus=bus, config=cfg, browser_factory=browser_factory
+            ),
         )
 
     def context_factory(session):
@@ -712,6 +731,23 @@ def run_daemon(*, once: bool) -> int:
             name="market_connect",
             interval_sec=_CONNECT_LANE_INTERVAL_SEC,
             func=lambda: browser_connect.connect_lane(connect_deps),
+        )
+    )
+    # Read the mailbox a marketplace without an inbox is answered through, and finish that
+    # marketplace's second sign-in. Its own lane and its own cadence: mail does not change minute
+    # to minute, and a logged-in poll of a mailbox every five minutes is both pointless and the
+    # strongest sustained signature this integration emits.
+    mail_deps = mail_lane.MailDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+    )
+    scheduler.register(
+        Task(
+            name="mail_read",
+            interval_sec=mail_lane.MAIL_READ_INTERVAL_SEC,
+            func=lambda: mail_lane.mail_lane(mail_deps),
         )
     )
     # Read the seller's existing listings once, ask, and turn a yes into items.

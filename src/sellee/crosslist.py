@@ -39,7 +39,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import marketplaces, settings
+from sellee import marketplaces, passes, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher, reconcile
 from sellee.browser.client import BrowserError, BrowserUnavailable
@@ -62,6 +62,21 @@ MAX_DRIVE_ATTEMPTS = 3
 # attempt three times.
 PUBLISH_MAX_ATTEMPTS = 3
 PUBLISH_RETRY_AFTER_SEC = 30 * 60.0
+
+# Markets that allow fewer attempts than that, because a retry costs more than a missed listing.
+#
+# Craigslist gets exactly one. It asks for no more than one posting per item per 48 hours, and it
+# enforces that by quietly hiding the account's listings rather than by refusing the post — so the
+# damage is invisible at the moment it is done. The trap is that a publish which *worked* but could
+# not read its own permalink back is indistinguishable here from one that failed, and the ordinary
+# response to that is to try again. On craigslist that response is what breaks the account.
+MAX_ATTEMPTS_BY_MARKET = {"craigslist": 1}
+
+
+def attempts_allowed(market: str) -> int:
+    """How many publish attempts a pair on this market may spend."""
+    return MAX_ATTEMPTS_BY_MARKET.get(market, PUBLISH_MAX_ATTEMPTS)
+
 
 NO_BROWSER_NOTICE = (
     "I can't list on {market} because I can't drive a browser here. The carousell.ai listing is "
@@ -122,6 +137,7 @@ def crosslist_lane(deps: CrosslistDeps) -> None:
     """One tick: report the fan-out publishes that have settled, push any cross-links the rail is
     missing, then queue at most one more publish."""
     report_settled(deps)
+    report_unlisted(deps)
     if deps.store.is_paused():
         return
     push_crosslinks(deps)
@@ -173,7 +189,7 @@ def _shots_spent(index, now: float) -> dict:
     """Which (item, market) pairs are out of attempts for the moment.
 
     Counted from the pass rows, which are never pruned, so there is no second counter to keep in
-    step. A pair gets `PUBLISH_MAX_ATTEMPTS` goes spaced by `PUBLISH_RETRY_AFTER_SEC`. A pair in
+    step. A pair gets `attempts_allowed(market)` goes spaced by `PUBLISH_RETRY_AFTER_SEC`. A pair in
     flight counts as spent, so nothing is queued twice.
     """
     attempts: dict = {}
@@ -184,7 +200,8 @@ def _shots_spent(index, now: float) -> dict:
             continue
         key = (row.get("item_id"), market)
         if row.get("status") in ("queued", "running"):
-            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS  # in flight: hold it
+            # In flight: hold it, whatever this market's bound is.
+            attempts[key] = attempts.get(key, 0) + attempts_allowed(market)
             continue
         attempts[key] = attempts.get(key, 0) + 1
         finished = row.get("finished_ts") or 0
@@ -192,8 +209,111 @@ def _shots_spent(index, now: float) -> dict:
     return {
         key: True
         for key, count in attempts.items()
-        if count >= PUBLISH_MAX_ATTEMPTS or (now - latest.get(key, 0)) < PUBLISH_RETRY_AFTER_SEC
+        if count >= attempts_allowed(key[1]) or (now - latest.get(key, 0)) < PUBLISH_RETRY_AFTER_SEC
     }
+
+
+UNLISTED_NOTICE = (
+    "{item} hadn't actually gone up anywhere — I told you it was being listed and then never "
+    "started the work. Starting it now on {markets}; I'll send the link when it's live."
+)
+UNLISTED_BLOCKED_NOTICE = (
+    "{item} hasn't gone up anywhere, and I can't start it: {reason}. Nothing is wrong with the "
+    "item itself."
+)
+
+
+def report_unlisted(deps: CrosslistDeps) -> int:
+    """Start the work for an item the seller confirmed that nothing was ever queued for.
+
+    The mirror of the rule the rest of this lane keeps. Outcomes are reported from the rows a pass
+    wrote rather than from what a model said, because "asking a model to remember to send a message
+    is how a listing went live once with nobody told". Spent the other way, the same trust is how a
+    listing never goes up at all while the seller is told it did.
+
+    That is not hypothetical. Observed on a live run: a channel pass looked up
+    `queue_marketplace_publish`, did not call it, and sent "going up on Craigslist. I'll send the
+    link once it's live." No pass row existed, so no lane had anything to report, no failure was
+    recorded, and the seller was left waiting on a link that was never coming. Every other silent
+    failure in this file is bounded by something; that one was bounded by nothing.
+
+    The seller has already confirmed the item, so the recovery is to finish the job rather than ask
+    them to ask again. Queued through the same gates a publish always passes, so a market that
+    cannot take this item is explained instead of attempted — spending an item's one craigslist
+    attempt to discover something knowable here is the mistake this lane exists to avoid.
+
+    Derived from rows, so it cannot be talked out of. Said and started once per item: the lane
+    ticks every 30 seconds, and a second queue for one pair is a second posting.
+
+    Answers how many items were acted on.
+    """
+    index = deps.store.publish_pass_index()
+    attempted = {row.get("item_id") for row in index if row.get("item_id")}
+    sold = deps.store.sold_item_ids()
+    acted = 0
+    for item in deps.store.list_items(status="ready"):
+        if item["id"] in sold or item["id"] in attempted:
+            continue
+        # Listed anywhere at all — including the rail — means work happened, and the lane's own
+        # reporting speaks for it.
+        if item.get("listing_urls"):
+            continue
+        key = f"unlisted:{item['id']}"
+        if deps.notified.get(key):
+            continue
+        acted += 1
+        _start_unlisted(deps, item, key)
+    return acted
+
+
+def _explainable_markets(store) -> list:
+    """Every connected marketplace this seller could be published to, gated or not.
+
+    The superset of `settings.publish_markets`: it includes a market held back for a reason the
+    seller can fix, so the reason gets said instead of the market simply vanishing from the
+    explanation.
+    """
+    publishable = market_adapters.publishable_markets(store.seller_region())
+    return [market for market in settings.connected_markets(store) if market in publishable]
+
+
+def _start_unlisted(deps: CrosslistDeps, item: dict, key: str) -> None:
+    """Queue what the stalled item is owed, or say why it cannot be."""
+    name = item.get("title") or item["id"]
+    started: list = []
+    refusals: list = []
+    # Deliberately **not** `settings.publish_markets`, which is the narrower "may actually be
+    # published to" and excludes a mail market whose mailbox is not connected. That exclusion is
+    # what closes every publish door at once — but it also makes the market invisible, and this is
+    # the one place whose whole job is to say *why* nothing went up. Asked wider here so
+    # `validate_payload` can answer with something the seller can act on.
+    for market in _explainable_markets(deps.store):
+        payload = {"item_id": item["id"], "market": market, "origin": ORIGIN}
+        try:
+            passes.validate_payload("publish", payload, deps.store)
+        except passes.PassPayloadError as exc:
+            refusals.append(str(exc))
+            continue
+        pass_id = deps.store.enqueue_pass("publish", payload)
+        started.append(market)
+        deps.bus.publish(
+            "crosslist.queued", {"item_id": item["id"], "market": market}, pass_id=pass_id
+        )
+
+    deps.bus.publish(
+        "crosslist.unlisted",
+        {"item_id": item["id"], "started": started, "blocked": len(refusals)},
+    )
+    if started:
+        names = _market_names(started)
+        _notify_once(deps, key, UNLISTED_NOTICE.format(item=name, markets=names))
+        return
+    reason = refusals[0] if refusals else "there's no marketplace switched on that I can list to"
+    _notify_once(deps, key, UNLISTED_BLOCKED_NOTICE.format(item=name, reason=reason))
+
+
+def _market_names(markets) -> str:
+    return ", ".join(marketplaces.display_name(market) for market in markets)
 
 
 def _shots_out(index) -> dict:
@@ -211,7 +331,7 @@ def _shots_out(index) -> dict:
             continue
         key = (row.get("item_id"), market)
         attempts[key] = attempts.get(key, 0) + 1
-    return {key: True for key, count in attempts.items() if count >= PUBLISH_MAX_ATTEMPTS}
+    return {key: True for key, count in attempts.items() if count >= attempts_allowed(key[1])}
 
 
 def _titles_seen_on(store, market: str) -> set:

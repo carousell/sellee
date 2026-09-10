@@ -105,15 +105,28 @@ def market_url(market: str, key: str, region: str | None = None, **fields) -> st
     a live page — never from a guess. A composed inbox or chat URL that was remembered rather than
     recorded is how a pass ends up touring a dead page, so an unrecorded template resolves to None
     and the caller reports that instead of inventing one.
+
+    A template is formatted **unconditionally**, so a placeholder with no field answers None rather
+    than a URL carrying the placeholder. That case is real: craigslist's posting URL takes the
+    seller's area, and an unfilled `.../c/{area}` is truthy, unusable, and reads as success to every
+    caller that only checks for None.
+
+    A template may also be an absolute `https://` URL, which is returned as given. One market's
+    surfaces can sit on different hosts — craigslist posts on `post.craigslist.org` and lists on
+    `www.` — and every other value is a path glued onto the single resolved host. The region is
+    still required either way: a marketplace with no site where the seller is has nowhere to send
+    them, whichever host a template names.
     """
     path = urls(market).get(key)
     host = resolve_domain(market, region)
     if not path or not host:
         return None
     try:
-        path = path.format(**fields) if fields else path
+        path = path.format(**fields)
     except (KeyError, IndexError):
         return None
+    if path.startswith("https://"):
+        return path
     return f"https://{host}{path}"
 
 
@@ -129,12 +142,20 @@ def supported_regions() -> list:
 
 
 def market_home(market: str, region: str | None = None) -> str | None:
-    """The marketplace's front page for a seller in this region, or None when it has no site there.
+    """Where a sign-in starts for this seller, or None when the market has no site in their region.
 
-    The one page every marketplace has and no registry needs a template for. It is where a
-    sign-in starts: logged out it shows the login screen, logged in it shows the signed-in header
-    the login probe reads.
+    The front page by default — the one page every marketplace has and no registry needs a template
+    for: logged out it shows the login screen, logged in it shows the signed-in header the login
+    probe reads.
+
+    A market may override it with a recorded `home` URL, because that default is an assumption and
+    not every front page holds it. Craigslist's shows an `account` link and no login form whether or
+    not the seller is signed in, so a probe there can prove neither state — it needs a page that
+    redirects to a login form when the session is gone.
     """
+    recorded = market_url(market, "home", region)
+    if recorded:
+        return recorded
     host = resolve_domain(market, region)
     return f"https://{host}/" if host else None
 

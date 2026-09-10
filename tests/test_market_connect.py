@@ -106,11 +106,11 @@ def test_the_signin_button_writes_a_request_and_touches_no_browser(store, bus) -
     seconds to tens of seconds to come up."""
     text, controls = fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
 
-    assert store.pending_market_connects() == [
+    assert store.pending_connects() == [
         {
-            "market": "carousell",
+            "target": "carousell",
             "mode": CONNECT_MODE_OPEN,
-            "requested_ts": pytest.approx(store.pending_market_connects()[0]["requested_ts"]),
+            "requested_ts": pytest.approx(store.pending_connects()[0]["requested_ts"]),
         }
     ]
     assert "Carousell" in text
@@ -121,7 +121,7 @@ def test_the_check_again_button_asks_for_a_probe_not_another_open(store, bus) ->
     """The seller has already signed in on that tab; re-opening would navigate away from it."""
     fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_PROBE))
 
-    assert store.pending_market_connects()[0]["mode"] == CONNECT_MODE_PROBE
+    assert store.pending_connects()[0]["mode"] == CONNECT_MODE_PROBE
 
 
 def test_a_double_tap_is_one_request(store, bus) -> None:
@@ -130,7 +130,7 @@ def test_a_double_tap_is_one_request(store, bus) -> None:
     fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
     fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
 
-    assert len(store.pending_market_connects()) == 1
+    assert len(store.pending_connects()) == 1
 
 
 def test_the_newest_tap_wins_its_mode(store, bus) -> None:
@@ -139,7 +139,7 @@ def test_the_newest_tap_wins_its_mode(store, bus) -> None:
     fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_MARKET))
     fastpaths.handle_fast_path(store, bus, _tap(fastpaths.CB_CONNECT_PROBE))
 
-    assert store.pending_market_connects()[0]["mode"] == CONNECT_MODE_PROBE
+    assert store.pending_connects()[0]["mode"] == CONNECT_MODE_PROBE
 
 
 def test_a_stale_button_for_a_withdrawn_market_says_so(store, bus) -> None:
@@ -148,7 +148,7 @@ def test_a_stale_button_for_a_withdrawn_market_says_so(store, bus) -> None:
         store, bus, _tap(fastpaths.CB_CONNECT_MARKET, ref="myspace")
     )
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
     assert "myspace" in text
     assert controls is None
 
@@ -172,7 +172,7 @@ def test_every_surface_attaches_the_same_door(store, bus) -> None:
         "x",
         controls=fastpaths.signin_controls("carousell"),
     )
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     connect.connect_lane(_deps(store, bus, StubClient(fail="navigate")))
 
     for notice in _notices(store):
@@ -200,7 +200,7 @@ def test_connect_with_one_market_to_offer_just_opens_it(store, bus, monkeypatch)
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    assert store.pending_market_connects()[0]["market"] == "carousell"
+    assert store.pending_connects()[0]["target"] == "carousell"
     assert controls is None
     assert "Carousell" in text
 
@@ -218,7 +218,7 @@ def test_connect_with_several_to_offer_asks_which(store, bus, monkeypatch) -> No
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
     assert text == fastpaths.CONNECT_PICK
     assert [ref for _label, ref in controls] == [
         f"carousell:{fastpaths.CB_CONNECT_MARKET}",
@@ -234,7 +234,7 @@ def test_connect_with_no_marketplace_we_can_drive_says_so(store, bus, monkeypatc
 
     text, controls = fastpaths.handle_fast_path(store, bus, _command("/connect"))
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
     assert text == fastpaths.CONNECT_NONE
     assert controls is None
 
@@ -257,7 +257,7 @@ def test_connect_never_offers_carousell_ai(store, bus) -> None:
 
 
 def test_the_lane_opens_the_market_and_asks_the_seller_to_sign_in(store, bus) -> None:
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     client = StubClient(login="logged_out")
 
     connect.connect_lane(_deps(store, bus, client))
@@ -269,12 +269,12 @@ def test_the_lane_opens_the_market_and_asks_the_seller_to_sign_in(store, bus) ->
     assert notice["controls"] == [
         [fastpaths.CHECK_AGAIN_LABEL, f"carousell:{fastpaths.CB_CONNECT_PROBE}"]
     ]
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_a_probe_does_not_elbow_the_seller_mid_sign_in(store, bus) -> None:
     """Check again must not reorder tabs — they are typing a password into one of them."""
-    store.request_market_connect("carousell", CONNECT_MODE_PROBE)
+    store.request_connect("carousell", CONNECT_MODE_PROBE)
     client = StubClient(login="logged_out")
 
     connect.connect_lane(_deps(store, bus, client))
@@ -285,20 +285,20 @@ def test_a_probe_does_not_elbow_the_seller_mid_sign_in(store, bus) -> None:
 
 
 def test_a_signed_in_market_is_confirmed_and_the_request_cleared(store, bus) -> None:
-    store.request_market_connect("carousell", CONNECT_MODE_PROBE)
+    store.request_connect("carousell", CONNECT_MODE_PROBE)
 
     connect.connect_lane(_deps(store, bus, StubClient(login="logged_in")))
 
     notice = _notices(store)[0]
     assert "Signed in to Carousell" in notice["text"]
     assert notice["controls"] is None  # nothing left to tap
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_an_unknown_probe_is_not_reported_as_signed_in(store, bus) -> None:
     """`unknown` is "no answer". Claiming a sign-in we did not see would send the seller away
     believing their market is being read."""
-    store.request_market_connect("carousell", CONNECT_MODE_PROBE)
+    store.request_connect("carousell", CONNECT_MODE_PROBE)
 
     connect.connect_lane(_deps(store, bus, StubClient(login="unknown")))
 
@@ -306,7 +306,7 @@ def test_an_unknown_probe_is_not_reported_as_signed_in(store, bus) -> None:
 
 
 def test_the_login_state_reaches_the_event_log(store, bus) -> None:
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
 
     connect.connect_lane(_deps(store, bus, StubClient(login="logged_in")))
 
@@ -320,22 +320,22 @@ def test_a_pass_driving_the_browser_leaves_the_request_pending(store, bus) -> No
     """A publish mid-drive owns the tab. Navigating it now would pull the page out from under a
     half-filled composer — the seller asked to sign in, not to lose a listing."""
     store.enqueue_pass("publish", {"market": "carousell"})
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     client = StubClient()
 
     connect.connect_lane(_deps(store, bus, client))
 
     assert client.navigations == []
-    assert store.pending_market_connects() != []  # retried next tick, not dropped
+    assert store.pending_connects() != []  # retried next tick, not dropped
     assert store.count_queued_notices() == 0  # and not answered wrongly meanwhile
 
 
 def test_a_request_the_browser_never_got_to_is_dropped_with_a_notice(store, bus) -> None:
     """Better one honest "I couldn't" than a request that retries in silence forever."""
     store.enqueue_pass("publish", {"market": "carousell"})
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     # The row is stamped by the store's own clock, so the lane's has to be read off it.
-    requested = store.pending_market_connects()[0]["requested_ts"]
+    requested = store.pending_connects()[0]["requested_ts"]
     late = {"t": requested}
 
     deps = _deps(store, bus, StubClient(), now=lambda: late["t"])
@@ -351,12 +351,12 @@ def test_a_request_the_browser_never_got_to_is_dropped_with_a_notice(store, bus)
     assert notice["controls"] == [
         [fastpaths.SIGN_IN_LABEL, f"carousell:{fastpaths.CB_CONNECT_MARKET}"]
     ]
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_a_browser_that_cannot_be_driven_falls_back_to_the_cli(store, bus) -> None:
     """The one case where the shell is still the way out — so this is where the CLI is named."""
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
 
     connect.connect_lane(_deps(store, bus, StubClient(fail="navigate")))
 
@@ -365,7 +365,7 @@ def test_a_browser_that_cannot_be_driven_falls_back_to_the_cli(store, bus) -> No
     assert notice["controls"] == [
         [fastpaths.SIGN_IN_LABEL, f"carousell:{fastpaths.CB_CONNECT_MARKET}"]
     ]
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_no_browser_at_all_is_reported_not_raised(store, bus) -> None:
@@ -374,16 +374,16 @@ def test_no_browser_at_all_is_reported_not_raised(store, bus) -> None:
     def factory():
         raise BrowserUnavailable("npx not found")
 
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     connect.connect_lane(_deps(store, bus, None, browser_factory=factory))
 
     assert "npx not found" in _texts(store)[0]
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
 
 
 def test_an_unset_region_is_reported_rather_than_navigated(store, bus) -> None:
     store.set_seller_config_section("basics", {})
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     client = StubClient()
 
     connect.connect_lane(_deps(store, bus, client))
@@ -393,23 +393,23 @@ def test_an_unset_region_is_reported_rather_than_navigated(store, bus) -> None:
 
 
 def test_a_market_with_no_adapter_is_cleared_not_retried_forever(store, bus) -> None:
-    store.request_market_connect("carousell", CONNECT_MODE_OPEN)
+    store.request_connect("carousell", CONNECT_MODE_OPEN)
     with store._db.transaction() as conn:  # noqa: SLF001 — arranging a withdrawn registry entry
-        conn.execute("UPDATE market_connect_requests SET market = 'myspace'")
+        conn.execute("UPDATE connect_requests SET target = 'myspace'")
 
     connect.connect_lane(_deps(store, bus, StubClient()))
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
     assert "myspace" in _texts(store)[0]
 
 
 def test_each_market_is_served_on_its_own(store, bus) -> None:
-    store.request_market_connect("carousell", CONNECT_MODE_PROBE)
-    store.request_market_connect("fb", CONNECT_MODE_PROBE)
+    store.request_connect("carousell", CONNECT_MODE_PROBE)
+    store.request_connect("fb", CONNECT_MODE_PROBE)
 
     connect.connect_lane(_deps(store, bus, StubClient(login="logged_in")))
 
-    assert store.pending_market_connects() == []
+    assert store.pending_connects() == []
     assert len(_notices(store)) == 2
 
 

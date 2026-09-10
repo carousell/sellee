@@ -433,6 +433,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._handle_seller_basics()
         elif route == "/control/connect-market":
             self._handle_connect_market()
+        elif route == "/control/mail-status":
+            self._handle_mail_status()
         elif route == "/control/browser-hold":
             self._handle_browser_hold()
         elif route == "/control/browser-release":
@@ -727,7 +729,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            state, url = self._open_and_probe(adapter, bring_tab_forward=True)
+            state, url, _answer = self._open_and_probe(adapter, bring_tab_forward=True)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
@@ -744,6 +746,42 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(
             200,
             {"market": adapter.market, "url": url, "state": state, "raise_window": raise_window},
+        )
+
+    def _handle_mail_status(self) -> None:
+        """Whether a market's mailbox is connected, for a CLI deciding whether to offer that step.
+
+        POST like its neighbours, and for the same reason: a side effect must never be reachable by
+        a URL alone. This one has no side effect, but it lives behind the attended token and a
+        top-level navigation sends no bearer, so keeping the method uniform keeps the door uniform.
+        """
+        from sellee import connectables
+
+        body = self._attended_body()
+        if body is None:
+            return
+        market = connectables.market_of(body.get("market"))
+        if market not in connectables.MAIL_MARKETS:
+            # Not a mail market, so nothing to connect and nothing outstanding. `ready` true is
+            # the honest answer: there is no mailbox step for this market.
+            self._send_json(200, {"market": market, "mail_market": False, "ready": True})
+            return
+        from sellee import settings
+
+        found = self._app.store.mail_transport(market)
+        self._send_json(
+            200,
+            {
+                "market": market,
+                "mail_market": True,
+                # Whether the seller switched this marketplace on at all. A mailbox nobody asked
+                # for is not an outstanding step, and reporting it as one would nag every seller
+                # who has never used Craigslist.
+                "connected_market": market in settings.connected_markets(self._app.store),
+                "ready": bool(self._app.store.mail_ready(market)),
+                "signed_in": bool(found and found["signed_in"]),
+                "handoff_address": (found or {}).get("handoff_address", ""),
+            },
         )
 
     def _handle_browser_hold(self) -> None:
@@ -792,7 +830,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"market": adapter.market, "state": "unknown", "detail": blocked})
             return
         try:
-            state, url = self._open_and_probe(adapter)
+            state, url, _answer = self._open_and_probe(adapter)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
@@ -827,12 +865,12 @@ class _Handler(BaseHTTPRequestHandler):
         allowed at all comes from Chrome's port and the pass queue (see `_probe_blocked`).
         POST for the same reason as market-login: the probe navigates the shared tab.
         """
-        from sellee import settings
-        from sellee.browser import markets as market_adapters
+        from sellee import connectables, settings
 
         if self._attended_body() is None:
             return
         enabled = settings.publish_markets(self._app.store)
+        region = self._app.store.seller_region()
         # The *reason* travels with the answer: "Chrome isn't running" and "a pass is using the
         # browser" both stop a probe, but a reader told the first while watching Chrome run a
         # publish learns to distrust the report.
@@ -841,11 +879,13 @@ class _Handler(BaseHTTPRequestHandler):
         results = []
         if not blocked:
             for market in enabled:
-                adapter = market_adapters.get_adapter(market)
-                if adapter is None:
+                # Markets only. This answers "can we publish there", and a mailbox is never
+                # publishable — the mailbox's own readiness is its market's, reported separately.
+                target = connectables.resolve(market, region)
+                if target is None:
                     continue
                 try:
-                    state, _url = self._open_and_probe(adapter)
+                    state, _url, _answer = self._open_and_probe(target)
                 except _BrowserDown as exc:
                     results.append({"market": market, "state": "unknown", "detail": str(exc)})
                     continue
@@ -853,14 +893,20 @@ class _Handler(BaseHTTPRequestHandler):
         self._send_json(200, {"enabled": enabled, "blocked": blocked, "markets": results})
 
     def _market_adapter(self, market):
-        """The adapter for a market id, or None once this has replied with why there isn't one."""
-        from sellee.browser import markets as market_adapters
+        """The connect target for an id, or None once this has replied with why there isn't one.
 
-        adapter = market_adapters.get_adapter(market) if isinstance(market, str) else None
+        Named for markets and answering for targets: a mailbox is a target too (Craigslist needs
+        two sign-ins), and `connectables.resolve` returns `None` for an unknown id exactly as
+        `get_adapter` did — so this door's existing refusal covers a stale mail token unchanged.
+        """
+        from sellee import connectables
+
+        region = self._app.store.seller_region()
+        adapter = connectables.resolve(market, region) if isinstance(market, str) else None
         if adapter is None:
             # What can be signed in to (this door), not what can be published to — the latter
             # would leave a market off its own error message.
-            supported = ", ".join(market_adapters.drivable_markets()) or "(none)"
+            supported = ", ".join(connectables.targets_for(region)) or "(none)"
             self._send_json(
                 400, {"error": f"no marketplace {market!r} to sign in to — supported: {supported}"}
             )
@@ -882,7 +928,7 @@ class _Handler(BaseHTTPRequestHandler):
         return connect.open_and_probe(
             store=self._app.store,
             browser_factory=ctx.browser_factory,
-            adapter=adapter,
+            target=adapter,
             bring_tab_forward=bring_tab_forward,
         )
 

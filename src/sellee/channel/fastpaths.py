@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import time
 
-from sellee import channel, marketplaces, prompt_data, settings
+from sellee import channel, connectables, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.channel import refs
@@ -186,9 +186,26 @@ MARKET_ADDED_NOTICE = (
     "I'll message you the moment the sign-in page is there. After that I'll read your inbox and "
     "answer buyers for you."
 )
+# The same tap, for a marketplace whose buyers arrive as mail. It needs a *second* sign-in, and
+# saying so here is the difference between a seller who finishes connecting and one who thinks they
+# already have — this is the happy path of the only connect flow the channel has.
+MARKET_ADDED_NOTICE_MAIL = (
+    "{name} is on — I'm opening it in my Chrome now so you can sign in. {name} buyers email you "
+    "rather than messaging in an app, so there's a second sign-in after it: the mailbox that "
+    "receives your {name} mail. I'll watch it and pass on what buyers say, and I only ever look "
+    "at a search in it that shows your {name} mail. {name} won't carry my replies back to them, "
+    "so answering stays yours."
+)
 MARKET_REMOVED_NOTICE = (
     "{name} is off — I've stopped reading it, answering buyers on it, and listing to it. Your "
     "sign-in stays put, so turning it back on takes one tap and no password."
+)
+# The same, for a mail market. "Stopped reading it" would be about the marketplace; what actually
+# stops is reading the mailbox — and the seller should know their mail is no longer being watched
+# rather than assume a marketplace page is.
+MARKET_REMOVED_NOTICE_MAIL = (
+    "{name} is off — I've stopped watching the mailbox its buyers email, answering them, and "
+    "listing to it. Both sign-ins stay put, so turning it back on takes one tap and no password."
 )
 MARKET_ALREADY_ON = "{name} is already on."
 MARKET_ALREADY_OFF = "{name} is already off."
@@ -319,14 +336,19 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
 
 
 def _signin_markets(store) -> list:
-    """The marketplaces `/connect` can offer: the ones the seller switched on that the agent has a
-    browser adapter for.
+    """The targets `/connect` can offer: every marketplace this seller could be signed in to, plus
+    the mailbox any of them needs.
 
-    Every marketplace we could drive for this seller, connected or not — offering only what is
-    already on would make the command useless for setting a new marketplace up. carousell.ai is
-    excluded: it is reached with an API key, so there is no window to open.
+    Connected or not — offering only what is already on would make the command useless for setting
+    a new marketplace up. carousell.ai is excluded: it is reached with an API key, so there is no
+    window to open.
+
+    A mailbox sits directly after its market, so the two-part shape of a Craigslist connection is
+    visible here rather than being two entries the seller has to know belong together. It is the
+    only way to re-do *just* the mailbox, which is the common case — a webmail session expires long
+    before a marketplace one, and the site sign-in is not what broke.
     """
-    return market_adapters.connectable_markets(store.seller_region())
+    return connectables.targets_for(store.seller_region())
 
 
 def _connect_button(store, market, mode: str) -> tuple:
@@ -337,11 +359,14 @@ def _connect_button(store, market, mode: str) -> tuple:
     Two ways a tap can be stale: an adapter withdrawn since (nothing to open ever) and a market
     disconnected since (nothing to open now) — only the first earns "I don't sell there".
     """
-    if not market or market not in market_adapters.connectable_markets(store.seller_region()):
-        # A stale button, for a market whose adapter has since been withdrawn.
+    if not market or market not in connectables.targets_for(store.seller_region()):
+        # A stale button, for a target whose adapter has since been withdrawn.
         return CONNECT_UNKNOWN.format(market=market or "that marketplace"), None
-    if market not in settings.connected_markets(store):
-        return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
+    # A mailbox belongs to a market, and it is the market's opt-in that decides whether any of this
+    # is wanted — so both halves of a two-part connect are gated on the same setting.
+    owner = connectables.market_of(market)
+    if owner not in settings.connected_markets(store):
+        return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(owner)), None
     return _request(store, market, mode)
 
 
@@ -376,8 +401,21 @@ def _market_button(store, bus, market, token: str) -> tuple:
     if adding:
         # On and signed-in are one intent — until the seller signs in there is nothing to read. Just
         # the row: opening Chrome takes seconds and this is the provider's receive loop.
-        store.request_market_connect(market, CONNECT_MODE_OPEN)
-    template = MARKET_ADDED_NOTICE if adding else MARKET_REMOVED_NOTICE
+        store.request_connect(market, CONNECT_MODE_OPEN)
+    if not adding:
+        gone = (
+            MARKET_REMOVED_NOTICE
+            if market_adapters.answers_buyers_in_browser(market)
+            else MARKET_REMOVED_NOTICE_MAIL
+        )
+        return gone.format(name=name), _control_spec(store)
+    # A market whose buyers arrive as mail needs a second sign-in, and the seller has to hear it on
+    # the tap rather than discover it when nobody gets answered.
+    template = (
+        MARKET_ADDED_NOTICE
+        if market_adapters.answers_buyers_in_browser(market)
+        else MARKET_ADDED_NOTICE_MAIL
+    )
     return template.format(name=name), _control_spec(store)
 
 
@@ -414,7 +452,7 @@ def _survey_button(store, market, token: str) -> tuple:
     if decision == "decline":
         # Decline reaches acceptances not yet adopted; zero means nothing was left to stop.
         if adopted and not in_flight:
-            return survey.already_managing_text(market, adopted), None
+            return survey.already_managing_text(market, adopted, store), None
         return survey.declined_text(market), None
     if in_flight or adopted:
         # Already said yes. Re-ack, but never reopen the survey: that deletes the accepted rows
@@ -438,19 +476,40 @@ def _connect_command(store, bus) -> tuple:
     if not markets:
         return CONNECT_NONE, None
     connected = set(settings.connected_markets(store))
+    # A mailbox target is only offered once its market is on: it cannot be *added* (a mailbox is
+    # not a marketplace), and offering it before its market would be a button that refuses.
+    markets = [
+        target
+        for target in markets
+        if not connectables.is_mail_target(target) or connectables.market_of(target) in connected
+    ]
+    if not markets:
+        return CONNECT_NONE, None
     if len(markets) == 1:
         market = markets[0]
-        if market in connected:
+        if connectables.market_of(market) in connected:
             return _request(store, market, CONNECT_MODE_OPEN)
         return _market_button(store, bus, market, CB_ADD_MARKET)
     controls = [
         (
-            marketplaces.display_name(market),
-            f"{market}:{CB_CONNECT_MARKET if market in connected else CB_ADD_MARKET}",
+            _target_label(target),
+            f"{target}:"
+            + (CB_CONNECT_MARKET if connectables.market_of(target) in connected else CB_ADD_MARKET),
         )
-        for market in markets
+        for target in markets
     ]
     return CONNECT_PICK, controls
+
+
+def _target_label(target: str) -> str:
+    """What a connect button says. A mailbox needs its own wording — `display_name` would put the
+    marketplace's name on a button that opens a webmail."""
+    found = connectables.resolve(target)
+    if found is None:
+        return target
+    if found.is_mail:
+        return f"{marketplaces.display_name(found.market)} mailbox"
+    return marketplaces.display_name(found.market)
 
 
 def _request(store, market: str, mode: str) -> tuple:
@@ -460,7 +519,7 @@ def _request(store, market: str, mode: str) -> tuple:
     every other message in the chat, and opening a cold Chrome takes seconds to tens of seconds.
     The lane picks the row up within a tick and sends the real answer.
     """
-    store.request_market_connect(market, mode)
+    store.request_connect(market, mode)
     template = CONNECT_ACK if mode == CONNECT_MODE_OPEN else CONNECT_CHECK_ACK
     return template.format(name=marketplaces.display_name(market)), None
 

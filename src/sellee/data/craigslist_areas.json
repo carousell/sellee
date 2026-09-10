@@ -1,0 +1,5407 @@
+{
+  "source": "https://reference.craigslist.org/Areas",
+  "captured": "2026-09-09",
+  "areas": [
+    {
+      "hostname": "annarbor",
+      "abbreviation": "aaa",
+      "description": "ann arbor, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "abbotsford",
+      "abbreviation": "abb",
+      "description": "fraser valley, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "abilene",
+      "abbreviation": "abi",
+      "description": "abilene, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "albuquerque",
+      "abbreviation": "abq",
+      "description": "albuquerque",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "nesd",
+      "abbreviation": "abr",
+      "description": "northeast SD",
+      "country": "US",
+      "state": "SD"
+    },
+    {
+      "hostname": "albanyga",
+      "abbreviation": "aby",
+      "description": "albany, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "aberdeen",
+      "abbreviation": "abz",
+      "description": "aberdeen",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "acapulco",
+      "abbreviation": "aca",
+      "description": "acapulco",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "accra",
+      "abbreviation": "acc",
+      "description": "ghana",
+      "country": "GH",
+      "state": ""
+    },
+    {
+      "hostname": "addisababa",
+      "abbreviation": "add",
+      "description": "ethiopia",
+      "country": "ET",
+      "state": ""
+    },
+    {
+      "hostname": "adelaide",
+      "abbreviation": "adl",
+      "description": "adelaide, SA",
+      "country": "AU",
+      "state": "SA"
+    },
+    {
+      "hostname": "cenla",
+      "abbreviation": "aex",
+      "description": "central louisiana",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "malaga",
+      "abbreviation": "agp",
+      "description": "malaga",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "athensga",
+      "abbreviation": "ahn",
+      "description": "athens, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "auckland",
+      "abbreviation": "akl",
+      "description": "auckland, NZ",
+      "country": "NZ",
+      "state": ""
+    },
+    {
+      "hostname": "albany",
+      "abbreviation": "alb",
+      "description": "albany, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "alicante",
+      "abbreviation": "alc",
+      "description": "alicante",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "allentown",
+      "abbreviation": "alt",
+      "description": "lehigh valley",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "amarillo",
+      "abbreviation": "ama",
+      "description": "amarillo, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "ahmedabad",
+      "abbreviation": "amd",
+      "description": "ahmedabad",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "ames",
+      "abbreviation": "ame",
+      "description": "ames, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "amsterdam",
+      "abbreviation": "ams",
+      "description": "amsterdam / randstad",
+      "country": "NL",
+      "state": ""
+    },
+    {
+      "hostname": "gadsden",
+      "abbreviation": "anb",
+      "description": "gadsden-anniston",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "anchorage",
+      "abbreviation": "anc",
+      "description": "anchorage / mat-su",
+      "country": "US",
+      "state": "AK"
+    },
+    {
+      "hostname": "annapolis",
+      "abbreviation": "anp",
+      "description": "annapolis, MD",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "altoona",
+      "abbreviation": "aoo",
+      "description": "altoona-johnstown",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "appleton",
+      "abbreviation": "app",
+      "description": "appleton-oshkosh-FDL",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "asheville",
+      "abbreviation": "ash",
+      "description": "asheville, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "athens",
+      "abbreviation": "ath",
+      "description": "greece",
+      "country": "GR",
+      "state": ""
+    },
+    {
+      "hostname": "atlanta",
+      "abbreviation": "atl",
+      "description": "atlanta, GA",
+      "country": "US",
+      "state": "GA",
+      "subareas": [
+        {
+          "abbreviation": "atl",
+          "description": "city of atlanta"
+        },
+        {
+          "abbreviation": "nat",
+          "description": "otp north"
+        },
+        {
+          "abbreviation": "eat",
+          "description": "otp east"
+        },
+        {
+          "abbreviation": "sat",
+          "description": "otp south"
+        },
+        {
+          "abbreviation": "wat",
+          "description": "otp west"
+        }
+      ]
+    },
+    {
+      "hostname": "auburn",
+      "abbreviation": "aub",
+      "description": "auburn, AL",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "augusta",
+      "abbreviation": "aug",
+      "description": "augusta, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "austin",
+      "abbreviation": "aus",
+      "description": "austin, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "scranton",
+      "abbreviation": "avp",
+      "description": "scranton / wilkes-barre",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "bakersfield",
+      "abbreviation": "bak",
+      "description": "bakersfield, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "baltimore",
+      "abbreviation": "bal",
+      "description": "baltimore, MD",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "barcelona",
+      "abbreviation": "bar",
+      "description": "barcelona",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "bhubaneswar",
+      "abbreviation": "bbi",
+      "description": "bhubaneswar",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "bacolod",
+      "abbreviation": "bcd",
+      "description": "bacolod",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "bajasur",
+      "abbreviation": "bcs",
+      "description": "baja california sur",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "belleville",
+      "abbreviation": "bel",
+      "description": "belleville, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "berlin",
+      "abbreviation": "ber",
+      "description": "berlin",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "beirut",
+      "abbreviation": "bey",
+      "description": "beirut, lebanon",
+      "country": "LB",
+      "state": ""
+    },
+    {
+      "hostname": "brantford",
+      "abbreviation": "bfd",
+      "description": "brantford-woodstock",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "scottsbluff",
+      "abbreviation": "bff",
+      "description": "scottsbluff / panhandle",
+      "country": "US",
+      "state": "NE"
+    },
+    {
+      "hostname": "baghdad",
+      "abbreviation": "bgd",
+      "description": "iraq",
+      "country": "IQ",
+      "state": ""
+    },
+    {
+      "hostname": "bangladesh",
+      "abbreviation": "bgl",
+      "description": "bangladesh",
+      "country": "BD",
+      "state": ""
+    },
+    {
+      "hostname": "binghamton",
+      "abbreviation": "bgm",
+      "description": "binghamton, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "bham",
+      "abbreviation": "bhm",
+      "description": "birmingham, AL",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "birmingham",
+      "abbreviation": "bhx",
+      "description": "birmingham / west mids",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "billings",
+      "abbreviation": "bil",
+      "description": "billings, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "bilbao",
+      "abbreviation": "bio",
+      "description": "bilbao",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "bismarck",
+      "abbreviation": "bis",
+      "description": "bismarck, ND",
+      "country": "US",
+      "state": "ND"
+    },
+    {
+      "hostname": "bemidji",
+      "abbreviation": "bji",
+      "description": "bemidji, MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "guanajuato",
+      "abbreviation": "bjx",
+      "description": "guanajuato",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "bangkok",
+      "abbreviation": "bkk",
+      "description": "thailand",
+      "country": "TH",
+      "state": ""
+    },
+    {
+      "hostname": "belfast",
+      "abbreviation": "blf",
+      "description": "belfast",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "bgky",
+      "abbreviation": "blg",
+      "description": "bowling green, KY",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "bellingham",
+      "abbreviation": "bli",
+      "description": "bellingham, WA",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "bn",
+      "abbreviation": "bln",
+      "description": "bloomington-normal",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "bologna",
+      "abbreviation": "blq",
+      "description": "bologna",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "bloomington",
+      "abbreviation": "bmg",
+      "description": "bloomington, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "boone",
+      "abbreviation": "bnc",
+      "description": "boone, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "bend",
+      "abbreviation": "bnd",
+      "description": "bend, OR",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "brisbane",
+      "abbreviation": "bne",
+      "description": "brisbane, QLD",
+      "country": "AU",
+      "state": "QLD"
+    },
+    {
+      "hostname": "bangalore",
+      "abbreviation": "bng",
+      "description": "bangalore",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "bordeaux",
+      "abbreviation": "bod",
+      "description": "bordeaux",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "colombia",
+      "abbreviation": "bog",
+      "description": "colombia",
+      "country": "CO",
+      "state": ""
+    },
+    {
+      "hostname": "boise",
+      "abbreviation": "boi",
+      "description": "boise, ID",
+      "country": "US",
+      "state": "ID"
+    },
+    {
+      "hostname": "boston",
+      "abbreviation": "bos",
+      "description": "boston",
+      "country": "US",
+      "state": "MA",
+      "subareas": [
+        {
+          "abbreviation": "gbs",
+          "description": "boston/cambridge/brookline"
+        },
+        {
+          "abbreviation": "nwb",
+          "description": "northwest/merrimack"
+        },
+        {
+          "abbreviation": "bmw",
+          "description": "metro west"
+        },
+        {
+          "abbreviation": "nos",
+          "description": "north shore"
+        },
+        {
+          "abbreviation": "sob",
+          "description": "south shore"
+        }
+      ]
+    },
+    {
+      "hostname": "boulder",
+      "abbreviation": "bou",
+      "description": "boulder, CO",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "beaumont",
+      "abbreviation": "bpt",
+      "description": "beaumont / port arthur",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "brainerd",
+      "abbreviation": "brd",
+      "description": "brainerd, MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "brighton",
+      "abbreviation": "bri",
+      "description": "brighton",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "vermont",
+      "abbreviation": "brl",
+      "description": "vermont",
+      "country": "US",
+      "state": "VT"
+    },
+    {
+      "hostname": "bremen",
+      "abbreviation": "brm",
+      "description": "bremen",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "bern",
+      "abbreviation": "brn",
+      "description": "bern",
+      "country": "CH",
+      "state": ""
+    },
+    {
+      "hostname": "brownsville",
+      "abbreviation": "bro",
+      "description": "brownsville, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "barrie",
+      "abbreviation": "brr",
+      "description": "barrie, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "bristol",
+      "abbreviation": "brs",
+      "description": "bristol",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "brussels",
+      "abbreviation": "bru",
+      "description": "belgium",
+      "country": "BE",
+      "state": ""
+    },
+    {
+      "hostname": "brasilia",
+      "abbreviation": "bsb",
+      "description": "brasilia",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "basel",
+      "abbreviation": "bsl",
+      "description": "basel",
+      "country": "CH",
+      "state": ""
+    },
+    {
+      "hostname": "battlecreek",
+      "abbreviation": "btc",
+      "description": "battle creek, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "bath",
+      "abbreviation": "bth",
+      "description": "bath, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "butte",
+      "abbreviation": "btm",
+      "description": "butte, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "batonrouge",
+      "abbreviation": "btr",
+      "description": "baton rouge",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "budapest",
+      "abbreviation": "bud",
+      "description": "budapest",
+      "country": "HU",
+      "state": ""
+    },
+    {
+      "hostname": "buenosaires",
+      "abbreviation": "bue",
+      "description": "buenos aires",
+      "country": "AR",
+      "state": ""
+    },
+    {
+      "hostname": "buffalo",
+      "abbreviation": "buf",
+      "description": "buffalo, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "bucharest",
+      "abbreviation": "buh",
+      "description": "romania",
+      "country": "RO",
+      "state": ""
+    },
+    {
+      "hostname": "brunswick",
+      "abbreviation": "bwk",
+      "description": "brunswick, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "bozeman",
+      "abbreviation": "bzn",
+      "description": "bozeman, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "columbia",
+      "abbreviation": "cae",
+      "description": "columbia, SC",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "cairo",
+      "abbreviation": "cai",
+      "description": "egypt",
+      "country": "EG",
+      "state": ""
+    },
+    {
+      "hostname": "akroncanton",
+      "abbreviation": "cak",
+      "description": "akron / canton",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "cambridge",
+      "abbreviation": "cam",
+      "description": "cambridge, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "guangzhou",
+      "abbreviation": "can",
+      "description": "guangzhou",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "capecod",
+      "abbreviation": "cap",
+      "description": "cape cod / islands",
+      "country": "US",
+      "state": "MA"
+    },
+    {
+      "hostname": "casablanca",
+      "abbreviation": "cas",
+      "description": "morocco",
+      "country": "MA",
+      "state": ""
+    },
+    {
+      "hostname": "catskills",
+      "abbreviation": "cat",
+      "description": "catskills",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "carbondale",
+      "abbreviation": "cbd",
+      "description": "southern illinois",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "chambersburg",
+      "abbreviation": "cbg",
+      "description": "cumberland valley",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "cariboo",
+      "abbreviation": "cbo",
+      "description": "cariboo, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "canberra",
+      "abbreviation": "cbr",
+      "description": "canberra, ACT",
+      "country": "AU",
+      "state": "NSW"
+    },
+    {
+      "hostname": "caracas",
+      "abbreviation": "ccs",
+      "description": "venezuela",
+      "country": "VE",
+      "state": ""
+    },
+    {
+      "hostname": "cdo",
+      "abbreviation": "cdo",
+      "description": "cagayan de oro",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "cadiz",
+      "abbreviation": "cdz",
+      "description": "cadiz",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "cebu",
+      "abbreviation": "ceb",
+      "description": "cebu",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "cedarrapids",
+      "abbreviation": "ced",
+      "description": "cedar rapids, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "cfl",
+      "abbreviation": "cfl",
+      "description": "heartland florida",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "cologne",
+      "abbreviation": "cgn",
+      "description": "cologne",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "charlotte",
+      "abbreviation": "cha",
+      "description": "charlotte, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "chico",
+      "abbreviation": "chc",
+      "description": "chico, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "chennai",
+      "abbreviation": "che",
+      "description": "chennai (madras)",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "chihuahua",
+      "abbreviation": "chh",
+      "description": "chihuahua",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "chicago",
+      "abbreviation": "chi",
+      "description": "chicago",
+      "country": "US",
+      "state": "IL",
+      "subareas": [
+        {
+          "abbreviation": "chc",
+          "description": "city of chicago"
+        },
+        {
+          "abbreviation": "nch",
+          "description": "north chicagoland"
+        },
+        {
+          "abbreviation": "wcl",
+          "description": "west chicagoland"
+        },
+        {
+          "abbreviation": "sox",
+          "description": "south chicagoland"
+        },
+        {
+          "abbreviation": "nwi",
+          "description": "northwest indiana"
+        },
+        {
+          "abbreviation": "nwc",
+          "description": "northwest suburbs"
+        }
+      ]
+    },
+    {
+      "hostname": "chatham",
+      "abbreviation": "chk",
+      "description": "chatham-kent, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "chillicothe",
+      "abbreviation": "chl",
+      "description": "chillicothe, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "chambana",
+      "abbreviation": "chm",
+      "description": "champaign urbana",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "chautauqua",
+      "abbreviation": "chq",
+      "description": "chautauqua, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "christchurch",
+      "abbreviation": "chr",
+      "description": "christchurch",
+      "country": "NZ",
+      "state": ""
+    },
+    {
+      "hostname": "charleston",
+      "abbreviation": "chs",
+      "description": "charleston, SC",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "chattanooga",
+      "abbreviation": "cht",
+      "description": "chattanooga, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "cincinnati",
+      "abbreviation": "cin",
+      "description": "cincinnati, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "juarez",
+      "abbreviation": "cjs",
+      "description": "ciudad juarez",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "chongqing",
+      "abbreviation": "ckg",
+      "description": "chongqing",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "clarksville",
+      "abbreviation": "ckv",
+      "description": "clarksville, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "cleveland",
+      "abbreviation": "cle",
+      "description": "cleveland, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "calgary",
+      "abbreviation": "clg",
+      "description": "calgary, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "centralmich",
+      "abbreviation": "cmu",
+      "description": "central michigan",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "comoxvalley",
+      "abbreviation": "cmx",
+      "description": "comox valley, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "belohorizonte",
+      "abbreviation": "cnf",
+      "description": "belo horizonte",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "cnj",
+      "abbreviation": "cnj",
+      "description": "central NJ",
+      "country": "US",
+      "state": "NJ"
+    },
+    {
+      "hostname": "cairns",
+      "abbreviation": "cns",
+      "description": "cairns, QLD",
+      "country": "AU",
+      "state": "QLD"
+    },
+    {
+      "hostname": "kerala",
+      "abbreviation": "cok",
+      "description": "kerala",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "columbus",
+      "abbreviation": "col",
+      "description": "columbus, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "cookeville",
+      "abbreviation": "coo",
+      "description": "cookeville, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "copenhagen",
+      "abbreviation": "cop",
+      "description": "copenhagen",
+      "country": "DK",
+      "state": ""
+    },
+    {
+      "hostname": "oregoncoast",
+      "abbreviation": "cor",
+      "description": "oregon coast",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "cosprings",
+      "abbreviation": "cos",
+      "description": "colorado springs",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "columbiamo",
+      "abbreviation": "cou",
+      "description": "columbia / jeff city",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "coventry",
+      "abbreviation": "cov",
+      "description": "coventry, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "capetown",
+      "abbreviation": "cpt",
+      "description": "cape town",
+      "country": "ZA",
+      "state": ""
+    },
+    {
+      "hostname": "caribbean",
+      "abbreviation": "crb",
+      "description": "caribbean islands",
+      "country": "",
+      "state": ""
+    },
+    {
+      "hostname": "costarica",
+      "abbreviation": "cri",
+      "description": "costa rica",
+      "country": "CR",
+      "state": ""
+    },
+    {
+      "hostname": "pampanga",
+      "abbreviation": "crk",
+      "description": "pampanga",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "corpuschristi",
+      "abbreviation": "crp",
+      "description": "corpus christi, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "corvallis",
+      "abbreviation": "crv",
+      "description": "corvallis/albany",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "charlestonwv",
+      "abbreviation": "crw",
+      "description": "charleston, WV",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "csd",
+      "abbreviation": "csd",
+      "description": "pierre / central SD",
+      "country": "US",
+      "state": "SD"
+    },
+    {
+      "hostname": "columbusga",
+      "abbreviation": "csg",
+      "description": "columbus, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "collegestation",
+      "abbreviation": "cst",
+      "description": "college station, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "chengdu",
+      "abbreviation": "ctu",
+      "description": "chengdu",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "clovis",
+      "abbreviation": "cvn",
+      "description": "clovis / portales",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "curitiba",
+      "abbreviation": "cwb",
+      "description": "curitiba",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "cardiff",
+      "abbreviation": "cym",
+      "description": "cardiff / wales",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "daytona",
+      "abbreviation": "dab",
+      "description": "daytona beach",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "dallas",
+      "abbreviation": "dal",
+      "description": "dallas / fort worth",
+      "country": "US",
+      "state": "TX",
+      "subareas": [
+        {
+          "abbreviation": "dal",
+          "description": "dallas"
+        },
+        {
+          "abbreviation": "ftw",
+          "description": "fort worth"
+        },
+        {
+          "abbreviation": "mdf",
+          "description": "mid cities"
+        },
+        {
+          "abbreviation": "ndf",
+          "description": "north DFW"
+        },
+        {
+          "abbreviation": "sdf",
+          "description": "south DFW"
+        }
+      ]
+    },
+    {
+      "hostname": "dayton",
+      "abbreviation": "day",
+      "description": "dayton / springfield",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "dubuque",
+      "abbreviation": "dbq",
+      "description": "dubuque",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "derby",
+      "abbreviation": "dby",
+      "description": "derby, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "delhi",
+      "abbreviation": "del",
+      "description": "delhi",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "denver",
+      "abbreviation": "den",
+      "description": "denver, CO",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "detroit",
+      "abbreviation": "det",
+      "description": "detroit metro",
+      "country": "US",
+      "state": "MI",
+      "subareas": [
+        {
+          "abbreviation": "mcb",
+          "description": "macomb county"
+        },
+        {
+          "abbreviation": "wyn",
+          "description": "wayne county"
+        },
+        {
+          "abbreviation": "okl",
+          "description": "oakland county"
+        }
+      ]
+    },
+    {
+      "hostname": "dothan",
+      "abbreviation": "dhn",
+      "description": "dothan, AL",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "decatur",
+      "abbreviation": "dil",
+      "description": "decatur, IL",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "dalian",
+      "abbreviation": "dlc",
+      "description": "dalian",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "duluth",
+      "abbreviation": "dlh",
+      "description": "duluth / superior",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "delaware",
+      "abbreviation": "dlw",
+      "description": "delaware",
+      "country": "US",
+      "state": "DE"
+    },
+    {
+      "hostname": "dundee",
+      "abbreviation": "dnd",
+      "description": "dundee",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "danville",
+      "abbreviation": "dnv",
+      "description": "danville",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "dresden",
+      "abbreviation": "drs",
+      "description": "dresden",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "delrio",
+      "abbreviation": "drt",
+      "description": "del rio / eagle pass",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "darwin",
+      "abbreviation": "drw",
+      "description": "darwin, NT",
+      "country": "AU",
+      "state": "NT"
+    },
+    {
+      "hostname": "desmoines",
+      "abbreviation": "dsm",
+      "description": "des moines, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "dublin",
+      "abbreviation": "dub",
+      "description": "dublin, IE",
+      "country": "IE",
+      "state": ""
+    },
+    {
+      "hostname": "dunedin",
+      "abbreviation": "dud",
+      "description": "dunedin, NZ",
+      "country": "NZ",
+      "state": ""
+    },
+    {
+      "hostname": "durban",
+      "abbreviation": "dur",
+      "description": "durban",
+      "country": "ZA",
+      "state": ""
+    },
+    {
+      "hostname": "dusseldorf",
+      "abbreviation": "dus",
+      "description": "dusseldorf",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "devon",
+      "abbreviation": "dvc",
+      "description": "devon & cornwall",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "davaocity",
+      "abbreviation": "dvo",
+      "description": "davao city",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "eauclaire",
+      "abbreviation": "eau",
+      "description": "eau claire, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "eastco",
+      "abbreviation": "eco",
+      "description": "eastern CO",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "edinburgh",
+      "abbreviation": "edi",
+      "description": "edinburgh",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "edmonton",
+      "abbreviation": "edm",
+      "description": "edmonton, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "eastidaho",
+      "abbreviation": "eid",
+      "description": "east idaho",
+      "country": "US",
+      "state": "ID"
+    },
+    {
+      "hostname": "eastky",
+      "abbreviation": "eky",
+      "description": "eastern kentucky",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "elko",
+      "abbreviation": "elk",
+      "description": "elko, NV",
+      "country": "US",
+      "state": "NV"
+    },
+    {
+      "hostname": "elmira",
+      "abbreviation": "elm",
+      "description": "elmira-corning",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "elpaso",
+      "abbreviation": "elp",
+      "description": "el paso, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "eastmids",
+      "abbreviation": "eml",
+      "description": "east midlands",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "kenai",
+      "abbreviation": "ena",
+      "description": "kenai peninsula",
+      "country": "US",
+      "state": "AK"
+    },
+    {
+      "hostname": "eastnc",
+      "abbreviation": "enc",
+      "description": "eastern NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "enid",
+      "abbreviation": "end",
+      "description": "northwest OK",
+      "country": "US",
+      "state": "OK"
+    },
+    {
+      "hostname": "eastoregon",
+      "abbreviation": "eor",
+      "description": "east oregon",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "erie",
+      "abbreviation": "eri",
+      "description": "erie, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "easternshore",
+      "abbreviation": "esh",
+      "description": "eastern shore",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "essen",
+      "abbreviation": "ess",
+      "description": "essen / ruhr",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "essex",
+      "abbreviation": "esx",
+      "description": "essex, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "easttexas",
+      "abbreviation": "etx",
+      "description": "tyler / east TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "eugene",
+      "abbreviation": "eug",
+      "description": "eugene, OR",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "evansville",
+      "abbreviation": "evv",
+      "description": "evansville, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "martinsburg",
+      "abbreviation": "ewv",
+      "description": "eastern panhandle",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "fredericksburg",
+      "abbreviation": "ezf",
+      "description": "fredericksburg, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "fairbanks",
+      "abbreviation": "fai",
+      "description": "fairbanks, AK",
+      "country": "US",
+      "state": "AK"
+    },
+    {
+      "hostname": "fargo",
+      "abbreviation": "far",
+      "description": "fargo / moorhead",
+      "country": "US",
+      "state": "ND"
+    },
+    {
+      "hostname": "fayetteville",
+      "abbreviation": "fay",
+      "description": "fayetteville, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "kalispell",
+      "abbreviation": "fca",
+      "description": "kalispell, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "frederick",
+      "abbreviation": "fdk",
+      "description": "frederick, MD",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "fingerlakes",
+      "abbreviation": "fgl",
+      "description": "finger lakes, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "sierravista",
+      "abbreviation": "fhu",
+      "description": "sierra vista, AZ",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "flagstaff",
+      "abbreviation": "flg",
+      "description": "flagstaff / sedona",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "florencesc",
+      "abbreviation": "flo",
+      "description": "florence, SC",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "florence",
+      "abbreviation": "flr",
+      "description": "florence / tuscany",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "ftmcmurray",
+      "abbreviation": "fmc",
+      "description": "ft mcmurray, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "fortmyers",
+      "abbreviation": "fmy",
+      "description": "ft myers / SW florida",
+      "country": "US",
+      "state": "FL",
+      "subareas": [
+        {
+          "abbreviation": "lee",
+          "description": "lee county"
+        },
+        {
+          "abbreviation": "chl",
+          "description": "charlotte county"
+        },
+        {
+          "abbreviation": "col",
+          "description": "collier county"
+        }
+      ]
+    },
+    {
+      "hostname": "farmington",
+      "abbreviation": "fnm",
+      "description": "farmington, NM",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "flint",
+      "abbreviation": "fnt",
+      "description": "flint, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "frankfurt",
+      "abbreviation": "fra",
+      "description": "frankfurt",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "fresno",
+      "abbreviation": "fre",
+      "description": "fresno / madera",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "faro",
+      "abbreviation": "fro",
+      "description": "faro / algarve",
+      "country": "PT",
+      "state": ""
+    },
+    {
+      "hostname": "siouxfalls",
+      "abbreviation": "fsd",
+      "description": "sioux falls / SE SD",
+      "country": "US",
+      "state": "SD"
+    },
+    {
+      "hostname": "fortsmith",
+      "abbreviation": "fsm",
+      "description": "fort smith, AR",
+      "country": "US",
+      "state": "AR"
+    },
+    {
+      "hostname": "fortcollins",
+      "abbreviation": "ftc",
+      "description": "fort collins / north CO",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "fortdodge",
+      "abbreviation": "ftd",
+      "description": "fort dodge, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "fortaleza",
+      "abbreviation": "ftl",
+      "description": "fortaleza",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "fukuoka",
+      "abbreviation": "fuk",
+      "description": "fukuoka",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "fortwayne",
+      "abbreviation": "fwa",
+      "description": "fort wayne, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "fayar",
+      "abbreviation": "fyv",
+      "description": "fayetteville, AR",
+      "country": "US",
+      "state": "AR"
+    },
+    {
+      "hostname": "greensboro",
+      "abbreviation": "gbo",
+      "description": "greensboro, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "guadalajara",
+      "abbreviation": "gdl",
+      "description": "guadalajara",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "genoa",
+      "abbreviation": "gen",
+      "description": "genoa",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "grandforks",
+      "abbreviation": "gfk",
+      "description": "grand forks",
+      "country": "US",
+      "state": "ND"
+    },
+    {
+      "hostname": "glensfalls",
+      "abbreviation": "gfl",
+      "description": "glens falls, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "grandisland",
+      "abbreviation": "gil",
+      "description": "grand island, NE",
+      "country": "US",
+      "state": "NE"
+    },
+    {
+      "hostname": "westslope",
+      "abbreviation": "gjt",
+      "description": "western slope",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "glasgow",
+      "abbreviation": "gla",
+      "description": "glasgow",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "goldcountry",
+      "abbreviation": "gld",
+      "description": "gold country",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "galveston",
+      "abbreviation": "gls",
+      "description": "galveston, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "grenoble",
+      "abbreviation": "gnb",
+      "description": "grenoble",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "gainesville",
+      "abbreviation": "gnv",
+      "description": "gainesville, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "goa",
+      "abbreviation": "goa",
+      "description": "goa",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "guelph",
+      "abbreviation": "gph",
+      "description": "guelph, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "gulfport",
+      "abbreviation": "gpt",
+      "description": "gulfport / biloxi",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "greenbay",
+      "abbreviation": "grb",
+      "description": "green bay, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "killeen",
+      "abbreviation": "grk",
+      "description": "killeen / temple / ft hood",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "grandrapids",
+      "abbreviation": "grr",
+      "description": "grand rapids, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "granada",
+      "abbreviation": "grx",
+      "description": "granada",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "greenville",
+      "abbreviation": "gsp",
+      "description": "greenville / upstate",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "greatfalls",
+      "abbreviation": "gtf",
+      "description": "great falls, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "guatemala",
+      "abbreviation": "gua",
+      "description": "guatemala",
+      "country": "GT",
+      "state": ""
+    },
+    {
+      "hostname": "micronesia",
+      "abbreviation": "gum",
+      "description": "guam-micronesia",
+      "country": "GU",
+      "state": ""
+    },
+    {
+      "hostname": "geneva",
+      "abbreviation": "gva",
+      "description": "geneva",
+      "country": "CH",
+      "state": ""
+    },
+    {
+      "hostname": "hannover",
+      "abbreviation": "haj",
+      "description": "hannover",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "hamburg",
+      "abbreviation": "ham",
+      "description": "hamburg",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "hat",
+      "abbreviation": "hat",
+      "description": "medicine hat, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "hobart",
+      "abbreviation": "hba",
+      "description": "tasmania",
+      "country": "AU",
+      "state": "TAS"
+    },
+    {
+      "hostname": "heidelberg",
+      "abbreviation": "hdb",
+      "description": "heidelberg",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "helsinki",
+      "abbreviation": "hel",
+      "description": "finland",
+      "country": "FI",
+      "state": ""
+    },
+    {
+      "hostname": "natchez",
+      "abbreviation": "hez",
+      "description": "southwest MS",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "haifa",
+      "abbreviation": "hfa",
+      "description": "haifa",
+      "country": "IL",
+      "state": ""
+    },
+    {
+      "hostname": "halifax",
+      "abbreviation": "hfx",
+      "description": "halifax, NS",
+      "country": "CA",
+      "state": "NS"
+    },
+    {
+      "hostname": "hangzhou",
+      "abbreviation": "hgh",
+      "description": "hangzhou",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "hiltonhead",
+      "abbreviation": "hhi",
+      "description": "hilton head",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "hiroshima",
+      "abbreviation": "hij",
+      "description": "hiroshima",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "hongkong",
+      "abbreviation": "hkg",
+      "description": "hong kong",
+      "country": "HK",
+      "state": ""
+    },
+    {
+      "hostname": "hickory",
+      "abbreviation": "hky",
+      "description": "hickory / lenoir",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "holland",
+      "abbreviation": "hld",
+      "description": "holland, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "helena",
+      "abbreviation": "hln",
+      "description": "helena, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "humboldt",
+      "abbreviation": "hmb",
+      "description": "humboldt county",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "hamilton",
+      "abbreviation": "hml",
+      "description": "hamilton-burlington",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "hanford",
+      "abbreviation": "hnf",
+      "description": "hanford-corcoran",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "honolulu",
+      "abbreviation": "hnl",
+      "description": "hawaii",
+      "country": "US",
+      "state": "HI",
+      "subareas": [
+        {
+          "abbreviation": "oah",
+          "description": "oahu"
+        },
+        {
+          "abbreviation": "big",
+          "description": "big island"
+        },
+        {
+          "abbreviation": "mau",
+          "description": "maui"
+        },
+        {
+          "abbreviation": "kau",
+          "description": "kauai"
+        },
+        {
+          "abbreviation": "mol",
+          "description": "molokai"
+        }
+      ]
+    },
+    {
+      "hostname": "houston",
+      "abbreviation": "hou",
+      "description": "houston, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "pretoria",
+      "abbreviation": "hpr",
+      "description": "pretoria",
+      "country": "ZA",
+      "state": ""
+    },
+    {
+      "hostname": "hermosillo",
+      "abbreviation": "hrm",
+      "description": "hermosillo",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "harrisburg",
+      "abbreviation": "hrs",
+      "description": "harrisburg, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "huntsville",
+      "abbreviation": "hsv",
+      "description": "huntsville / decatur",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "hartford",
+      "abbreviation": "htf",
+      "description": "hartford, CT",
+      "country": "US",
+      "state": "CT"
+    },
+    {
+      "hostname": "huntington",
+      "abbreviation": "hts",
+      "description": "huntington-ashland",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "hudsonvalley",
+      "abbreviation": "hud",
+      "description": "hudson valley, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "houma",
+      "abbreviation": "hum",
+      "description": "houma, LA",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "newhaven",
+      "abbreviation": "hvn",
+      "description": "new haven, CT",
+      "country": "US",
+      "state": "CT"
+    },
+    {
+      "hostname": "hyderabad",
+      "abbreviation": "hyd",
+      "description": "hyderabad",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "iowacity",
+      "abbreviation": "iac",
+      "description": "iowa city, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "baleares",
+      "abbreviation": "ibz",
+      "description": "baleares",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "indore",
+      "abbreviation": "idr",
+      "description": "indore",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "iloilo",
+      "abbreviation": "ilo",
+      "description": "iloilo",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "imperial",
+      "abbreviation": "imp",
+      "description": "imperial county",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "indianapolis",
+      "abbreviation": "ind",
+      "description": "indianapolis",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "inlandempire",
+      "abbreviation": "inl",
+      "description": "inland empire, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "longisland",
+      "abbreviation": "isp",
+      "description": "long island, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "istanbul",
+      "abbreviation": "ist",
+      "description": "turkey",
+      "country": "TR",
+      "state": ""
+    },
+    {
+      "hostname": "ithaca",
+      "abbreviation": "ith",
+      "description": "ithaca, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "chandigarh",
+      "abbreviation": "ixc",
+      "description": "chandigarh",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "jaipur",
+      "abbreviation": "jai",
+      "description": "jaipur",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "jackson",
+      "abbreviation": "jan",
+      "description": "jackson, MS",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "jacksonville",
+      "abbreviation": "jax",
+      "description": "jacksonville, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "jonesboro",
+      "abbreviation": "jbr",
+      "description": "jonesboro, AR",
+      "country": "US",
+      "state": "AR"
+    },
+    {
+      "hostname": "ashtabula",
+      "abbreviation": "jfn",
+      "description": "ashtabula, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "jakarta",
+      "abbreviation": "jkt",
+      "description": "indonesia",
+      "country": "ID",
+      "state": ""
+    },
+    {
+      "hostname": "joplin",
+      "abbreviation": "jln",
+      "description": "joplin, MO",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "johannesburg",
+      "abbreviation": "jnb",
+      "description": "johannesburg",
+      "country": "ZA",
+      "state": ""
+    },
+    {
+      "hostname": "juneau",
+      "abbreviation": "jnu",
+      "description": "southeast alaska",
+      "country": "US",
+      "state": "AK"
+    },
+    {
+      "hostname": "jerusalem",
+      "abbreviation": "jrs",
+      "description": "jerusalem",
+      "country": "IL",
+      "state": ""
+    },
+    {
+      "hostname": "janesville",
+      "abbreviation": "jvl",
+      "description": "janesville, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "jxn",
+      "abbreviation": "jxn",
+      "description": "jackson, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "jacksontn",
+      "abbreviation": "jxt",
+      "description": "jackson, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "jerseyshore",
+      "abbreviation": "jys",
+      "description": "jersey shore",
+      "country": "US",
+      "state": "NJ"
+    },
+    {
+      "hostname": "ukraine",
+      "abbreviation": "kbp",
+      "description": "ukraine",
+      "country": "UA",
+      "state": ""
+    },
+    {
+      "hostname": "kitchener",
+      "abbreviation": "kch",
+      "description": "kitchener-waterloo-cambridge",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "kelowna",
+      "abbreviation": "kel",
+      "description": "kelowna / okanagan",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "kent",
+      "abbreviation": "ken",
+      "description": "kent, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "keys",
+      "abbreviation": "key",
+      "description": "florida keys",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "klamath",
+      "abbreviation": "klf",
+      "description": "klamath falls, OR",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "kaiserslautern",
+      "abbreviation": "klt",
+      "description": "kaiserslautern",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "kamloops",
+      "abbreviation": "kml",
+      "description": "kamloops, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "kingston",
+      "abbreviation": "kng",
+      "description": "kingston, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "knoxville",
+      "abbreviation": "knx",
+      "description": "knoxville, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "kolkata",
+      "abbreviation": "kol",
+      "description": "kolkata (calcutta)",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "kootenays",
+      "abbreviation": "koo",
+      "description": "kootenays, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "kpr",
+      "abbreviation": "kpr",
+      "description": "kennewick-pasco-richland",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "kirksville",
+      "abbreviation": "krk",
+      "description": "kirksville, MO",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "kansascity",
+      "abbreviation": "ksc",
+      "description": "kansas city, MO",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "kuwait",
+      "abbreviation": "kwi",
+      "description": "kuwait",
+      "country": "KW",
+      "state": ""
+    },
+    {
+      "hostname": "kalamazoo",
+      "abbreviation": "kzo",
+      "description": "kalamazoo, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "tippecanoe",
+      "abbreviation": "laf",
+      "description": "lafayette / west lafayette",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "lakeland",
+      "abbreviation": "lal",
+      "description": "lakeland, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "lansing",
+      "abbreviation": "lan",
+      "description": "lansing, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "lausanne",
+      "abbreviation": "lau",
+      "description": "lausanne",
+      "country": "CH",
+      "state": ""
+    },
+    {
+      "hostname": "lawton",
+      "abbreviation": "law",
+      "description": "lawton, OK",
+      "country": "US",
+      "state": "OK"
+    },
+    {
+      "hostname": "losangeles",
+      "abbreviation": "lax",
+      "description": "los angeles",
+      "country": "US",
+      "state": "CA",
+      "subareas": [
+        {
+          "abbreviation": "wst",
+          "description": "westside-southbay-310"
+        },
+        {
+          "abbreviation": "sfv",
+          "description": "san fernando valley"
+        },
+        {
+          "abbreviation": "lac",
+          "description": "central LA 213/323"
+        },
+        {
+          "abbreviation": "sgv",
+          "description": "san gabriel valley"
+        },
+        {
+          "abbreviation": "lgb",
+          "description": "long beach / 562"
+        },
+        {
+          "abbreviation": "ant",
+          "description": "antelope valley"
+        }
+      ]
+    },
+    {
+      "hostname": "lubbock",
+      "abbreviation": "lbb",
+      "description": "lubbock, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "northplatte",
+      "abbreviation": "lbf",
+      "description": "north platte, NE",
+      "country": "US",
+      "state": "NE"
+    },
+    {
+      "hostname": "lakecity",
+      "abbreviation": "lcq",
+      "description": "north central FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "lascruces",
+      "abbreviation": "lcr",
+      "description": "las cruces, NM",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "london",
+      "abbreviation": "ldn",
+      "description": "london, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "leeds",
+      "abbreviation": "lds",
+      "description": "leeds",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "leipzig",
+      "abbreviation": "lej",
+      "description": "leipzig",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "lexington",
+      "abbreviation": "lex",
+      "description": "lexington, KY",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "lafayette",
+      "abbreviation": "lft",
+      "description": "lafayette, LA",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "logan",
+      "abbreviation": "lgu",
+      "description": "logan, UT",
+      "country": "US",
+      "state": "UT"
+    },
+    {
+      "hostname": "lille",
+      "abbreviation": "lil",
+      "description": "lille",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "lima",
+      "abbreviation": "lim",
+      "description": "peru",
+      "country": "PE",
+      "state": ""
+    },
+    {
+      "hostname": "lisbon",
+      "abbreviation": "lis",
+      "description": "lisbon",
+      "country": "PT",
+      "state": ""
+    },
+    {
+      "hostname": "littlerock",
+      "abbreviation": "lit",
+      "description": "little rock",
+      "country": "US",
+      "state": "AR"
+    },
+    {
+      "hostname": "liverpool",
+      "abbreviation": "liv",
+      "description": "liverpool",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "lakecharles",
+      "abbreviation": "lkc",
+      "description": "lake charles, LA",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "lucknow",
+      "abbreviation": "lko",
+      "description": "lucknow",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "limaohio",
+      "abbreviation": "lma",
+      "description": "lima / findlay",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "lincoln",
+      "abbreviation": "lnk",
+      "description": "lincoln, NE",
+      "country": "US",
+      "state": "NE"
+    },
+    {
+      "hostname": "lancaster",
+      "abbreviation": "lns",
+      "description": "lancaster, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "londonon",
+      "abbreviation": "lon",
+      "description": "london, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "louisville",
+      "abbreviation": "lou",
+      "description": "louisville, KY",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "loz",
+      "abbreviation": "loz",
+      "description": "lake of the ozarks",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "lapaz",
+      "abbreviation": "lpb",
+      "description": "bolivia",
+      "country": "BO",
+      "state": ""
+    },
+    {
+      "hostname": "laredo",
+      "abbreviation": "lrd",
+      "description": "laredo, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "lacrosse",
+      "abbreviation": "lse",
+      "description": "la crosse, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "lasalle",
+      "abbreviation": "lsl",
+      "description": "la salle co",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "lethbridge",
+      "abbreviation": "lth",
+      "description": "lethbridge, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "luxembourg",
+      "abbreviation": "lux",
+      "description": "luxembourg",
+      "country": "LU",
+      "state": ""
+    },
+    {
+      "hostname": "lasvegas",
+      "abbreviation": "lvg",
+      "description": "las vegas",
+      "country": "US",
+      "state": "NV"
+    },
+    {
+      "hostname": "lawrence",
+      "abbreviation": "lwr",
+      "description": "lawrence, KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "lewiston",
+      "abbreviation": "lws",
+      "description": "lewiston / clarkston",
+      "country": "US",
+      "state": "ID"
+    },
+    {
+      "hostname": "lynchburg",
+      "abbreviation": "lyn",
+      "description": "lynchburg, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "lyon",
+      "abbreviation": "lys",
+      "description": "lyon",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "madison",
+      "abbreviation": "mad",
+      "description": "madison, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "manchester",
+      "abbreviation": "man",
+      "description": "manchester, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "saginaw",
+      "abbreviation": "mbs",
+      "description": "saginaw-midland-baycity",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "mcallen",
+      "abbreviation": "mca",
+      "description": "mcallen / edinburg",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "macon",
+      "abbreviation": "mcn",
+      "description": "macon / warner robins",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "madrid",
+      "abbreviation": "mdd",
+      "description": "madrid",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "mendocino",
+      "abbreviation": "mdo",
+      "description": "mendocino county",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "meadville",
+      "abbreviation": "mdv",
+      "description": "meadville, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "meridian",
+      "abbreviation": "mei",
+      "description": "meridian, MS",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "melbourne",
+      "abbreviation": "mel",
+      "description": "melbourne, VIC",
+      "country": "AU",
+      "state": "VIC"
+    },
+    {
+      "hostname": "memphis",
+      "abbreviation": "mem",
+      "description": "memphis, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "merced",
+      "abbreviation": "mer",
+      "description": "merced, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "mexicocity",
+      "abbreviation": "mex",
+      "description": "mexico city",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "mansfield",
+      "abbreviation": "mfd",
+      "description": "mansfield, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "medford",
+      "abbreviation": "mfr",
+      "description": "medford-ashland",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "managua",
+      "abbreviation": "mga",
+      "description": "nicaragua",
+      "country": "NI",
+      "state": ""
+    },
+    {
+      "hostname": "montgomery",
+      "abbreviation": "mgm",
+      "description": "montgomery, AL",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "ksu",
+      "abbreviation": "mhk",
+      "description": "manhattan, KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "mohave",
+      "abbreviation": "mhv",
+      "description": "mohave county",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "miami",
+      "abbreviation": "mia",
+      "description": "south florida",
+      "country": "US",
+      "state": "FL",
+      "subareas": [
+        {
+          "abbreviation": "mdc",
+          "description": "miami / dade county"
+        },
+        {
+          "abbreviation": "brw",
+          "description": "broward county"
+        },
+        {
+          "abbreviation": "pbc",
+          "description": "palm beach county"
+        }
+      ]
+    },
+    {
+      "hostname": "milwaukee",
+      "abbreviation": "mil",
+      "description": "milwaukee, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "minneapolis",
+      "abbreviation": "min",
+      "description": "minneapolis / st paul",
+      "country": "US",
+      "state": "MN",
+      "subareas": [
+        {
+          "abbreviation": "hnp",
+          "description": "hennepin county"
+        },
+        {
+          "abbreviation": "ram",
+          "description": "ramsey county"
+        },
+        {
+          "abbreviation": "ank",
+          "description": "anoka/chisago/isanti"
+        },
+        {
+          "abbreviation": "wsh",
+          "description": "washington co / WI"
+        },
+        {
+          "abbreviation": "dak",
+          "description": "dakota / scott"
+        },
+        {
+          "abbreviation": "csw",
+          "description": "carver/sherburne/wright"
+        }
+      ]
+    },
+    {
+      "hostname": "muskegon",
+      "abbreviation": "mkg",
+      "description": "muskegon, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "mankato",
+      "abbreviation": "mkt",
+      "description": "mankato, MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "spacecoast",
+      "abbreviation": "mlb",
+      "description": "space coast, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "quadcities",
+      "abbreviation": "mli",
+      "description": "quad cities, IA/IL",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "moseslake",
+      "abbreviation": "mlk",
+      "description": "moses lake, WA",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "monroe",
+      "abbreviation": "mlu",
+      "description": "monroe, LA",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "malaysia",
+      "abbreviation": "mly",
+      "description": "malaysia",
+      "country": "MY",
+      "state": ""
+    },
+    {
+      "hostname": "marshall",
+      "abbreviation": "mml",
+      "description": "southwest MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "maine",
+      "abbreviation": "mne",
+      "description": "maine",
+      "country": "US",
+      "state": "ME"
+    },
+    {
+      "hostname": "manila",
+      "abbreviation": "mnl",
+      "description": "manila",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "monroemi",
+      "abbreviation": "mnr",
+      "description": "monroe, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "montana",
+      "abbreviation": "mnt",
+      "description": "eastern montana",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "mobile",
+      "abbreviation": "mob",
+      "description": "mobile, AL",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "modesto",
+      "abbreviation": "mod",
+      "description": "modesto, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "montreal",
+      "abbreviation": "mon",
+      "description": "montreal, QC",
+      "country": "CA",
+      "state": "QC"
+    },
+    {
+      "hostname": "moscow",
+      "abbreviation": "mos",
+      "description": "moscow",
+      "country": "RU",
+      "state": ""
+    },
+    {
+      "hostname": "montpellier",
+      "abbreviation": "mpl",
+      "description": "montpellier",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "marseilles",
+      "abbreviation": "mrs",
+      "description": "marseille",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "masoncity",
+      "abbreviation": "msc",
+      "description": "mason city, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "shoals",
+      "abbreviation": "msl",
+      "description": "florence / muscle shoals",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "missoula",
+      "abbreviation": "mso",
+      "description": "missoula, MT",
+      "country": "US",
+      "state": "MT"
+    },
+    {
+      "hostname": "monterey",
+      "abbreviation": "mtb",
+      "description": "monterey bay",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "mattoon",
+      "abbreviation": "mto",
+      "description": "mattoon-charleston",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "monterrey",
+      "abbreviation": "mty",
+      "description": "monterrey",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "munich",
+      "abbreviation": "muc",
+      "description": "munich",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "mumbai",
+      "abbreviation": "mum",
+      "description": "mumbai",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "muncie",
+      "abbreviation": "mun",
+      "description": "muncie / anderson",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "montevideo",
+      "abbreviation": "mvd",
+      "description": "montevideo",
+      "country": "UY",
+      "state": ""
+    },
+    {
+      "hostname": "skagit",
+      "abbreviation": "mvw",
+      "description": "skagit / island / SJI",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "milan",
+      "abbreviation": "mxp",
+      "description": "milan",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "myrtlebeach",
+      "abbreviation": "myr",
+      "description": "myrtle beach, SC",
+      "country": "US",
+      "state": "SC"
+    },
+    {
+      "hostname": "mazatlan",
+      "abbreviation": "mzt",
+      "description": "mazatlan",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "naples",
+      "abbreviation": "nap",
+      "description": "napoli / campania",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "kenya",
+      "abbreviation": "nbo",
+      "description": "kenya",
+      "country": "KE",
+      "state": ""
+    },
+    {
+      "hostname": "newbrunswick",
+      "abbreviation": "nbw",
+      "description": "new brunswick",
+      "country": "CA",
+      "state": "NB"
+    },
+    {
+      "hostname": "cotedazur",
+      "abbreviation": "nce",
+      "description": "nice / cote d'azur",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "newcastle",
+      "abbreviation": "ncl",
+      "description": "newcastle / NE england",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "nwct",
+      "abbreviation": "nct",
+      "description": "northwest CT",
+      "country": "US",
+      "state": "CT"
+    },
+    {
+      "hostname": "nd",
+      "abbreviation": "ndk",
+      "description": "north dakota",
+      "country": "US",
+      "state": "ND"
+    },
+    {
+      "hostname": "norfolk",
+      "abbreviation": "nfk",
+      "description": "norfolk / hampton roads",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "newfoundland",
+      "abbreviation": "nfl",
+      "description": "st john's, NL",
+      "country": "CA",
+      "state": "NL"
+    },
+    {
+      "hostname": "nagoya",
+      "abbreviation": "ngo",
+      "description": "nagoya",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "nh",
+      "abbreviation": "nhm",
+      "description": "new hampshire",
+      "country": "US",
+      "state": "NH"
+    },
+    {
+      "hostname": "newjersey",
+      "abbreviation": "njy",
+      "description": "north jersey",
+      "country": "US",
+      "state": "NJ"
+    },
+    {
+      "hostname": "nanjing",
+      "abbreviation": "nkg",
+      "description": "nanjing",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "newlondon",
+      "abbreviation": "nlo",
+      "description": "eastern CT",
+      "country": "US",
+      "state": "CT"
+    },
+    {
+      "hostname": "nmi",
+      "abbreviation": "nmi",
+      "description": "northern michigan",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "nanaimo",
+      "abbreviation": "nmo",
+      "description": "nanaimo, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "northmiss",
+      "abbreviation": "nms",
+      "description": "north mississippi",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "neworleans",
+      "abbreviation": "nor",
+      "description": "new orleans",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "nottingham",
+      "abbreviation": "not",
+      "description": "nottingham, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "tuscarawas",
+      "abbreviation": "nph",
+      "description": "tuscarawas co",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "niagara",
+      "abbreviation": "nsc",
+      "description": "niagara region",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "nashville",
+      "abbreviation": "nsh",
+      "description": "nashville, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "loire",
+      "abbreviation": "nte",
+      "description": "loire valley",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "ntl",
+      "abbreviation": "ntl",
+      "description": "newcastle, NSW",
+      "country": "AU",
+      "state": "NSW"
+    },
+    {
+      "hostname": "nuremberg",
+      "abbreviation": "nue",
+      "description": "nuremberg",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "nwga",
+      "abbreviation": "nwg",
+      "description": "northwest GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "norwich",
+      "abbreviation": "nwh",
+      "description": "east anglia",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "northernwi",
+      "abbreviation": "nwi",
+      "description": "northern WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "nwks",
+      "abbreviation": "nwk",
+      "description": "northwest KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "newyork",
+      "abbreviation": "nyc",
+      "description": "new york city",
+      "country": "US",
+      "state": "NY",
+      "subareas": [
+        {
+          "abbreviation": "mnh",
+          "description": "manhattan"
+        },
+        {
+          "abbreviation": "brk",
+          "description": "brooklyn"
+        },
+        {
+          "abbreviation": "que",
+          "description": "queens"
+        },
+        {
+          "abbreviation": "brx",
+          "description": "bronx"
+        },
+        {
+          "abbreviation": "stn",
+          "description": "staten island"
+        },
+        {
+          "abbreviation": "jsy",
+          "description": "new jersey"
+        },
+        {
+          "abbreviation": "lgi",
+          "description": "long island"
+        },
+        {
+          "abbreviation": "wch",
+          "description": "westchester"
+        },
+        {
+          "abbreviation": "fct",
+          "description": "fairfield co, CT"
+        }
+      ]
+    },
+    {
+      "hostname": "onslow",
+      "abbreviation": "oaj",
+      "description": "jacksonville, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "oaxaca",
+      "abbreviation": "oax",
+      "description": "oaxaca",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "outerbanks",
+      "abbreviation": "obx",
+      "description": "outer banks",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "ocala",
+      "abbreviation": "oca",
+      "description": "ocala, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "nacogdoches",
+      "abbreviation": "och",
+      "description": "deep east texas",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "odessa",
+      "abbreviation": "odm",
+      "description": "odessa / midland",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "ogden",
+      "abbreviation": "ogd",
+      "description": "ogden-clearfield",
+      "country": "US",
+      "state": "UT"
+    },
+    {
+      "hostname": "athensohio",
+      "abbreviation": "ohu",
+      "description": "athens, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "okinawa",
+      "abbreviation": "oka",
+      "description": "okinawa",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "oklahomacity",
+      "abbreviation": "okc",
+      "description": "oklahoma city",
+      "country": "US",
+      "state": "OK"
+    },
+    {
+      "hostname": "kokomo",
+      "abbreviation": "okk",
+      "description": "kokomo, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "winchester",
+      "abbreviation": "okv",
+      "description": "winchester, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "olympic",
+      "abbreviation": "olp",
+      "description": "olympic peninsula",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "omaha",
+      "abbreviation": "oma",
+      "description": "omaha / council bluffs",
+      "country": "US",
+      "state": "NE"
+    },
+    {
+      "hostname": "oneonta",
+      "abbreviation": "onh",
+      "description": "oneonta, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "goldcoast",
+      "abbreviation": "ool",
+      "description": "gold coast",
+      "country": "AU",
+      "state": "QLD"
+    },
+    {
+      "hostname": "orangecounty",
+      "abbreviation": "orc",
+      "description": "orange county, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "orlando",
+      "abbreviation": "orl",
+      "description": "orlando, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "osaka",
+      "abbreviation": "osa",
+      "description": "osaka-kobe-kyoto",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "oslo",
+      "abbreviation": "osl",
+      "description": "norway",
+      "country": "NO",
+      "state": ""
+    },
+    {
+      "hostname": "stillwater",
+      "abbreviation": "osu",
+      "description": "stillwater, OK",
+      "country": "US",
+      "state": "OK"
+    },
+    {
+      "hostname": "ottawa",
+      "abbreviation": "ott",
+      "description": "ottawa-hull-gatineau",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "ottumwa",
+      "abbreviation": "otu",
+      "description": "southeast IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "owensboro",
+      "abbreviation": "owb",
+      "description": "owensboro, KY",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "owensound",
+      "abbreviation": "ows",
+      "description": "owen sound, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "oxford",
+      "abbreviation": "oxf",
+      "description": "oxford, UK",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "ventura",
+      "abbreviation": "oxr",
+      "description": "ventura county",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "pakistan",
+      "abbreviation": "pak",
+      "description": "pakistan",
+      "country": "PK",
+      "state": ""
+    },
+    {
+      "hostname": "ramallah",
+      "abbreviation": "pal",
+      "description": "west bank",
+      "country": "PS",
+      "state": ""
+    },
+    {
+      "hostname": "panama",
+      "abbreviation": "pan",
+      "description": "panama",
+      "country": "PA",
+      "state": ""
+    },
+    {
+      "hostname": "paris",
+      "abbreviation": "par",
+      "description": "paris, FR",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "peace",
+      "abbreviation": "pax",
+      "description": "peace river country",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "puebla",
+      "abbreviation": "pbl",
+      "description": "puebla, MX",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "portland",
+      "abbreviation": "pdx",
+      "description": "portland, OR",
+      "country": "US",
+      "state": "OR",
+      "subareas": [
+        {
+          "abbreviation": "mlt",
+          "description": "multnomah county"
+        },
+        {
+          "abbreviation": "wsc",
+          "description": "washington county"
+        },
+        {
+          "abbreviation": "clk",
+          "description": "clark/cowlitz WA"
+        },
+        {
+          "abbreviation": "clc",
+          "description": "clackamas county"
+        },
+        {
+          "abbreviation": "nco",
+          "description": "north coast"
+        },
+        {
+          "abbreviation": "yam",
+          "description": "yamhill co"
+        },
+        {
+          "abbreviation": "grg",
+          "description": "columbia gorge"
+        }
+      ]
+    },
+    {
+      "hostname": "perugia",
+      "abbreviation": "peg",
+      "description": "perugia",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "pei",
+      "abbreviation": "pei",
+      "description": "prince edward island",
+      "country": "CA",
+      "state": "PE"
+    },
+    {
+      "hostname": "beijing",
+      "abbreviation": "pek",
+      "description": "beijing",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "perth",
+      "abbreviation": "per",
+      "description": "perth, WA",
+      "country": "AU",
+      "state": "WA"
+    },
+    {
+      "hostname": "panamacity",
+      "abbreviation": "pfn",
+      "description": "panama city, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "portoalegre",
+      "abbreviation": "pgp",
+      "description": "porto alegre",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "philadelphia",
+      "abbreviation": "phi",
+      "description": "philadelphia",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "porthuron",
+      "abbreviation": "phn",
+      "description": "port huron, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "phoenix",
+      "abbreviation": "phx",
+      "description": "phoenix, AZ",
+      "country": "US",
+      "state": "AZ",
+      "subareas": [
+        {
+          "abbreviation": "cph",
+          "description": "central/south phx"
+        },
+        {
+          "abbreviation": "evl",
+          "description": "east valley"
+        },
+        {
+          "abbreviation": "nph",
+          "description": "phx north"
+        },
+        {
+          "abbreviation": "wvl",
+          "description": "west valley"
+        }
+      ]
+    },
+    {
+      "hostname": "peoria",
+      "abbreviation": "pia",
+      "description": "peoria, IL",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "pittsburgh",
+      "abbreviation": "pit",
+      "description": "pittsburgh, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "parkersburg",
+      "abbreviation": "pkb",
+      "description": "parkersburg-marietta",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "plattsburgh",
+      "abbreviation": "plb",
+      "description": "plattsburgh-adirondacks",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "pullman",
+      "abbreviation": "plm",
+      "description": "pullman / moscow",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "pune",
+      "abbreviation": "pnq",
+      "description": "pune",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "pensacola",
+      "abbreviation": "pns",
+      "description": "pensacola, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "poconos",
+      "abbreviation": "poc",
+      "description": "poconos",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "prescott",
+      "abbreviation": "prc",
+      "description": "prescott, AZ",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "prague",
+      "abbreviation": "prg",
+      "description": "prague",
+      "country": "CZ",
+      "state": ""
+    },
+    {
+      "hostname": "puertorico",
+      "abbreviation": "pri",
+      "description": "puerto rico",
+      "country": "PR",
+      "state": "PR"
+    },
+    {
+      "hostname": "providence",
+      "abbreviation": "prv",
+      "description": "rhode island",
+      "country": "US",
+      "state": "RI"
+    },
+    {
+      "hostname": "treasure",
+      "abbreviation": "psl",
+      "description": "treasure coast, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "palmsprings",
+      "abbreviation": "psp",
+      "description": "palm springs, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "pennstate",
+      "abbreviation": "psu",
+      "description": "state college, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "potsdam",
+      "abbreviation": "ptd",
+      "description": "potsdam-canton-massena",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "porto",
+      "abbreviation": "pto",
+      "description": "porto",
+      "country": "PT",
+      "state": ""
+    },
+    {
+      "hostname": "pueblo",
+      "abbreviation": "pub",
+      "description": "pueblo, CO",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "pv",
+      "abbreviation": "pvr",
+      "description": "puerto vallarta",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "provo",
+      "abbreviation": "pvu",
+      "description": "provo / orem",
+      "country": "US",
+      "state": "UT"
+    },
+    {
+      "hostname": "quebec",
+      "abbreviation": "qbc",
+      "description": "quebec city",
+      "country": "CA",
+      "state": "QC"
+    },
+    {
+      "hostname": "quincy",
+      "abbreviation": "qcy",
+      "description": "western IL",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "quito",
+      "abbreviation": "qui",
+      "description": "ecuador",
+      "country": "EC",
+      "state": ""
+    },
+    {
+      "hostname": "racine",
+      "abbreviation": "rac",
+      "description": "kenosha-racine",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "raleigh",
+      "abbreviation": "ral",
+      "description": "raleigh / durham / CH",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "rapidcity",
+      "abbreviation": "rap",
+      "description": "rapid city / west SD",
+      "country": "US",
+      "state": "SD"
+    },
+    {
+      "hostname": "roseburg",
+      "abbreviation": "rbg",
+      "description": "roseburg, OR",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "rockies",
+      "abbreviation": "rck",
+      "description": "high rockies",
+      "country": "US",
+      "state": "CO"
+    },
+    {
+      "hostname": "rochester",
+      "abbreviation": "rcs",
+      "description": "rochester, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "redding",
+      "abbreviation": "rdd",
+      "description": "redding, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "reading",
+      "abbreviation": "rea",
+      "description": "reading, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "recife",
+      "abbreviation": "rec",
+      "description": "recife",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "reddeer",
+      "abbreviation": "red",
+      "description": "red deer, AB",
+      "country": "CA",
+      "state": "AB"
+    },
+    {
+      "hostname": "regina",
+      "abbreviation": "reg",
+      "description": "regina, SK",
+      "country": "CA",
+      "state": "SK"
+    },
+    {
+      "hostname": "rockford",
+      "abbreviation": "rfd",
+      "description": "rockford, IL",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "richmond",
+      "abbreviation": "ric",
+      "description": "richmond, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "richmondin",
+      "abbreviation": "rin",
+      "description": "richmond, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "rio",
+      "abbreviation": "rio",
+      "description": "rio de janeiro",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "reykjavik",
+      "abbreviation": "rkv",
+      "description": "reykjavik",
+      "country": "IS",
+      "state": ""
+    },
+    {
+      "hostname": "rmn",
+      "abbreviation": "rmn",
+      "description": "rochester, MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "reno",
+      "abbreviation": "rno",
+      "description": "reno / tahoe",
+      "country": "US",
+      "state": "NV"
+    },
+    {
+      "hostname": "rennes",
+      "abbreviation": "rns",
+      "description": "brittany",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "roanoke",
+      "abbreviation": "roa",
+      "description": "roanoke, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "rome",
+      "abbreviation": "rom",
+      "description": "rome",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "rouen",
+      "abbreviation": "rou",
+      "description": "normandy",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "roswell",
+      "abbreviation": "row",
+      "description": "roswell / carlsbad",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "sacramento",
+      "abbreviation": "sac",
+      "description": "sacramento",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "santafe",
+      "abbreviation": "saf",
+      "description": "santa fe / taos",
+      "country": "US",
+      "state": "NM"
+    },
+    {
+      "hostname": "elsalvador",
+      "abbreviation": "sal",
+      "description": "el salvador",
+      "country": "SV",
+      "state": ""
+    },
+    {
+      "hostname": "sanantonio",
+      "abbreviation": "sat",
+      "description": "san antonio",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "savannah",
+      "abbreviation": "sav",
+      "description": "savannah / hinesville",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "santabarbara",
+      "abbreviation": "sba",
+      "description": "santa barbara",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "sheboygan",
+      "abbreviation": "sbm",
+      "description": "sheboygan, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "southbend",
+      "abbreviation": "sbn",
+      "description": "south bend / michiana",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "santiago",
+      "abbreviation": "scl",
+      "description": "chile",
+      "country": "CL",
+      "state": ""
+    },
+    {
+      "hostname": "sendai",
+      "abbreviation": "sdj",
+      "description": "sendai",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "sd",
+      "abbreviation": "sdk",
+      "description": "south dakota",
+      "country": "US",
+      "state": "SD"
+    },
+    {
+      "hostname": "sandiego",
+      "abbreviation": "sdo",
+      "description": "san diego",
+      "country": "US",
+      "state": "CA",
+      "subareas": [
+        {
+          "abbreviation": "csd",
+          "description": "city of san diego"
+        },
+        {
+          "abbreviation": "nsd",
+          "description": "north san diego county"
+        },
+        {
+          "abbreviation": "esd",
+          "description": "east san diego county"
+        },
+        {
+          "abbreviation": "ssd",
+          "description": "south san diego county"
+        }
+      ]
+    },
+    {
+      "hostname": "santodomingo",
+      "abbreviation": "sdq",
+      "description": "dominican republic",
+      "country": "DO",
+      "state": ""
+    },
+    {
+      "hostname": "seattle",
+      "abbreviation": "sea",
+      "description": "seattle-tacoma",
+      "country": "US",
+      "state": "WA",
+      "subareas": [
+        {
+          "abbreviation": "see",
+          "description": "seattle"
+        },
+        {
+          "abbreviation": "est",
+          "description": "eastside"
+        },
+        {
+          "abbreviation": "sno",
+          "description": "snohomish county"
+        },
+        {
+          "abbreviation": "kit",
+          "description": "kitsap / west puget"
+        },
+        {
+          "abbreviation": "tac",
+          "description": "tacoma / pierce"
+        },
+        {
+          "abbreviation": "oly",
+          "description": "olympia / thurston"
+        },
+        {
+          "abbreviation": "skc",
+          "description": "south king co"
+        }
+      ]
+    },
+    {
+      "hostname": "seks",
+      "abbreviation": "sek",
+      "description": "southeast KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "seoul",
+      "abbreviation": "sel",
+      "description": "seoul",
+      "country": "KR",
+      "state": ""
+    },
+    {
+      "hostname": "sevilla",
+      "abbreviation": "sev",
+      "description": "sevilla",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "sfbay",
+      "abbreviation": "sfo",
+      "description": "SF bay area",
+      "country": "US",
+      "state": "CA",
+      "subareas": [
+        {
+          "abbreviation": "sfc",
+          "description": "city of san francisco"
+        },
+        {
+          "abbreviation": "sby",
+          "description": "south bay area"
+        },
+        {
+          "abbreviation": "eby",
+          "description": "east bay area"
+        },
+        {
+          "abbreviation": "pen",
+          "description": "peninsula"
+        },
+        {
+          "abbreviation": "nby",
+          "description": "north bay / marin"
+        },
+        {
+          "abbreviation": "scz",
+          "description": "santa cruz co"
+        }
+      ]
+    },
+    {
+      "hostname": "springfield",
+      "abbreviation": "sgf",
+      "description": "springfield, MO",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "saguenay",
+      "abbreviation": "sgy",
+      "description": "saguenay, QC",
+      "country": "CA",
+      "state": "QC"
+    },
+    {
+      "hostname": "shanghai",
+      "abbreviation": "sha",
+      "description": "shanghai",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "sherbrooke",
+      "abbreviation": "shb",
+      "description": "sherbrooke, QC",
+      "country": "CA",
+      "state": "QC"
+    },
+    {
+      "hostname": "harrisonburg",
+      "abbreviation": "shd",
+      "description": "harrisonburg, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "shenyang",
+      "abbreviation": "she",
+      "description": "shenyang",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "sheffield",
+      "abbreviation": "shf",
+      "description": "sheffield",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "shreveport",
+      "abbreviation": "shv",
+      "description": "shreveport, LA",
+      "country": "US",
+      "state": "LA"
+    },
+    {
+      "hostname": "sicily",
+      "abbreviation": "sic",
+      "description": "sicilia",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "sanangelo",
+      "abbreviation": "sjt",
+      "description": "san angelo, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "skeena",
+      "abbreviation": "ske",
+      "description": "skeena-bulkley",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "saskatoon",
+      "abbreviation": "skt",
+      "description": "saskatoon, SK",
+      "country": "CA",
+      "state": "SK"
+    },
+    {
+      "hostname": "sandusky",
+      "abbreviation": "sky",
+      "description": "sandusky, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "saltlakecity",
+      "abbreviation": "slc",
+      "description": "salt lake city",
+      "country": "US",
+      "state": "UT"
+    },
+    {
+      "hostname": "salem",
+      "abbreviation": "sle",
+      "description": "salem, OR",
+      "country": "US",
+      "state": "OR"
+    },
+    {
+      "hostname": "slo",
+      "abbreviation": "slo",
+      "description": "san luis obispo",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "southcoast",
+      "abbreviation": "sma",
+      "description": "south coast, MA",
+      "country": "US",
+      "state": "MA"
+    },
+    {
+      "hostname": "smd",
+      "abbreviation": "smd",
+      "description": "southern maryland",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "semo",
+      "abbreviation": "smo",
+      "description": "southeast missouri",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "santamaria",
+      "abbreviation": "smx",
+      "description": "santa maria, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "singapore",
+      "abbreviation": "sng",
+      "description": "singapore",
+      "country": "SG",
+      "state": ""
+    },
+    {
+      "hostname": "southjersey",
+      "abbreviation": "snj",
+      "description": "south jersey",
+      "country": "US",
+      "state": "NJ"
+    },
+    {
+      "hostname": "salina",
+      "abbreviation": "sns",
+      "description": "salina, KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "bulgaria",
+      "abbreviation": "sof",
+      "description": "bulgaria",
+      "country": "BG",
+      "state": ""
+    },
+    {
+      "hostname": "soo",
+      "abbreviation": "soo",
+      "description": "sault ste marie, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "hampshire",
+      "abbreviation": "sou",
+      "description": "hampshire",
+      "country": "GB",
+      "state": ""
+    },
+    {
+      "hostname": "showlow",
+      "abbreviation": "sow",
+      "description": "show low, AZ",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "springfieldil",
+      "abbreviation": "spi",
+      "description": "springfield, IL",
+      "country": "US",
+      "state": "IL"
+    },
+    {
+      "hostname": "spokane",
+      "abbreviation": "spk",
+      "description": "spokane / coeur d'alene",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "saopaulo",
+      "abbreviation": "spo",
+      "description": "sao paulo",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "sapporo",
+      "abbreviation": "spp",
+      "description": "sapporo",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "sardinia",
+      "abbreviation": "srd",
+      "description": "sardinia",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "sarnia",
+      "abbreviation": "srn",
+      "description": "sarnia, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "sarasota",
+      "abbreviation": "srq",
+      "description": "sarasota-bradenton",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "salvador",
+      "abbreviation": "ssa",
+      "description": "salvador, bahia",
+      "country": "BR",
+      "state": ""
+    },
+    {
+      "hostname": "siskiyou",
+      "abbreviation": "ssk",
+      "description": "siskiyou county",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "susanville",
+      "abbreviation": "ssn",
+      "description": "susanville, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "stcloud",
+      "abbreviation": "stc",
+      "description": "st cloud, MN",
+      "country": "US",
+      "state": "MN"
+    },
+    {
+      "hostname": "stgeorge",
+      "abbreviation": "stg",
+      "description": "st george, UT",
+      "country": "US",
+      "state": "UT"
+    },
+    {
+      "hostname": "stockholm",
+      "abbreviation": "sth",
+      "description": "sweden",
+      "country": "SE",
+      "state": ""
+    },
+    {
+      "hostname": "stjoseph",
+      "abbreviation": "stj",
+      "description": "st joseph",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "stockton",
+      "abbreviation": "stk",
+      "description": "stockton, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "stlouis",
+      "abbreviation": "stl",
+      "description": "st louis, MO",
+      "country": "US",
+      "state": "MO"
+    },
+    {
+      "hostname": "stpetersburg",
+      "abbreviation": "stp",
+      "description": "st petersburg, RU",
+      "country": "RU",
+      "state": ""
+    },
+    {
+      "hostname": "stuttgart",
+      "abbreviation": "str",
+      "description": "stuttgart",
+      "country": "DE",
+      "state": ""
+    },
+    {
+      "hostname": "sudbury",
+      "abbreviation": "sud",
+      "description": "sudbury, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "sunshine",
+      "abbreviation": "sun",
+      "description": "sunshine coast, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "siouxcity",
+      "abbreviation": "sux",
+      "description": "sioux city, IA",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "surat",
+      "abbreviation": "svt",
+      "description": "surat surat",
+      "country": "IN",
+      "state": ""
+    },
+    {
+      "hostname": "swks",
+      "abbreviation": "swk",
+      "description": "southwest KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "swmi",
+      "abbreviation": "swm",
+      "description": "southwest michigan",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "swv",
+      "abbreviation": "swv",
+      "description": "southern WV",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "strasbourg",
+      "abbreviation": "sxb",
+      "description": "strasbourg",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "sydney",
+      "abbreviation": "syd",
+      "description": "sydney, NSW",
+      "country": "AU",
+      "state": "NSW"
+    },
+    {
+      "hostname": "syracuse",
+      "abbreviation": "syr",
+      "description": "syracuse, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "shenzhen",
+      "abbreviation": "szx",
+      "description": "shenzhen",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "tallahassee",
+      "abbreviation": "tal",
+      "description": "tallahassee",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "statesboro",
+      "abbreviation": "tbr",
+      "description": "statesboro, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "thunderbay",
+      "abbreviation": "tby",
+      "description": "thunder bay, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "canarias",
+      "abbreviation": "tfn",
+      "description": "canarias",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "terrehaute",
+      "abbreviation": "tha",
+      "description": "terre haute, IN",
+      "country": "US",
+      "state": "IN"
+    },
+    {
+      "hostname": "thumb",
+      "abbreviation": "thb",
+      "description": "the thumb, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "tijuana",
+      "abbreviation": "tij",
+      "description": "tijuana, MX",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "toulouse",
+      "abbreviation": "tls",
+      "description": "toulouse",
+      "country": "FR",
+      "state": ""
+    },
+    {
+      "hostname": "telaviv",
+      "abbreviation": "tlv",
+      "description": "tel aviv",
+      "country": "IL",
+      "state": ""
+    },
+    {
+      "hostname": "territories",
+      "abbreviation": "toc",
+      "description": "territories",
+      "country": "CA",
+      "state": "NT"
+    },
+    {
+      "hostname": "tokyo",
+      "abbreviation": "tok",
+      "description": "tokyo",
+      "country": "JP",
+      "state": ""
+    },
+    {
+      "hostname": "toledo",
+      "abbreviation": "tol",
+      "description": "toledo, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "toronto",
+      "abbreviation": "tor",
+      "description": "toronto",
+      "country": "CA",
+      "state": "ON",
+      "subareas": [
+        {
+          "abbreviation": "tor",
+          "description": "city of toronto"
+        },
+        {
+          "abbreviation": "drh",
+          "description": "durham region"
+        },
+        {
+          "abbreviation": "yrk",
+          "description": "york region"
+        },
+        {
+          "abbreviation": "bra",
+          "description": "brampton-caledon"
+        },
+        {
+          "abbreviation": "mss",
+          "description": "mississauga"
+        },
+        {
+          "abbreviation": "oak",
+          "description": "oakville-milton"
+        }
+      ]
+    },
+    {
+      "hostname": "tampa",
+      "abbreviation": "tpa",
+      "description": "tampa bay area",
+      "country": "US",
+      "state": "FL",
+      "subareas": [
+        {
+          "abbreviation": "hdo",
+          "description": "hernando co"
+        },
+        {
+          "abbreviation": "hil",
+          "description": "hillsborough co"
+        },
+        {
+          "abbreviation": "psc",
+          "description": "pasco co"
+        },
+        {
+          "abbreviation": "pnl",
+          "description": "pinellas co"
+        }
+      ]
+    },
+    {
+      "hostname": "topeka",
+      "abbreviation": "tpk",
+      "description": "topeka, KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "tehran",
+      "abbreviation": "trh",
+      "description": "iran",
+      "country": "IR",
+      "state": ""
+    },
+    {
+      "hostname": "tricities",
+      "abbreviation": "tri",
+      "description": "tri-cities, TN",
+      "country": "US",
+      "state": "TN"
+    },
+    {
+      "hostname": "torino",
+      "abbreviation": "trn",
+      "description": "torino",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "troisrivieres",
+      "abbreviation": "trs",
+      "description": "trois-rivieres, QC",
+      "country": "CA",
+      "state": "QC"
+    },
+    {
+      "hostname": "tuscaloosa",
+      "abbreviation": "tsc",
+      "description": "tuscaloosa",
+      "country": "US",
+      "state": "AL"
+    },
+    {
+      "hostname": "sanmarcos",
+      "abbreviation": "tsu",
+      "description": "san marcos, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "twintiers",
+      "abbreviation": "tts",
+      "description": "twin tiers NY/PA",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "tulsa",
+      "abbreviation": "tul",
+      "description": "tulsa, OK",
+      "country": "US",
+      "state": "OK"
+    },
+    {
+      "hostname": "tunis",
+      "abbreviation": "tun",
+      "description": "tunisia",
+      "country": "TN",
+      "state": ""
+    },
+    {
+      "hostname": "tucson",
+      "abbreviation": "tus",
+      "description": "tucson, AZ",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "taipei",
+      "abbreviation": "twd",
+      "description": "taiwan",
+      "country": "TW",
+      "state": ""
+    },
+    {
+      "hostname": "twinfalls",
+      "abbreviation": "twf",
+      "description": "twin falls, ID",
+      "country": "US",
+      "state": "ID"
+    },
+    {
+      "hostname": "texarkana",
+      "abbreviation": "txk",
+      "description": "texarkana",
+      "country": "US",
+      "state": "AR"
+    },
+    {
+      "hostname": "texoma",
+      "abbreviation": "txm",
+      "description": "texoma",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "dubai",
+      "abbreviation": "uae",
+      "description": "united arab emirates",
+      "country": "AE",
+      "state": ""
+    },
+    {
+      "hostname": "hattiesburg",
+      "abbreviation": "usm",
+      "description": "hattiesburg, MS",
+      "country": "US",
+      "state": "MS"
+    },
+    {
+      "hostname": "staugustine",
+      "abbreviation": "ust",
+      "description": "st augustine, FL",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "utica",
+      "abbreviation": "uti",
+      "description": "utica-rome-oneida",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "charlottesville",
+      "abbreviation": "uva",
+      "description": "charlottesville, VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "valencia",
+      "abbreviation": "val",
+      "description": "valencia",
+      "country": "ES",
+      "state": ""
+    },
+    {
+      "hostname": "vancouver",
+      "abbreviation": "van",
+      "description": "vancouver, BC",
+      "country": "CA",
+      "state": "BC",
+      "subareas": [
+        {
+          "abbreviation": "van",
+          "description": "city of vancouver"
+        },
+        {
+          "abbreviation": "nvn",
+          "description": "north shore"
+        },
+        {
+          "abbreviation": "bnc",
+          "description": "burnaby/newwest"
+        },
+        {
+          "abbreviation": "rds",
+          "description": "delta/surrey/langley"
+        },
+        {
+          "abbreviation": "pml",
+          "description": "tricities/pitt/maple"
+        },
+        {
+          "abbreviation": "rch",
+          "description": "richmond"
+        }
+      ]
+    },
+    {
+      "hostname": "swva",
+      "abbreviation": "vaw",
+      "description": "southwest VA",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "venice",
+      "abbreviation": "vce",
+      "description": "venice / veneto",
+      "country": "IT",
+      "state": ""
+    },
+    {
+      "hostname": "veracruz",
+      "abbreviation": "vcz",
+      "description": "veracruz",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "victoria",
+      "abbreviation": "vic",
+      "description": "victoria, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "vienna",
+      "abbreviation": "vie",
+      "description": "vienna",
+      "country": "AT",
+      "state": ""
+    },
+    {
+      "hostname": "visalia",
+      "abbreviation": "vis",
+      "description": "visalia-tulare",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "valdosta",
+      "abbreviation": "vld",
+      "description": "valdosta, GA",
+      "country": "US",
+      "state": "GA"
+    },
+    {
+      "hostname": "blacksburg",
+      "abbreviation": "vpi",
+      "description": "new river valley",
+      "country": "US",
+      "state": "VA"
+    },
+    {
+      "hostname": "okaloosa",
+      "abbreviation": "vps",
+      "description": "okaloosa / walton",
+      "country": "US",
+      "state": "FL"
+    },
+    {
+      "hostname": "virgin",
+      "abbreviation": "vrg",
+      "description": "virgin islands",
+      "country": "VI",
+      "state": ""
+    },
+    {
+      "hostname": "vietnam",
+      "abbreviation": "vtn",
+      "description": "vietnam",
+      "country": "VN",
+      "state": ""
+    },
+    {
+      "hostname": "victoriatx",
+      "abbreviation": "vtx",
+      "description": "victoria, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "wausau",
+      "abbreviation": "wau",
+      "description": "wausau, WI",
+      "country": "US",
+      "state": "WI"
+    },
+    {
+      "hostname": "warsaw",
+      "abbreviation": "waw",
+      "description": "poland",
+      "country": "PL",
+      "state": ""
+    },
+    {
+      "hostname": "waco",
+      "abbreviation": "wco",
+      "description": "waco, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "washingtondc",
+      "abbreviation": "wdc",
+      "description": "washington, DC",
+      "country": "US",
+      "state": "DC",
+      "subareas": [
+        {
+          "abbreviation": "doc",
+          "description": "district of columbia"
+        },
+        {
+          "abbreviation": "nva",
+          "description": "northern virginia"
+        },
+        {
+          "abbreviation": "mld",
+          "description": "maryland"
+        }
+      ]
+    },
+    {
+      "hostname": "wenatchee",
+      "abbreviation": "wen",
+      "description": "wenatchee, WA",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "whitehorse",
+      "abbreviation": "whh",
+      "description": "whitehorse, YT",
+      "country": "CA",
+      "state": "YK"
+    },
+    {
+      "hostname": "whistler",
+      "abbreviation": "whi",
+      "description": "whistler / squamish",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "wheeling",
+      "abbreviation": "whl",
+      "description": "northern panhandle",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "wichita",
+      "abbreviation": "wic",
+      "description": "wichita, KS",
+      "country": "US",
+      "state": "KS"
+    },
+    {
+      "hostname": "winnipeg",
+      "abbreviation": "win",
+      "description": "winnipeg, MB",
+      "country": "CA",
+      "state": "MB"
+    },
+    {
+      "hostname": "westky",
+      "abbreviation": "wky",
+      "description": "western KY",
+      "country": "US",
+      "state": "KY"
+    },
+    {
+      "hostname": "wellington",
+      "abbreviation": "wll",
+      "description": "wellington",
+      "country": "NZ",
+      "state": ""
+    },
+    {
+      "hostname": "waterloo",
+      "abbreviation": "wlo",
+      "description": "waterloo / cedar falls",
+      "country": "US",
+      "state": "IA"
+    },
+    {
+      "hostname": "westernmass",
+      "abbreviation": "wma",
+      "description": "western massachusetts",
+      "country": "US",
+      "state": "MA"
+    },
+    {
+      "hostname": "westmd",
+      "abbreviation": "wmd",
+      "description": "western maryland",
+      "country": "US",
+      "state": "MD"
+    },
+    {
+      "hostname": "wilmington",
+      "abbreviation": "wnc",
+      "description": "wilmington, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "naga",
+      "abbreviation": "wnp",
+      "description": "bicol region",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "wollongong",
+      "abbreviation": "wol",
+      "description": "wollongong, NSW",
+      "country": "AU",
+      "state": "NSW"
+    },
+    {
+      "hostname": "worcester",
+      "abbreviation": "wor",
+      "description": "worcester / central MA",
+      "country": "US",
+      "state": "MA"
+    },
+    {
+      "hostname": "williamsport",
+      "abbreviation": "wpt",
+      "description": "williamsport, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "winstonsalem",
+      "abbreviation": "wsl",
+      "description": "winston-salem, NC",
+      "country": "US",
+      "state": "NC"
+    },
+    {
+      "hostname": "windsor",
+      "abbreviation": "wsr",
+      "description": "windsor, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "wichitafalls",
+      "abbreviation": "wtf",
+      "description": "wichita falls, TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "watertown",
+      "abbreviation": "wtn",
+      "description": "watertown, NY",
+      "country": "US",
+      "state": "NY"
+    },
+    {
+      "hostname": "bigbend",
+      "abbreviation": "wtx",
+      "description": "southwest TX",
+      "country": "US",
+      "state": "TX"
+    },
+    {
+      "hostname": "wuhan",
+      "abbreviation": "wuh",
+      "description": "wuhan",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "wv",
+      "abbreviation": "wva",
+      "description": "west virginia (old)",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "morgantown",
+      "abbreviation": "wvu",
+      "description": "morgantown, WV",
+      "country": "US",
+      "state": "WV"
+    },
+    {
+      "hostname": "wyoming",
+      "abbreviation": "wyo",
+      "description": "wyoming",
+      "country": "US",
+      "state": "WY"
+    },
+    {
+      "hostname": "xian",
+      "abbreviation": "xiy",
+      "description": "xi'an",
+      "country": "CN",
+      "state": ""
+    },
+    {
+      "hostname": "yakima",
+      "abbreviation": "yak",
+      "description": "yakima, WA",
+      "country": "US",
+      "state": "WA"
+    },
+    {
+      "hostname": "yubasutter",
+      "abbreviation": "ybs",
+      "description": "yuba-sutter, CA",
+      "country": "US",
+      "state": "CA"
+    },
+    {
+      "hostname": "cornwall",
+      "abbreviation": "ycc",
+      "description": "cornwall, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "yellowknife",
+      "abbreviation": "ykf",
+      "description": "yellowknife, NT",
+      "country": "CA",
+      "state": "NT"
+    },
+    {
+      "hostname": "youngstown",
+      "abbreviation": "yng",
+      "description": "youngstown, OH",
+      "country": "US",
+      "state": "OH"
+    },
+    {
+      "hostname": "peterborough",
+      "abbreviation": "ypq",
+      "description": "peterborough, ON",
+      "country": "CA",
+      "state": "ON"
+    },
+    {
+      "hostname": "york",
+      "abbreviation": "yrk",
+      "description": "york, PA",
+      "country": "US",
+      "state": "PA"
+    },
+    {
+      "hostname": "yucatan",
+      "abbreviation": "yuc",
+      "description": "yucatan",
+      "country": "MX",
+      "state": ""
+    },
+    {
+      "hostname": "yuma",
+      "abbreviation": "yum",
+      "description": "yuma, AZ",
+      "country": "US",
+      "state": "AZ"
+    },
+    {
+      "hostname": "up",
+      "abbreviation": "yup",
+      "description": "upper peninsula, MI",
+      "country": "US",
+      "state": "MI"
+    },
+    {
+      "hostname": "princegeorge",
+      "abbreviation": "yxs",
+      "description": "prince george, BC",
+      "country": "CA",
+      "state": "BC"
+    },
+    {
+      "hostname": "zagreb",
+      "abbreviation": "zag",
+      "description": "croatia",
+      "country": "HR",
+      "state": ""
+    },
+    {
+      "hostname": "zamboanga",
+      "abbreviation": "zam",
+      "description": "zamboanga",
+      "country": "PH",
+      "state": ""
+    },
+    {
+      "hostname": "zurich",
+      "abbreviation": "zur",
+      "description": "zurich",
+      "country": "CH",
+      "state": ""
+    },
+    {
+      "hostname": "zanesville",
+      "abbreviation": "zvl",
+      "description": "zanesville / cambridge",
+      "country": "US",
+      "state": "OH"
+    }
+  ]
+}

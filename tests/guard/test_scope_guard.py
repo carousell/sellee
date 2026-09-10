@@ -57,6 +57,18 @@ _UNGUARDED_BY_DESIGN = {
         "daemon-only: the inbox lane writes what it read off a conversation's own banner, before "
         "any thread exists to be scoped to — and no pass tier carries a tool that reaches it"
     ),
+    ("mail_thread_by_thread_id", "thread_id"): (
+        "the mail send path, which is handed a thread the tool has already scope-checked and "
+        "writes through the unscoped store by design (see the daemon's reply_sink_factory) — the "
+        "same contract every reply sink runs under, and the reason `send` takes the thread rather "
+        "than an id it could widen"
+    ),
+    ("upsert_mail_thread", "thread_id"): (
+        "daemon-only: the mail read lane records which threads row a relay conversation became, "
+        "in the same tick it created that row, and no pass tier carries a tool that reaches it — "
+        "a mailbox is read by a lane, never by a pass. Guarding it would also refuse the write "
+        "that establishes the very thread the scope would be checked against"
+    ),
     ("thread_listing_lookup", "thread_id"): (
         "daemon-only: the inbox lane's own memory of a lookup it already performed, read before a "
         "thread exists, and no pass tier carries a tool that reaches it"

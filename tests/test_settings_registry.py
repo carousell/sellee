@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee import settings
+from sellee import marketplaces, settings
 from sellee.browser import markets as market_adapters
 
 # --- quiet_hours parse / render ---------------------------------------------------------------
@@ -285,7 +285,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
         "• Watch mode: off — I work in the background",
-        "3 more settings at defaults — ask me about settings.",
+        "7 more settings at defaults — ask me about settings.",
     ]
 
 
@@ -312,7 +312,7 @@ def test_card_promotes_a_changed_non_headline_setting(fresh_store) -> None:
     )
     lines = settings.card_lines(fresh_store)
     assert "• Persona: terse and businesslike" in lines
-    assert "2 more settings at defaults — ask me about settings." in lines
+    assert "6 more settings at defaults — ask me about settings." in lines
 
 
 def test_describe_carries_policy(fresh_store) -> None:
@@ -327,3 +327,123 @@ def test_prompt_block_states_propose_only(fresh_store) -> None:
     block = settings.prompt_block(fresh_store)
     assert "propose only" in block
     assert "quiet_hours" in block
+
+
+# --- craigslist area: the rollout gate, and the country check ---------------------------------
+
+
+def test_craigslist_area_defaults_to_the_launch_area() -> None:
+    """With one launched area there is nothing for a seller to choose, so the default is the
+    answer and the setup step never appears."""
+    assert settings.get_spec("craigslist_area").default == "sfo"
+
+
+def test_craigslist_area_stores_the_abbreviation_whatever_the_seller_named() -> None:
+    """The posting flow requires the abbreviation; the hostname is what a seller can see and copy.
+    Feeding the hostname to the flow answers HTTP 200 and lands on a generic area picker, so the
+    two must never be interchangeable past this parser."""
+    parse = settings.get_spec("craigslist_area").parse
+    for said in ("sfo", "sfbay", "SF bay area", "https://www.craigslist.org/area/sfbay"):
+        assert parse(said) == "sfo"
+
+
+def test_craigslist_area_refuses_an_area_we_have_not_launched() -> None:
+    """Los Angeles is inside the legal envelope and still not somewhere we work — the refusal has
+    to read as a rollout limit, not a broken account."""
+    with pytest.raises(settings.SettingError) as caught:
+        settings.get_spec("craigslist_area").parse("lax")
+    assert "yet" in str(caught.value).lower()
+
+
+def test_craigslist_area_refuses_an_area_outside_the_legal_envelope() -> None:
+    with pytest.raises(settings.SettingError) as caught:
+        settings.get_spec("craigslist_area").parse("nyc")
+    assert "yet" not in str(caught.value).lower()
+
+
+def test_craigslist_area_refuses_an_area_that_does_not_exist() -> None:
+    with pytest.raises(settings.SettingError):
+        settings.get_spec("craigslist_area").parse("atlantis")
+
+
+def test_craigslist_area_renders_as_a_place() -> None:
+    assert settings.get_spec("craigslist_area").render("sfo") == "SF bay area (sfbay)"
+
+
+def test_craigslist_area_refuses_an_area_in_another_country(fresh_store) -> None:
+    """Craigslist runs a US site and the seller sells in Singapore: posting their goods to the Bay
+    Area reaches nobody who can buy them. Checked against seller state rather than in the parser,
+    which is pure and knows nothing about this seller."""
+    fresh_store.set_seller_config_section("basics", {"region": "SG"})
+    with pytest.raises(settings.SettingError) as caught:
+        settings.check_for_seller("craigslist_area", "sfo", fresh_store)
+    assert "SG" in str(caught.value)
+
+
+def test_craigslist_area_passes_for_a_seller_in_its_country(fresh_store) -> None:
+    fresh_store.set_seller_config_section("basics", {"region": "US"})
+    settings.check_for_seller("craigslist_area", "sfo", fresh_store)
+
+
+def test_craigslist_area_is_not_refused_for_an_unknown_region(fresh_store) -> None:
+    """Deliberately permissive, matching `connected_markets`: a seller whose region we have not
+    asked for yet is not told their area is wrong. The country is only compared when known."""
+    settings.check_for_seller("craigslist_area", "sfo", fresh_store)
+
+
+def test_clearing_the_area_is_never_region_refused(fresh_store) -> None:
+    fresh_store.set_seller_config_section("basics", {"region": "SG"})
+    settings.check_for_seller("craigslist_area", "", fresh_store)
+
+
+# --- the posting URL's per-seller field --------------------------------------------------------
+
+
+def test_market_url_fields_supplies_the_area_for_craigslist(fresh_store) -> None:
+    """`urls.sell` for craigslist carries `{area}`, and `market_url` formats unconditionally — so
+    without this the caller would get None and the publish would refuse."""
+    assert settings.market_url_fields("craigslist", fresh_store) == {"area": "sfo"}
+
+
+def test_market_url_fields_is_empty_for_every_other_market(fresh_store) -> None:
+    """No other market's templates take a field at this call site, and handing one an unexpected
+    key would be a silent behaviour change."""
+    for market in ("fb", "carousell", "carousell-ai", "nope"):
+        assert settings.market_url_fields(market, fresh_store) == {}
+
+
+def test_market_url_fields_omits_an_unset_area(fresh_store) -> None:
+    """Fail closed: with no area, `market_url` answers None and the publish refuses up front,
+    rather than composing `.../c/{area}` and navigating to it."""
+    seed_setting(fresh_store, "craigslist_area", "")
+    assert settings.market_url_fields("craigslist", fresh_store) == {}
+    assert (
+        marketplaces.market_url(
+            "craigslist", "sell", "US", **settings.market_url_fields("craigslist", fresh_store)
+        )
+        is None
+    )
+
+
+# --- the postal code craigslist's map step will not proceed without ----------------------------
+
+
+def test_craigslist_postal_code_defaults_to_unset() -> None:
+    assert settings.get_spec("craigslist_postal_code").default == ""
+
+
+@pytest.mark.parametrize("said", ["94103", " 94103 ", "94103-1234"])
+def test_a_us_postal_code_is_accepted(said) -> None:
+    assert settings.get_spec("craigslist_postal_code").parse(said).startswith("94103")
+
+
+@pytest.mark.parametrize("bad", ["abc", "9410", "0", "not a zip", "941035551212"])
+def test_a_value_that_is_not_a_postal_code_is_refused(bad) -> None:
+    """Never guessed and never coerced: this decides where on a map the seller's item appears, and
+    a wrong one puts it in the wrong place rather than failing loudly."""
+    with pytest.raises(settings.SettingError):
+        settings.get_spec("craigslist_postal_code").parse(bad)
+
+
+def test_clearing_the_postal_code_is_allowed() -> None:
+    assert settings.get_spec("craigslist_postal_code").parse("") == ""

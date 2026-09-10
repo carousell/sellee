@@ -153,6 +153,13 @@ def inbox_lane(deps: InboxDeps) -> None:
     # Read at use: only the markets the seller has connected. One they have not connected — or
     # have removed — is not one to open, probe, or tell them they are signed out of.
     for market in settings.connected_markets(deps.store):
+        if not market_adapters.answers_buyers_in_browser(market):
+            # A market whose buyers arrive as mail has no conversation to open and no composer to
+            # type into, and `sellee/mail/lane.py` answers them instead. Skipped rather than read
+            # as a permanently empty inbox: that cost a navigation of the shared tab to a login
+            # page every 300s to learn nothing, and it is the strongest sustained automation
+            # signature this integration emitted.
+            continue
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
             continue  # a registry entry with no adapter yet is not a market we can read
@@ -799,6 +806,30 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
 NO_SEND_COOLDOWN_SEC = 300.0
 
 
+def unanswerable_markets(store, config, now=None) -> tuple:
+    """Every marketplace whose buyers must not be claimed into a reply pass right now.
+
+    Two reasons, and they are different in kind:
+
+    **Pacing** — the cap would refuse the next send anyway (see below).
+
+    **No transport that can answer them at all.** Craigslist's relay carries a buyer's message to
+    the seller and has never been observed carrying a reply back — measured four times across both
+    of its addresses, including a hand-typed send with none of this code in the path
+    (`market_adapters.READ_ONLY_BUYERS`). Claimed anyway, every such message costs a model pass
+    that composes a reply, tries to send it, and is refused; the mail lane passes the buyer's words
+    to the seller instead, which is what we can honestly do.
+    """
+    unanswerable = tuple(
+        sorted(
+            market
+            for market in {row["market"] for row in store.threads_with_unhandled_inbound()}
+            if not market_adapters.answers_buyers(market)
+        )
+    )
+    return tuple(sorted(set(unanswerable) | set(paced_out_markets(store, config, now))))
+
+
 def paced_out_markets(store, config, now=None) -> tuple:
     """The marketplaces whose next buyer reply the pacing engine would refuse right now.
 
@@ -857,7 +888,7 @@ def reply_lane(*, store, bus, config, now=None) -> None:
     now = time.time() if now is None else now
     if in_no_send_cooldown(store, now):
         return
-    claimed = store.enqueue_reply_pass(skip_markets=paced_out_markets(store, config, now))
+    claimed = store.enqueue_reply_pass(skip_markets=unanswerable_markets(store, config, now))
     if claimed is None:
         return
     bus.publish(

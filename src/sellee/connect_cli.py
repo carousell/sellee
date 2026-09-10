@@ -25,6 +25,7 @@ phone?" offer shares one implementation of the UX.
 from __future__ import annotations
 
 import getpass
+import json
 import sys
 import time
 
@@ -99,15 +100,33 @@ _MARKET_STATE_MESSAGES = {
 }
 
 
-def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | None = None) -> int:
-    """Open a marketplace for sign-in and report what the login probe then sees.
+def market_flow(
+    port: int,
+    mcp_token: str,
+    market: str,
+    *,
+    interactive: bool | None = None,
+    enable: bool = True,
+) -> int:
+    """Open a connect target for sign-in and report what the login probe then sees.
+
+    A target is a marketplace or a marketplace's mailbox — Craigslist needs both.
 
     Exit codes mirror the Telegram flow: 0 signed in · 1 not yet (re-runnable) · 3 the daemon or
     the browser could not do it. Shared with the installer's marketplace step, so both paths ask
     in exactly one way.
+
+    `enable` turns the market on as well as signing in, which is what `sellee connect <market>`
+    means to a person typing it. It had to be added: this flow only ever signed in, and every lane,
+    tool and sink gates on `connected_markets` — so a seller who ran it got a signed-in marketplace
+    the agent would not touch, with nothing anywhere saying why. The installer passes `enable=False`
+    because it has already written the whole picked list.
     """
     if interactive is None:
         interactive = sys.stdin.isatty()
+
+    if enable and _turn_on(port, mcp_token, market) != 0:
+        return 3
 
     try:
         status, body = control.post(port, mcp_token, "/control/connect-market", {"market": market})
@@ -131,7 +150,7 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     state = body.get("state")
     if state == "logged_in":
         print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
-        return 0
+        return _chain_mailbox(port, mcp_token, market, interactive=interactive)
 
     # From here a person is typing into a login screen the connect route claimed a hold for; every
     # path below releases it before returning.
@@ -150,7 +169,81 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
 
     _release_browser(port, mcp_token, HOLD_SIGNIN)
     print(_MARKET_STATE_MESSAGES.get(state or "unknown", "").format(name=name))
-    return 0 if state == "logged_in" else 1
+    if state != "logged_in":
+        return 1
+    return _chain_mailbox(port, mcp_token, market, interactive=interactive)
+
+
+def _chain_mailbox(port: int, mcp_token: str, target: str, *, interactive: bool) -> int:
+    """Sign in to the mailbox this market's buyers email, if it needs one and has not got one.
+
+    Chained rather than left to the seller to discover, because the two sign-ins are one intent: a
+    Craigslist that is signed in with no mailbox lists items and answers nobody, and the publish
+    gate holds its ads back until the mailbox is there. Doing it here covers both terminal doors —
+    `sellee connect <market>` and the installer's marketplace phase — with the chat flow chaining
+    the same way in `browser/connect.py`.
+
+    Only ever one level deep: a mail target has no mail target of its own, so this cannot recurse.
+    """
+    from sellee import connectables
+
+    if connectables.is_mail_target(target):
+        return 0
+    mail_target = connectables.mail_target_for(target)
+    if not mail_target:
+        return 0
+    if _mail_is_ready(port, mcp_token, connectables.market_of(target)):
+        return 0
+    name = _display_name(target)
+    print()
+    print(
+        f"{name} buyers email you rather than messaging in an app, so I need the mailbox that "
+        f"receives it. I'll monitor that mailbox and reply for you."
+    )
+    # `enable=False`: the market is already on, and this is its second sign-in rather than a
+    # second market.
+    return market_flow(port, mcp_token, mail_target, interactive=interactive, enable=False)
+
+
+def _mail_is_ready(port: int, mcp_token: str, market: str) -> bool:
+    """Whether this market's mailbox is already connected, as the daemon sees it.
+
+    Unreadable answers `False`, which offers the sign-in again — the harmless direction. Answering
+    `True` on a failed read would skip the step and leave a market that answers nobody.
+    """
+    try:
+        status, body = control.post(port, mcp_token, "/control/mail-status", {"market": market})
+    except control.DaemonUnreachable:
+        return False
+    if status != 200:
+        return False
+    return bool(body.get("ready"))
+
+
+def _turn_on(port: int, mcp_token: str, target: str) -> int:
+    """Add this target's market to `connected_markets`, if it is not already there.
+
+    Before the sign-in, matching what the chat button does and for the same reason: it is what the
+    seller opted into, and it holds even if the sign-in is interrupted. The publish gate is what
+    keeps a half-connected market from going live — `settings.publish_markets` refuses a mail
+    market whose mailbox is not connected — so turning it on early costs nothing and forgetting to
+    turn it on at all cost everything.
+    """
+    from sellee import connectables, settings_cli
+
+    market = connectables.market_of(target)
+    try:
+        current = settings_cli.read_setting(port, mcp_token, "connected_markets")
+    except Exception:  # noqa: BLE001 — any failure here means "we do not know", handled below
+        current = None
+    if current is None:
+        # Unreadable: do not guess. Signing in still works, and the seller can turn the market on
+        # from chat or with `sellee settings set`.
+        return 0
+    if market in current:
+        return 0
+    wanted = sorted({*current, market})
+    return settings_cli.set_setting(port, mcp_token, "connected_markets", json.dumps(wanted))
 
 
 def _release_browser(port: int, mcp_token: str, holder: str) -> None:

@@ -52,6 +52,26 @@ def _message_line(message: dict) -> str:
     return f"  [{who}] {prompt_data.as_data(message['text'])}{suffix}"
 
 
+# How the reply travels, said only where it is not an on-site chat.
+#
+# The model composing a Craigslist reply was told nothing about mail: not the market, not the
+# transport. So it wrote chat — short, no greeting, no sign-off — into an email, and had no reason
+# to expect the length or the shape an email wants. Said per thread rather than in the standing
+# instructions, because one pass can carry a Carousell chat and a Craigslist email at once.
+_MAIL_TRANSPORT_LINE = (
+    "How this reply travels: **email**, not an in-app chat — this marketplace has no messaging, so "
+    "the buyer emailed you and your reply is an email back. Write it as one: a line or two, plain "
+    "text, no links. I add a note asking them to continue at your own address, so you do not need "
+    "to mention it."
+)
+
+
+def _transport_line(market: object) -> str:
+    from sellee.connectables import MAIL_MARKETS
+
+    return _MAIL_TRANSPORT_LINE if str(market or "") in MAIL_MARKETS else ""
+
+
 def _thread_block(thread: dict, item: dict | None) -> str:
     """One conversation: what it is about, where it stands, and what was said.
 
@@ -63,6 +83,9 @@ def _thread_block(thread: dict, item: dict | None) -> str:
     """
     handle = prompt_data.as_data(thread["counterpart_handle"])
     lines = [f"### Thread {thread['thread_id']} — buyer {handle}"]
+    transport = _transport_line(thread.get("market"))
+    if transport:
+        lines.append(transport)
     if item is not None:
         price = item.get("list_price")
         listed = f", listed at {price} {item.get('currency') or ''}".rstrip() if price else ""

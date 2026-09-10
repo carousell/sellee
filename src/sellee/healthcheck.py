@@ -303,9 +303,9 @@ def _clock_probe(cfg) -> checks.Check:
 
 
 def run_checks(platform=None) -> list:
-    """The six checks, in the order a person would ask them. None of them can raise.
+    """The seven checks, in the order a person would ask them. None of them can raise.
 
-    Seven in a container, where the clock is a compose knob rather than the seller's own — the
+    Eight in a container, where the clock is a compose knob rather than the seller's own — the
     one question that cannot be wrong on a machine they are sitting at.
     """
     cfg = config.load()
@@ -316,10 +316,89 @@ def run_checks(platform=None) -> list:
         checks.fail_open("browser server", lambda: _browser_server_probe(cfg)),
         checks.fail_open("harness", lambda: _harness_probe(cfg)),
         checks.fail_open("carousell.ai key", _rail_key_probe),
+        checks.fail_open("marketplace mailboxes", lambda: _mailbox_probe(cfg)),
     ]
     if deployment.is_container():
         results.append(checks.fail_open("clock", lambda: _clock_probe(cfg)))
     return results
+
+
+def mailbox_check(*, rows) -> checks.Check:
+    """Can we answer the buyers of a marketplace that has no inbox of its own?
+
+    Its own check, because the browser one cannot answer it: that iterates `publish_markets`, and a
+    mailbox is never publishable — so extending it would have produced a green line about a market
+    whose buyers nobody was reading. And a green line is exactly the failure worth avoiding here:
+    the seller's ads are up, buyers are writing, and the only evidence anything is wrong is silence.
+
+    Warn rather than fail. Nothing is broken — the listings are live and the seller can answer by
+    hand — but it needs them, and the report is where they look.
+    """
+    if not rows:
+        return checks.ok("marketplace mailboxes", "none needed")
+    unready = [row for row in rows if not row["ready"]]
+    if not unready:
+        names = ", ".join(row["name"] for row in rows)
+        return checks.ok("marketplace mailboxes", f"connected for {names}")
+    first = unready[0]
+    if not first["signed_in"]:
+        return checks.warn(
+            "marketplace mailboxes",
+            f"I'm signed out of the mailbox {first['name']} buyers email, so I'm not answering "
+            "them",
+            f"Run `sellee connect {first['mail_target']}` and sign in there.",
+        )
+    return checks.warn(
+        "marketplace mailboxes",
+        f"{first['name']}'s mailbox isn't finished connecting, so I'm not answering its buyers "
+        "and I'm holding its listings back",
+        "Nothing to do — I'll finish it on my next mailbox turn.",
+    )
+
+
+def _mailbox_probe(cfg) -> checks.Check:
+    """Ask the daemon about every connected market whose buyers arrive as mail.
+
+    Through the daemon rather than the database, like every other probe here: it owns the store's
+    one writer, and a status read must not open a second connection to it.
+    """
+    from sellee import connectables, marketplaces
+
+    token = secrets.read_mcp_token()
+    if not token:
+        return _mailbox_unknown("the daemon has never run here")
+    rows = []
+    for market in connectables.MAIL_MARKETS:
+        try:
+            status, answer = control.post(
+                cfg.http_port, token, "/control/mail-status", {"market": market}
+            )
+        except control.DaemonUnreachable:
+            return _mailbox_unknown("the daemon isn't answering")
+        if status != 200:
+            return _mailbox_unknown(f"the daemon refused the read ({answer.get('error', status)})")
+        if not answer.get("connected_market"):
+            # Not switched on, so there is no mailbox to want.
+            continue
+        rows.append(
+            {
+                "name": marketplaces.display_name(market),
+                "mail_target": connectables.mail_target_for(market) or market,
+                "ready": bool(answer.get("ready")),
+                "signed_in": bool(answer.get("signed_in")),
+            }
+        )
+    return mailbox_check(rows=rows)
+
+
+def _mailbox_unknown(why: str) -> checks.Check:
+    """Unknown, never green. A green line about a mailbox nobody read is the exact failure this
+    check exists for: the ads are live, buyers are writing, and silence is the only symptom."""
+    return checks.warn(
+        "marketplace mailboxes",
+        f"I couldn't check the mailboxes marketplace buyers email — {why}",
+        "Start the worker (`sellee daemon start`) and run this again.",
+    )
 
 
 def report(results) -> str:

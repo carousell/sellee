@@ -21,6 +21,7 @@ from tests.conftest import seed_setting
 
 from sellee import settings
 from sellee.browser import adopt, survey
+from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserToolError, BrowserUnavailable
 from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
@@ -712,7 +713,7 @@ def test_signing_in_lines_up_a_look_at_what_they_already_have(store, bus) -> Non
     from sellee.browser import connect
 
     _ready(store)
-    store.request_market_connect(_MARKET, "probe")
+    store.request_connect(_MARKET, "probe")
     deps = connect.ConnectDeps(
         store=store, bus=bus, config=Config(), browser_factory=lambda: StubClient()
     )
@@ -968,3 +969,82 @@ def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:
     _tap(store, bus, fastpaths.CB_SURVEY_YES)
 
     assert store.get_market_survey(_MARKET)["state"] == "due"
+
+
+# --- what the ask promises, per market ---------------------------------------------------------
+
+
+def test_the_ask_promises_buyer_replies_only_where_they_can_be_kept() -> None:
+    """Connecting has always promised four things, and craigslist is the first market that keeps
+    two of them by a different route: buyers reach the seller by anonymised relay email, so they
+    are answered from the seller's mailbox rather than in the browser.
+
+    Three predicates, and confusing them is the bug this pins. `answers_buyers_in_browser` is what
+    the browser lane asks. `answers_buyers` is a *capability* — craigslist has it, via the mail
+    transport. `can_answer_buyers` adds this seller's state, and it is the one every seller-facing
+    promise branches on: a Craigslist seller who has not finished connecting their mailbox must be
+    told the truth until they have.
+    """
+    assert market_adapters.answers_buyers_in_browser("carousell")
+    assert not market_adapters.answers_buyers_in_browser("craigslist")
+    # Craigslist's buyers can be **read** — the mail transport does that — and cannot be answered:
+    # its relay has never been observed carrying a reply back, including from a hand-typed send.
+    assert market_adapters.reads_buyers("craigslist")
+    assert not market_adapters.answers_buyers("craigslist")
+    assert market_adapters.answers_buyers("carousell")
+
+    both = survey.FOUND_PROMISE
+    silent = survey.FOUND_PROMISE_NO_INBOX
+    assert "answer buyers" in both
+    assert "answer buyers" not in silent
+    assert "answering stays yours" in silent
+
+    accepted_both = survey.ACCEPTED_PROMISE
+    accepted_silent = survey.ACCEPTED_PROMISE_NO_INBOX
+    assert "answer buyers" in accepted_both
+    assert "answer buyers" not in accepted_silent
+    assert "answering is yours" in accepted_silent
+
+
+def test_a_connected_mailbox_does_not_promise_replies_craigslist_will_not_carry(store, bus) -> None:
+    """The correction, pinned so it is not undone by someone wiring more of the transport.
+
+    An earlier version of this test asserted the opposite: that finishing the mailbox connect
+    flipped the copy to promising replies. It did, and the promise was false — craigslist's relay
+    carries a buyer's message to the seller and not a reply back, measured four times including a
+    hand-typed send. So a fully connected mailbox still must not promise answering.
+
+    The predicate is still what the copy asks, and it is still the right mechanism; what changed is
+    that capability now answers `False` for this market, so no amount of seller state can make the
+    promise true.
+    """
+    store.set_seller_config_section("basics", {"region": "US", "currency": "USD"})
+    settings.set_now(store, bus, key="connected_markets", raw_value=["craigslist"])
+    store.record_mail_probe("craigslist", provider="gmail", signed_in=True)
+    store.record_mail_view("craigslist", "https://mail.google.com/#search/x")
+    store.record_mail_handoff("craigslist", "you@example.com", verified=True)
+
+    assert store.mail_ready("craigslist") is True, "the mailbox is fully connected"
+    assert market_adapters.can_answer_buyers("craigslist", store) is False
+
+    said = survey.accepted_text(store, "craigslist", 2)
+    assert "answering is yours" in said
+    assert "answer buyers on them" not in said
+
+
+def test_the_accepted_notice_for_a_market_with_no_inbox_says_so(store) -> None:
+    """It says three things, and the third is the one that was wrong for a while: buyers email you,
+    we pass on what they said, and answering them is yours because craigslist will not carry a
+    reply back."""
+    store.set_seller_config_section("basics", {"region": "US"})
+    text = survey.accepted_text(store, "craigslist", 2)
+    assert "emails you" in text
+    assert "pass on what they said" in text
+    assert "answering is yours" in text
+    assert "answer buyers on them" not in text
+
+
+def test_the_accepted_notice_still_promises_replies_where_there_is_an_inbox(store) -> None:
+    store.set_seller_config_section("basics", {"region": "SG"})
+    text = survey.accepted_text(store, "carousell", 2)
+    assert "answer buyers on them" in text

@@ -24,7 +24,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import marketplaces
+from sellee import connectables, craigslist_areas, marketplaces
 from sellee.browser import markets as market_adapters
 
 log = logging.getLogger(__name__)
@@ -155,6 +155,8 @@ def check_for_seller(key: str, value: object, store) -> None:
     which marketplaces exist depends on where the seller sells."""
     if key == "connected_markets":
         _check_connected_markets(value, store)
+    elif key == "craigslist_area":
+        _check_craigslist_area(value, store)
 
 
 # --- discoverability renderers (F10) ---------------------------------------------------------
@@ -311,6 +313,7 @@ def decide(store, bus, *, change_id: str, decision: str, decided_via: str) -> di
             )
         if result["status"] == "applied":
             publish_changed(bus, spec, change_id, result["value"], result["prior_value"])
+            _request_signins(store, key, result["value"], result["prior_value"])
             out = {
                 "status": "applied",
                 "key": key,
@@ -472,6 +475,32 @@ def expire_stale_proposals(store, bus, now: float | None = None) -> int:
     for change in expired:
         bus.publish("setting.expired", {"change_id": change["change_id"], "key": change["key"]})
     return len(expired)
+
+
+def _request_signins(store, key: str, value, prior) -> None:
+    """Ask for a sign-in on any marketplace this change just switched on.
+
+    The gap this closes: tapping **Connect** in the card writes `connected_markets` *and* queues
+    the sign-in, because on-and-signed-in are one intent. Approving the identical write proposed by
+    the model wrote the setting and queued nothing — so up to five minutes later the read lane
+    probed a market nobody had signed into and reported it signed out, which is a true statement
+    that reads like a fault and does not say what to do.
+
+    Newly-added markets only, and their mailboxes too where they need one: a market already on is
+    already being served, and re-requesting would navigate the shared tab for nothing.
+    """
+    if key != "connected_markets":
+        return
+    from sellee.store.browser import CONNECT_MODE_OPEN
+
+    added = [market for market in (value or []) if market not in (prior or [])]
+    for market in added:
+        store.request_connect(market, CONNECT_MODE_OPEN)
+        mail_target = connectables.mail_target_for(market)
+        if mail_target and not store.mail_ready(market):
+            # Queued alongside rather than after: the connect lane serves oldest first, so the
+            # site is opened before the mailbox without either needing to know about the other.
+            store.request_connect(mail_target, CONNECT_MODE_OPEN)
 
 
 def publish_changed(bus, spec, change_id, value, prior_value) -> None:
@@ -738,9 +767,27 @@ def publish_markets(store) -> list:
     Narrower than `connected_markets` on purpose: connecting a marketplace turns on reading it and
     answering buyers, which needs no publish recipe. A market missing one is worked but not listed
     to, rather than being unavailable entirely.
+
+    **And narrower again for a market whose buyers arrive as mail.** Publishing to Craigslist puts
+    a real, public advertisement up with an email address on it. If that mailbox is not connected,
+    every buyer who writes gets silence — so the listing is worse than no listing, and the seller
+    finds out from a buyer rather than from us.
+
+    Gating it *here* is deliberate and it is what makes the rule hold everywhere. Every route to a
+    live Craigslist post runs through this list: the `queue_marketplace_publish` tool, `sellee pass
+    run publish`, the crosslist fan-out (whose `pending_pairs` **backfills the whole catalogue** the
+    moment a market becomes publishable), the MCP proxy, and the healthcheck's login probes. One
+    filter closes all of them; a check added at each door would be one door away from a gap.
     """
     publishable = market_adapters.publishable_markets(store.seller_region())
-    return [market for market in connected_markets(store) if market in publishable]
+    out = []
+    for market in connected_markets(store):
+        if market not in publishable:
+            continue
+        if market in connectables.MAIL_MARKETS and not store.mail_ready(market):
+            continue
+        out.append(market)
+    return out
 
 
 register(
@@ -750,9 +797,11 @@ register(
         parse=_parse_connected_markets,
         render=_render_connected_markets,
         default=[],
-        description="Marketplaces I work as well as carousell.ai. On a connected one I read your "
-        "inbox, answer buyers, and — where I have a way to post there — list your items and send "
-        "the link over. Empty means carousell.ai only.",
+        description="Marketplaces I work as well as carousell.ai. On a connected one I list your "
+        "items, send the link over, and answer your buyers. Craigslist is the exception: its "
+        "buyers email you, so it takes two sign-ins (the site, then that mailbox) and I pass on "
+        "what buyers say — but Craigslist does not carry my replies back to them, so answering "
+        "Craigslist buyers is yours. Empty means carousell.ai only.",
         take_effect="applies from now on: I start on a market you add and stop on one you remove, "
         "including work already queued.",
         requires_approval=True,
@@ -850,5 +899,251 @@ register(
         "inboxes never takes your focus either way, and bringing the window forward only works on "
         "a Mac. true or false.",
         take_effect="applies to the next page I open.",
+    )
+)
+
+
+# --- where craigslist listings go -------------------------------------------------------------
+
+# Craigslist's unit of geography is one of hundreds of city sites, not a country, so it needs a
+# per-seller answer that `resolve_domain` (which is keyed by country) cannot give. This is the only
+# per-market setting in the registry, and deliberately so: craigslist is the first marketplace whose
+# posting destination is a choice rather than a fact about where the seller lives. Generalising it
+# to a map over markets would be inventing a shape for one entry.
+#
+# Note the two meanings of "region" in play. `craigslist_areas` calls a US state `state`, because
+# `region` here and everywhere else in sellee is an ISO *country* code — a "CA" means California in
+# Craigslist's data and Canada in ours.
+
+
+def _parse_craigslist_area(raw: object) -> str:
+    """A craigslist area, stored as the abbreviation its posting flow requires.
+
+    Accepts whatever a seller would plausibly name it — the abbreviation, the hostname from their
+    own URL, the site's description, or a pasted area URL — and answers the abbreviation. Those are
+    not interchangeable downstream: `post.craigslist.org/c/<hostname>` answers HTTP 200 and lands on
+    a generic "choose area" picker, from which a listing goes wherever that picker decides, and a
+    wrong area cannot be corrected after publishing.
+
+    Empty clears it. Pure, per the settings contract: whether *this* seller may use the area is
+    `_check_craigslist_area`.
+    """
+    if raw is None:
+        return ""
+    said = str(raw).strip()
+    if not said:
+        return ""
+    try:
+        area = craigslist_areas.resolve(said)
+        craigslist_areas.check_servable(area)
+    except (craigslist_areas.UnknownArea, craigslist_areas.AreaNotAvailable) as exc:
+        raise SettingError(str(exc)) from exc
+    return area
+
+
+def _render_craigslist_area(value: object) -> str:
+    if not value:
+        return "not set"
+    return craigslist_areas.display_name(str(value))
+
+
+def _check_craigslist_area(value: object, store) -> None:
+    """Refuse an area in a country the seller does not sell in.
+
+    Redundant against today's single-area rollout — the parser already refuses everything outside
+    it — and kept because it is the check that still holds when the rollout grows. Deliberately
+    permissive about a *missing* region, exactly as `_check_connected_markets` is: a seller we have
+    not asked yet is not told their area is wrong.
+    """
+    if not value:
+        return
+    area = craigslist_areas.get(str(value))
+    region = store.seller_region()
+    if area is None or not region or not area.get("country"):
+        return
+    if area["country"] != region:
+        raise SettingError(
+            f"{craigslist_areas.display_name(str(value))} is a "
+            f"{area['country']} site and you sell in {region} — buyers there can't reach you"
+        )
+
+
+def craigslist_area(store) -> str:
+    """Which craigslist site this seller's listings go on."""
+    return str(get(store, "craigslist_area") or "")
+
+
+def market_url_fields(market: str, store) -> dict:
+    """Per-seller fields a market's URL templates need, for `marketplaces.market_url`.
+
+    Craigslist's posting URL carries the seller's area and every other market's templates carry
+    nothing, so this is empty for all of them. An unset area answers empty rather than a blank
+    value: `market_url` formats unconditionally, so a missing field makes the URL None and the
+    caller refuses up front — where a blank one would compose `.../c/` and be navigated to.
+    """
+    if market != "craigslist":
+        return {}
+    area = craigslist_area(store)
+    return {"area": area} if area else {}
+
+
+register(
+    SettingSpec(
+        key="craigslist_area",
+        label="Craigslist city",
+        parse=_parse_craigslist_area,
+        render=_render_craigslist_area,
+        default="sfo",
+        description="Which Craigslist site your items go on. Craigslist is one city at a time and "
+        "a post on the wrong one is invisible to your buyers, so this is not a preference — it "
+        "decides who sees what you're selling. Right now I only work the SF bay area.",
+        take_effect="applies to listings from now on; anything already posted stays where it is.",
+        requires_approval=True,
+    )
+)
+
+
+# The postal code craigslist's map step will not proceed without.
+#
+# Seller-level, not per-item: it places the posting on a map, and craigslist requires it before the
+# wizard will advance. Nothing in an item record carries one, and a first live run proved what that
+# costs — a publish pass walked the whole wizard correctly and then stopped at the details form
+# because the recipe (rightly) refuses to invent a location for the seller. Forty-four model turns
+# to learn something knowable at enqueue, which is why `validate_payload` now asks first.
+#
+# Craigslist-scoped like the area beside it. A general seller address belongs in seller_config, but
+# nothing else needs one yet, and inventing that shape for one market's map step is speculative.
+
+_POSTAL_CODE_LEN = 5
+
+
+def _parse_craigslist_postal_code(raw: object) -> str:
+    """A US ZIP, as craigslist's map step wants it. Empty clears it.
+
+    Never guessed, never coerced: this decides where on a map the seller's item appears, so a value
+    that is not a postal code is refused rather than trimmed into one. ZIP+4 is accepted and kept —
+    craigslist takes it, and discarding the seller's own precision is not this parser's business.
+    """
+    if raw is None:
+        return ""
+    said = str(raw).strip()
+    if not said:
+        return ""
+    head, _, tail = said.partition("-")
+    ok = len(head) == _POSTAL_CODE_LEN and head.isdigit()
+    if tail:
+        ok = ok and len(tail) == 4 and tail.isdigit()
+    if not ok:
+        raise SettingError(
+            f"{said!r} isn't a postal code — craigslist needs a 5-digit ZIP (or ZIP+4) to put your "
+            "listing on its map"
+        )
+    return said
+
+
+def craigslist_postal_code(store) -> str:
+    """The ZIP craigslist's map step needs for this seller."""
+    return str(get(store, "craigslist_postal_code") or "")
+
+
+register(
+    SettingSpec(
+        key="craigslist_postal_code",
+        label="Craigslist postal code",
+        parse=_parse_craigslist_postal_code,
+        render=lambda value: str(value) if value else "not set",
+        default="",
+        description="The ZIP code Craigslist puts your listing on the map with. It asks for one "
+        "before it will take a posting, and I won't guess where you are — so without this I can't "
+        "list there. It is shown on the posting as an area, not as your address.",
+        take_effect="applies to listings from now on.",
+        requires_approval=True,
+    )
+)
+
+
+# The scoped view of the seller's mailbox that craigslist's buyer mail is read through.
+#
+# Craigslist buyers arrive as relay email, so answering them means reading a mailbox — and no mail
+# provider offers a per-sender read scope, the narrowest read grant any of them has being the whole
+# mailbox. So the limit is a *view*: a label the seller creates with their own filter, or a search.
+# The transport navigates only that view, which makes the restriction structural rather than a
+# promise about our code — it cannot read what the view does not contain.
+#
+# A label the seller made is preferred over a search because they can see it, audit what lands in
+# it, and change it without asking us. Stored as the webmail URL of the view, because that is what
+# the transport navigates and what the seller can check by opening it themselves.
+
+
+def _parse_craigslist_mail_view(raw: object) -> str:
+    """The webmail URL of the scoped view. Empty clears it.
+
+    Refuses anything that is not an https URL: this value is navigated to in the seller's own
+    signed-in browser, so a non-URL would be a navigation to nowhere and a non-https one would be
+    a signed-in session over plaintext.
+    """
+    if raw is None:
+        return ""
+    said = str(raw).strip()
+    if not said:
+        return ""
+    if not said.startswith("https://"):
+        raise SettingError(
+            "that needs to be the https:// address of the mail view holding your Craigslist "
+            f"messages — a label or a saved search — not {said!r}"
+        )
+    return said
+
+
+def _parse_craigslist_handoff_address(raw: object) -> str:
+    """The +tagged address a buyer is invited to forward the thread to. Empty clears it.
+
+    Refuses a plain address, and that refusal is the whole point rather than fussiness — see
+    `sellee.mail.handoff`. Craigslist mints a fresh relay address per view of a posting and an
+    expired one cannot be recovered, so a conversation that stays on the relay eventually goes
+    unreachable, silently. The fix is to invite the buyer onto an address of the seller's own. But a
+    *plain* address cannot be told apart from the rest of their mail, so scoping to it would put
+    their whole mailbox in this agent's view. A +tag is what keeps the widening to one address that
+    exists only for Craigslist.
+    """
+    from sellee.mail import handoff
+
+    try:
+        return handoff.parse(raw)
+    except handoff.HandoffError as exc:
+        raise SettingError(str(exc)) from exc
+
+
+register(
+    SettingSpec(
+        key="craigslist_handoff_address",
+        label="Craigslist forwarding address",
+        parse=_parse_craigslist_handoff_address,
+        render=lambda value: str(value) if value else "not set",
+        default="",
+        description="A +tagged version of your own email — something like you+cl@gmail.com — that "
+        "I give to Craigslist buyers and ask them to forward the thread to. Craigslist's own "
+        "forwarding address for an ad stops working after a while and can't be revived, so without "
+        "this a buyer eventually can't be answered at all. The +tag matters: it means I watch one "
+        "address that exists only for Craigslist rather than your whole inbox.",
+        take_effect="applies to the next reply I send a Craigslist buyer.",
+        requires_approval=True,
+    )
+)
+
+
+register(
+    SettingSpec(
+        key="craigslist_mail_view",
+        label="Craigslist mail view",
+        parse=_parse_craigslist_mail_view,
+        render=lambda value: str(value) if value else "not connected",
+        default="",
+        description="Where I look for your Craigslist buyer messages. Craigslist has no inbox of "
+        "its own — buyers email you — so this is the address of a label or search in your own "
+        "webmail that holds just those messages. I read only what that view shows me, so you "
+        "decide what I can see and you can change it whenever you like.",
+        take_effect="applies from the next time I check for messages.",
+        requires_approval=True,
     )
 )

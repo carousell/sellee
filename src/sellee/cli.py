@@ -219,10 +219,20 @@ def _build_parser() -> argparse.ArgumentParser:
     # than accepting any word and failing at the door. Driving is the right test, not publishing:
     # signing in is what this command does, and a market whose publish recipe is still to come is
     # signed in to the same way.
+    from sellee import connectables as _connectables
     from sellee.browser import markets as _markets
 
     for market in _markets.drivable_markets():
         consub.add_parser(market, help=f"sign in to {market} in the agent's browser")
+        # A market whose buyers arrive as mail needs a second sign-in, and it gets its own verb so
+        # a seller can re-do just that half — which is the common case, because a webmail session
+        # expires long before a marketplace one and the site sign-in is not what broke.
+        mail_target = _connectables.mail_target_for(market)
+        if mail_target:
+            consub.add_parser(
+                mail_target,
+                help=f"sign in to the mailbox that receives your {market} mail",
+            )
 
     settings_cmd = sub.add_parser("settings", help="view and change seller settings")
     ssub = settings_cmd.add_subparsers(dest="settings_command", required=True)

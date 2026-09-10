@@ -47,6 +47,25 @@ def set_setting(port: int, token: str, key: str, value: str) -> int:
     return 0
 
 
+def read_setting(port: int, token: str, key: str):
+    """One setting's current value, or `None` if it could not be read.
+
+    `None` is "we do not know", never "empty": a caller that treated an unreachable daemon as an
+    empty list would silently replace the seller's connected marketplaces with whatever it was
+    adding. Every caller here branches on it.
+    """
+    try:
+        status, data = control.get(port, token, "/control/settings-list")
+    except control.DaemonUnreachable:
+        return None
+    if status != 200:
+        return None
+    for row in data.get("settings") or []:
+        if row.get("key") == key:
+            return row.get("value")
+    return None
+
+
 def _list(port: int, token: str) -> int:
     try:
         status, data = control.get(port, token, "/control/settings-list")

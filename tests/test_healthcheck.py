@@ -195,7 +195,7 @@ def test_a_probe_that_explodes_becomes_a_line_not_the_end_of_the_report(monkeypa
 
     monkeypatch.setattr(healthcheck, "_daemon_probe", explode)
     results = healthcheck.run_checks()
-    assert len(results) == 6
+    assert len(results) == 7
     assert results[0].status == checks.FAIL
     assert "launchctl vanished" in results[0].detail
 

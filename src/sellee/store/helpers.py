@@ -6,6 +6,7 @@ the name, which is what tests/conftest.py's patch_store_attr does.
 
 from __future__ import annotations
 
+import html
 import json
 import re
 import sqlite3
@@ -476,6 +477,25 @@ def _item_from_row(row: sqlite3.Row) -> ItemRecord:
         "created_ts": row["created_ts"],
         "updated_ts": row["updated_ts"],
     }
+
+
+def normalize_title(value: object) -> str:
+    """An item's title as it should be stored, which is as it will be *published*.
+
+    Two things, and deliberately only two. HTML entities are decoded, and the edges are trimmed.
+
+    Entities decode because a title is composed upstream of here by whatever is looking at the
+    item — a model reading a photo in a channel pass, a marketplace's own listings page during
+    adoption, a person typing — and nothing between them and a public posting would question it.
+    A real one arrived this way: `DJI Mic Mini (single, w/ case &amp; pouch)`, which would have
+    gone up on craigslist reading "&amp;" to every buyer who saw it. Nothing in this codebase
+    escapes anything, so the entity was simply written; the boundary that stores the title is the
+    one place that can fix it for every caller at once.
+
+    What is *not* done here is editing. Capitalisation, punctuation, wording and length are the
+    seller's, and a store is not the place to have opinions about them.
+    """
+    return html.unescape(str(value or "")).strip()
 
 
 def validate_photos(value: object) -> list:
