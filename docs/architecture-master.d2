@@ -1,0 +1,136 @@
+# Master architecture diagram — sellee
+# Layout: control surfaces / seller's machine (daemon inside) / marketplaces,
+# with the seller and buyers as the endpoints.
+#
+# Rendered with d2's TALA engine, which honours explicit `top`/`left` on every
+# shape. Positions are relative to the enclosing container; TALA pads 60px
+# between a container's border and its children, and treats a container's
+# `width`/`height` as a minimum. Edge routing is left to TALA.
+
+classes: {
+  zone: {
+    label.near: top-left
+    style.italic: true
+    style.bold: false
+    style.font-size: 16
+    style.font-color: black
+    style.stroke: black
+    style.stroke-width: 2
+  }
+  node: {
+    width: 160
+    height: 50
+    style.bold: false
+    style.font-size: 14
+    style.fill: white
+    style.stroke: black
+  }
+  person: {
+    shape: oval
+    width: 130
+    height: 70
+    style.bold: false
+    style.fill: white
+    style.stroke: black
+  }
+  edge: {
+    style.stroke: black
+    style.font-size: 13
+    style.font-color: black
+    style.italic: false
+  }
+}
+(** -> **)[*].class: edge
+(** <-> **)[*].class: edge
+
+# ---------- people ----------
+seller: {class: person; top: 0; left: 335}
+buyers: {class: person; top: 1270; left: 335}
+
+# ---------- control surfaces ----------
+control: control surfaces {
+  class: zone
+  style.fill: "#dbeefb"
+  top: 130; left: 0
+  width: 800; height: 170
+
+  attended: attended session\n(terminal) {class: node; top: 0; left: 60}
+  telegram: telegram channel {class: node; top: 0; left: 260}
+  other: ... other channels {class: node; top: 0; left: 460}
+}
+
+# ---------- seller's machine ----------
+machine: seller's machine {
+  class: zone
+  style.fill: "#fffbf0"
+  top: 340; left: 0
+  width: 800; height: 680
+
+  daemon: sellee daemon {
+    class: zone
+    style.fill: "#fdf3d6"
+    top: 0; left: 0
+    width: 680; height: 490
+
+    adapter: channel adapter {class: node; top: 0; left: 200}
+    bus: event bus {
+      shape: queue
+      width: 560; height: 40
+      style.bold: false
+      style.fill: white
+      style.stroke: black
+      top: 100; left: 0
+    }
+    mcp: MCP server {class: node; top: 220; left: 0}
+    scheduler: scheduler {class: node; top: 220; left: 200}
+    db: sqlite DB\n(everything uses this) {
+      shape: cylinder
+      style.bold: false
+      style.font-size: 13
+      style.fill: white
+      style.stroke: black
+      top: 200; left: 390
+    }
+    pass: pass runner {class: node; top: 320; left: 200}
+  }
+
+  # external processes on the seller's machine
+  harness: agent harness\n(ephemeral) {class: node; top: 510; left: 60}
+  browser: browser {class: node; top: 510; left: 310}
+}
+
+# ---------- marketplaces ----------
+markets: marketplaces {
+  class: zone
+  style.fill: "#f6e6fa"
+  top: 1060; left: 0
+  width: 800; height: 170
+
+  carousell: carousell {class: node; top: 0; left: 60}
+  facebook: facebook\nmarketplace {class: node; top: 0; left: 260}
+  other: ... other marketplaces {class: node; top: 0; left: 460}
+}
+
+# ---------- arrows ----------
+# people <-> zones
+seller <-> control
+buyers <-> markets
+
+# control surfaces <-> daemon
+control.telegram <-> machine.daemon.adapter
+control.other <-> machine.daemon.adapter
+control.attended -> machine.daemon.mcp: calls
+
+# daemon internals
+machine.daemon.adapter <-> machine.daemon.bus: consumes\n+ emits
+machine.daemon.mcp -> machine.daemon.bus: emits
+machine.daemon.scheduler <-> machine.daemon.bus: consumes\n+ emits
+machine.daemon.scheduler -> machine.daemon.pass: triggers
+
+# the pass loop: daemon spawns the harness; the harness acts only via MCP
+machine.daemon.pass -> machine.harness: spawns + manages
+machine.harness -> machine.daemon.mcp: calls
+
+# harness -> browser -> marketplaces
+machine.harness -> machine.browser: drives
+machine.browser <-> markets
