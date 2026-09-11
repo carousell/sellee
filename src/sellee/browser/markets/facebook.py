@@ -119,7 +119,7 @@ INBOX_FOLDER_JS = f"""() => {{
 # matched on — the id is read from the opened conversation. `unread` is 0 because the folder's
 # unread marker has not been captured and a guess would suppress reads; `_can_skip` errs toward
 # opening and the full sweep opens everything regardless.
-CONVERSATIONS_LIST_JS = """async () => {
+_CONVERSATIONS_LIST_TEMPLATE = """async () => {
   const RAIL_EDGE = 400;
   const SEPARATOR = ' \\u00b7 ';
   // The folder's own heading. Scoped to the rail: the right-hand pane shows the word
@@ -233,7 +233,7 @@ CONVERSATIONS_LIST_JS = """async () => {
     await new Promise((r) => setTimeout(r, 250));
     result = read();
   }
-  if (result !== null) {
+  if (result !== null && __DEEP__) {
     await loadAll();
     const bottom = read();
     await scrollToTop();
@@ -250,6 +250,23 @@ CONVERSATIONS_LIST_JS = """async () => {
   }
   return result;
 }"""
+
+# Two readings of the same folder, differing only in how far they scroll.
+#
+# The deep one paginates the whole folder: it is how a conversation nobody has written in for weeks
+# is still found, which is what adoption needs. It is also `loadAll` — up to sixty `scrollIntoView`
+# steps on a 400ms timer, each one triggering Messenger's own load-more fetch — and running that
+# every five minutes is a scroll pattern with no wheel event behind it and no variance in its
+# spacing, all day.
+#
+# The shallow one reads the screenful already painted. Nothing is lost by it: the folder is ordered
+# by recency and a buyer writing bumps their conversation to the top, so every conversation with
+# something new in it is in the first screenful by construction. The comment on `loadAll` says as
+# much — a plain read "looks exactly like a seller with a handful of buyers".
+#
+# So: shallow on an ordinary tick, deep on the sweep that already opens everything anyway.
+CONVERSATIONS_LIST_JS = _CONVERSATIONS_LIST_TEMPLATE.replace("__DEEP__", "true")
+CONVERSATIONS_RECENT_JS = _CONVERSATIONS_LIST_TEMPLATE.replace("__DEEP__", "false")
 
 # Which listing the open conversation is about.
 #

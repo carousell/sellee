@@ -57,6 +57,8 @@ class StubClient:
         # Counted apart from navigations: an adopted thread is navigated again to read its tail,
         # which is not the lane re-deriving the listing.
         self.product_id_reads = 0
+        # Which folder reading each tick asked for, in order.
+        self.list_reads: list = []
         self.url = ""
 
     class _Exclusive:
@@ -115,7 +117,12 @@ class StubClient:
         if function == inbox._FOCUS_JS:
             self.calls.append(("focus", kwargs.get("target")))
             return self.focus_works
-        if function == fb_market.CONVERSATIONS_LIST_JS:
+        if function in (fb_market.CONVERSATIONS_LIST_JS, fb_market.CONVERSATIONS_RECENT_JS):
+            # Both readings answer the same rows; which one the lane asked for is recorded so a
+            # test about the sweep can say the deep one is only paid for on a sweep.
+            self.list_reads.append(
+                "deep" if function == fb_market.CONVERSATIONS_LIST_JS else "recent"
+            )
             if self.list_error is not None:
                 answer = {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
                 if self.blocked:
@@ -1242,3 +1249,47 @@ def test_facebooks_pin_wall_is_named_in_its_own_words(store, bus, seeded) -> Non
 
     assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
     assert "PIN" in _notice_texts(store)[0]
+
+
+# --- how far the folder is scrolled ---------------------------------------------------------------
+#
+# The deep reading paginates the whole folder: up to sixty `scrollIntoView` steps on a 400ms timer,
+# each one triggering Messenger's own load-more fetch. Running that every five minutes is a scroll
+# pattern with no wheel event behind it and no variance in its spacing, all day. The sweep already
+# opens every conversation, so it is the tick that can afford it.
+
+
+def test_an_ordinary_tick_reads_only_the_screenful(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=6))
+
+    assert client.list_reads == ["recent"]
+
+
+def test_the_sweep_paginates_the_whole_folder(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client, inbox_full_sweep_every=2)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert client.list_reads == ["recent", "deep"]
+
+
+def test_a_tick_that_could_not_be_read_does_not_spend_its_way_to_a_sweep(store, bus, seeded):
+    """The counter is what picks the deep read, so a market that was blind for five ticks must not
+    arrive at one having 'used' them."""
+    blind = StubClient(list_error="the Marketplace folder is not open")
+    deps = _deps(store, bus, blind, inbox_full_sweep_every=2)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+    assert set(blind.list_reads) == {"recent"}
+
+    seeing = StubClient(conversations=[_conv()], tails={"99": []})
+    deps.browser_factory = lambda: seeing
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert seeing.list_reads == ["recent", "deep"]

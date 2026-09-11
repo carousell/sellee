@@ -244,12 +244,24 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
 
     _open_inbox_folder(client, adapter)
 
-    answer = client.evaluate(adapter.conversations_list_js)
+    # Decided before the read, because it chooses which read to make — but only committed to
+    # `deps.ticks` once one has answered, so a market that cannot be seen does not spend its way
+    # toward a sweep while blind.
+    tick = deps.ticks.get(market, 0) + 1
+    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+    # The sweep opens every conversation anyway, so it is the tick that can afford to paginate the
+    # whole folder; an ordinary tick reads the screenful already painted. Nothing is missed by that:
+    # the folder is ordered by recency, so a buyer who has written is at the top of it.
+    list_js = adapter.conversations_list_js
+    if not full_sweep and adapter.conversations_recent_js:
+        list_js = adapter.conversations_recent_js
+
+    answer = client.evaluate(list_js)
     if _list_unreadable(answer):
         # The quiet read abstained. A list that only builds itself while visible is the one read a
         # background tab cannot serve, so the tab is brought forward here — and only here, once the
         # cheap read has already said it was not enough.
-        answer = client.read_forward(adapter.conversations_list_js)
+        answer = client.read_forward(list_js)
     if _list_unreadable(answer):
         # The list came back as a failure rather than content; unlike a DOM read that finds
         # nothing, this cannot be mistaken for an empty inbox. Everything the artifact measured
@@ -268,10 +280,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         )
         return
     rows = answer["conversations"]
-
-    tick = deps.ticks.get(market, 0) + 1
     deps.ticks[market] = tick
-    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
 
     known = {t["thread_id"]: t for t in deps.store.list_threads(side="sell")}
     items = deps.store.list_items()

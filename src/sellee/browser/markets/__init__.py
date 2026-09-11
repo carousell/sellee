@@ -52,6 +52,10 @@ class MarketAdapter:
     # keystroke dispatched from the page, carrying `isTrusted: false` — a signal on the seller's own
     # account, so it belongs to a market someone has decided that for.
     chat_message_submit_js: str = ""
+    # The same folder read as `conversations_list_js`, without the pagination. Used on an ordinary
+    # tick; the deep one is kept for the sweep, which opens every conversation anyway. Empty means
+    # this market has only one reading of its inbox and gets it every time.
+    conversations_recent_js: str = ""
     # What the seller already has listed, read off their own listings page:
     # `{listings: [{listing_id, url, title, price, price_text}], active_count, dropped, truncated}`
     # or `{error: …}`. Live listings only — a reader that cannot prove the rows are live must
@@ -132,6 +136,7 @@ CAROUSELL = MarketAdapter(
 FACEBOOK = MarketAdapter(
     market="fb",
     conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
+    conversations_recent_js=facebook.CONVERSATIONS_RECENT_JS,
     conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
     login_js=facebook.LOGIN_JS,
     my_listings_js=facebook.MY_LISTINGS_JS,
