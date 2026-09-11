@@ -98,6 +98,91 @@ class BrowserMixin:
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
 
+    # --- a marketplace that has told us to stop ------------------------------------------------
+
+    def block_market(
+        self,
+        market: str,
+        cause: str,
+        *,
+        ttl_sec: float | None,
+        now: float | None = None,
+    ) -> None:
+        """Stop driving `market` until it is cleared. `ttl_sec` None means indefinite.
+
+        Re-blocking the same market under the same cause renews the window and counts a strike; a
+        *different* cause is a new incident, so `incident_ts` moves and the seller is owed a fresh
+        telling. Strikes are what let a caller lengthen the window rather than repeat it.
+        """
+        now = _now() if now is None else now
+        expires = None if ttl_sec is None else now + ttl_sec
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO market_blocks "
+                "(market, cause, strikes, blocked_ts, incident_ts, expires_ts, told_ts) "
+                "VALUES (?, ?, 1, ?, ?, ?, NULL) ON CONFLICT (market) DO UPDATE SET "
+                "cause = excluded.cause, "
+                "strikes = market_blocks.strikes + 1, "
+                "blocked_ts = excluded.blocked_ts, "
+                "expires_ts = excluded.expires_ts, "
+                # A new incident re-arms the telling; the same one going on does not.
+                "incident_ts = CASE WHEN market_blocks.cause = excluded.cause "
+                "THEN market_blocks.incident_ts ELSE excluded.incident_ts END, "
+                "told_ts = CASE WHEN market_blocks.cause = excluded.cause "
+                "THEN market_blocks.told_ts ELSE NULL END",
+                (market, cause, now, now, expires),
+            )
+
+    def market_block(self, market: str, now: float | None = None) -> dict | None:
+        """This market's live block, or None when it is free to drive.
+
+        An expired row reads as None rather than being deleted: a read that writes would turn every
+        lane tick into a transaction, and the row costs nothing until the next block overwrites it.
+        A NULL `expires_ts` never expires — see the migration for why that case exists.
+        """
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT market, cause, strikes, blocked_ts, incident_ts, expires_ts, told_ts "
+            "FROM market_blocks WHERE market = ? AND (expires_ts IS NULL OR expires_ts > ?)",
+            (market, now),
+        )
+        return dict(rows[0]) if rows else None
+
+    def blocked_markets(self, now: float | None = None) -> list[str]:
+        """Every market currently blocked. For the gates that ask about a set rather than one."""
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT market FROM market_blocks WHERE expires_ts IS NULL OR expires_ts > ? "
+            "ORDER BY market ASC",
+            (now,),
+        )
+        return [str(row["market"]) for row in rows]
+
+    def clear_market_block(self, market: str) -> None:
+        """Let this market be driven again. Only ever called once something has proved it is
+        clear — never by a read that merely happened to succeed."""
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM market_blocks WHERE market = ?", (market,))
+
+    def report_market_block_once(self, market: str, text: str, controls: list | None = None):
+        """Tell the seller this market is blocked — once per incident, not once per strike.
+
+        Returns whether this queued the notice. One transaction, because saying it and recording
+        that we said it are one event: split in two, a crash between them tells the seller twice.
+
+        The guard is `told_ts` against the incident, so a block that expired and re-triggered is a
+        new thing to say while the same one going on is not.
+        """
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE market_blocks SET told_ts = ? WHERE market = ? AND told_ts IS NULL",
+                (_now(), market),
+            )
+            if not cur.rowcount:
+                return False
+            _insert_notice(conn, text, controls=controls)
+            return True
+
     # --- what a conversation is about -------------------------------------------------------
 
     def record_thread_listing(
