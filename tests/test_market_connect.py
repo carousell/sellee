@@ -167,7 +167,9 @@ def test_every_surface_attaches_the_same_door(store, bus) -> None:
     seen = set()
 
     inbox._notify_once(  # noqa: SLF001 — the notice builder is the surface under test
-        inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=None),
+        inbox.InboxDeps(
+            store=store, bus=bus, config=Config(), browser_factory=None, sleep=lambda _s: None
+        ),
         "logged_out:carousell",
         "x",
         controls=fastpaths.signin_controls("carousell"),

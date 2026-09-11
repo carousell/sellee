@@ -23,6 +23,7 @@ Three rules keep the lane honest:
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -68,6 +69,20 @@ UNAVAILABLE_NOTICE = (
     "The carousell.ai side is unaffected. Details: {reason}"
 )
 
+# How long the lane sits on a conversation it has just read before moving to the next one.
+#
+# Not decoration. A sweep opened every active conversation back to back, as fast as the marketplace
+# would serve them, with nothing between the scrape of one and the navigation to the next — a shape
+# no person reading their messages produces. The base is the glance a conversation costs even when
+# nothing in it is new; the per-character part is the reading itself, and it is measured on what is
+# *new*, because that is what there is to read. The cap is what stops a buyer pasting an essay from
+# stalling every conversation queued behind them.
+READ_DWELL_BASE_SEC = 1.5
+READ_DWELL_PER_CHAR_SEC = 0.04
+READ_DWELL_CAP_SEC = 12.0
+# Applied to the whole dwell, so the pause is not itself a constant to measure.
+READ_DWELL_JITTER = (0.7, 1.3)
+
 
 @dataclass
 class InboxDeps:
@@ -84,6 +99,10 @@ class InboxDeps:
     # is only set on the first failure of a run, so a market that flaps does not keep resetting it.
     blind_since: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
+    # How the lane waits, and where its randomness comes from. Injected so a test can drive the
+    # read dwell without spending it.
+    sleep: Callable[[float], None] = time.sleep
+    rng: object = random
 
 
 def seller_region(store) -> str | None:
@@ -273,7 +292,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # Which conversations this tick already opened, so the chase below only pays for the ones the
     # list never named.
     visited: set = set()
-    for row in rows:
+    for row in _read_order(rows, market, unsettled, deps.rng):
         if not isinstance(row, dict):
             continue
         thread_id = _thread_key(market, row.get("thread_id"))
@@ -802,7 +821,42 @@ def _read_thread(
                 "scam_verdict": verdict,
             },
         )
+    # Paid on every conversation we could actually read, including one with nothing new: a person
+    # who opens a chat and finds no new message still spent a moment finding that out. Not paid on
+    # an unreadable one, which returned above — there was nothing on screen to have been reading.
+    deps.sleep(_read_dwell_sec(sum(len(entry["text"] or "") for entry in fresh), deps.rng))
     return len(fresh)
+
+
+def _read_order(rows: list, market: str, unsettled: dict, rng) -> list:
+    """The order this tick opens conversations in.
+
+    The marketplace hands the list back newest-first, and walking it top to bottom every sweep is a
+    fixed traversal of the same conversations in the same sequence — a shape that says a program
+    read the list, not a person.
+
+    Shuffled, except that a thread holding a send we cannot account for goes first whatever the
+    draw. That is not a preference: `_chase_unsettled` exists because an unconfirmed send has to be
+    resolved before the thread is reasoned about, and leaving it to land at the end of a shuffle
+    would put it behind every other conversation on the market.
+    """
+    chase, rest = [], []
+    for row in rows:
+        key = _thread_key(market, row.get("thread_id")) if isinstance(row, dict) else None
+        (chase if key and key in unsettled else rest).append(row)
+    rng.shuffle(rest)
+    return chase + rest
+
+
+def _read_dwell_sec(fresh_chars: int, rng) -> float:
+    """How long to sit on a conversation that has just been read.
+
+    The cap is applied after the jitter rather than before, so it bounds the pause actually taken —
+    capping the span first would still let a long message hold the lane for a third longer than the
+    ceiling says.
+    """
+    span = READ_DWELL_BASE_SEC + READ_DWELL_PER_CHAR_SEC * fresh_chars
+    return min(span * rng.uniform(*READ_DWELL_JITTER), READ_DWELL_CAP_SEC)
 
 
 def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:

@@ -159,6 +159,7 @@ def _deps(store, bus, client, **overrides):
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
+        sleep=lambda _s: None,
         now=now,
     )
 

@@ -206,6 +206,7 @@ def test_a_buyer_message_becomes_a_scoped_reply_that_reaches_the_marketplace(
             bus=bus,
             config=Config(),
             browser_factory=lambda: browser,
+            sleep=lambda _s: None,
             now=lambda: 100.0,
         )
     )
@@ -270,6 +271,7 @@ def test_the_scope_stops_the_pass_reading_another_buyers_thread(wired, tmp_path)
             bus=bus,
             config=Config(),
             browser_factory=lambda: browser,
+            sleep=lambda _s: None,
             now=lambda: 100.0,
         )
     )
@@ -320,6 +322,7 @@ def test_the_floor_never_appears_anywhere_in_the_loop(wired, tmp_path) -> None:
             bus=bus,
             config=Config(),
             browser_factory=lambda: browser,
+            sleep=lambda _s: None,
             now=lambda: 100.0,
         )
     )

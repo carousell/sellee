@@ -75,7 +75,9 @@ def test_the_read_lane_skips_a_disconnected_market_entirely(store, bus) -> None:
     """Never opens the page, not merely "reads nothing" — a probe is what produces the logged-out
     notice."""
     _disconnect(store)
-    deps = inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=StubClient, sleep=lambda _s: None
+    )
 
     inbox.inbox_lane(deps)
 
