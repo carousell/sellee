@@ -1172,6 +1172,17 @@ class _RecordingSleep:
         self.pauses.append(seconds)
 
 
+class _FixedRandom:
+    """No shuffle, no jitter — so a test about how long a pause is does not also depend on the
+    order conversations came out in or on the draw inside the pause."""
+
+    def shuffle(self, seq) -> None:
+        return None
+
+    def uniform(self, low: float, high: float) -> float:
+        return 1.0
+
+
 def _dwell_deps(store, bus, client, sleep, **overrides):
     return inbox.InboxDeps(
         store=store,
@@ -1179,6 +1190,7 @@ def _dwell_deps(store, bus, client, sleep, **overrides):
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
         sleep=sleep,
+        rng=_FixedRandom(),
     )
 
 

@@ -366,6 +366,10 @@ class SurveyStub:
         self.navigations: list = []
         self.prepared = 0
 
+    def user_agent(self) -> str:
+        """What the photo fetch is told to call itself — the real client asks Chrome."""
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/151.0.0.0 Safari/537.36"
+
     class _Exclusive:
         def __init__(self, client):
             self.client = client

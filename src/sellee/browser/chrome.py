@@ -124,6 +124,24 @@ def version_url(port: int) -> str:
     return f"http://127.0.0.1:{port}/json/version"
 
 
+def user_agent(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> str:
+    """What the running Chrome calls itself, or "" when it could not be asked.
+
+    For the one request the agent makes outside Chrome — a listing's photographs, fetched straight
+    from the marketplace's CDN. Asking the browser beats keeping a string in our own source, which
+    goes stale silently and, if it ever named this tool, would hand that CDN a label rather than
+    leaving it an inference.
+    """
+    try:
+        with urllib.request.urlopen(version_url(port), timeout=timeout_sec) as resp:
+            version = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return ""
+    if not isinstance(version, dict):
+        return ""
+    return str(version.get("User-Agent") or "")
+
+
 def _read_active_port_file() -> tuple | None:
     """Chrome's announced `(port, ws_path)`, or None when it has announced nothing readable.
 

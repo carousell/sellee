@@ -731,6 +731,21 @@ class BrowserClient:
         except Exception:  # noqa: BLE001 — a tab that will not take this must not fail a read
             log.debug("could not prepare the new tab for background work", exc_info=True)
 
+    def user_agent(self) -> str:
+        """What the Chrome this client drives calls itself, or "" when it could not be asked.
+
+        For the photo fetch, which is the one request made outside the browser and so the one that
+        would otherwise announce a different client to the marketplace's CDN.
+        """
+        port = self._cdp_port()
+        if port is None:
+            return ""
+        try:
+            return chrome.user_agent(port)
+        except Exception:  # noqa: BLE001 — a UA we could not read must never fail a survey
+            log.debug("could not read Chrome's user agent", exc_info=True)
+            return ""
+
     def _cdp_port(self) -> int | None:
         """The port this client's server drives, read back out of its own command."""
         command = [str(part) for part in (self._command or [])]

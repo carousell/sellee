@@ -231,7 +231,7 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         _fail(deps, row, "the listing page shows no usable price")
         return
 
-    photos = _photos(deps, row, detail) if relist else []
+    photos = _photos(deps, client, row, detail) if relist else []
     item = deps.store.adopt_discovered_listing(
         market,
         listing_id,
@@ -266,14 +266,19 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         )
 
 
-def _photos(deps, row: dict, detail: dict) -> list:
+def _photos(deps, client, row: dict, detail: dict) -> list:
     """The listing's photographs, brought into the media store. Empty when none could be."""
     urls = [url for url in (detail.get("photo_urls") or []) if isinstance(url, str)]
     if not urls:
         return []
     dest = paths.media_dir() / f"adopted-{row['market']}-{row['listing_id']}"
     return photo_fetch.fetch_listing_photos(
-        urls[:MAX_PHOTOS], market=row["market"], dest_dir=dest, referer=row["url"]
+        urls[:MAX_PHOTOS],
+        market=row["market"],
+        dest_dir=dest,
+        referer=row["url"],
+        # The CDN hears from the browser that just loaded the listing, not from a second client.
+        user_agent=client.user_agent(),
     )
 
 
