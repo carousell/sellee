@@ -85,6 +85,12 @@ _SURVEY_LANE_INTERVAL_SEC = 60.0
 # off the hot path entirely, so it only has to be longer than a slow connection needs.
 _BROWSER_WARM_TIMEOUT_SEC = 600.0
 
+# How far either side of its interval a browser lane's next run may wander. These are the lanes a
+# marketplace can see, and an arrival every interval_sec exactly, forever, is the cheapest thing an
+# account-integrity model can notice about an account. 0.3 keeps a 300s read inside 3.5-6.5 minutes,
+# which costs nobody anything: a buyer's message is found on the next read either way.
+_BROWSER_LANE_JITTER = 0.3
+
 # Said whenever acquiring the browser had to start Chrome. Deliberately names no flow: any actor
 # that needs the browser may be the one that opens the window, and the seller only needs to know
 # it was us.
@@ -582,6 +588,8 @@ def run_daemon(*, once: bool) -> int:
         tick_interval_sec=cfg.tick_interval_sec,
         on_tick=lambda: heartbeat.write(paths.heartbeat_path()),
         stop_event=stop,
+        # Off under --once, where the whole point is that one tick exercises every lane.
+        stagger=not once,
     )
 
     # Channel providers run only when registered: at boot for those already configured, and at
@@ -696,6 +704,7 @@ def run_daemon(*, once: bool) -> int:
             name="inbox_read",
             interval_sec=float(cfg.inbox_read_interval_sec),
             func=lambda: inbox.inbox_lane(inbox_deps),
+            jitter=_BROWSER_LANE_JITTER,
         )
     )
     # Sign the seller in to a marketplace when they ask from chat. The tap itself lands on the
@@ -726,6 +735,7 @@ def run_daemon(*, once: bool) -> int:
             name="market_survey",
             interval_sec=_SURVEY_LANE_INTERVAL_SEC,
             func=lambda: browser_survey.survey_lane(survey_deps),
+            jitter=_BROWSER_LANE_JITTER,
         )
     )
     # Answer the buyers who are waiting. Driven off durable rows rather than off the read lane, so a
@@ -747,6 +757,7 @@ def run_daemon(*, once: bool) -> int:
             name="crosslist_lane",
             interval_sec=_CROSSLIST_LANE_INTERVAL_SEC,
             func=lambda: crosslist.crosslist_lane(crosslist_deps),
+            jitter=_BROWSER_LANE_JITTER,
         )
     )
     # Look for a new release and say so once. Nothing installs itself — an update replaces the
