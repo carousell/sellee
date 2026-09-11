@@ -181,20 +181,30 @@ def test_pacing_and_negotiation_knobs_are_read(xdg_tmp) -> None:
     assert cfg.negotiation_lowball_cap == 2
 
 
-def test_valid_but_loose_pacing_values_clamp_down(xdg_tmp) -> None:
-    # Tighten-only: a well-formed cap/delay above the hard ceiling clamps down (never rejects,
-    # never relaxes) — distinct from malformed values, which reject below.
-    _write_config(
-        {
-            "max_actions_per_hour": 500,
-            "reply_delay_sec": [10, 120],
-            "interactive_reply_delay_sec": [0, 60],
-        }
-    )
+def test_a_cap_above_the_ceiling_clamps_down(xdg_tmp) -> None:
+    # Tighten-only, and only the cap: a higher cap is a looser one, so a tampered or fat-fingered
+    # config can lower it but never raise it past the ceiling.
+    _write_config({"max_actions_per_hour": 500})
+    assert load().max_actions_per_hour == 60
+
+
+def test_a_human_paced_reply_delay_is_allowed(xdg_tmp) -> None:
+    """A longer delay is a tighter one. It used to be silently clamped to 3s, so an operator
+    asking for a pause a person could plausibly have taken got one no person would."""
+    _write_config({"reply_delay_sec": [20, 40], "interactive_reply_delay_sec": [5, 15]})
     cfg = load()
-    assert cfg.max_actions_per_hour == 60
-    assert cfg.reply_delay_sec == (3.0, 3.0)  # min follows max down so min <= max holds
-    assert cfg.interactive_reply_delay_sec == (0.0, 3.0)
+    assert cfg.reply_delay_sec == (20.0, 40.0)
+    assert cfg.interactive_reply_delay_sec == (5.0, 15.0)
+
+
+def test_a_delay_past_the_ceiling_is_refused_rather_than_clamped(xdg_tmp) -> None:
+    """The delay ceiling is mechanical, not a safety bound: it keeps a jittered send inside the
+    stale-intent grace. Silently shortening the wait would leave the config saying one thing and
+    the daemon doing another, so this is loud."""
+    _write_config({"reply_delay_sec": [10, 120]})
+    with pytest.raises(ConfigError) as caught:
+        load()
+    assert "45" in str(caught.value)
 
 
 @pytest.mark.parametrize(
