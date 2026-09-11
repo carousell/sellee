@@ -82,6 +82,10 @@ READ_DWELL_PER_CHAR_SEC = 0.04
 READ_DWELL_CAP_SEC = 12.0
 # Applied to the whole dwell, so the pause is not itself a constant to measure.
 READ_DWELL_JITTER = (0.7, 1.3)
+# And what every dwell in one market's read may add up to. The read holds the browser exclusively
+# for its whole tick, so without this a sweep of twenty conversations could sit on it for minutes
+# and a buyer waiting on a reply would wait behind the reading of everyone else's.
+READ_DWELL_TICK_BUDGET_SEC = 30.0
 
 
 @dataclass
@@ -301,6 +305,8 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # Which conversations this tick already opened, so the chase below only pays for the ones the
     # list never named.
     visited: set = set()
+    # Shared across every conversation this tick reads; see READ_DWELL_TICK_BUDGET_SEC.
+    dwell_budget = [READ_DWELL_TICK_BUDGET_SEC]
     for row in _read_order(rows, market, unsettled, deps.rng):
         if not isinstance(row, dict):
             continue
@@ -337,6 +343,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             unsettled,
             tail_measured,
             on_screen=on_screen,
+            dwell_budget=dwell_budget,
         )
         if fresh is None:
             unreadable += 1
@@ -726,6 +733,7 @@ def _read_thread(
     unsettled: dict | None = None,
     measured_out: dict | None = None,
     on_screen: bool = False,
+    dwell_budget: list | None = None,
 ) -> int | None:
     """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
     conversation could not be read at all — which the caller counts as being blind on this market,
@@ -833,8 +841,18 @@ def _read_thread(
     # Paid on every conversation we could actually read, including one with nothing new: a person
     # who opens a chat and finds no new message still spent a moment finding that out. Not paid on
     # an unreadable one, which returned above — there was nothing on screen to have been reading.
-    deps.sleep(_read_dwell_sec(sum(len(entry["text"] or "") for entry in fresh), deps.rng))
+    _dwell(deps, sum(len(entry["text"] or "") for entry in fresh), dwell_budget)
     return len(fresh)
+
+
+def _dwell(deps: InboxDeps, fresh_chars: int, budget: list | None) -> None:
+    """Sit on the conversation just read, within what this tick has left to spend."""
+    pause = _read_dwell_sec(fresh_chars, deps.rng)
+    if budget is not None:
+        pause = min(pause, budget[0])
+        budget[0] -= pause
+    if pause > 0:
+        deps.sleep(pause)
 
 
 def _read_order(rows: list, market: str, unsettled: dict, rng) -> list:

@@ -1297,3 +1297,27 @@ def test_ordering_survives_a_row_with_no_thread_id(store, bus) -> None:
     ordered = inbox._read_order(rows, "carousell", {}, _ReversingRandom())
 
     assert len(ordered) == 2
+
+
+def test_a_tick_cannot_spend_more_than_its_dwell_budget(store, bus, seeded) -> None:
+    """The read holds the browser exclusively for the whole tick, so the dwells have a ceiling
+    together as well as one apiece — otherwise a sweep of twenty conversations sits on it for
+    minutes and a buyer waiting on a reply waits behind everyone else's reading."""
+    conversations, tails = [], {}
+    for n in range(20):
+        native = str(100 + n)
+        _thread(store, seeded, tid=f"carousell:{native}", handle=f"buyer{n}")
+        conversations.append(_conv(thread_id=native, handle=f"buyer{n}"))
+        tails[native] = [_bubble("is this available? " * 40)]
+    sleep = _RecordingSleep()
+
+    inbox.inbox_lane(
+        _dwell_deps(store, bus, StubClient(conversations=conversations, tails=tails), sleep)
+    )
+
+    # Every conversation is still read; what runs out is the time spent looking at them, and a
+    # spent budget means no pause at all rather than a pause of zero.
+    assert store.get_thread("carousell:100")["messages"]
+    assert store.get_thread("carousell:119")["messages"]
+    assert sum(sleep.pauses) <= inbox.READ_DWELL_TICK_BUDGET_SEC
+    assert len(sleep.pauses) < 20
