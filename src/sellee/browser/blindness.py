@@ -146,22 +146,30 @@ VERIFY_NOTICE = (
 # What the seller is told when the marketplace says it suspects the account of being automated.
 #
 # Says what Facebook said and does not argue with it, because the honest position is that it is
-# right: the account is being read and answered by an agent. Names the one thing only they can do —
-# look at it themselves — and says plainly that everything on that market has stopped meanwhile,
-# since a seller who is not told that will assume their buyers are still being answered.
+# right: the account is being read and answered by an agent. Says plainly that everything on that
+# market has stopped, since a seller who is not told that will assume their buyers are still being
+# answered.
+#
+# Sends them to their *own* Facebook rather than to the agent's window, and that is deliberate.
+# The warning is on the account, so clearing it anywhere clears it; going to the agent's Chrome
+# would put them in the one tab `close_stray_tabs` reaps on every acquisition, and would mean
+# holding the shared browser — stopping every other marketplace — for as long as they took. This
+# way the agent is not driving the market at all while they deal with it, which is the whole point.
 AUTOMATION_NOTICE = (
     "{name} has put a warning on your account saying it suspects automated behaviour, so I've "
-    "stopped touching {name} completely — no reading, no replies, no new listings. Nothing else is "
-    "affected. Have a look at {name} yourself{where} and see what it's asking of you; tap below "
-    "once you have and I'll check whether it's clear before I start again."
+    "stopped touching {name} completely — no reading, no replies, no new listings. Your other "
+    "marketplaces are unaffected. Open {name} yourself, on your phone or your own browser, and see "
+    "what it's asking of you. Tap below when you have and I'll check whether it's clear before I "
+    "go near it again."
 )
 
 # A checkpoint is Facebook holding the account at a door only the seller can walk through, so this
 # says less and asks for the one thing that helps.
 CHECKPOINT_NOTICE = (
     "{name} is holding your account at a security checkpoint, so I've stopped touching {name} "
-    "until it's cleared — no reading, no replies, no new listings. Nothing else is affected. Only "
-    "you can answer it: open {name}{where}, do what it asks, then tap below and I'll check."
+    "until it's cleared — no reading, no replies, no new listings. Your other marketplaces are "
+    "unaffected. Only you can answer it: open {name} on your phone or your own browser, do what it "
+    "asks, then tap below and I'll check."
 )
 
 _NOTICES = {

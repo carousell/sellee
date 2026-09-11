@@ -970,3 +970,51 @@ def test_a_composer_we_cannot_read_is_not_a_reason_to_strand_the_buyer(store, bu
     _sink(store, bus, Unreadable()).send(thread, "yes!", "reply", _reserve(store))
 
     assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
+_WALL_JS = "() => 'probe'"
+
+
+@pytest.fixture
+def walled_market(monkeypatch):
+    """Carousell's adapter with a wall probe bolted on, standing in for a market that has one.
+    Facebook is the only market that does, and this file scripts Carousell's artifacts."""
+    import dataclasses
+
+    watched = dataclasses.replace(market_adapters.CAROUSELL, block_wall_js=_WALL_JS)
+    monkeypatch.setattr(market_adapters, "get_adapter", lambda market: watched)
+    return watched
+
+
+def test_a_wall_that_goes_up_while_typing_stops_before_the_commit(
+    store, bus, thread, walled_market
+) -> None:
+    """Typing a reply takes seconds and a wall can go up inside them. Past the commit the buyer may
+    already have the message, so this is the last moment refusing still means nothing was
+    delivered."""
+
+    class WallsMidType(StubClient):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.typed_yet = False
+
+        def evaluate(self, function, **kwargs):
+            if function == _WALL_JS:
+                return "automation" if self.typed_yet else ""
+            return super().evaluate(function, **kwargs)
+
+        def call_tool(self, name, arguments):
+            out = super().call_tool(name, arguments)
+            if name == "browser_type":
+                self.typed_yet = True
+            return out
+
+    client = WallsMidType()
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="wall"):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", intent)
+
+    assert _intent_status(store, intent) == "pending"
+    assert _send_button_click_index(client) is None
+    assert "submit" not in [name for name, _ in client.calls]

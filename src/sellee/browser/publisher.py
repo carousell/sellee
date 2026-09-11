@@ -84,6 +84,7 @@ def publish(
 
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
+    _refuse_at_a_wall(client, adapter)
     _open_all_fields(client, adapter, pause)
     found = client.evaluate(adapter.publish_fields_js) or {}
     _refuse_unless_ready(adapter.market, found)
@@ -151,6 +152,28 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
         raise PublishNotAttempted(
             f"the photographs would not attach: {exc}", retryable=True
         ) from exc
+
+
+def _refuse_at_a_wall(client, adapter) -> None:
+    """Stop before acting if the marketplace is refusing the account.
+
+    Raised as `PublishNotAttempted` and retryable: a wall is exactly the condition that clears on
+    its own or by the seller, and nothing has been created, so the pair keeps its attempt.
+
+    A probe that will not run is not evidence of a wall — the form reads below report their own
+    failures, and refusing on a failed probe would stop publishing on a browser hiccup.
+    """
+    if not adapter.block_wall_js:
+        return
+    try:
+        wall = str(client.evaluate(adapter.block_wall_js) or "")
+    except BrowserError:
+        return
+    if wall:
+        raise PublishNotAttempted(
+            f"{adapter.market} is refusing the account ({wall}) — nothing was filled in",
+            retryable=True,
+        )
 
 
 def _fill_text(client, adapter, item: dict, found: dict, pause) -> None:
@@ -264,6 +287,10 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
     # submits nothing — treating that as "may have gone through" would retire the item over a
     # missing photograph. Read fresh: the caller's `found` predates filling, when Next is always
     # disabled.
+    # Asked again on the safe side of the line, because a publish takes minutes and a wall can go
+    # up inside one. Everything past the Next below may have created a listing, so this is the last
+    # moment refusing still costs nothing.
+    _refuse_at_a_wall(client, adapter)
     ready = client.evaluate(adapter.publish_fields_js) or {}
     if ready.get("next_enabled") is False:
         raise PublishNotAttempted(

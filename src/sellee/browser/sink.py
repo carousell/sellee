@@ -121,6 +121,7 @@ class BrowserReplySink:
                 box = self._locate(market, adapter, _MESSAGE_BOX)
                 self._refuse_over_a_draft(market, thread, box, text)
                 self._client.type_humanly(box.target, "the reply message box", text)
+                self._refuse_at_a_wall(adapter, market, thread)
                 if not self._commit(adapter, market, box):
                     # The page did not take it, so nothing was delivered and this is still safe to
                     # retry — the one case a key press could never tell us about.
@@ -193,6 +194,26 @@ class BrowserReplySink:
         if not native:
             return None
         return marketplaces.market_url(thread["market"], "thread", self._region, thread_id=native)
+
+    def _refuse_at_a_wall(self, adapter, market: str, thread: dict) -> None:
+        """One more look, on the safe side of the commit.
+
+        The block is checked when the send starts, but typing a reply takes seconds and a wall can
+        go up inside them. Past the commit the buyer may already have the message, so this is the
+        last moment at which refusing still means nothing was delivered.
+        """
+        if not adapter.block_wall_js:
+            return
+        try:
+            wall = str(self._client.evaluate(adapter.block_wall_js) or "")
+        except BrowserError:
+            # Not evidence of a wall, and the read-back after the commit is what actually decides
+            # whether this landed.
+            return
+        if not wall:
+            return
+        self._publish(market, thread, "refused", f"the marketplace is refusing us ({wall})")
+        raise SendNotAttempted(f"{market!r} put up a {wall} wall before this could be sent")
 
     def _refuse_over_a_draft(self, market: str, thread: dict, box, text: str) -> None:
         """Fail closed on a composer that already holds something.
