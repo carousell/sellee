@@ -29,6 +29,10 @@ from sellee.browser.client import BrowserError
 
 log = logging.getLogger(__name__)
 
+# Between one form field and the next. Shorter than a step, because moving between fields is not
+# the same act as waiting for a page to respond to one.
+FIELD_SETTLE_SEC = 1.5
+
 # The fields that must be marked before anything is typed. The two text inputs are
 # indistinguishable except by label, so a partly-recognised form could put the price in the title.
 REQUIRED_FIELDS = ("title", "price", "next")
@@ -87,7 +91,7 @@ def publish(
     if photos:
         _attach(client, adapter, photos, found, pause)
         pause(STEP_SETTLE_SEC)
-    _fill_text(client, adapter, item, found)
+    _fill_text(client, adapter, item, found, pause)
     condition = adapter.publish_condition_for(str(item.get("condition") or ""))
     _choose(client, adapter, "condition", condition, found, pause)
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
@@ -149,24 +153,23 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
         ) from exc
 
 
-def _fill_text(client, adapter, item: dict, found: dict) -> None:
+def _fill_text(client, adapter, item: dict, found: dict, pause) -> None:
     """Type the fields that are text. Never `value =`: the form listens for real input, and a value
-    set from script leaves React holding the old one — which publishes an empty listing."""
+    set from script leaves React holding the old one — which publishes an empty listing.
+
+    Typed rather than filled, and with a gap between fields. A create form is instrumented the same
+    way a composer is — per-field focus and input events feed its draft autosave and its abandonment
+    funnel — and three fields each receiving their whole value in one event, milliseconds apart, is
+    not a form anybody filled in.
+    """
     for step, text in _text_fields(item):
         if step not in (found.get("marked") or []) or not text:
             continue
         try:
-            client.call_tool(
-                "browser_type",
-                {
-                    "target": adapter.publish_target(step),
-                    "element": f"the {step} field",
-                    "text": str(text),
-                    "submit": False,
-                },
-            )
+            client.type_humanly(adapter.publish_target(step), f"the {step} field", str(text))
         except BrowserError as exc:
             raise PublishNotAttempted(f"could not fill {step}: {exc}", retryable=True) from exc
+        pause(FIELD_SETTLE_SEC)
 
 
 def _text_fields(item: dict) -> list:

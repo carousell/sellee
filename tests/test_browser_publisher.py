@@ -8,11 +8,13 @@ given.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher
-from sellee.browser.client import BrowserToolError
+from sellee.browser.client import BrowserClient, BrowserToolError
 
 _CREATE = "https://www.facebook.com/marketplace/create/item"
 _ADAPTER = market_adapters.FACEBOOK
@@ -30,6 +32,11 @@ _ALL_FIELDS = [
 ]
 
 
+class _NoJitter:
+    def uniform(self, low: float, high: float) -> float:
+        return 0.0
+
+
 class StubForm:
     """A create form answering the publish artifacts from a script, recording every action."""
 
@@ -45,6 +52,10 @@ class StubForm:
         next_enabled=True,
         fail_on=None,
     ):
+        # The real typing, so what a publish test says the form received is what it would have.
+        self._lock = threading.RLock()
+        self._sleep = lambda _seconds: None
+        self._rng = _NoJitter()
         self.marked = list(_ALL_FIELDS if marked is None else marked)
         self.after_next = list(self.marked + ["publish"] if after_next is None else after_next)
         self.readback = readback
@@ -79,6 +90,8 @@ class StubForm:
 
     def navigate(self, url):
         self.navigate_visible(url)
+
+    type_humanly = BrowserClient.type_humanly
 
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")

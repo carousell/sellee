@@ -20,6 +20,7 @@ from __future__ import annotations
 import json
 import logging
 import queue
+import random
 import re
 import shutil
 import subprocess
@@ -33,6 +34,15 @@ from sellee import paths, proc_tree
 from sellee.browser import chrome
 
 log = logging.getLogger(__name__)
+
+# What is already in a text box, whether it is an input or a contenteditable.
+COMPOSER_TEXT_JS = "(el) => (el.value !== undefined ? el.value : (el.innerText || '')).trim()"
+
+# The gap between the lines of a typed message, and the ceiling on all of them together. A person
+# pauses at a line break; the ceiling is what stops a message with many of them from holding the
+# browser — and every other lane waiting on it — longer than the read-back that follows.
+TYPE_LINE_PAUSE_SEC = (0.4, 1.2)
+TYPE_MAX_PAUSE_SEC = 6.0
 
 # The package spawned via npx when config.playwright_mcp_cmd is unset. The installer verifies the
 # spawn and warms the package, and the daemon re-warms it at startup, so this resolves from the npx
@@ -274,10 +284,16 @@ class BrowserClient:
         command: list,
         timeout_sec: float = DEFAULT_TIMEOUT_SEC,
         startup_timeout_sec: float = STARTUP_TIMEOUT_SEC,
+        sleep=time.sleep,
+        rng=None,
     ):
         self._command = list(command)
         self._timeout = timeout_sec
         self._startup_timeout = startup_timeout_sec
+        # How typing paces itself. Injected so a test can prove the shape of a send without
+        # spending the seconds it describes.
+        self._sleep = sleep
+        self._rng = rng if rng is not None else random
         # Re-entrant so a compound operation can hold the lock across its own call_tool calls.
         self._lock = threading.RLock()
         self._proc: subprocess.Popen | None = None
@@ -730,6 +746,51 @@ class BrowserClient:
             chrome.enable_background_operation(port)
         except Exception:  # noqa: BLE001 — a tab that will not take this must not fail a read
             log.debug("could not prepare the new tab for background work", exc_info=True)
+
+    def composer_text(self, target: str, element: str) -> str:
+        """What is already sitting in a text box. Callers use it to refuse to type over a draft."""
+        answer = self.evaluate(COMPOSER_TEXT_JS, target=target, element=element)
+        return str(answer or "")
+
+    def type_humanly(self, target: str, element: str, text: str) -> None:
+        """Put `text` in a box the way a person would: clicked into, then typed.
+
+        Two things separate this from a fill, and both are what the marketplace is watching.
+
+        A fill arrives as one `Input.insertText` — a single `beforeinput`/`input` pair carrying the
+        whole message and not one `keydown`. A chat composer is instrumented at the key level:
+        that is how it renders a draft and how it emits the typing indicator its server relays to
+        the buyer. A message that appears with no keystrokes and no typing indicator is a message
+        nobody typed.
+
+        And a person clicks into the box first. Typing into a composer that received no pointer
+        event, from a page that has seen none all session, is its own answer.
+
+        Typed one line at a time, `slowly` per line rather than in small chunks: `slowly` is a real
+        per-character key stream inside one tool call, so a line costs one locator resolution
+        instead of a dozen. Line breaks are sent as Shift+Enter, never a bare Enter — in most
+        composers a bare Enter *is* the send, which is what makes typing a multi-line reply a way
+        to deliver half of one. The pauses between lines are jittered and bounded: a reply must not
+        hold the browser open longer than the verify window it is followed by.
+        """
+        with self._lock:
+            self.call_tool("browser_click", {"target": target, "element": element})
+            budget = TYPE_MAX_PAUSE_SEC
+            for index, line in enumerate(text.split("\n")):
+                if index:
+                    self.call_tool("browser_press_key", {"key": "Shift+Enter"})
+                    pause = min(self._rng.uniform(*TYPE_LINE_PAUSE_SEC), budget)
+                    budget -= pause
+                    if pause > 0:
+                        self._sleep(pause)
+                if not line:
+                    # A blank line is the Shift+Enter above and nothing else; typing "" would still
+                    # cost a locator resolution and tell the page nothing.
+                    continue
+                self.call_tool(
+                    "browser_type",
+                    {"target": target, "element": element, "text": line, "slowly": True},
+                )
 
     def user_agent(self) -> str:
         """What the Chrome this client drives calls itself, or "" when it could not be asked.
