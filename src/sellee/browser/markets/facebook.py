@@ -72,6 +72,18 @@ INBOX_FOLDER_JS = f"""() => {{
   }});
   let marked = false;
   let candidates = 0;
+  // Nothing to mark on a folder that is already open, and marking anyway wrote an attribute of
+  // ours onto one of Facebook's own nodes on every read — a mutation its own observers can see,
+  // for a click the caller was never going to make.
+  if (alreadyOpen) {{
+    return {{
+      marked: false,
+      already_open: true,
+      candidates: 0,
+      width: window.innerWidth,
+      visible: document.visibilityState === 'visible',
+    }};
+  }}
   document.querySelectorAll('div[role="button"]').forEach((el) => {{
     const r = el.getBoundingClientRect();
     if (r.left > RAIL_EDGE || r.width < 200 || r.height < 40 || r.height > 100) return;
