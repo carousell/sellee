@@ -11,6 +11,7 @@ transaction, so the DB lock is never held across network I/O.
 from __future__ import annotations
 
 from sellee import settings
+from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
@@ -239,6 +240,12 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
     if _queued_for(ctx.store, item_id, market):
         return {"status": "already_queued", "item_id": item_id, "market": market}
 
+    # A market with a driver is never a model's work: the fan-out lane publishes it by driving the
+    # form. Queueing a pass here would spend one of the pair's three attempts on a refusal, because
+    # `validate_payload` turns it away where the pass is claimed.
+    if publisher.can_drive(market):
+        return {"status": "driven", "item_id": item_id, "market": market}
+
     # Checked before queueing, so "I can't drive a browser right now" is answered in the
     # conversation asking for it rather than by a pass that dies seconds later with nobody there.
     if ctx.browser_factory is None:
@@ -265,10 +272,12 @@ register(
         "runs in the background and reports its own outcome, so tell the seller it has started — "
         "never that the listing is up. Refuses a marketplace they have not turned on, and will "
         "not queue a second publish of something already listed there or already under way. "
-        "Two statuses mean 'not yet, and not an error': looking_first = we have not read what the "
-        "seller already has on that marketplace, so posting now could duplicate it — say we are "
-        "checking their existing listings first. already_there = they have that item on that "
-        "marketplace themselves, so there is nothing to post.",
+        "Three statuses mean 'not yet, and not an error': looking_first = we have not read what "
+        "the seller already has on that marketplace, so posting now could duplicate it — say we "
+        "are checking their existing listings first. already_there = they have that item on that "
+        "marketplace themselves, so there is nothing to post. driven = that marketplace is posted "
+        "by the automatic cross-poster rather than by you — say it is handled automatically and "
+        "that you cannot start one from here; do not claim you have queued anything.",
         input_schema={
             "type": "object",
             "properties": {

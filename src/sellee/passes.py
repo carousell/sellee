@@ -22,7 +22,7 @@ from typing import Callable
 
 from sellee import channel, marketplaces, paths, settings, skills
 from sellee import reply_prompt as reply_prompt_mod
-from sellee.browser import chrome
+from sellee.browser import chrome, publisher
 from sellee.browser import client as browser_client
 from sellee.browser import markets as market_adapters
 from sellee.browser import window as browser_window
@@ -161,6 +161,12 @@ def _publish_market_error(market: str, store) -> str | None:
         return f"cannot publish to {market!r} (publishable here: {supported})"
     if market not in settings.connected_markets(store):
         return f"{market!r} isn't connected — turn it back on and ask me again"
+    if publisher.can_drive(market):
+        # A market with a driver is published by `crosslist._drive_publish`, which is why
+        # `enqueue_next` routes one there instead of spawning. Refused here rather than only at the
+        # doors that queue, because this runs where a pass is *claimed*: a pass queued before the
+        # driver existed would otherwise still hand a model free navigation of a logged-in account.
+        return f"{market!r} is published by driving its form, not by a pass"
     return None
 
 
@@ -204,12 +210,22 @@ def _publish_skills(payload: dict, store, pass_id: str) -> tuple:
 
 
 def _publish_browser_tools(payload: dict, store, pass_id: str) -> tuple:
-    """The browser diet, and only for a market the agent drives in Chrome.
+    """The browser diet, and only for a market a model is meant to publish to in Chrome.
 
     A rail publish talks to an API and is handed no browser at all — browser authority follows the
     market, not the pass type.
+
+    Two markets get nothing beyond that, and both absences are the point. A market with a driver is
+    not a model's work at all. A market with no recipe has no steps for the model to follow, so a
+    grant would be authority without instructions: free navigation of a logged-in account,
+    `browser_tabs`, main-world `browser_evaluate` and a `browser_handle_dialog` able to dismiss
+    whatever the marketplace put on screen. Granting by connector alone is how Facebook came to hold
+    exactly that. A guard test pins both, over the registry rather than over a list of names.
     """
-    if marketplaces.connector_type(publish_market(payload)) != "browser":
+    market = publish_market(payload)
+    if marketplaces.connector_type(market) != "browser":
+        return ()
+    if publisher.can_drive(market) or not marketplaces.listing_flow(market):
         return ()
     return PUBLISH_BROWSER_TOOLS
 
