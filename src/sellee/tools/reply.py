@@ -143,7 +143,9 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             "market": thread["market"],
         }
 
-    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store))
+    cfg = pacing_engine.resolve(
+        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
+    )
     interactive = ctx.session.tier == TIER_ATTENDED
     try:
         reserved = ctx.store.reserve_reply(

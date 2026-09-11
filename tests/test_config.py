@@ -166,6 +166,7 @@ def test_pacing_and_negotiation_knobs_are_read(xdg_tmp) -> None:
             "reply_delay_sec": [0, 2],
             "interactive_reply_delay_sec": [0.5, 1.5],
             "pacing_mode": "fast",
+            "pacing_fast_until": 1893456000,
             "negotiation_max_counters": 4,
             "negotiation_min_offer_ratio": 0.5,
             "negotiation_lowball_cap": 2,
@@ -311,3 +312,19 @@ def test_non_object_json_is_rejected(xdg_tmp) -> None:
     _write_config([1, 2, 3])
     with pytest.raises(ConfigError):
         load()
+
+
+def test_fast_pacing_must_say_when_it_ends(xdg_tmp) -> None:
+    """Fast drops the cap, the jitter and quiet hours at once. A demo ends; this makes the config
+    say when, so one cannot outlive itself unnoticed."""
+    _write_config({"pacing_mode": "fast"})
+    with pytest.raises(ConfigError) as caught:
+        load()
+    assert "pacing_fast_until" in str(caught.value)
+
+
+def test_fast_pacing_with_an_end_time_loads(xdg_tmp) -> None:
+    _write_config({"pacing_mode": "fast", "pacing_fast_until": 1893456000})
+    cfg = load()
+    assert cfg.pacing_mode == "fast"
+    assert cfg.pacing_fast_until == 1893456000.0

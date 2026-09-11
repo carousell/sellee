@@ -356,7 +356,9 @@ def _publish_would_be_allowed(deps) -> bool:
     listing's fault, and a pass queued into one spends its attempt and looks exactly like a failure.
     Held silently — the row stays owed, and a later tick queues it.
     """
-    cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
+    cfg = pacing_engine.resolve(
+        deps.config, settings.quiet_window_minutes(deps.store), now=deps.now()
+    )
     verdict = deps.store.peek_action(
         marketplace=marketplaces.RAIL, kind="publish", cfg=cfg, now=deps.now()
     )

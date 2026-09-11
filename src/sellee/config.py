@@ -123,6 +123,10 @@ class Config:
     # it deliberately drops the account-safety disguise. The pacing engine reads this; the
     # stored knob values themselves are untouched, so tuned values survive a round-trip.
     pacing_mode: str = "normal"
+    # When fast stops, as a Unix timestamp. Required whenever the mode is fast, because a demo
+    # ends and nothing else here would: left set afterwards, the account runs at five times the
+    # cap with no pause between sends, through the night, until somebody reads this file.
+    pacing_fast_until: float | None = None
     # How often the daemon looks for a new release, and where it looks. The check is one small
     # HTTP GET and it only ever queues a notice — nothing installs itself — so this is about how
     # soon a seller hears, not about load. Null base URL means the published one.
@@ -348,6 +352,12 @@ def _validate(raw: dict) -> Config:
         if key in raw:
             values[key] = _validate_delay_pair(key, raw[key])
 
+    if "pacing_fast_until" in raw:
+        until = raw["pacing_fast_until"]
+        if until is not None and not _is_real_number(until):
+            raise ConfigError(f"pacing_fast_until must be a Unix timestamp or null, got {until!r}")
+        values["pacing_fast_until"] = None if until is None else float(until)
+
     if "pacing_mode" in raw:
         mode = raw["pacing_mode"]
         if mode not in _VALID_PACING_MODES:
@@ -355,6 +365,11 @@ def _validate(raw: dict) -> Config:
                 f"pacing_mode must be one of {sorted(_VALID_PACING_MODES)}, got {mode!r}"
             )
         values["pacing_mode"] = mode
+        if mode == "fast" and values.get("pacing_fast_until") is None:
+            raise ConfigError(
+                "pacing_mode 'fast' needs pacing_fast_until (a Unix timestamp): it drops the cap, "
+                "the jitter and quiet hours all at once, so it has to say when it stops"
+            )
 
     if "update_check_interval_sec" in raw:
         interval = raw["update_check_interval_sec"]

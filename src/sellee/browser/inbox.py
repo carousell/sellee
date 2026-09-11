@@ -893,8 +893,8 @@ def paced_out_markets(store, config, now=None) -> tuple:
     Per market, because the cap is a per-marketplace-account ledger. `peek_action` records nothing,
     so asking never spends the slot the real send needs.
     """
-    cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store))
     now = time.time() if now is None else now
+    cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store), now=now)
     waiting = {row["market"] for row in store.threads_with_unhandled_inbound()}
     return tuple(
         sorted(

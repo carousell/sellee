@@ -10,6 +10,8 @@ transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+import time
+
 from sellee import settings
 from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
@@ -62,7 +64,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
-    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store))
+    cfg = pacing_engine.resolve(
+        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
+    )
     paced = ctx.store.reserve_action(
         marketplace=_MARKET,
         kind="publish",

@@ -111,7 +111,9 @@ def in_quiet_hours(deps: CrosslistDeps) -> bool:
     Not consulted by this lane (see the module docstring); kept as the one place that resolves the
     window against the pacing config.
     """
-    cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
+    cfg = pacing_engine.resolve(
+        deps.config, settings.quiet_window_minutes(deps.store), now=deps.now()
+    )
     stamp = time.localtime(deps.now())
     return pacing_engine.in_quiet_window(
         stamp.tm_hour * 60 + stamp.tm_min, cfg.quiet_start_min, cfg.quiet_end_min
