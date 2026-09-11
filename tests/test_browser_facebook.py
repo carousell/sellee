@@ -326,6 +326,23 @@ def test_the_conversation_is_not_reopened_for_a_thread_we_already_know(store, bu
     assert len(evaluated_ids) == 1, "the thread was navigated more than once for one read"
 
 
+def test_a_conversation_being_adopted_is_opened_once(store, bus, seeded) -> None:
+    """Reading the listing id and reading the tail are one visit, not two.
+
+    The id lives inside the conversation and the tail lives inside the same conversation, so the
+    lane navigated there, read the banner, adopted the thread, and navigated to the identical URL
+    again to read the messages. Each of those is a full document load of Messenger against a
+    logged-in account, and the second one bought nothing.
+    """
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.get_thread("fb:99") is not None, "the thread should have been adopted"
+    assert client.product_id_reads == 1
+    assert client.navigations.count(_THREAD) == 1
+
+
 def test_a_row_the_folder_reports_with_an_id_is_taken_at_its_word(store, bus, seeded) -> None:
     """A row already carrying the listing id must not pay for a second navigation."""
     client = StubClient(conversations=[_conv(product_id=_PRODUCT_ID)], tails={"99": []})

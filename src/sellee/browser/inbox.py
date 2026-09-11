@@ -281,8 +281,11 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         if not thread_id or handle.lower() in adapter.system_handles:
             continue  # the platform talking to the seller, not a buyer
         thread = known.get(thread_id)
+        # Whether reading the listing id has already left this conversation on screen. Adoption
+        # between here and the tail read touches only the store, so the tab has not moved.
+        on_screen = False
         if thread is None:
-            row = _with_product_id(deps, client, adapter, market, thread_id, row, region)
+            row, on_screen = _with_product_id(deps, client, adapter, market, thread_id, row, region)
             if _adopt(deps, market, adapter, thread_id, row, handle, items, unplaceable):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
@@ -296,7 +299,17 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             continue
         opened += 1
         visited.add(thread_id)
-        fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
+        fresh = _read_thread(
+            deps,
+            client,
+            adapter,
+            thread,
+            region,
+            row,
+            unsettled,
+            tail_measured,
+            on_screen=on_screen,
+        )
         if fresh is None:
             unreadable += 1
         else:
@@ -409,9 +422,14 @@ def _listing_key(row: dict) -> str:
 
 def _with_product_id(
     deps: InboxDeps, client, adapter, market: str, thread_id: str, row: dict, region
-) -> dict:
+) -> tuple:
     """Fill in which listing a conversation is about, for a market that names it only inside the
     conversation itself.
+
+    Answers `(row, open)` — `open` saying the conversation is on screen right now, so the caller
+    can read its tail without loading the same page a second time. False whenever this returned
+    without navigating, and false when the navigation itself raised: the question is where the tab
+    actually is, not where it was sent.
 
     Facebook's folder rows carry the listing's title, not its id, and a title is never matched on —
     `reconcile.matching_items` joins on the id or refuses, which is what stops a conversation being
@@ -425,16 +443,16 @@ def _with_product_id(
     error here; it becomes an `unknown_listing` in `_adopt`.
     """
     if not adapter.product_id_js or row.get("product_id"):
-        return row
+        return row, False
     row_key = _listing_key(row)
     remembered = deps.store.thread_listing_lookup(thread_id)
     if remembered is not None and remembered["row_key"] == row_key:
         product_id = remembered["product_id"]
-        return {**row, "product_id": product_id} if product_id else row
+        return ({**row, "product_id": product_id} if product_id else row), False
     native = thread_id.split(":", 1)[1] if ":" in thread_id else ""
     url = marketplaces.market_url(market, "thread", region, thread_id=native) if native else None
     if url is None:
-        return row
+        return row, False
     try:
         # Quiet on purpose, with no forward retry: a thread whose listing cannot be resolved is an
         # ordinary `unknown_listing`, not a starved read, and those repeat on every sweep. Spending
@@ -443,12 +461,14 @@ def _with_product_id(
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
         # Not remembered: a failed read is not an answer, and caching it would hide the
-        # conversation for as long as it kept naming the same listing.
+        # conversation for as long as it kept naming the same listing. The navigation may or may
+        # not have landed before this raised, so the tab's whereabouts are unknown: say closed and
+        # let the tail read pay for its own navigation.
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
-        return row
+        return row, False
     product_id = str(answer.get("product_id") or "")
     deps.store.record_thread_listing(thread_id, market, product_id, row_key)
-    return {**row, "product_id": product_id} if product_id else row
+    return ({**row, "product_id": product_id} if product_id else row), True
 
 
 def _thread_key(market: str, native_id) -> str | None:
@@ -677,6 +697,7 @@ def _read_thread(
     row: dict | None = None,
     unsettled: dict | None = None,
     measured_out: dict | None = None,
+    on_screen: bool = False,
 ) -> int | None:
     """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
     conversation could not be read at all — which the caller counts as being blind on this market,
@@ -687,6 +708,11 @@ def _read_thread(
     we cannot see what we were told is there; and if the list reports unread content but the
     reconciler finds nothing fresh, a repeat past the tail window would otherwise pass for a
     quiet buyer.
+
+    `on_screen` says this conversation is already the page the tab is on, so the tail is read
+    where it already is. Only the caller knows that — it is true of a thread just opened to read
+    the listing id off its banner, and a second load of the same address buys nothing but another
+    cold boot of the marketplace against a logged-in account.
     """
     market = thread["market"]
     native = thread["thread_id"].split(":", 1)[1] if ":" in thread["thread_id"] else ""
@@ -694,7 +720,8 @@ def _read_thread(
     if url is None:
         log.warning("no recorded thread URL template for %s", market)
         return None
-    client.navigate(url)
+    if not on_screen:
+        client.navigate(url)
     raw = client.evaluate(adapter.conversation_tail_js)
     if reconcile.unreadable_reason(raw) is not None:
         # Same bargain as the list read: the quiet read is tried first and the tab is only brought
