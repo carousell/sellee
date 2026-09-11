@@ -23,9 +23,11 @@ _HOME = "https://www.carousell.sg/"
 class StubClient:
     """A browser that answers the login probe from a script and records what it was asked to do."""
 
-    def __init__(self, *, login="logged_out", fail=None):
+    def __init__(self, *, login="logged_out", fail=None, wall=""):
         self.login = login
         self.fail = fail
+        # What the wall probe answers: '' is a marketplace that is not refusing the account.
+        self.wall = wall
         self.navigations: list = []
         self.frontmost: list = []
 
@@ -60,6 +62,12 @@ class StubClient:
         # Every market's login probe: this file is about the lane's scheduling, not one DOM.
         if function in {adapter.login_js for adapter in market_adapters.adapters()}:
             return {"state": self.login}
+        # And its wall probe, which the same tap asks about: a market that is not refusing us
+        # answers the empty string.
+        if function in {
+            adapter.block_wall_js for adapter in market_adapters.adapters() if adapter.block_wall_js
+        }:
+            return self.wall
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
 
@@ -422,3 +430,61 @@ def test_the_lane_is_a_no_op_with_nothing_pending(store, bus) -> None:
 
     assert client.navigations == []
     assert store.count_queued_notices() == 0
+
+
+# --- clearing a market that told the account to stop ----------------------------------------------
+#
+# The block stays on until something proves the market is clear, and the Check again probe is that
+# something. The fail-open version — clear first, probe after — is the bug these hold shut: it
+# leaves a window in which every lane resumes against a market nobody has checked.
+
+
+def _blocked_fb(store):
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    store.request_market_connect("fb", CONNECT_MODE_PROBE)
+
+
+def test_a_probe_that_finds_the_wall_still_there_does_not_clear_it(store, bus) -> None:
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="automation")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    block = store.market_block("fb")
+    assert block is not None
+    assert block["strikes"] == 2  # renewed, and the window escalates with it
+
+
+def test_a_probe_that_is_clean_and_signed_in_clears_it(store, bus) -> None:
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb") is None
+    assert any("reading and answering there again" in n["text"] for n in _notices(store))
+
+
+def test_a_probe_with_no_wall_but_signed_out_leaves_it_blocked(store, bus) -> None:
+    """Not walled is not the same as demonstrably fine, and half an answer must not resume a
+    market that was stopped."""
+    _blocked_fb(store)
+    client = StubClient(login="logged_out", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb") is not None
+
+
+def test_a_probe_reaches_a_blocked_market_at_all(store, bus) -> None:
+    """The narrow bypass: the one thing that may still drive a blocked market is the probe that
+    decides whether it is still blocked."""
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert client.navigations  # it went and looked

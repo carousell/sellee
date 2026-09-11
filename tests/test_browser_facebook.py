@@ -38,11 +38,14 @@ class StubClient:
         tails=None,
         click_fails=False,
         blocked=None,
+        wall="",
     ):
         self.login = login
         self.conversations = conversations
         self.list_error = list_error
         self.blocked = blocked
+        # What the standalone wall probe answers — '' is a marketplace that is not refusing us.
+        self.wall = wall
         self.folder_marked = folder_marked
         self.folder_already_open = folder_already_open
         self.focus_works = focus_works
@@ -104,6 +107,8 @@ class StubClient:
     def evaluate(self, function, **kwargs):
         # Dispatched on artifact identity, so a moved artifact surfaces as a missing case rather
         # than a substring match landing on the wrong branch.
+        if function == fb_market.BLOCK_WALL_JS:
+            return self.wall
         if function == fb_market.LOGIN_JS:
             return {"state": self.login}
         if function == fb_market.INBOX_FOLDER_JS:
@@ -1293,3 +1298,71 @@ def test_a_tick_that_could_not_be_read_does_not_spend_its_way_to_a_sweep(store, 
     inbox.inbox_lane(deps)
 
     assert seeing.list_reads == ["recent", "deep"]
+
+
+# --- a marketplace that tells the account to stop -------------------------------------------------
+#
+# The shape this exists for: Facebook put a warning on the account, nothing could see it, the failed
+# read was reported as "the marketplace declined", and the lane went on asking every five minutes.
+
+
+def test_a_wall_stops_the_market_and_is_found_before_anything_is_pressed(store, bus, seeded):
+    client = StubClient(wall="automation", conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb")["cause"] == "automation"
+    # Before the folder click: the first thing the agent did on seeing a warning about automated
+    # behaviour must not be to dispatch a real key press at the page.
+    assert client.clicks == []
+    assert [c for c in client.calls if c[0] == "browser_press_key"] == []
+    assert client.list_reads == []
+
+
+def test_the_seller_is_told_what_facebook_said(store, bus, seeded) -> None:
+    inbox.inbox_lane(_deps(store, bus, StubClient(wall="automation")))
+
+    text = store.claim_queued_notices(10)[0]["text"]
+    assert "automated" in text.lower()
+    assert "stopped" in text.lower()
+    # Not the old sentence, which blamed Facebook for withholding conversations and promised to
+    # keep trying.
+    assert "keep trying" not in text.lower()
+
+
+def test_a_blocked_market_is_not_read_again(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient(wall="automation"))
+    inbox.inbox_lane(deps)
+
+    second = StubClient(conversations=[_conv()], tails={"99": []})
+    deps.browser_factory = lambda: second
+    inbox.inbox_lane(deps)
+
+    assert second.navigations == []
+
+
+def test_another_market_keeps_being_read(store, bus, seeded) -> None:
+    """A wall on one marketplace is not a reason to stop reading a different one."""
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    assert store.blocked_markets() == ["fb"]
+    assert store.market_block("carousell") is None
+
+
+def test_a_checkpoint_blocks_without_any_wording_at_all(store, bus, seeded) -> None:
+    inbox.inbox_lane(_deps(store, bus, StubClient(wall="checkpoint")))
+
+    assert store.market_block("fb")["cause"] == "checkpoint"
+
+
+def test_a_clean_read_does_not_clear_a_block(store, bus, seeded) -> None:
+    """Facebook can drop an interstitial for a single page load, and letting that clear the block
+    would put the account back to full rate three hundred seconds later."""
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    deps = _deps(store, bus, StubClient(conversations=[_conv()], tails={"99": []}))
+
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is not None

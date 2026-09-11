@@ -161,6 +161,10 @@ def _publish_market_error(market: str, store) -> str | None:
         return f"cannot publish to {market!r} (publishable here: {supported})"
     if market not in settings.connected_markets(store):
         return f"{market!r} isn't connected — turn it back on and ask me again"
+    if store.market_block(market):
+        # Asked here because this runs where a pass is *claimed*, so a publish queued before the
+        # marketplace put a wall up is turned away rather than driven into it.
+        return f"{market!r} has asked us to stop — nothing is published there until it clears"
     if publisher.can_drive(market):
         # A market with a driver is published by `crosslist._drive_publish`, which is why
         # `enqueue_next` routes one there instead of spawning. Refused here rather than only at the

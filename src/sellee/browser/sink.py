@@ -104,6 +104,12 @@ class BrowserReplySink:
         url = self._thread_url(thread)
         if url is None:
             raise SendNotAttempted(f"no recorded thread URL for {thread['thread_id']!r}")
+        # Fail-closed backstop. The reply lane already holds passes for a blocked market, so
+        # reaching here means something else queued this one — and `SendNotAttempted` is exactly
+        # right: nothing was typed, the intent stays pending, and the buyer is answered when the
+        # market clears.
+        if self._store.market_block(market):
+            raise SendNotAttempted(f"{market!r} has asked us to stop, so nothing is being sent")
 
         try:
             with self._client.exclusive():

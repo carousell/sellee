@@ -727,7 +727,7 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            state, url = self._open_and_probe(adapter, bring_tab_forward=True)
+            state, url, _wall = self._open_and_probe(adapter, bring_tab_forward=True)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
@@ -792,7 +792,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"market": adapter.market, "state": "unknown", "detail": blocked})
             return
         try:
-            state, url = self._open_and_probe(adapter)
+            state, url, _wall = self._open_and_probe(adapter)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
@@ -845,7 +845,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if adapter is None:
                     continue
                 try:
-                    state, _url = self._open_and_probe(adapter)
+                    state, _url, _wall = self._open_and_probe(adapter)
                 except _BrowserDown as exc:
                     results.append({"market": market, "state": "unknown", "detail": str(exc)})
                     continue

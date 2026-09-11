@@ -179,6 +179,9 @@ def inbox_lane(deps: InboxDeps) -> None:
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
             continue  # a registry entry with no adapter yet is not a market we can read
+        if deps.store.market_block(market):
+            # This market has told the account to stop. Every other market still reads.
+            continue
         try:
             with client.exclusive():
                 _read_market(deps, client, adapter, region)
@@ -199,6 +202,29 @@ def inbox_lane(deps: InboxDeps) -> None:
     # Recovery is a tick that ran into no unavailability, so a condition that persists mid-loop
     # keeps its one notice instead of being re-queued every tick.
     _clear_notice(deps, "unavailable")
+
+
+def _walled(deps: InboxDeps, client, adapter, market: str) -> bool:
+    """Whether the marketplace is refusing this account, asked before anything acts on the page.
+
+    Its own read rather than a by-product of a failed one. A wall used to be discoverable only by a
+    read that had already spent a navigation and dispatched a real key press at the rail — so the
+    first thing the agent did on seeing a warning about automated behaviour was press a key. One
+    extra evaluate on a lane that ticks every few minutes is not a cost worth that.
+    """
+    if not adapter.block_wall_js:
+        return False
+    try:
+        cause = str(client.evaluate(adapter.block_wall_js) or "")
+    except BrowserError:
+        # A probe that would not run is not evidence of a wall, and the reads below report their
+        # own failures.
+        log.debug("could not check %s for a wall", market, exc_info=True)
+        return False
+    if cause not in blindness.BLOCKING_CAUSES:
+        return False
+    _block_market(deps, market, cause)
+    return True
 
 
 def _list_unreadable(answer) -> bool:
@@ -245,6 +271,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         # probe has just run, so the login check costs nothing; the primary key makes it ask-once.
         if market_adapters.can_survey(market, region):
             deps.store.request_market_survey(market)
+
+    if _walled(deps, client, adapter, market):
+        return
 
     _open_inbox_folder(client, adapter)
 
@@ -923,11 +952,15 @@ def paced_out_markets(store, config, now=None) -> tuple:
     now = time.time() if now is None else now
     cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store), now=now)
     waiting = {row["market"] for row in store.threads_with_unhandled_inbound()}
+    # A blocked market joins the paced-out ones because the answer is the same shape: hold the
+    # pass, never the buyer. The rows stay eligible and a later tick claims them once it clears.
+    blocked = set(store.blocked_markets(now=now))
     return tuple(
         sorted(
             market
             for market in waiting
-            if store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
+            if market in blocked
+            or store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
             != "go"
         )
     )
@@ -1005,6 +1038,12 @@ def _count_blind(
     payload = {k: v for k, v in (measured or {}).items() if isinstance(k, str)}
     payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})
     deps.bus.publish("browser.blind", payload)
+    if cause in blindness.BLOCKING_CAUSES:
+        # Not a fault of ours and not a run to wait out: the marketplace has said something about
+        # the account. Stop it now rather than after `browser_blind_after` more reads, and tell the
+        # seller on this tick rather than on the third.
+        _block_market(deps, market, cause, measured)
+        return
     if failures >= int(deps.config.browser_blind_after):
         _notify_once(
             deps,
@@ -1019,6 +1058,41 @@ def _count_blind(
                 verify_notice=adapter.verify_notice if adapter else "",
             ),
         )
+
+
+def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | None = None) -> None:
+    """Stop driving a market that has told the account something, and say so once.
+
+    Durable, because a wall makes a restart likely — the seller is being told something is wrong —
+    and every other brake here is an in-process counter that a restart re-arms toward reading more.
+
+    The window escalates with strikes and never becomes indefinite: the seller clears it from the
+    notice, and an agent that locked itself out of a market forever on its own phrase match would be
+    a worse failure than the one being prevented.
+    """
+    adapter = market_adapters.get_adapter(market)
+    deps.store.block_market(
+        market, cause, ttl_sec=blindness.block_window_sec(_strikes_for(deps, market) + 1)
+    )
+    told = deps.store.report_market_block_once(
+        market,
+        blindness.notice_for(
+            cause,
+            name=marketplaces.display_name(market),
+            where=window.where(),
+            verify_notice=adapter.verify_notice if adapter else "",
+        ),
+        fastpaths.check_again_controls(market),
+    )
+    deps.bus.publish(
+        "browser.blocked",
+        {"market": market, "cause": cause, "told": told, **(measured or {})},
+    )
+
+
+def _strikes_for(deps: InboxDeps, market: str) -> int:
+    block = deps.store.market_block(market)
+    return int(block["strikes"]) if block else 0
 
 
 def _clear_blind(deps: InboxDeps, market: str, *, read_content: bool = False) -> None:

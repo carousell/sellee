@@ -56,6 +56,10 @@ class MarketAdapter:
     # tick; the deep one is kept for the sweep, which opens every conversation anyway. Empty means
     # this market has only one reading of its inbox and gets it every time.
     conversations_recent_js: str = ""
+    # Whether this marketplace is refusing the account, and what kind of refusal it is. Answers
+    # '' when it is not. Evaluated on its own before a read commits to anything, so a wall is
+    # found before a click is dispatched at it rather than by the read that failed.
+    block_wall_js: str = ""
     # What the seller already has listed, read off their own listings page:
     # `{listings: [{listing_id, url, title, price, price_text}], active_count, dropped, truncated}`
     # or `{error: …}`. Live listings only — a reader that cannot prove the rows are live must
@@ -137,6 +141,7 @@ FACEBOOK = MarketAdapter(
     market="fb",
     conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
     conversations_recent_js=facebook.CONVERSATIONS_RECENT_JS,
+    block_wall_js=facebook.BLOCK_WALL_JS,
     conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
     login_js=facebook.LOGIN_JS,
     my_listings_js=facebook.MY_LISTINGS_JS,
