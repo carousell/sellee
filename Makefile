@@ -41,7 +41,7 @@ buyer-sim:
 buyer-daemon:
 	SELLEE_BUYER_SIM=1 PYTHONPATH=src $(RUN) python -c "from sellee import cli; cli.main()" daemon run
 
-# Regenerate all diagrams (SVG + PNG) under docs/.
+# Regenerate all diagrams (PNG) under docs/.
 diagrams:
 	docs/generate-diagrams.sh
 
