@@ -11,13 +11,17 @@ VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
 	import sellee; print(sellee.__version__)")
 STAGE = $(DIST)/sellee-$(VERSION)
 
-.PHONY: bootstrap test test-serial lint fmt typecheck dist diagrams
+.PHONY: bootstrap hooks test test-serial lint fmt typecheck dist diagrams
 
 # Provision the toolchain this repo builds against: uv itself if it is missing or too old, the
 # pinned interpreter, then the dev dependency set. ./setup does the same thing for a user, from
 # the same pin file — this target is the developer's door to it.
-bootstrap:
+bootstrap: hooks
 	@./setup --bootstrap-only --with-dev
+
+# Point git at the committed hooks so every commit runs .githooks/pre-commit.
+hooks:
+	@git config core.hooksPath .githooks
 
 # Runs tests in parallel.
 test:

@@ -1,0 +1,16 @@
+#!/bin/sh
+# Same gate as `make lint typecheck test`, before each commit. Skip once with `git commit --no-verify`.
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+
+touched=$(git diff --cached --name-only -- '*.py' bin/sellee pyproject.toml uv.lock)
+[ -n "$touched" ] || exit 0
+
+staged=$(git diff --cached --name-only --diff-filter=ACMR -- '*.py' bin/sellee)
+if [ -n "$staged" ]; then
+	echo "$staged" | xargs uv run ruff format --check
+	echo "$staged" | xargs uv run ruff check
+fi
+
+uv run pyright
+uv run python -m pytest -n auto --dist worksteal -q
