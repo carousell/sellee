@@ -111,7 +111,8 @@ make test       # parallel via pytest-xdist; `make test-serial` for -s/--pdb deb
 ```
 
 Every target runs through `uv run`, so what you test on is what a user's install
-runs on.
+runs on. `make bootstrap` also installs `.githooks/pre-commit`, which runs the
+same three checks on every commit; `git commit --no-verify` skips it once.
 
 Do **not** add GitHub Actions / CI workflows — CI is owner-managed to org
 conventions. The Makefile targets are the seam CI will call.
