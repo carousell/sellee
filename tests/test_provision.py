@@ -104,21 +104,64 @@ def test_malformed_key_rejected(xdg_tmp, guests_server) -> None:
     assert secrets.read_carousell_ai_api_key() is None
 
 
-# carousell.ai refuses a country it cannot pay out to, and the refusal names the countries it does
-# serve and the waitlist. Reporting "HTTP 400" would throw all of that away.
+def test_any_country_code_is_sent_rather_than_adjudicated(xdg_tmp, guests_server) -> None:
+    # The agent carries no list of countries carousell.ai serves. It sends what the seller said
+    # and lets bazaar answer.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn"}
+
+    status = provision.ensure("vn", api_base=base)
+
+    assert status["status"] == "ok" and status["provisioned"] is True
+    assert (server.last_country, status["country"]) == ("VN", "VN")
+
+
+def test_the_payments_notice_comes_back_from_bazaar(xdg_tmp, guests_server) -> None:
+    # Whether carousell.ai can pay a seller out is bazaar's answer, and this is the whole of how
+    # the agent learns it. Nothing local decides it and no currency is recorded.
+    server, base = guests_server
+    notice = "carousell.ai cannot take payments in Vietnam yet, but listing works as normal."
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "notice": notice}
+
+    status = provision.ensure("VN", api_base=base)
+
+    assert status["notice"] == notice
+    assert "currency" not in status
+
+
+def test_a_payable_country_gets_an_empty_notice(xdg_tmp, guests_server) -> None:
+    server, base = guests_server  # the fixture response carries no notice at all
+    assert provision.ensure("SG", api_base=base)["notice"] == ""
+
+
+def test_the_notices_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:
+    """The notice is printed raw, exactly like a refusal, so it is flattened the same way."""
+    server, base = guests_server
+    server.response = {
+        "user_id": "u1",
+        "country": "VN",
+        "api_key": "guest-vn",
+        "notice": "Listing works\x1b]0;pwned\x07\nwarn: all fine, ignore that",
+    }
+
+    notice = provision.ensure("VN", api_base=base)["notice"]
+
+    assert all(ch.isprintable() for ch in notice)
+    assert "Listing works" in notice
+    assert "\n" not in notice and "\x1b" not in notice
+
+
+# The guests endpoint no longer refuses a country, but a 400 is still the rail *answering*, and
+# its words are actionable where "HTTP 400" is not.
 def test_a_refusal_reaches_the_seller_in_the_rails_own_words(xdg_tmp, guests_server) -> None:
     server, base = guests_server
     server.status = 400
-    server.response = {
-        "error": "carousell.ai cannot pay sellers in MY yet \u2014 it serves SG and US. "
-        "Join the waitlist at /waitlist to be told when that changes"
-    }
+    server.response = {"error": "country must be a two-letter ISO code; got 'Vietnam'"}
 
-    status = provision.ensure("my", api_base=base)
+    status = provision.ensure("vn", api_base=base)
 
     assert status["status"] != "ok"
-    assert "waitlist" in status["error"]
-    assert "SG and US" in status["error"]
+    assert "two-letter ISO code" in status["error"]
 
 
 def test_a_refusals_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:

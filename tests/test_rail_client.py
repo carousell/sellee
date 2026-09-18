@@ -97,15 +97,15 @@ def test_initialize_and_create_listing(fake_rail) -> None:
     server.tool_result = {"structuredContent": {"listing_id": "L1", "url": url}}
     client = _client(base)
     client.initialize()
-    listing = client.create_listing({"title": "Lamp", "price_cents": 8000, "currency": "SGD"})
-    assert listing == {"listing_id": "L1", "url": url}
+    listing = client.create_listing({"title": "Lamp", "price_cents": 8000})
+    assert listing == {"listing_id": "L1", "url": url, "currency": ""}
 
 
 def test_create_listing_from_text_content(fake_rail) -> None:
     server, base = fake_rail
     server.tool_result = {"content": [{"type": "text", "text": json.dumps({"id": "L2"})}]}
     listing = _client(base).create_listing({"title": "x"})
-    assert listing == {"listing_id": "L2", "url": f"{base}/listing/L2"}
+    assert listing == {"listing_id": "L2", "url": f"{base}/listing/L2", "currency": ""}
 
 
 def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
@@ -115,7 +115,15 @@ def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
         "structuredContent": {"listing": {"id": "L3", "status": "active", "images": []}}
     }
     listing = _client(base).create_listing({"title": "x"})
-    assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3"}
+    assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3", "currency": ""}
+
+
+def test_create_listing_carries_back_the_currency_bazaar_chose(fake_rail) -> None:
+    """The request never asserts a currency, so the created listing is the only place the
+    authoritative code comes from."""
+    server, base = fake_rail
+    server.tool_result = {"structuredContent": {"listing": {"id": "L5", "currency": "VND"}}}
+    assert _client(base).create_listing({"title": "x"})["currency"] == "VND"
 
 
 def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:

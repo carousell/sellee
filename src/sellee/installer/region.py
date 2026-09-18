@@ -4,21 +4,16 @@ Region is the first thing the agent needs and the least interesting thing to ask
 which regional marketplace sites exist for this seller and which currency their prices are in.
 The machine already knows its timezone, so setup proposes an answer and asks for a yes.
 
-The table covers only the countries the rail serves, because those are the only ones the product
-works in — a guess outside them would hand someone a confident answer that setup then has to
-refuse. Anything unmapped produces no guess at all, and setup asks instead: one extra question is
-cheaper than a wrong default, and far cheaper than a seller configured for a country where
-nothing they list can go anywhere.
+Nothing here decides where a seller may sell: any country is accepted, and an unmapped zone
+simply produces no guess, so setup asks instead of proposing a wrong default.
 """
 
 from __future__ import annotations
 
 import os
 
-from sellee import marketplaces
-
-# What a region prices in. Only the regions the rail serves are here; `supported()` is the
-# authority on which those are, and this must not get ahead of it.
+# What a region likely prices in, for the confirm line only. bazaar decides the real currency of
+# a listing, so a country missing here costs nothing.
 CURRENCIES = {
     "SG": "SGD",
     "US": "USD",
@@ -47,13 +42,8 @@ _ZONE_REGIONS = {
 _ZONE_PREFIX_REGIONS = (("US/", "US"), ("America/Indiana/", "US"), ("America/Kentucky/", "US"))
 
 
-def supported() -> list:
-    """The regions setup will accept, straight from the registry."""
-    return marketplaces.supported_regions()
-
-
 def region_for_zone(zone: str):
-    """The region a timezone implies, or None when it implies nothing we support."""
+    """The region a timezone implies, or None when it implies nothing."""
     if not zone:
         return None
     found = _ZONE_REGIONS.get(zone)
@@ -62,7 +52,7 @@ def region_for_zone(zone: str):
             if zone.startswith(prefix):
                 found = region
                 break
-    return found if found in supported() else None
+    return found
 
 
 def zones_for(region: str) -> list:
@@ -176,3 +166,12 @@ def render(basics: dict) -> str:
     return " · ".join(
         str(basics.get(key, "")) for key in ("region", "currency", "timezone") if basics.get(key)
     )
+
+
+def describe(basics: dict) -> str:
+    """The same line, with the country's likely currency filled in when it is not recorded.
+    Display only — the currency a listing is actually priced in comes back from bazaar."""
+    if basics.get("currency"):
+        return render(basics)
+    guessed = CURRENCIES.get(basics.get("region", ""))
+    return render({**basics, "currency": guessed} if guessed else basics)

@@ -1,20 +1,8 @@
-"""Guessing where the seller sells — and refusing to guess where the product does not work."""
+"""Guessing where the seller sells, and never deciding it."""
 
 from __future__ import annotations
 
-from sellee import marketplaces
 from sellee.installer import region
-
-
-def test_the_supported_regions_are_the_ones_the_rail_serves() -> None:
-    # Every listing goes on the rail, so a country the rail has no site for is a country the
-    # agent cannot sell in, whatever browser marketplaces happen to operate there.
-    assert region.supported() == ["SG", "US"]
-    assert marketplaces.supported_regions() == ["SG", "US"]
-
-
-def test_the_currency_table_never_gets_ahead_of_the_supported_set() -> None:
-    assert sorted(region.CURRENCIES) == region.supported()
 
 
 def test_a_singapore_machine_is_proposed_singapore() -> None:
@@ -45,10 +33,22 @@ def test_other_countries_in_the_americas_are_not_guessed_as_the_us() -> None:
         assert region.region_for_zone(zone) is None, zone
 
 
-def test_a_country_the_rail_does_not_serve_produces_no_guess() -> None:
-    # Better to ask than to hand someone a confident answer the write door will refuse.
+def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
+    # A guess is a convenience, so an absent country asks rather than proposing. Nothing here
+    # decides where the seller may sell: the answer they type is accepted whatever it is.
     for zone in ("Asia/Kuala_Lumpur", "Asia/Hong_Kong", "Australia/Sydney", "Europe/London"):
         assert region.guess(zone) is None, zone
+
+
+def test_the_confirm_line_shows_a_guessed_currency_without_recording_one() -> None:
+    # The currency on this line is a guess for the seller to read. bazaar decides what a listing
+    # is actually priced in, so nothing here is stored.
+    assert region.describe({"region": "SG", "timezone": "Asia/Singapore"}) == (
+        "SG · SGD · Asia/Singapore"
+    )
+    assert region.describe({"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}) == (
+        "VN · Asia/Ho_Chi_Minh"
+    )
 
 
 def test_an_unknown_or_missing_zone_produces_no_guess() -> None:

@@ -1,6 +1,6 @@
 """carousell.ai guest-key provisioning — zero-LLM, fail-soft, off the pass path.
 
-POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key}; the key is
+POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key, notice}; the key is
 stored 0600 through secrets.py and never printed. ensure is idempotent (a key already present
 means no network call); reprovision forces a fresh key. Operational failures are returned as a
 status dict with defer=True, never raised — a provisioning hiccup must not crash a caller.
@@ -31,23 +31,23 @@ def _normalize_region(region: str | None) -> str:
     return region.strip().upper()
 
 
+def _plain(raw: str) -> str:
+    """Remote words made safe to print raw: control characters flattened to spaces.
+    An escape sequence or newline must not retitle the terminal or forge a line that looks
+    like ours — the same reason a non-printable api_key is rejected below."""
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())[:400]
+
+
 def _refusal(exc: urllib.error.HTTPError) -> str:
     """The rail's own words when it refuses, falling back to the status code.
-    A 400 is usually actionable — an unserved country — and "HTTP 400" is not.
-    The words are remote and ui.warn prints them raw, so control characters are
-    flattened to spaces: an escape sequence or newline in the body must not be
-    able to retitle the terminal or forge a line that looks like ours — the same
-    reason a non-printable api_key is rejected below."""
+    A 400 is the rail answering and its words are actionable; "HTTP 400" is not."""
     try:
         body = json.loads(exc.read().decode("utf-8"))
         raw = str(body.get("error") or "")
     except (ValueError, AttributeError, OSError):
         # Unreadable, non-JSON, or non-object body — a proxy's error page, not a refusal.
         raw = ""
-    message = " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())
-    if not message:
-        return f"guests API returned HTTP {exc.code}"
-    return message[:400]
+    return _plain(raw) or f"guests API returned HTTP {exc.code}"
 
 
 def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAULT_TIMEOUT_SEC):
@@ -101,6 +101,9 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         "forced": force,
         "user_id": str(payload.get("user_id") or ""),
         "country": payload.get("country") or resolved,
+        # Whether carousell.ai can pay this seller out is bazaar's answer, not ours. Empty means
+        # there is nothing to tell them.
+        "notice": _plain(str(payload.get("notice") or "")),
     }
 
 

@@ -10,6 +10,7 @@ transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+import logging
 import time
 
 from sellee import settings
@@ -29,6 +30,8 @@ from sellee.tools.registry import (
     register,
 )
 from sellee.tools.verify import verify_market_url
+
+log = logging.getLogger(__name__)
 
 _MARKET = "carousell-ai"
 # The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
@@ -54,8 +57,6 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
-    if not (item.get("currency") or "").strip():
-        raise ToolError("item has no currency — set one before publishing")
     try:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
@@ -80,11 +81,12 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             f"{int(paced['delay_sec'])}s"
         )
 
+    # No currency is asserted. carousell.ai derives it from the seller, and the field is only an
+    # assertion it refuses when it disagrees, so sending one can only ever fail.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
         "price_cents": price_cents,
-        "currency": item["currency"],
     }
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
@@ -121,7 +123,16 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         ctx.store.record_listing_url(item_id, _MARKET, listing["url"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
-    return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+
+    # The listing is already live and its URL recorded, so a failure to copy the currency back
+    # is logged rather than reported as a failed publish the caller would retry.
+    currency = listing.get("currency") or ""
+    if currency and currency != (item.get("currency") or ""):
+        try:
+            ctx.store.update_item(item_id, {"currency": currency})
+        except StoreError as exc:
+            log.warning("could not record %s's currency %s: %s", item_id, currency, exc)
+    return {"listing_id": listing.get("listing_id"), "url": listing["url"], "currency": currency}
 
 
 register(

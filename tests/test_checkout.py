@@ -228,6 +228,17 @@ def test_another_rail_tool_error_keeps_the_generic_wrap(make_ctx, store) -> None
     assert message == "listing is not active"
 
 
+def test_an_unplaced_sellers_refusal_is_relayed_in_bazaars_own_words(make_ctx, store) -> None:
+    """carousell.ai decides where it can take payments, so its refusal arrives verbatim. The
+    agent authors no copy of its own about which countries are served."""
+    refusal = (
+        "carousell.ai cannot take payments in Vietnam yet, so checkout is unavailable. "
+        "Listing still works as normal."
+    )
+    message = _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(refusal))
+    assert message == refusal
+
+
 def test_a_transport_failure_is_not_the_gate(make_ctx, store) -> None:
     message = _refused(make_ctx, store, TIER_PASS_CHANNEL, RailNetworkError("rail unreachable"))
     assert message == "rail unreachable"

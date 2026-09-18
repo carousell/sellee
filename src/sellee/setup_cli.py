@@ -465,14 +465,14 @@ def _seller_region(ui: Ui, args, port: int, token: str):
     known = _stored_basics(port, token)
     if known.get("region") and not args.region:
         ui.step("Where you sell")
-        ui.say(f"{region_guess.render(known)} — already recorded, unchanged")
+        ui.say(f"{region_guess.describe(known)} — already recorded, unchanged")
         return known["region"]
 
     basics = _basics_from_flag(args) if args.region else region_guess.guess()
     if args.region:
         ui.step("Where you sell")
     elif basics and not ui.confirm(
-        f"You sell in {region_guess.render(basics)}, correct?", default=True
+        f"You sell in {region_guess.describe(basics)}, correct?", default=True
     ):
         basics = None
     if basics is None:
@@ -482,10 +482,13 @@ def _seller_region(ui: Ui, args, port: int, token: str):
         ui.note("both are completed once a region is set")
         return None
 
+    # The guessed currency is for the confirm line only. bazaar derives what a listing is
+    # priced in, so recording one here would make a guess look authoritative.
+    basics = {key: value for key, value in basics.items() if key != "currency"}
     status, body = control.post(port, token, "/control/seller-basics", basics)
     if status != 200:
         raise Abort(f"could not record your region: {body.get('error', status)}")
-    ui.say(f"recorded: {region_guess.render(body['basics'])}")
+    ui.say(f"recorded: {region_guess.describe(body['basics'])}")
     return body["basics"].get("region")
 
 
@@ -500,30 +503,31 @@ def _stored_basics(port: int, token: str) -> dict:
 def _basics_from_flag(args) -> dict:
     code = str(args.region).strip().upper()
     basics = {"region": code, "timezone": region_guess.default_zone(code)}
-    currency = region_guess.CURRENCIES.get(code)
-    if currency:
-        basics["currency"] = currency
     return {key: value for key, value in basics.items() if value}
 
 
 def _ask_basics(ui: Ui):
     """Ask which country outright. Answers nothing when there is nobody to ask.
 
-    Only the countries the rail serves are offered, and an answer outside them is refused here
-    rather than three questions later at the door — the currency and timezone are not worth
-    collecting for a region that cannot be stored.
+    Any country is taken: what carousell.ai can pay out is bazaar's answer, so offering a list
+    here would be the agent deciding something it does not know.
     """
     if not ui.interactive:
         return None
-    supported = region_guess.supported()
-    code = ui.choose("Which country do you sell in?", supported)
-    region = supported[code]
-    basics = {
-        "region": region,
-        "currency": region_guess.CURRENCIES.get(region, ""),
-        "timezone": _ask_timezone(ui, region),
-    }
+    region = _ask_country(ui)
+    basics = {"region": region, "timezone": _ask_timezone(ui, region)}
     return {key: value for key, value in basics.items() if value}
+
+
+def _ask_country(ui: Ui) -> str:
+    """Ask for a country code until the answer is one the write door will take."""
+    default = (region_guess.guess() or {}).get("region", "")
+    while True:
+        answer = ui.ask("Which country do you sell in?", default=default, lead=False).strip()
+        code = answer.upper()
+        if len(code) == 2 and code.isalpha():
+            return code
+        ui.say("A country is its two-letter code, like SG or VN.")
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:
@@ -564,6 +568,10 @@ def _provision_rail(ui: Ui, region) -> None:
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         ui.say("ready — always enabled, with nothing to sign in to")
+        # Whether carousell.ai can pay this seller out is bazaar's to say, in bazaar's words.
+        notice = str(status.get("notice") or "")
+        if notice:
+            ui.note(notice)
         return
     ui.warn(f"carousell.ai setup did not complete: {status.get('error')}")
     ui.note("re-run `sellee provision carousell-ai` when back online")

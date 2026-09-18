@@ -31,6 +31,9 @@ from sellee.browser import markets as market_adapters
 from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
 
+# Captured before any fixture stubs it out, so a test about the rail phase can put it back.
+_PROVISION_RAIL = setup_cli._provision_rail
+
 
 @pytest.fixture
 def world(monkeypatch, xdg_tmp, tree):
@@ -481,28 +484,31 @@ def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
 
 def test_the_region_is_proposed_from_the_machines_timezone(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
-    assert world.calls["basics"] == {
-        "region": "SG",
-        "currency": "SGD",
-        "timezone": "Asia/Singapore",
-    }
+    assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
+    # The currency on the confirm line is a guess for the seller to read. It is not recorded:
+    # what a listing is priced in comes back from bazaar.
     assert "You sell in SG · SGD · Asia/Singapore, correct?" in capsys.readouterr().out
 
 
 def test_the_region_flag_wins_over_the_guess(world) -> None:
     assert setup_main("--yes", "--manual", "--region", "us") == 0
     assert world.calls["basics"]["region"] == "US"
-    assert world.calls["basics"]["currency"] == "USD"
+    assert "currency" not in world.calls["basics"]
 
 
-def test_a_country_the_rail_does_not_serve_is_refused(world, capsys) -> None:
-    # Storing it would produce a seller who looks configured and is not: nothing they list can
-    # reach the rail, and the rail is where every listing goes.
-    assert setup_main("--yes", "--manual", "--region", "my") == 1
+def test_any_country_completes_setup(world, capsys) -> None:
+    # Vietnam has no Stripe platform behind it, so carousell.ai cannot pay this seller out yet.
+    # Everything else works, so setup finishes rather than refusing them a configuration.
+    assert setup_main("--yes", "--manual", "--region", "vn") == 0
+    assert world.calls["basics"]["region"] == "VN"
+    assert "currency" not in world.calls["basics"]
+    assert world.calls["provisioned"] == "VN"
+
+
+def test_a_malformed_country_flag_is_still_refused(world, capsys) -> None:
+    assert setup_main("--yes", "--manual", "--region", "vnm") == 1
     assert world.calls["basics"] == {}
-    err = capsys.readouterr().err
-    assert "MY isn't a country sellee works in yet" in err
-    assert "SG, US" in err
+    assert "two-letter country code" in capsys.readouterr().err
 
 
 def test_a_re_run_leaves_a_recorded_region_alone(world, capsys) -> None:
@@ -512,11 +518,9 @@ def test_a_re_run_leaves_a_recorded_region_alone(world, capsys) -> None:
     assert "unchanged" in capsys.readouterr().out
 
 
-def test_a_timezone_outside_the_supported_countries_makes_no_guess(
-    world, monkeypatch, capsys
-) -> None:
-    # Kuala Lumpur is a real timezone the rail does not serve. Proposing "MY · MYR" would be a
-    # confident answer setup then has to refuse, so it proposes nothing and asks instead.
+def test_a_timezone_the_table_does_not_name_makes_no_guess(world, monkeypatch, capsys) -> None:
+    # The zone table is small and only ever suggests, so an unmapped machine is asked rather
+    # than proposed a country. A run with nobody to ask records nothing.
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "Asia/Kuala_Lumpur")
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {}
@@ -531,15 +535,11 @@ def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
     reason and the country's own zone."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     # country, a zone that does not exist, Enter for the proposed one, then the defaults.
-    _answer(monkeypatch, ["1", "gmt8+", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "gmt8+", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
-    assert world.calls["basics"] == {
-        "region": "SG",
-        "currency": "SGD",
-        "timezone": "Asia/Singapore",
-    }
+    assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
     out = capsys.readouterr().out
     assert "unknown timezone 'gmt8+'" in out
     assert "zone names look like Asia/Singapore" in out
@@ -551,12 +551,51 @@ def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
     """Singapore has exactly one zone, so the question has an answer in it already and Enter is
     enough."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
-    _answer(monkeypatch, ["1", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
     assert world.calls["basics"]["timezone"] == "Asia/Singapore"
     assert "Timezone? [Asia/Singapore]" in capsys.readouterr().out
+
+
+def test_the_country_question_takes_any_code_rather_than_offering_a_list(
+    world, monkeypatch, capsys
+) -> None:
+    # Nothing here enumerates the countries carousell.ai serves, so there is no list to pick
+    # from and no "other" to fall off the end of.
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["vn", "Asia/Ho_Chi_Minh", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"] == {"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}
+    assert "Which country do you sell in?" in capsys.readouterr().out
+
+
+def test_a_mistyped_country_re_asks_instead_of_ending_the_install(
+    world, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["Vietnam", "VN", "Asia/Ho_Chi_Minh", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["region"] == "VN"
+    assert "two-letter code" in capsys.readouterr().out
+
+
+def test_the_machines_guess_is_the_default_answer_to_the_country_question(
+    world, monkeypatch, capsys
+) -> None:
+    # The seller who says no to the proposal is usually correcting the timezone, not the country,
+    # so the guess stays on offer as the default rather than being thrown away.
+    _answer(monkeypatch, ["n", "", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["region"] == "SG"
+    assert "Which country do you sell in? [SG]" in capsys.readouterr().out
 
 
 def test_provisioning_gets_the_region_that_was_recorded(world) -> None:
@@ -568,6 +607,47 @@ def test_nothing_is_provisioned_without_a_region(world, monkeypatch) -> None:
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "Antarctica/Troll")
     setup_main("--yes", "--manual")
     assert world.calls["provisioned"] is None
+
+
+def _real_rail_phase(monkeypatch, status: dict):
+    """Put the real rail phase back, with the guests call answered from a dict.
+
+    The `world` fixture stubs the phase out, so the module-level reference captured before any
+    patching is what puts the real one back.
+    """
+    from sellee.rail import provision
+
+    monkeypatch.setattr(setup_cli, "_provision_rail", _PROVISION_RAIL)
+    monkeypatch.setattr(provision, "ensure", lambda region, *, api_base: status)
+
+
+def test_bazaars_payments_notice_is_printed_before_the_marketplace_phase(
+    world, monkeypatch, capsys
+) -> None:
+    # The seller is told once, plainly, at the point the account is made, and the words are
+    # bazaar's. Nothing local decides which countries can be paid.
+    notice = "carousell.ai cannot take payments in Vietnam yet, but listing works as normal."
+    _real_rail_phase(
+        monkeypatch, {"status": "ok", "provisioned": True, "country": "VN", "notice": notice}
+    )
+
+    assert setup_main("--yes", "--manual", "--region", "VN") == 0
+
+    out = capsys.readouterr().out
+    assert notice in out
+    assert out.index(notice) < out.index("Other marketplaces")
+
+
+def test_a_payable_country_is_told_nothing_extra(world, monkeypatch, capsys) -> None:
+    _real_rail_phase(
+        monkeypatch, {"status": "ok", "provisioned": True, "country": "SG", "notice": ""}
+    )
+
+    assert setup_main("--yes", "--manual", "--region", "SG") == 0
+
+    out = capsys.readouterr().out
+    assert "cannot take payments" not in out
+    assert "ready — always enabled" in out  # the phase still reports what it did
 
 
 # --- marketplaces --------------------------------------------------------------------------------
