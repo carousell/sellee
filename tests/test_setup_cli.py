@@ -610,11 +610,8 @@ def test_nothing_is_provisioned_without_a_region(world, monkeypatch) -> None:
 
 
 def _real_rail_phase(monkeypatch, status: dict):
-    """Put the real rail phase back, with the guests call answered from a dict.
-
-    The `world` fixture stubs the phase out, so the module-level reference captured before any
-    patching is what puts the real one back.
-    """
+    """Put the real rail phase back, with the guests call answered from a dict — the `world`
+    fixture stubs the phase out, so the reference captured at import is what restores it."""
     from sellee.rail import provision
 
     monkeypatch.setattr(setup_cli, "_provision_rail", _PROVISION_RAIL)

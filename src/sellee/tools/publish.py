@@ -124,10 +124,14 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    # The listing is already live and its URL recorded, so a failure to copy the currency back
-    # is logged rather than reported as a failed publish the caller would retry.
+    # The listing is live and its URL recorded by now, so anything below is logged rather than
+    # raised: reporting a failure here would send the caller back to publish it a second time.
     currency = listing.get("currency") or ""
-    if currency and currency != (item.get("currency") or ""):
+    if not currency:
+        # The item is left without one, which is what every read already tolerates. This is the
+        # only place an authoritative code exists, so its absence is carousell.ai's to explain.
+        log.warning("%s: carousell.ai created a listing carrying no currency", item_id)
+    elif currency != (item.get("currency") or ""):
         try:
             ctx.store.update_item(item_id, {"currency": currency})
         except StoreError as exc:

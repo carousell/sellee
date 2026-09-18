@@ -101,6 +101,24 @@ def test_quote_shipping_composes_engine_and_never_emits_address(make_ctx, store)
     assert "12 Secret Lane" not in str(quote) and "address" not in quote
 
 
+def test_quote_shipping_takes_its_currency_from_the_item(make_ctx, store) -> None:
+    """Setup records no currency any more, so the item's is the one a quote can name — and an
+    item gets that from the listing carousell.ai creates, not from a local guess."""
+    ctx = make_ctx("attended")
+    dispatch("update_seller_config", {"shipping": {"zones": _ZONES}}, ctx)
+    priced = store.create_item(title="Lamp", list_price=80.0, currency="VND")
+    unpriced = store.create_item(title="Vase", list_price=80.0)
+
+    quoted = dispatch("quote_shipping", {"item_id": priced["id"], "dest_area": "tampines"}, ctx)
+    assert quoted["currency"] == "VND"
+
+    # Before a listing exists there is no authoritative code, and the quote says so rather than
+    # naming a currency nobody chose. Only the code is absent; the fees are unaffected.
+    quiet = dispatch("quote_shipping", {"item_id": unpriced["id"], "dest_area": "tampines"}, ctx)
+    assert quiet["currency"] == ""
+    assert quiet["buyer_total"] == quoted["buyer_total"]
+
+
 def test_quote_shipping_requires_configured_zones(make_ctx, store) -> None:
     ctx = make_ctx("attended")
     item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")

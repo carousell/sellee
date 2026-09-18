@@ -6,11 +6,8 @@ from sellee.installer import region
 
 
 def test_a_singapore_machine_is_proposed_singapore() -> None:
-    assert region.guess("Asia/Singapore") == {
-        "region": "SG",
-        "currency": "SGD",
-        "timezone": "Asia/Singapore",
-    }
+    # No currency in the proposal: what a listing is priced in comes back from bazaar.
+    assert region.guess("Asia/Singapore") == {"region": "SG", "timezone": "Asia/Singapore"}
 
 
 def test_us_zones_resolve_across_the_mainland_and_its_outliers() -> None:
@@ -43,12 +40,14 @@ def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
 def test_the_confirm_line_shows_a_guessed_currency_without_recording_one() -> None:
     # The currency on this line is a guess for the seller to read. bazaar decides what a listing
     # is actually priced in, so nothing here is stored.
-    assert region.describe({"region": "SG", "timezone": "Asia/Singapore"}) == (
+    assert region.render({"region": "SG", "timezone": "Asia/Singapore"}) == (
         "SG · SGD · Asia/Singapore"
     )
-    assert region.describe({"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}) == (
+    assert region.render({"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}) == (
         "VN · Asia/Ho_Chi_Minh"
     )
+    # A recorded currency is shown as recorded, never overwritten by the guess.
+    assert region.render({"region": "SG", "currency": "VND"}) == "SG · VND"
 
 
 def test_an_unknown_or_missing_zone_produces_no_guess() -> None:
@@ -83,7 +82,7 @@ def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:
         region.os.path, "realpath", lambda _: "/usr/share/zoneinfo.default/Asia/Singapore"
     )
     assert region.system_timezone() == "Asia/Singapore"
-    assert region.guess() == {"region": "SG", "currency": "SGD", "timezone": "Asia/Singapore"}
+    assert region.guess() == {"region": "SG", "timezone": "Asia/Singapore"}
 
 
 def test_the_plain_zoneinfo_layout_still_reads(monkeypatch) -> None:

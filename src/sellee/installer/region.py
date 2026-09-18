@@ -1,11 +1,7 @@
 """Guessing where the seller sells, so setup can confirm rather than interrogate.
 
-Region is the first thing the agent needs and the least interesting thing to ask for: it decides
-which regional marketplace sites exist for this seller and which currency their prices are in.
-The machine already knows its timezone, so setup proposes an answer and asks for a yes.
-
-Nothing here decides where a seller may sell: any country is accepted, and an unmapped zone
-simply produces no guess, so setup asks instead of proposing a wrong default.
+Nothing here decides where a seller may sell: any country is accepted, and a zone the table does
+not name produces no guess at all, so setup asks rather than proposing a wrong default.
 """
 
 from __future__ import annotations
@@ -150,28 +146,21 @@ def zone_error(name: str) -> str:
 
 
 def guess(zone: str | None = None):
-    """A complete {region, currency, timezone} proposal, or None when the machine gives no hint."""
+    """A {region, timezone} proposal, or None when the machine gives no hint. No currency: what a
+    listing is priced in comes back from bazaar, so proposing one would be recording a guess."""
     zone = system_timezone() if zone is None else zone
     region = region_for_zone(zone)
-    if region is None:
-        return None
-    currency = CURRENCIES.get(region)
-    if currency is None:
-        return None
-    return {"region": region, "currency": currency, "timezone": zone}
+    return None if region is None else {"region": region, "timezone": zone}
 
 
 def render(basics: dict) -> str:
-    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`."""
+    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`. An unrecorded currency
+    is filled in from the table for this line only, and is dropped for a country not in it."""
+    shown = basics if basics.get("currency") else {**basics, "currency": _likely_currency(basics)}
     return " · ".join(
-        str(basics.get(key, "")) for key in ("region", "currency", "timezone") if basics.get(key)
+        str(shown.get(key, "")) for key in ("region", "currency", "timezone") if shown.get(key)
     )
 
 
-def describe(basics: dict) -> str:
-    """The same line, with the country's likely currency filled in when it is not recorded.
-    Display only — the currency a listing is actually priced in comes back from bazaar."""
-    if basics.get("currency"):
-        return render(basics)
-    guessed = CURRENCIES.get(basics.get("region", ""))
-    return render({**basics, "currency": guessed} if guessed else basics)
+def _likely_currency(basics: dict) -> str:
+    return CURRENCIES.get(basics.get("region", ""), "")

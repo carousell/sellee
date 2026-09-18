@@ -134,11 +134,7 @@ class RailClient:
 
     def create_listing(self, args: dict) -> dict:
         """Create a listing and return {listing_id, url, currency}. Raises RailToolError when the
-        response carries no id — without one there is no listing to point at.
-
-        The currency is carousell.ai's, derived from the seller: the request asserts none, so the
-        created listing is the only place the authoritative code comes from.
-        """
+        response carries no id, and the currency is carousell.ai's — the request asserts none."""
         result = self.call_tool("create_listing", args)
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result

@@ -126,7 +126,7 @@ def _intro(ui: Ui, platform) -> None:
     ui.say("  • check for Node, Chrome, and the claude CLI (installed and signed in)")
     ui.say("  • install this version, plus the `sellee` command")
     ui.say("  • register and start the background worker")
-    ui.say("  • record the region and currency to price in")
+    ui.say("  • record the country you sell in")
     ui.say("  • optionally connect marketplaces and a chat channel (Telegram or Discord)")
     ui.say("")
     ui.say("Sellee will be installed into the following locations:")
@@ -149,7 +149,7 @@ def _intro_container(ui: Ui) -> None:
     ui.say(f"limits you set. Version {__version__} is already running in this container.")
     ui.say("")
     ui.say("This will:")
-    ui.say("  • record the region and currency to price in")
+    ui.say("  • record the country you sell in")
     ui.say("  • set up carousell.ai")
     ui.say("  • optionally connect marketplaces and a chat channel (Telegram or Discord)")
     ui.say("  • write the workspace for the terminal session")
@@ -465,14 +465,14 @@ def _seller_region(ui: Ui, args, port: int, token: str):
     known = _stored_basics(port, token)
     if known.get("region") and not args.region:
         ui.step("Where you sell")
-        ui.say(f"{region_guess.describe(known)} — already recorded, unchanged")
+        ui.say(f"{region_guess.render(known)} — already recorded, unchanged")
         return known["region"]
 
     basics = _basics_from_flag(args) if args.region else region_guess.guess()
     if args.region:
         ui.step("Where you sell")
     elif basics and not ui.confirm(
-        f"You sell in {region_guess.describe(basics)}, correct?", default=True
+        f"You sell in {region_guess.render(basics)}, correct?", default=True
     ):
         basics = None
     if basics is None:
@@ -482,13 +482,10 @@ def _seller_region(ui: Ui, args, port: int, token: str):
         ui.note("both are completed once a region is set")
         return None
 
-    # The guessed currency is for the confirm line only. bazaar derives what a listing is
-    # priced in, so recording one here would make a guess look authoritative.
-    basics = {key: value for key, value in basics.items() if key != "currency"}
     status, body = control.post(port, token, "/control/seller-basics", basics)
     if status != 200:
         raise Abort(f"could not record your region: {body.get('error', status)}")
-    ui.say(f"recorded: {region_guess.describe(body['basics'])}")
+    ui.say(f"recorded: {region_guess.render(body['basics'])}")
     return body["basics"].get("region")
 
 
@@ -502,21 +499,18 @@ def _stored_basics(port: int, token: str) -> dict:
 
 def _basics_from_flag(args) -> dict:
     code = str(args.region).strip().upper()
-    basics = {"region": code, "timezone": region_guess.default_zone(code)}
-    return {key: value for key, value in basics.items() if value}
+    zone = region_guess.default_zone(code)
+    return {"region": code, "timezone": zone} if zone else {"region": code}
 
 
 def _ask_basics(ui: Ui):
-    """Ask which country outright. Answers nothing when there is nobody to ask.
-
-    Any country is taken: what carousell.ai can pay out is bazaar's answer, so offering a list
-    here would be the agent deciding something it does not know.
-    """
+    """Ask which country outright, taking any of them: what carousell.ai can pay out is bazaar's
+    answer, so a list here would be the agent deciding something it does not know."""
     if not ui.interactive:
         return None
     region = _ask_country(ui)
-    basics = {"region": region, "timezone": _ask_timezone(ui, region)}
-    return {key: value for key, value in basics.items() if value}
+    zone = _ask_timezone(ui, region)
+    return {"region": region, "timezone": zone} if zone else {"region": region}
 
 
 def _ask_country(ui: Ui) -> str:

@@ -31,10 +31,9 @@ def _normalize_region(region: str | None) -> str:
     return region.strip().upper()
 
 
-def _plain(raw: str) -> str:
-    """Remote words made safe to print raw: control characters flattened to spaces.
-    An escape sequence or newline must not retitle the terminal or forge a line that looks
-    like ours — the same reason a non-printable api_key is rejected below."""
+def _printable(raw: str) -> str:
+    """Remote words made safe to print raw: control characters flattened to spaces, so none can
+    retitle the terminal or forge a line that looks like ours."""
     return " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())[:400]
 
 
@@ -47,7 +46,7 @@ def _refusal(exc: urllib.error.HTTPError) -> str:
     except (ValueError, AttributeError, OSError):
         # Unreadable, non-JSON, or non-object body — a proxy's error page, not a refusal.
         raw = ""
-    return _plain(raw) or f"guests API returned HTTP {exc.code}"
+    return _printable(raw) or f"guests API returned HTTP {exc.code}"
 
 
 def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAULT_TIMEOUT_SEC):
@@ -103,7 +102,7 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         "country": payload.get("country") or resolved,
         # Whether carousell.ai can pay this seller out is bazaar's answer, not ours. Empty means
         # there is nothing to tell them.
-        "notice": _plain(str(payload.get("notice") or "")),
+        "notice": _printable(str(payload.get("notice") or "")),
     }
 
 

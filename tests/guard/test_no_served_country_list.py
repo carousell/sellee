@@ -1,11 +1,5 @@
-"""The agent never names the countries carousell.ai serves.
-
-Which countries carousell.ai can take payments in is bazaar's answer, and it changes when a
-Stripe platform account appears rather than when the agent ships. A copy of the list held here
-is wrong the moment that happens, and it was wrong in both directions at once: it offered US,
-which the backend did not serve, while refusing a seller in Vietnam, whom everything except
-payouts works for. So the agent asks for a country, sends it, and relays what bazaar says.
-"""
+"""The agent never names the countries carousell.ai serves: that answer is bazaar's, and it
+changes when a Stripe platform account appears rather than when the agent ships."""
 
 from __future__ import annotations
 
@@ -53,9 +47,8 @@ def test_the_rail_has_one_site_rather_than_a_country_map() -> None:
 
 
 def test_the_write_door_takes_every_well_formed_country() -> None:
-    """validate_basics is the one authority both writers go through, so a membership test
-    reintroduced there would close the product to a country again. Swept rather than sampled:
-    sampling inside the old served set is how the previous version of this looked fine."""
+    """Swept rather than sampled, because sampling inside the old served set is exactly how the
+    previous version of this rule looked correct while being wrong."""
     from sellee.tools.seller import BasicsError, validate_basics
 
     alphabet = [chr(code) for code in range(ord("A"), ord("Z") + 1)]
