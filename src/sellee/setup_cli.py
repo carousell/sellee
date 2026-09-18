@@ -455,12 +455,11 @@ def _wait_for_daemon(started_after: float) -> bool:
 
 
 def _seller_region(ui: Ui, args, port: int, token: str):
-    """Record region, currency and timezone, and answer with the region the daemon now holds.
+    """Record country and timezone, and answer with the region the daemon now holds.
 
-    The machine's timezone already implies all three, so this confirms a proposal rather than
-    conducting an interview. A machine that implies nothing (or a seller who says no) is asked.
-    Provisioning and the marketplace list both key off the answer, so it is read back from the
-    daemon rather than assumed — on a re-run the region may already be there.
+    The machine's timezone implies both, so this confirms a proposal rather than conducting an
+    interview, and a machine that implies nothing is asked instead. The answer is read back from
+    the daemon rather than assumed, because provisioning and the marketplace list key off it.
     """
     known = _stored_basics(port, token)
     if known.get("region") and not args.region:
