@@ -94,7 +94,7 @@ def test_publish_requires_a_price(make_ctx, store) -> None:
 
 def test_publish_never_asserts_a_currency(make_ctx, store) -> None:
     # An unplaced seller has no currency to assert, and asserting the wrong one is refused by
-    # bazaar. Omitting the field cannot be refused, so the field is never sent at all.
+    # the backend. Omitting the field cannot be refused, so the field is never sent at all.
     rail = FakeRail(currency="VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
     item = store.create_item(title="Bicycle", list_price=500.0)

@@ -228,7 +228,7 @@ def test_another_rail_tool_error_keeps_the_generic_wrap(make_ctx, store) -> None
     assert message == "listing is not active"
 
 
-def test_an_unplaced_sellers_refusal_is_relayed_in_bazaars_own_words(make_ctx, store) -> None:
+def test_an_unplaced_sellers_refusal_is_relayed_in_the_backends_words(make_ctx, store) -> None:
     """carousell.ai decides where it can take payments, so its refusal arrives verbatim. The
     agent authors no copy of its own about which countries are served."""
     refusal = (

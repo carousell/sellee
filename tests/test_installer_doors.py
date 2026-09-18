@@ -572,7 +572,7 @@ def test_a_structurally_invalid_timezone_is_refused_not_shrugged_at(server) -> N
 
 def test_any_real_country_is_recorded_at_the_door(server, store) -> None:
     # The door checks the shape of a country code and nothing else. Where carousell.ai can pay
-    # out is bazaar's answer to give, and it is not a reason to refuse a seller a configuration.
+    # out is the backend's answer to give, and it is not a reason to refuse a configuration.
     for code in ("VN", "MY", "BR", "vn"):
         status, body = _call(server, "POST", "/control/seller-basics", body={"region": code})
         assert status == 200, body

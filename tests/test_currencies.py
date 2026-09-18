@@ -1,11 +1,11 @@
-"""The currency a country's listings are priced in — the agent's copy of bazaar's answer."""
+"""The currency a country's listings are priced in — the agent's copy of the backend's answer."""
 
 from __future__ import annotations
 
 from sellee import currencies
 
 
-def test_the_set_is_the_nineteen_codes_bazaar_knows() -> None:
+def test_the_set_is_the_nineteen_codes_the_backend_knows() -> None:
     assert currencies.KNOWN == (
         "AUD",
         "BND",
@@ -59,7 +59,7 @@ def test_the_euro_countries_share_one_code() -> None:
 
 
 def test_a_country_outside_the_table_prices_in_usd() -> None:
-    # bazaar's fallback, and the reason it is safe to predict: a country with no entry lists in
+    # The backend's fallback, and the reason it is safe to predict: a country with no entry lists
     # USD there too, so the agent and the backend agree rather than merely both guessing.
     for code in ("BR", "CN", "NG", "TR", "KE", "AE", "ZZ", ""):
         assert currencies.for_country(code) == "USD", code

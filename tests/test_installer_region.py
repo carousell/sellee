@@ -6,7 +6,7 @@ from sellee.installer import region
 
 
 def test_a_singapore_machine_is_proposed_singapore() -> None:
-    # No currency in the proposal: what a listing is priced in comes back from bazaar.
+    # No currency in the proposal: what a listing is priced in comes from the backend.
     assert region.guess("Asia/Singapore") == {"region": "SG", "timezone": "Asia/Singapore"}
 
 

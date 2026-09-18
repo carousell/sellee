@@ -142,7 +142,7 @@ def zone_error(name: str) -> str:
 
 def guess(zone: str | None = None):
     """A {region, timezone} proposal, or None when the machine gives no hint. No currency: what a
-    listing is priced in comes back from bazaar, so proposing one would be recording a guess."""
+    listing is priced in comes from the backend, so proposing one would be recording a guess."""
     zone = system_timezone() if zone is None else zone
     region = region_for_zone(zone)
     return None if region is None else {"region": region, "timezone": zone}

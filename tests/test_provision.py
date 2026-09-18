@@ -106,7 +106,7 @@ def test_malformed_key_rejected(xdg_tmp, guests_server) -> None:
 
 def test_any_country_code_is_sent_rather_than_adjudicated(xdg_tmp, guests_server) -> None:
     # The agent carries no list of countries carousell.ai serves. It sends what the seller said
-    # and lets bazaar answer.
+    # and lets the backend answer.
     server, base = guests_server
     server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn"}
 
@@ -116,9 +116,9 @@ def test_any_country_code_is_sent_rather_than_adjudicated(xdg_tmp, guests_server
     assert (server.last_country, status["country"]) == ("VN", "VN")
 
 
-def test_the_payments_notice_comes_back_from_bazaar(xdg_tmp, guests_server) -> None:
-    # Whether carousell.ai can pay a seller out is bazaar's answer, and this is the whole of how
-    # the agent learns it. Nothing local decides it and no currency is recorded.
+def test_the_payments_notice_comes_back_from_the_backend(xdg_tmp, guests_server) -> None:
+    # Whether carousell.ai can pay a seller out is the backend's answer, and this is the whole of
+    # how the agent learns it. Nothing local decides it and no currency is recorded.
     server, base = guests_server
     notice = "carousell.ai cannot take payments in Vietnam yet, but listing works as normal."
     server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "notice": notice}

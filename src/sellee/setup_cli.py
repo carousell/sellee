@@ -504,8 +504,8 @@ def _basics_from_flag(args) -> dict:
 
 
 def _ask_basics(ui: Ui):
-    """Ask which country outright, taking any of them: what carousell.ai can pay out is bazaar's
-    answer, so a list here would be the agent deciding something it does not know."""
+    """Ask which country outright, taking any of them: what carousell.ai can pay out is the
+    backend's answer, so a list here would be the agent deciding something it does not know."""
     if not ui.interactive:
         return None
     region = _ask_country(ui)
@@ -521,7 +521,7 @@ def _ask_country(ui: Ui) -> str:
         code = answer.upper()
         if len(code) == 2 and code.isalpha():
             return code
-        ui.say("A country is its two-letter code, like SG or VN.")
+        ui.say("A country is its two-letter code, like US or CA.")
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:
@@ -562,7 +562,7 @@ def _provision_rail(ui: Ui, region) -> None:
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         ui.say("ready — always enabled, with nothing to sign in to")
-        # Whether carousell.ai can pay this seller out is bazaar's answer, printed unchanged.
+        # Whether carousell.ai can pay this seller out is the backend's answer, printed as given.
         notice = str(status.get("notice") or "")
         if notice:
             ui.note(notice)

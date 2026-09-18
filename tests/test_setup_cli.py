@@ -486,7 +486,7 @@ def test_the_region_is_proposed_from_the_machines_timezone(world, capsys) -> Non
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
     # The currency on the confirm line is a guess for the seller to read. It is not recorded:
-    # what a listing is priced in comes back from bazaar.
+    # what a listing is priced in comes from the backend.
     assert "You sell in SG · SGD · Asia/Singapore, correct?" in capsys.readouterr().out
 
 
@@ -618,11 +618,11 @@ def _real_rail_phase(monkeypatch, status: dict):
     monkeypatch.setattr(provision, "ensure", lambda region, *, api_base: status)
 
 
-def test_bazaars_payments_notice_is_printed_before_the_marketplace_phase(
+def test_the_backends_payments_notice_is_printed_before_the_marketplace_phase(
     world, monkeypatch, capsys
 ) -> None:
     # The seller is told once, plainly, at the point the account is made, and the words are
-    # bazaar's. Nothing local decides which countries can be paid.
+    # the backend's. Nothing local decides which countries can be paid.
     notice = "carousell.ai cannot take payments in Vietnam yet, but listing works as normal."
     _real_rail_phase(
         monkeypatch, {"status": "ok", "provisioned": True, "country": "VN", "notice": notice}

@@ -118,7 +118,7 @@ def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
     assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3", "currency": ""}
 
 
-def test_create_listing_carries_back_the_currency_bazaar_chose(fake_rail) -> None:
+def test_create_listing_carries_back_the_currency_the_backend_chose(fake_rail) -> None:
     """The request never asserts a currency, so the created listing is the only place the
     authoritative code comes from."""
     server, base = fake_rail

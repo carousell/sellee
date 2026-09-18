@@ -47,13 +47,13 @@ def validate_basics(basics: dict) -> dict:
     region = str(basics.get("region", "")).strip()
     if "region" in basics:
         if len(region) != 2 or not region.isalpha():
-            raise BasicsError(f"region must be a two-letter country code (e.g. SG), got {region!r}")
+            raise BasicsError(f"region must be a two-letter country code (e.g. US), got {region!r}")
         out["region"] = region.upper()
 
     currency = str(basics.get("currency", "")).strip()
     if "currency" in basics:
         if len(currency) != 3 or not currency.isalpha():
-            raise BasicsError(f"currency must be a three-letter code (e.g. SGD), got {currency!r}")
+            raise BasicsError(f"currency must be a three-letter code (e.g. USD), got {currency!r}")
         out["currency"] = currency.upper()
 
     timezone = str(basics.get("timezone", "")).strip()

@@ -1,5 +1,5 @@
-"""The agent never names the countries carousell.ai serves: that answer is bazaar's, and it
-changes when a Stripe platform account appears rather than when the agent ships."""
+"""The agent never names the countries carousell.ai serves: that answer is the backend's, and
+it changes when a Stripe platform account appears rather than when the agent ships."""
 
 from __future__ import annotations
 

@@ -27,7 +27,7 @@ class ProvisionError(Exception):
 
 def _normalize_region(region: str | None) -> str:
     if not region or len(region.strip()) != 2 or not region.strip().isalpha():
-        raise ValueError("a two-letter region code is required (e.g. --region SG)")
+        raise ValueError("a two-letter region code is required (e.g. --region US)")
     return region.strip().upper()
 
 
@@ -100,8 +100,8 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         "forced": force,
         "user_id": str(payload.get("user_id") or ""),
         "country": payload.get("country") or resolved,
-        # Whether carousell.ai can pay this seller out is bazaar's answer, not ours. Empty means
-        # there is nothing to tell them.
+        # Whether carousell.ai can pay this seller out is the backend's answer, not ours. Empty
+        # means there is nothing to tell them.
         "notice": _printable(str(payload.get("notice") or "")),
     }
 
