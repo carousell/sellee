@@ -519,8 +519,8 @@ def test_a_re_run_leaves_a_recorded_region_alone(world, capsys) -> None:
 
 
 def test_a_timezone_the_table_does_not_name_makes_no_guess(world, monkeypatch, capsys) -> None:
-    # The zone table is small and only ever suggests, so an unmapped machine is asked rather
-    # than proposed a country. A run with nobody to ask records nothing.
+    # The zone table only ever suggests, so an unmapped machine is asked instead of being
+    # given a default. A run with nobody to ask records nothing.
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "Asia/Kuala_Lumpur")
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {}
@@ -563,7 +563,7 @@ def test_the_country_question_takes_any_code_rather_than_offering_a_list(
     world, monkeypatch, capsys
 ) -> None:
     # Nothing here enumerates the countries carousell.ai serves, so there is no list to pick
-    # from and no "other" to fall off the end of.
+    # from and no Other option behind it.
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     _answer(monkeypatch, ["vn", "Asia/Ho_Chi_Minh", "", "", ""])
 

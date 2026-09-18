@@ -562,7 +562,7 @@ def _provision_rail(ui: Ui, region) -> None:
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         ui.say("ready — always enabled, with nothing to sign in to")
-        # Whether carousell.ai can pay this seller out is bazaar's to say, in bazaar's words.
+        # Whether carousell.ai can pay this seller out is bazaar's answer, printed unchanged.
         notice = str(status.get("notice") or "")
         if notice:
             ui.note(notice)

@@ -19,8 +19,8 @@ def _sources() -> list[Path]:
 
 
 def test_no_module_derives_a_set_of_served_countries() -> None:
-    # `supported_regions` was the function that did this, reading the rail's regional-site map as
-    # if it said where a seller may live. Named explicitly so the idea cannot come back by name.
+    # `supported_regions` read the rail's regional-site map as if it said where a seller may
+    # live. Checked by name so it cannot quietly return.
     for path in _sources():
         source = path.read_text()
         assert "supported_regions" not in source, path

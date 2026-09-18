@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import os
 
-# What a region likely prices in, for the confirm line only. bazaar decides the real currency of
-# a listing, so a country missing here costs nothing.
+# What a region likely prices in, for the confirm line only. bazaar decides what a listing is
+# priced in, so a country absent from this table is fine.
 CURRENCIES = {
     "SG": "SGD",
     "US": "USD",

@@ -81,8 +81,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             f"{int(paced['delay_sec'])}s"
         )
 
-    # No currency is asserted. carousell.ai derives it from the seller, and the field is only an
-    # assertion it refuses when it disagrees, so sending one can only ever fail.
+    # No currency is sent. carousell.ai derives it from the seller, and the field is only an
+    # assertion it refuses when it disagrees — a disagreement the agent cannot rule out.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
@@ -128,8 +128,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # raised: reporting a failure here would send the caller back to publish it a second time.
     currency = listing.get("currency") or ""
     if not currency:
-        # The item is left without one, which is what every read already tolerates. This is the
-        # only place an authoritative code exists, so its absence is carousell.ai's to explain.
+        # The item keeps no currency, which every read already tolerates. This is the only
+        # place an authoritative code comes from, so a missing one is a fault upstream.
         log.warning("%s: carousell.ai created a listing carrying no currency", item_id)
     elif currency != (item.get("currency") or ""):
         try:

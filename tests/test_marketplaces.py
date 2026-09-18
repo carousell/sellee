@@ -108,8 +108,8 @@ def test_a_region_absent_from_the_map_has_no_site() -> None:
 
 
 def test_carousell_ai_is_one_site_for_every_country() -> None:
-    # The rail is a single global host, so enumerating countries here was both untrue and the
-    # last place the agent decided which countries carousell.ai is for.
+    # The rail is a single global host, so enumerating countries here was untrue, and it was
+    # the last list of served countries the agent held.
     for region in ("US", "SG", "MY", "VN", "BR", None):
         assert marketplaces.resolve_domain("carousell-ai", region) == "www.carousell.ai", region
 
