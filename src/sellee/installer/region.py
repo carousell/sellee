@@ -8,12 +8,7 @@ from __future__ import annotations
 
 import os
 
-# What a region likely prices in, for the confirm line only. bazaar decides what a listing is
-# priced in, so a country absent from this table is fine.
-CURRENCIES = {
-    "SG": "SGD",
-    "US": "USD",
-}
+from sellee import currencies
 
 # Timezones that identify a region unambiguously. US zones are listed rather than matched by an
 # `America/*` prefix: that prefix also covers Toronto, Mexico City and São Paulo, and answering
@@ -154,13 +149,11 @@ def guess(zone: str | None = None):
 
 
 def render(basics: dict) -> str:
-    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`. An unrecorded currency
-    is filled in from the table for this line only, and is dropped for a country not in it."""
-    shown = basics if basics.get("currency") else {**basics, "currency": _likely_currency(basics)}
+    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`. The currency is filled
+    in when none is recorded, so they read what their prices will mean before setting any."""
+    shown = basics
+    if not shown.get("currency") and shown.get("region"):
+        shown = {**basics, "currency": currencies.for_country(shown["region"])}
     return " · ".join(
         str(shown.get(key, "")) for key in ("region", "currency", "timezone") if shown.get(key)
     )
-
-
-def _likely_currency(basics: dict) -> str:
-    return CURRENCIES.get(basics.get("region", ""), "")

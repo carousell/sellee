@@ -37,16 +37,19 @@ def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
         assert region.guess(zone) is None, zone
 
 
-def test_the_confirm_line_shows_a_guessed_currency_without_recording_one() -> None:
-    # The currency on this line is a guess for the seller to read. bazaar decides what a listing
-    # is actually priced in, so nothing here is stored.
+def test_the_confirm_line_names_the_currency_without_recording_it() -> None:
+    # The seller reads what their prices will mean before setting any, which is the whole point
+    # of showing it. Nothing here is stored: carousell.ai decides the currency.
     assert region.render({"region": "SG", "timezone": "Asia/Singapore"}) == (
         "SG · SGD · Asia/Singapore"
     )
     assert region.render({"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}) == (
-        "VN · Asia/Ho_Chi_Minh"
+        "VN · VND · Asia/Ho_Chi_Minh"
     )
-    # A recorded currency is shown as recorded, never overwritten by the guess.
+    # A country carousell.ai has no currency for prices in USD, and the line says so rather
+    # than leaving the seller to assume their own.
+    assert region.render({"region": "BR"}) == "BR · USD"
+    # A recorded currency is shown as recorded, never overwritten.
     assert region.render({"region": "SG", "currency": "VND"}) == "SG · VND"
 
 
