@@ -68,7 +68,14 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
-        return {"listing_id": None, "url": existing, "already_published": True}
+        # Same keys a fresh publish returns, so a caller reading `currency` gets the recorded
+        # code on the second call rather than "" — the shape must not depend on the attempt.
+        return {
+            "listing_id": None,
+            "url": existing,
+            "already_published": True,
+            "currency": (item.get("currency") or "").strip().upper(),
+        }
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
     # no-op and stays allowed; a real publish is refused until resume.

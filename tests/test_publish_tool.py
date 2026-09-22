@@ -70,7 +70,14 @@ def test_publish_is_idempotent(make_ctx, store) -> None:
     first = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
     calls_after_first = list(rail.calls)
     second = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
-    assert second == {"listing_id": None, "url": first["url"], "already_published": True}
+    # Same keys either way: a caller reading `currency` must not get "" on the second call
+    # merely because the listing already existed.
+    assert second == {
+        "listing_id": None,
+        "url": first["url"],
+        "already_published": True,
+        "currency": "SGD",
+    }
     assert first["currency"] == "SGD"
     assert rail.calls == calls_after_first  # never posted a second time
 
