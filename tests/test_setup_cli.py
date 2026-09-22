@@ -487,9 +487,8 @@ def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
 def test_the_region_is_proposed_from_the_machines_timezone(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
-    # No currency on the confirm line: the backend answers that at registration, which has not
-    # happened yet.
-    assert "You sell in SG · Asia/Singapore, correct?" in capsys.readouterr().out
+    # No currency on the confirm line: registration answers that, and it has not run yet.
+    assert "You sell in SG — Singapore · Asia/Singapore, correct?" in capsys.readouterr().out
 
 
 def test_the_region_flag_wins_over_the_guess(world) -> None:
@@ -537,7 +536,7 @@ def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
     reason and the country's own zone."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     # country, a zone that does not exist, Enter for the proposed one, then the defaults.
-    _answer(monkeypatch, ["SG", "gmt8+", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "", "gmt8+", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
@@ -553,7 +552,7 @@ def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
     """Singapore has exactly one zone, so the question has an answer in it already and Enter is
     enough."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
-    _answer(monkeypatch, ["SG", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
@@ -567,7 +566,7 @@ def test_the_country_question_takes_any_code_rather_than_offering_a_list(
     # Nothing here enumerates the countries carousell.ai serves, so there is no list to pick
     # from and no Other option behind it.
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
-    _answer(monkeypatch, ["vn", "Asia/Ho_Chi_Minh", "", "", ""])
+    _answer(monkeypatch, ["vn", "", "Asia/Ho_Chi_Minh", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
@@ -579,7 +578,7 @@ def test_a_mistyped_country_re_asks_instead_of_ending_the_install(
     world, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
-    _answer(monkeypatch, ["Vietnam", "VN", "Asia/Ho_Chi_Minh", "", "", ""])
+    _answer(monkeypatch, ["Sellerland", "VN", "", "Asia/Ho_Chi_Minh", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
@@ -587,12 +586,41 @@ def test_a_mistyped_country_re_asks_instead_of_ending_the_install(
     assert "two-letter code" in capsys.readouterr().out
 
 
+def test_a_country_typed_by_name_is_spelled_as_a_code_rather_than_bounced(
+    world, monkeypatch, capsys
+) -> None:
+    """Resolving a name the seller already typed is spelling, not eligibility: it decides
+    nothing about where they may sell, it only saves them from guessing at the code."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["Vietnam", "", "Asia/Ho_Chi_Minh", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["region"] == "VN"
+    assert "You sell in VN — Vietnam, correct?" in capsys.readouterr().out
+
+
+def test_a_typed_country_is_confirmed_by_name_so_a_wrong_code_can_be_caught(
+    world, monkeypatch, capsys
+) -> None:
+    """The SA/SG class. "SA" is well-formed, real, and provisions — the only thing that can
+    catch it is the seller reading "Saudi Arabia" and saying no."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    # SA, "no" to the confirm, then the code they meant and "yes".
+    _answer(monkeypatch, ["SA", "n", "SG", "", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["region"] == "SG"
+    assert "You sell in SA — Saudi Arabia, correct?" in capsys.readouterr().out
+
+
 def test_the_machines_guess_is_the_default_answer_to_the_country_question(
     world, monkeypatch, capsys
 ) -> None:
     # The seller who says no to the proposal is usually correcting the timezone, not the country,
     # so the guess stays on offer as the default rather than being thrown away.
-    _answer(monkeypatch, ["n", "", "", "", "", ""])
+    _answer(monkeypatch, ["n", "", "", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 

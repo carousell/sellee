@@ -23,6 +23,7 @@ from sellee import (
     config,
     connect_cli,
     control,
+    countries,
     deployment,
     healthcheck,
     heartbeat,
@@ -513,14 +514,28 @@ def _ask_basics(ui: Ui):
 
 
 def _ask_country(ui: Ui) -> str:
-    """Ask for a country code until the answer is one the write door will take."""
+    """Ask for a country code until the answer is one the write door will take, and confirm it.
+
+    The confirm is the point. A code of the right shape is always accepted, so the error no check
+    can catch is a real country that is not theirs — "SA" typed for "SG" is two letters, is a
+    country, provisions, and then prices every listing in the wrong currency. Naming it back is
+    the only thing standing between that typo and a live mislabelled listing.
+
+    A typed country *name* is resolved rather than rejected: the seller has already told us what
+    they meant, and spelling it as a code for them is not the agent deciding where they may sell.
+    """
     default = (region_guess.guess() or {}).get("region", "")
     while True:
         answer = ui.ask("Which country do you sell in?", default=default, lead=False).strip()
         code = answer.upper()
-        if len(code) == 2 and code.isalpha():
+        if len(code) != 2 or not code.isalpha():
+            spelled = countries.code_for_name(answer)
+            if not spelled:
+                ui.say("A country is its two-letter code, like US or CA.")
+                continue
+            code = spelled
+        if ui.confirm(f"You sell in {countries.label(code)}, correct?", default=True):
             return code
-        ui.say("A country is its two-letter code, like US or CA.")
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:

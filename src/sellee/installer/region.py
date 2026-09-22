@@ -8,6 +8,9 @@ from __future__ import annotations
 
 import os
 
+from sellee import countries
+
+
 # Timezones that identify a region unambiguously. US zones are listed rather than matched by an
 # `America/*` prefix: that prefix also covers Toronto, Mexico City and São Paulo, and answering
 # "US" for those would be wrong in a way the seller has no reason to double-check.
@@ -147,8 +150,8 @@ def guess(zone: str | None = None):
 
 
 def render(basics: dict) -> str:
-    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`. Only what is recorded is
-    shown; the currency appears once registration has answered one."""
-    return " · ".join(
-        str(basics.get(key, "")) for key in ("region", "currency", "timezone") if basics.get(key)
-    )
+    """How a proposal is put to the seller: `SG — Singapore · SGD · Asia/Singapore`. The country
+    is spelled out because "SA" and "SG" look equally right until one of them is named."""
+    parts = [countries.label(basics["region"])] if basics.get("region") else []
+    parts += [str(basics[key]) for key in ("currency", "timezone") if basics.get(key)]
+    return " · ".join(parts)
