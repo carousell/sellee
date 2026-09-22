@@ -69,9 +69,25 @@ def test_british_spelling_is_recognised_too() -> None:
     assert _wall(text=AUTOMATION_WALL.replace("behavior", "behaviour"), dialog=True) == "automation"
 
 
-def test_a_checkpoint_needs_no_words_at_all() -> None:
+@pytest.mark.parametrize(
+    "pathname",
+    [
+        "/checkpoint/",
+        "/checkpoint/1501092823525282/",
+        # Served from under other roots too, which a prefix test would have missed entirely.
+        "/login/checkpoint/",
+        "/security/checkpoint/1501092823525282/",
+    ],
+)
+def test_a_checkpoint_needs_no_words_at_all(pathname) -> None:
     """The one signal here nothing a person writes can forge, which is why it alone is unpaired."""
-    assert _wall(pathname="/checkpoint/1501092823525282/", text="") == "checkpoint"
+    assert _wall(pathname=pathname, text="") == "checkpoint"
+
+
+@pytest.mark.parametrize("pathname", ["/mycheckpoints", "/checkpoints-explained", "/messages/"])
+def test_a_path_that_merely_contains_the_word_is_not_a_checkpoint(pathname) -> None:
+    """Anchored on the separators, so the clause stays the unforgeable one."""
+    assert _wall(pathname=pathname, text="") == ""
 
 
 def test_the_pin_wall_still_answers_as_itself() -> None:

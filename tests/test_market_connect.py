@@ -479,6 +479,38 @@ def test_a_probe_with_no_wall_but_signed_out_leaves_it_blocked(store, bus) -> No
     assert store.market_block("fb") is not None
 
 
+def test_a_pin_wall_never_blocks_a_market_the_probe_found_clear(store, bus) -> None:
+    """The recovery path has to ask the same question every other one does.
+
+    `verify` is a PIN prompt, and its phrases are things people type over a dialog Facebook has
+    open half the time — which is why it is not in `BLOCKING_CAUSES`. A seller tapping Sign in
+    while one is up must not lose the marketplace for six hours.
+    """
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.request_market_connect("fb", CONNECT_MODE_PROBE)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="verify")))
+
+    assert store.market_block("fb") is None
+
+
+def test_a_pin_wall_mid_recovery_neither_clears_nor_escalates(store, bus) -> None:
+    """It proved nothing in either direction, so the block is left exactly as it was — not
+    cleared, not escalated, and not renamed to a cause that would outlive the real one."""
+    _blocked_fb(store)
+    before = store.market_block("fb")
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="verify")))
+
+    after = store.market_block("fb")
+    assert after is not None
+    assert after["cause"] == "automation" == before["cause"]
+    assert after["strikes"] == before["strikes"]
+    assert after["expires_ts"] == before["expires_ts"]
+
+
 def test_a_probe_reaches_a_blocked_market_at_all(store, bus) -> None:
     """The narrow bypass: the one thing that may still drive a blocked market is the probe that
     decides whether it is still blocked."""

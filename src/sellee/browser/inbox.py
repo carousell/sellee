@@ -1072,7 +1072,9 @@ def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | Non
     """
     adapter = market_adapters.get_adapter(market)
     deps.store.block_market(
-        market, cause, ttl_sec=blindness.block_window_sec(_strikes_for(deps, market) + 1)
+        market,
+        cause,
+        ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
     )
     told = deps.store.report_market_block_once(
         market,
@@ -1088,11 +1090,6 @@ def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | Non
         "browser.blocked",
         {"market": market, "cause": cause, "told": told, **(measured or {})},
     )
-
-
-def _strikes_for(deps: InboxDeps, market: str) -> int:
-    block = deps.store.market_block(market)
-    return int(block["strikes"]) if block else 0
 
 
 def _clear_blind(deps: InboxDeps, market: str, *, read_content: bool = False) -> None:

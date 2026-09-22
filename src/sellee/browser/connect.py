@@ -259,17 +259,33 @@ def _settle_block(deps: ConnectDeps, market: str, name: str, state: str, wall: s
     A read that merely happened to succeed is never enough, and does not come through here at all:
     Facebook can drop an interstitial for a single page load, and letting that clear the block
     would put the account back to full rate three hundred seconds later.
+
+    Which walls may block is `blindness.BLOCKING_CAUSES` and not "any wall", and this path has to
+    ask the same question every other one does. A `verify` wall is a PIN prompt, whose phrases are
+    things people type and which Facebook shows over a dialog it has open half the time — so it is
+    not evidence worth stopping a marketplace for. It is still not *proof the market is clear*
+    either, which is the asymmetry: on a blocked market a wall we do not block on leaves the block
+    exactly as it was, neither cleared nor escalated nor renamed.
     """
     block = deps.store.market_block(market)
-    if wall:
-        strikes = int(block["strikes"]) if block else 0
-        deps.store.block_market(market, wall, ttl_sec=blindness.block_window_sec(strikes + 1))
+    if wall in blindness.BLOCKING_CAUSES:
+        deps.store.block_market(
+            market,
+            wall,
+            ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
+        )
         deps.store.report_market_block_once(
             market,
             blindness.notice_for(wall, name=name, where=window.where()),
             fastpaths.check_again_controls(market),
         )
         deps.bus.publish("browser.blocked", {"market": market, "cause": wall, "via": "probe"})
+        return False
+    if wall and block is not None:
+        # Something is in the way that we do not block on, so this probe proved nothing either
+        # direction. Left untouched, and reported no further: telling the seller they are signed in
+        # while the market is still stopped would be the wrong half of the truth.
+        deps.bus.publish("browser.probe_inconclusive", {"market": market, "wall": wall})
         return False
     if block is None:
         return True

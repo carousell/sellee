@@ -129,7 +129,10 @@ INBOX_FOLDER_JS = f"""() => {{
 # so a phrase list guessed rather than copied from a real one could turn a buyer's message into a
 # permanent outage. It goes in when there is a real one to copy.
 BLOCK_WALL_JS = """() => {
-  if ((location.pathname || '').indexOf('/checkpoint') === 0) return 'checkpoint';
+  // A whole path segment, not a prefix: Facebook serves checkpoints from `/checkpoint/...` but
+  // also from under other roots, and a prefix test misses every one of those. Anchored on the
+  // separators so `/mycheckpoints` is not one.
+  if (/(^|\\/)checkpoint(\\/|$)/.test(location.pathname || '')) return 'checkpoint';
   const text = ((document.body && document.body.innerText) || '').toLowerCase();
   const dialog = () => !!document.querySelector('[role="dialog"]');
   const automation = [

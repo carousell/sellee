@@ -124,3 +124,22 @@ def test_the_notice_carries_its_controls(store) -> None:
 def test_telling_a_market_that_is_not_blocked_queues_nothing(store) -> None:
     assert store.report_market_block_once(_MARKET, "nothing to say") is False
     assert _notices(store) == []
+
+
+def test_strikes_survive_the_window_they_were_counted_in(store) -> None:
+    """The escalation counts walls "with no clean probe in between", so a block that lapsed and
+    was never cleared still carries what happened — otherwise a repeat offender restarts at the
+    shortest window every time."""
+    store.block_market(_MARKET, "automation", ttl_sec=10.0, now=1000.0)
+    store.block_market(_MARKET, "automation", ttl_sec=10.0, now=1005.0)
+
+    assert store.market_block(_MARKET, now=1100.0) is None  # the window lapsed
+    assert store.market_block_strikes(_MARKET) == 2  # what happened did not
+
+
+def test_a_clean_probe_resets_the_strikes(store) -> None:
+    """Clearing is the one thing that means the market is genuinely fine again."""
+    store.block_market(_MARKET, "automation", ttl_sec=10.0, now=1000.0)
+    store.clear_market_block(_MARKET)
+
+    assert store.market_block_strikes(_MARKET) == 0

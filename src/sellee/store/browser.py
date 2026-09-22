@@ -158,6 +158,17 @@ class BrowserMixin:
         )
         return [str(row["market"]) for row in rows]
 
+    def market_block_strikes(self, market: str) -> int:
+        """How many times this market has hit a wall with no clean probe in between.
+
+        Read regardless of expiry, unlike `market_block`. The row outlives its own window — only a
+        confirmed-clean probe deletes it — so a wall that comes back after a block lapsed is a
+        repeat rather than a first offence, which is what makes the escalating window mean what its
+        comment says.
+        """
+        rows = self._db.query("SELECT strikes FROM market_blocks WHERE market = ?", (market,))
+        return int(rows[0]["strikes"]) if rows else 0
+
     def clear_market_block(self, market: str) -> None:
         """Let this market be driven again. Only ever called once something has proved it is
         clear — never by a read that merely happened to succeed."""
