@@ -18,6 +18,9 @@ from sellee.browser import photo_fetch
 _JPEG = b"\xff\xd8\xff" + b"0" * 64
 _HOST = "media.karousell.com"
 _URL = f"https://{_HOST}/media/photos/products/a.jpg"
+# Facebook serves media from per-request hostnames under one suffix, which is the market whose CDN
+# is also the marketplace watching the account.
+_FB_URL = "https://scontent-sin6-1.fbcdn.net/v/t45/a.jpg"
 
 
 class _Response(io.BytesIO):
@@ -244,3 +247,38 @@ def test_a_malformed_response_does_not_escape_the_fetch(tmp_path, monkeypatch) -
     )
 
     assert photo_fetch.fetch_listing_photos([_URL], market="carousell", dest_dir=tmp_path) == []
+
+
+# --- what the CDN is told about us ----------------------------------------------------------------
+#
+# The fetch goes to the marketplace's own CDN, from the same IP as the logged-in session, carrying
+# the seller's listing page as its Referer. Meta operates fbcdn.net, so a User-Agent naming a
+# third-party tool on that request is not an inference anyone has to make — it is a labelled join
+# key handed over on a plate.
+
+
+def test_the_cdn_is_never_told_a_tool_name(opener, tmp_path) -> None:
+    photo_fetch.fetch_listing_photos([_FB_URL], market="fb", dest_dir=tmp_path, user_agent="")
+
+    sent = opener.requests[0].get_header("User-agent") or ""
+    assert "sellee" not in sent.lower()
+    assert "python" not in sent.lower()
+
+
+def test_chromes_own_user_agent_is_used_when_it_can_be_had(opener, tmp_path) -> None:
+    """The browser is right there and knows what it says it is; a string we keep in our own source
+    is one more thing to go stale."""
+    real = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/151.0.0.0"
+
+    photo_fetch.fetch_listing_photos([_FB_URL], market="fb", dest_dir=tmp_path, user_agent=real)
+
+    assert opener.requests[0].get_header("User-agent") == real
+
+
+def test_the_module_holds_no_tool_name(opener) -> None:
+    """The fallback exists for a Chrome that could not be asked, and it must not reintroduce what
+    the live answer is there to avoid."""
+    import inspect
+
+    source = inspect.getsource(photo_fetch)
+    assert "sellee/" not in source

@@ -119,6 +119,11 @@ def discover_phase(deps: SurveyDeps) -> None:
             # Disconnected since the look was owed — left owed rather than abandoned, because
             # reconnecting is a later tick that can serve it.
             continue
+        if deps.store.market_block(market):
+            # The marketplace has told the account to stop. Left owed and costing no attempt, for
+            # the same reason the browser failures below are: five unserved looks abandon the ask
+            # for good, and a wall that clears in six hours must not be what spends them.
+            continue
         try:
             _survey(deps, market, region)
         except (BrowserUnavailable, BrowserDetached) as exc:

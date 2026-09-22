@@ -38,11 +38,14 @@ class StubClient:
         tails=None,
         click_fails=False,
         blocked=None,
+        wall="",
     ):
         self.login = login
         self.conversations = conversations
         self.list_error = list_error
         self.blocked = blocked
+        # What the standalone wall probe answers — '' is a marketplace that is not refusing us.
+        self.wall = wall
         self.folder_marked = folder_marked
         self.folder_already_open = folder_already_open
         self.focus_works = focus_works
@@ -57,6 +60,8 @@ class StubClient:
         # Counted apart from navigations: an adopted thread is navigated again to read its tail,
         # which is not the lane re-deriving the listing.
         self.product_id_reads = 0
+        # Which folder reading each tick asked for, in order.
+        self.list_reads: list = []
         self.url = ""
 
     class _Exclusive:
@@ -102,6 +107,8 @@ class StubClient:
     def evaluate(self, function, **kwargs):
         # Dispatched on artifact identity, so a moved artifact surfaces as a missing case rather
         # than a substring match landing on the wrong branch.
+        if function == fb_market.BLOCK_WALL_JS:
+            return self.wall
         if function == fb_market.LOGIN_JS:
             return {"state": self.login}
         if function == fb_market.INBOX_FOLDER_JS:
@@ -115,7 +122,12 @@ class StubClient:
         if function == inbox._FOCUS_JS:
             self.calls.append(("focus", kwargs.get("target")))
             return self.focus_works
-        if function == fb_market.CONVERSATIONS_LIST_JS:
+        if function in (fb_market.CONVERSATIONS_LIST_JS, fb_market.CONVERSATIONS_RECENT_JS):
+            # Both readings answer the same rows; which one the lane asked for is recorded so a
+            # test about the sweep can say the deep one is only paid for on a sweep.
+            self.list_reads.append(
+                "deep" if function == fb_market.CONVERSATIONS_LIST_JS else "recent"
+            )
             if self.list_error is not None:
                 answer = {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
                 if self.blocked:
@@ -159,6 +171,7 @@ def _deps(store, bus, client, **overrides):
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
+        sleep=lambda _s: None,
         now=now,
     )
 
@@ -326,6 +339,23 @@ def test_the_conversation_is_not_reopened_for_a_thread_we_already_know(store, bu
     assert len(evaluated_ids) == 1, "the thread was navigated more than once for one read"
 
 
+def test_a_conversation_being_adopted_is_opened_once(store, bus, seeded) -> None:
+    """Reading the listing id and reading the tail are one visit, not two.
+
+    The id lives inside the conversation and the tail lives inside the same conversation, so the
+    lane navigated there, read the banner, adopted the thread, and navigated to the identical URL
+    again to read the messages. Each of those is a full document load of Messenger against a
+    logged-in account, and the second one bought nothing.
+    """
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.get_thread("fb:99") is not None, "the thread should have been adopted"
+    assert client.product_id_reads == 1
+    assert client.navigations.count(_THREAD) == 1
+
+
 def test_a_row_the_folder_reports_with_an_id_is_taken_at_its_word(store, bus, seeded) -> None:
     """A row already carrying the listing id must not pay for a second navigation."""
     client = StubClient(conversations=[_conv(product_id=_PRODUCT_ID)], tails={"99": []})
@@ -347,6 +377,10 @@ class SurveyStub:
         self.listings = listings if listings is not None else {"listings": [], "active_count": 0}
         self.navigations: list = []
         self.prepared = 0
+
+    def user_agent(self) -> str:
+        """What the photo fetch is told to call itself — the real client asks Chrome."""
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/151.0.0.0 Safari/537.36"
 
     class _Exclusive:
         def __init__(self, client):
@@ -1220,3 +1254,115 @@ def test_facebooks_pin_wall_is_named_in_its_own_words(store, bus, seeded) -> Non
 
     assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
     assert "PIN" in _notice_texts(store)[0]
+
+
+# --- how far the folder is scrolled ---------------------------------------------------------------
+#
+# The deep reading paginates the whole folder: up to sixty `scrollIntoView` steps on a 400ms timer,
+# each one triggering Messenger's own load-more fetch. Running that every five minutes is a scroll
+# pattern with no wheel event behind it and no variance in its spacing, all day. The sweep already
+# opens every conversation, so it is the tick that can afford it.
+
+
+def test_an_ordinary_tick_reads_only_the_screenful(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=6))
+
+    assert client.list_reads == ["recent"]
+
+
+def test_the_sweep_paginates_the_whole_folder(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client, inbox_full_sweep_every=2)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert client.list_reads == ["recent", "deep"]
+
+
+def test_a_tick_that_could_not_be_read_does_not_spend_its_way_to_a_sweep(store, bus, seeded):
+    """The counter is what picks the deep read, so a market that was blind for five ticks must not
+    arrive at one having 'used' them."""
+    blind = StubClient(list_error="the Marketplace folder is not open")
+    deps = _deps(store, bus, blind, inbox_full_sweep_every=2)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+    assert set(blind.list_reads) == {"recent"}
+
+    seeing = StubClient(conversations=[_conv()], tails={"99": []})
+    deps.browser_factory = lambda: seeing
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert seeing.list_reads == ["recent", "deep"]
+
+
+# --- a marketplace that tells the account to stop -------------------------------------------------
+#
+# The shape this exists for: Facebook put a warning on the account, nothing could see it, the failed
+# read was reported as "the marketplace declined", and the lane went on asking every five minutes.
+
+
+def test_a_wall_stops_the_market_and_is_found_before_anything_is_pressed(store, bus, seeded):
+    client = StubClient(wall="automation", conversations=[_conv()], tails={"99": []})
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb")["cause"] == "automation"
+    # Before the folder click: the first thing the agent did on seeing a warning about automated
+    # behaviour must not be to dispatch a real key press at the page.
+    assert client.clicks == []
+    assert [c for c in client.calls if c[0] == "browser_press_key"] == []
+    assert client.list_reads == []
+
+
+def test_the_seller_is_told_what_facebook_said(store, bus, seeded) -> None:
+    inbox.inbox_lane(_deps(store, bus, StubClient(wall="automation")))
+
+    text = store.claim_queued_notices(10)[0]["text"]
+    assert "automated" in text.lower()
+    assert "stopped" in text.lower()
+    # Not the old sentence, which blamed Facebook for withholding conversations and promised to
+    # keep trying.
+    assert "keep trying" not in text.lower()
+
+
+def test_a_blocked_market_is_not_read_again(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient(wall="automation"))
+    inbox.inbox_lane(deps)
+
+    second = StubClient(conversations=[_conv()], tails={"99": []})
+    deps.browser_factory = lambda: second
+    inbox.inbox_lane(deps)
+
+    assert second.navigations == []
+
+
+def test_another_market_keeps_being_read(store, bus, seeded) -> None:
+    """A wall on one marketplace is not a reason to stop reading a different one."""
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    assert store.blocked_markets() == ["fb"]
+    assert store.market_block("carousell") is None
+
+
+def test_a_checkpoint_blocks_without_any_wording_at_all(store, bus, seeded) -> None:
+    inbox.inbox_lane(_deps(store, bus, StubClient(wall="checkpoint")))
+
+    assert store.market_block("fb")["cause"] == "checkpoint"
+
+
+def test_a_clean_read_does_not_clear_a_block(store, bus, seeded) -> None:
+    """Facebook can drop an interstitial for a single page load, and letting that clear the block
+    would put the account back to full rate three hundred seconds later."""
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    deps = _deps(store, bus, StubClient(conversations=[_conv()], tails={"99": []}))
+
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is not None

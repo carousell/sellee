@@ -39,6 +39,39 @@ CAUSE_MARKET = "market"
 CAUSE_TAILS = "tails"
 CAUSE_VIEWPORT = "viewport"
 CAUSE_VERIFY = "verify"
+# The marketplace has not merely declined a read — it has told the account something about itself.
+CAUSE_AUTOMATION = "automation"
+CAUSE_CHECKPOINT = "checkpoint"
+
+# Which causes are strong enough to stop every lane on the market rather than only say so.
+#
+# Not every wall qualifies, and the line is drawn on how forgeable the evidence is, because the
+# block is durable and stops the seller's marketplace. `checkpoint` is a URL, which nothing a buyer
+# writes can produce. The automation phrases are whole sentences from the dialog Facebook served,
+# long enough that quoting one verbatim is reproducing the wall.
+#
+# `verify` is deliberately not here. Its phrases — "enter your pin", "confirm your identity" — are
+# things people type, and Facebook has a dialog open half the time, so the pairing does not narrow
+# them far enough to spend a market on. It keeps doing what it already did: tell the seller, and
+# let the next read decide. tests/integration/test_facebook_block_wall.py is where that is pinned.
+BLOCKING_CAUSES = (CAUSE_CHECKPOINT, CAUSE_AUTOMATION)
+
+# How long a market stays blocked, by how many times it has hit a wall with no clean probe in
+# between. Escalating rather than repeating, because a wall that comes straight back after the
+# first window is telling us the first window was not the answer.
+#
+# Capped rather than becoming indefinite. Indefinite exists in the schema for a cause whose evidence
+# is conclusive, and neither of these is: the seller can clear either at any time by tapping Check
+# again, and an agent that locked itself out of a market permanently on its own phrase match would
+# be a worse failure than the one it is preventing.
+_BLOCK_WINDOWS_SEC = (6 * 3600.0, 24 * 3600.0, 72 * 3600.0)
+
+
+def block_window_sec(strikes: int) -> float:
+    """How long a block lasts for a market that has hit a wall `strikes` times."""
+    index = min(max(int(strikes), 1), len(_BLOCK_WINDOWS_SEC)) - 1
+    return _BLOCK_WINDOWS_SEC[index]
+
 
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
 # the seller is signed in — no login probe ran, because the navigate before it failed. Not that the
@@ -110,12 +143,43 @@ VERIFY_NOTICE = (
     "them up on my next look. Until then your {name} app has anything I've missed."
 )
 
+# What the seller is told when the marketplace says it suspects the account of being automated.
+#
+# Says what Facebook said and does not argue with it, because the honest position is that it is
+# right: the account is being read and answered by an agent. Says plainly that everything on that
+# market has stopped, since a seller who is not told that will assume their buyers are still being
+# answered.
+#
+# Sends them to their *own* Facebook rather than to the agent's window, and that is deliberate.
+# The warning is on the account, so clearing it anywhere clears it; going to the agent's Chrome
+# would put them in the one tab `close_stray_tabs` reaps on every acquisition, and would mean
+# holding the shared browser — stopping every other marketplace — for as long as they took. This
+# way the agent is not driving the market at all while they deal with it, which is the whole point.
+AUTOMATION_NOTICE = (
+    "{name} has put a warning on your account saying it suspects automated behaviour, so I've "
+    "stopped touching {name} completely — no reading, no replies, no new listings. Your other "
+    "marketplaces are unaffected. Open {name} yourself, on your phone or your own browser, and see "
+    "what it's asking of you. Tap below when you have and I'll check whether it's clear before I "
+    "go near it again."
+)
+
+# A checkpoint is Facebook holding the account at a door only the seller can walk through, so this
+# says less and asks for the one thing that helps.
+CHECKPOINT_NOTICE = (
+    "{name} is holding your account at a security checkpoint, so I've stopped touching {name} "
+    "until it's cleared — no reading, no replies, no new listings. Your other marketplaces are "
+    "unaffected. Only you can answer it: open {name} on your phone or your own browser, do what it "
+    "asks, then tap below and I'll check."
+)
+
 _NOTICES = {
     CAUSE_PLUMBING: PLUMBING_NOTICE,
     CAUSE_MARKET: MARKET_NOTICE,
     CAUSE_TAILS: TAILS_NOTICE,
     CAUSE_VIEWPORT: VIEWPORT_NOTICE,
     CAUSE_VERIFY: VERIFY_NOTICE,
+    CAUSE_AUTOMATION: AUTOMATION_NOTICE,
+    CAUSE_CHECKPOINT: CHECKPOINT_NOTICE,
 }
 
 
@@ -131,8 +195,9 @@ def cause_for(cause: str, measured: dict | None, minimum: int = 0) -> str:
     """
     if cause not in (CAUSE_MARKET, CAUSE_TAILS):
         return cause
-    if (measured or {}).get("blocked") == CAUSE_VERIFY:
-        return CAUSE_VERIFY
+    blocked = (measured or {}).get("blocked")
+    if blocked in (CAUSE_CHECKPOINT, CAUSE_AUTOMATION, CAUSE_VERIFY):
+        return str(blocked)
     width = (measured or {}).get("width")
     if isinstance(width, bool) or not isinstance(width, (int, float)):
         return cause

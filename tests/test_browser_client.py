@@ -1162,3 +1162,150 @@ def test_a_handshake_that_fails_leaves_nothing_behind_to_block_the_next_try(make
     with pytest.raises(BrowserUnavailable):
         client.call_tool("browser_click", {})
     assert client._proc is None
+
+
+# --- typing a message the way a person does -------------------------------------------------------
+#
+# A fill arrives at the page as one `Input.insertText`: a single input event carrying the whole
+# message and not one keydown. A chat composer is instrumented at the key level — that is how it
+# draws a draft and how it emits the typing indicator its server relays to the buyer — so a message
+# with no keystrokes behind it is a message nobody typed. These run over the real transport, so what
+# is asserted is what the server would actually have received.
+
+
+class _Paced:
+    """Records the pauses instead of taking them."""
+
+    def __init__(self):
+        self.slept: list = []
+
+    def __call__(self, seconds: float) -> None:
+        self.slept.append(seconds)
+
+
+class _MaxJitter:
+    def uniform(self, low: float, high: float) -> float:
+        return high
+
+
+def _typing_client(make_client, sleep=None, rng=None):
+    return make_client(
+        {
+            "tools": {
+                "browser_click": {"text": "ok"},
+                "browser_type": {"text": "ok"},
+                "browser_press_key": {"text": "ok"},
+            }
+        },
+        sleep=sleep or (lambda _s: None),
+        rng=rng or _MaxJitter(),
+    )
+
+
+def test_a_message_is_typed_not_filled(make_client) -> None:
+    client = _typing_client(make_client)
+
+    client.type_humanly("textarea", "the reply message box", "yes, still available!")
+
+    calls = tool_calls(client)
+    assert [c["tool"] for c in calls] == ["browser_click", "browser_type"]
+    assert calls[0]["arguments"]["element"] == "the reply message box"
+    assert calls[1]["arguments"]["text"] == "yes, still available!"
+    assert calls[1]["arguments"]["slowly"] is True
+
+
+def test_a_line_break_is_shift_enter_never_a_bare_enter(make_client) -> None:
+    """A bare Enter *is* the send in most composers, which is how typing a two-line reply becomes
+    a way to deliver the first line of one."""
+    client = _typing_client(make_client)
+
+    client.type_humanly("textarea", "box", "first line\nsecond line")
+
+    calls = tool_calls(client)
+    assert [c["tool"] for c in calls] == [
+        "browser_click",
+        "browser_type",
+        "browser_press_key",
+        "browser_type",
+    ]
+    keys = [c["arguments"]["key"] for c in calls if c["tool"] == "browser_press_key"]
+    assert keys == ["Shift+Enter"]
+    assert "Enter" not in [k for k in keys if k == "Enter"]
+    assert [c["arguments"]["text"] for c in calls if c["tool"] == "browser_type"] == [
+        "first line",
+        "second line",
+    ]
+
+
+def test_leading_trailing_and_doubled_newlines_survive(make_client) -> None:
+    client = _typing_client(make_client)
+
+    client.type_humanly("textarea", "box", "\nmiddle\n\nend\n")
+
+    calls = tool_calls(client)
+    breaks = sum(1 for c in calls if c["tool"] == "browser_press_key")
+    typed = [c["arguments"]["text"] for c in calls if c["tool"] == "browser_type"]
+    # Four breaks for five segments, and no call that types nothing.
+    assert breaks == 4
+    assert typed == ["middle", "end"]
+    assert all(text for text in typed)
+
+
+def test_an_emoji_is_never_split(make_client) -> None:
+    """A line goes in one call, so nothing can land between the halves of a surrogate pair."""
+    client = _typing_client(make_client)
+    text = "deal 👍🏽 — see you at 6 ✅"
+
+    client.type_humanly("textarea", "box", text)
+
+    typed = [c["arguments"]["text"] for c in tool_calls(client) if c["tool"] == "browser_type"]
+    assert typed == [text]
+
+
+def test_the_pauses_between_lines_are_bounded(make_client) -> None:
+    """A reply must not hold the browser — and every lane waiting on it — longer than the read-back
+    that follows it."""
+    paced = _Paced()
+    client = _typing_client(make_client, sleep=paced, rng=_MaxJitter())
+
+    client.type_humanly("textarea", "box", "\n".join(str(n) for n in range(40)))
+
+    assert sum(paced.slept) <= client_typing_ceiling()
+
+
+def client_typing_ceiling() -> float:
+    from sellee.browser.client import TYPE_MAX_PAUSE_SEC
+
+    return TYPE_MAX_PAUSE_SEC
+
+
+def test_the_composer_can_be_read_before_typing(make_client) -> None:
+    client = make_client({"tools": {"browser_evaluate": {"result": "half a draft"}}})
+
+    assert client.composer_text("textarea", "box") == "half a draft"
+
+
+def test_a_composer_that_will_not_hold_still_is_still_typed_into(make_client) -> None:
+    """The regression that broke ten sends in a row on a live account.
+
+    A click waits for its target to be actionable, and a chat composer is a node the page repaints
+    as it goes — so the click resolves the element and then times out waiting for it to hold still.
+    `COMPOSER_DEFAULTS` already records exactly this about the send button and declines to use it.
+    The pointer event is worth having and must never be able to stop a buyer being answered.
+    """
+    client = make_client(
+        {
+            "tools": {
+                "browser_click": {"error": "TimeoutError: Timeout 5000ms exceeded."},
+                "browser_type": {"text": "ok"},
+            }
+        },
+        sleep=lambda _s: None,
+        rng=_MaxJitter(),
+    )
+
+    client.type_humanly("textarea", "the reply message box", "yes, still available!")
+
+    typed = [c for c in tool_calls(client) if c["tool"] == "browser_type"]
+    assert [c["arguments"]["text"] for c in typed] == ["yes, still available!"]
+    assert typed[0]["arguments"]["slowly"] is True

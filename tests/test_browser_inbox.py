@@ -122,6 +122,7 @@ def _deps(store, bus, client, **overrides):
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
+        sleep=lambda _s: None,
         now=now,
     )
 
@@ -881,7 +882,9 @@ def test_no_browser_degrades_with_one_notice_and_no_crash(store, bus, seeded) ->
     def factory():
         raise BrowserUnavailable("npx not found")
 
-    deps = inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=factory)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=factory, sleep=lambda _s: None
+    )
     inbox.inbox_lane(deps)
     inbox.inbox_lane(deps)
     assert store.count_queued_notices() == 1
@@ -997,6 +1000,7 @@ def _clock_deps(store, bus, client, clock, **overrides):
         bus=bus,
         config=Config(**overrides) if overrides else Config(),
         browser_factory=lambda: client,
+        sleep=lambda _s: None,
         now=lambda: clock["t"],
     )
 
@@ -1151,3 +1155,169 @@ def test_our_own_plumbing_failure_is_never_blamed_on_the_window(store, bus, seed
     """A server that lost Chrome is not something the seller can drag away; only a market cause
     may be promoted."""
     assert blindness.cause_for(blindness.CAUSE_PLUMBING, {"width": 400}) == blindness.CAUSE_PLUMBING
+
+
+# --- reading at a human pace ----------------------------------------------------------------------
+#
+# The lane opened a conversation, scraped it, and navigated straight to the next one with nothing
+# in between — N conversations in as fast as the marketplace would serve them, twice an hour, with
+# no gap a person reading their messages would ever produce.
+
+
+class _RecordingSleep:
+    def __init__(self):
+        self.pauses: list = []
+
+    def __call__(self, seconds: float) -> None:
+        self.pauses.append(seconds)
+
+
+class _FixedRandom:
+    """No shuffle, no jitter — so a test about how long a pause is does not also depend on the
+    order conversations came out in or on the draw inside the pause."""
+
+    def shuffle(self, seq) -> None:
+        return None
+
+    def uniform(self, low: float, high: float) -> float:
+        return 1.0
+
+
+def _dwell_deps(store, bus, client, sleep, **overrides):
+    return inbox.InboxDeps(
+        store=store,
+        bus=bus,
+        config=Config(**overrides) if overrides else Config(),
+        browser_factory=lambda: client,
+        sleep=sleep,
+        rng=_FixedRandom(),
+    )
+
+
+def test_reading_a_conversation_is_followed_by_a_pause(store, bus, seeded) -> None:
+    _thread(store, seeded)
+    sleep = _RecordingSleep()
+    client = StubClient(conversations=[_conv()], tails={"99": [_bubble("still available?")]})
+
+    inbox.inbox_lane(_dwell_deps(store, bus, client, sleep))
+
+    assert len(sleep.pauses) == 1
+    assert sleep.pauses[0] > 0.0
+
+
+def test_a_longer_message_is_dwelt_on_for_longer(store, bus, seeded) -> None:
+    """A pause that ignored what was on screen would be its own constant to notice."""
+    _thread(store, seeded)
+    _thread(store, seeded, tid="carousell:98", handle="ann")
+    sleep = _RecordingSleep()
+    client = StubClient(
+        conversations=[_conv(), _conv(thread_id="98", handle="ann")],
+        tails={
+            "99": [_bubble("hi")],
+            "98": [_bubble("is this still available and can you deliver it? " * 12)],
+        },
+    )
+
+    inbox.inbox_lane(_dwell_deps(store, bus, client, sleep))
+
+    brief, considered = sleep.pauses
+    assert considered > brief
+
+
+def test_the_pause_is_capped(store, bus, seeded) -> None:
+    """A buyer who pastes an essay must not stall the lane behind them."""
+    _thread(store, seeded)
+    sleep = _RecordingSleep()
+    client = StubClient(conversations=[_conv()], tails={"99": [_bubble("x" * 20_000)]})
+
+    inbox.inbox_lane(_dwell_deps(store, bus, client, sleep))
+
+    assert max(sleep.pauses) <= inbox.READ_DWELL_CAP_SEC
+
+
+def test_an_unreadable_conversation_is_not_dwelt_on(store, bus, seeded) -> None:
+    """Nothing was read, so there is nothing to have been reading."""
+    _thread(store, seeded)
+    sleep = _RecordingSleep()
+    client = StubClient(conversations=[_conv()], tails={"99": None})
+
+    inbox.inbox_lane(_dwell_deps(store, bus, client, sleep))
+
+    assert sleep.pauses == []
+
+
+# --- the order conversations are opened in --------------------------------------------------------
+
+
+class _ReversingRandom:
+    """A shuffle with a shape a test can assert on."""
+
+    def __init__(self):
+        self.shuffled = 0
+
+    def shuffle(self, seq) -> None:
+        self.shuffled += 1
+        seq.reverse()
+
+    def uniform(self, low: float, high: float) -> float:
+        return high
+
+
+def _row(native):
+    return {"thread_id": native, "handle": "bob"}
+
+
+def test_the_open_order_is_shuffled(store, bus) -> None:
+    """Top-to-bottom, every sweep, is a fixed traversal of the same list."""
+    rng = _ReversingRandom()
+    rows = [_row("1"), _row("2"), _row("3")]
+
+    ordered = inbox._read_order(rows, "carousell", {}, rng)
+
+    assert rng.shuffled == 1
+    assert [r["thread_id"] for r in ordered] == ["3", "2", "1"]
+
+
+def test_an_unsettled_thread_is_opened_before_anything_else(store, bus) -> None:
+    """A send we cannot account for is the one thing that must not wait behind a shuffle: its
+    thread is opened to find out whether the buyer already has the message."""
+    rng = _ReversingRandom()
+    rows = [_row("1"), _row("2"), _row("3")]
+
+    ordered = inbox._read_order(rows, "carousell", {"carousell:2": [{}]}, rng)
+
+    assert ordered[0]["thread_id"] == "2"
+    assert sorted(r["thread_id"] for r in ordered) == ["1", "2", "3"]
+
+
+def test_ordering_survives_a_row_with_no_thread_id(store, bus) -> None:
+    """The list is the marketplace's, so a malformed row is its prerogative, not a crash."""
+    rows = [{"handle": "bob"}, _row("2")]
+
+    ordered = inbox._read_order(rows, "carousell", {}, _ReversingRandom())
+
+    assert len(ordered) == 2
+
+
+def test_a_tick_cannot_spend_more_than_its_dwell_budget(store, bus, seeded) -> None:
+    """The read holds the browser exclusively for the whole tick, so the dwells have a ceiling
+    together as well as one apiece — otherwise a sweep of twenty conversations sits on it for
+    minutes and a buyer waiting on a reply waits behind everyone else's reading."""
+    conversations, tails = [], {}
+    for n in range(20):
+        native = str(100 + n)
+        _thread(store, seeded, tid=f"carousell:{native}", handle=f"buyer{n}")
+        conversations.append(_conv(thread_id=native, handle=f"buyer{n}"))
+        tails[native] = [_bubble("is this available? " * 40)]
+    sleep = _RecordingSleep()
+
+    inbox.inbox_lane(
+        _dwell_deps(store, bus, StubClient(conversations=conversations, tails=tails), sleep)
+    )
+
+    # Every conversation is still read; what runs out is the time spent looking at them, and a
+    # spent budget means no pause at all rather than a pause of zero.
+    assert store.get_thread("carousell:100")["messages"]
+    assert store.get_thread("carousell:119")["messages"]
+    assert sum(sleep.pauses) <= inbox.READ_DWELL_TICK_BUDGET_SEC
+    assert len(sleep.pauses) < 20

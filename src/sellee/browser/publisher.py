@@ -29,6 +29,10 @@ from sellee.browser.client import BrowserError
 
 log = logging.getLogger(__name__)
 
+# Between one form field and the next. Shorter than a step, because moving between fields is not
+# the same act as waiting for a page to respond to one.
+FIELD_SETTLE_SEC = 1.5
+
 # The fields that must be marked before anything is typed. The two text inputs are
 # indistinguishable except by label, so a partly-recognised form could put the price in the title.
 REQUIRED_FIELDS = ("title", "price", "next")
@@ -80,6 +84,7 @@ def publish(
 
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
+    _refuse_at_a_wall(client, adapter)
     _open_all_fields(client, adapter, pause)
     found = client.evaluate(adapter.publish_fields_js) or {}
     _refuse_unless_ready(adapter.market, found)
@@ -87,7 +92,7 @@ def publish(
     if photos:
         _attach(client, adapter, photos, found, pause)
         pause(STEP_SETTLE_SEC)
-    _fill_text(client, adapter, item, found)
+    _fill_text(client, adapter, item, found, pause)
     condition = adapter.publish_condition_for(str(item.get("condition") or ""))
     _choose(client, adapter, "condition", condition, found, pause)
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
@@ -149,24 +154,45 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
         ) from exc
 
 
-def _fill_text(client, adapter, item: dict, found: dict) -> None:
+def _refuse_at_a_wall(client, adapter) -> None:
+    """Stop before acting if the marketplace is refusing the account.
+
+    Raised as `PublishNotAttempted` and retryable: a wall is exactly the condition that clears on
+    its own or by the seller, and nothing has been created, so the pair keeps its attempt.
+
+    A probe that will not run is not evidence of a wall — the form reads below report their own
+    failures, and refusing on a failed probe would stop publishing on a browser hiccup.
+    """
+    if not adapter.block_wall_js:
+        return
+    try:
+        wall = str(client.evaluate(adapter.block_wall_js) or "")
+    except BrowserError:
+        return
+    if wall:
+        raise PublishNotAttempted(
+            f"{adapter.market} is refusing the account ({wall}) — nothing was filled in",
+            retryable=True,
+        )
+
+
+def _fill_text(client, adapter, item: dict, found: dict, pause) -> None:
     """Type the fields that are text. Never `value =`: the form listens for real input, and a value
-    set from script leaves React holding the old one — which publishes an empty listing."""
+    set from script leaves React holding the old one — which publishes an empty listing.
+
+    Typed rather than filled, and with a gap between fields. A create form is instrumented the same
+    way a composer is — per-field focus and input events feed its draft autosave and its abandonment
+    funnel — and three fields each receiving their whole value in one event, milliseconds apart, is
+    not a form anybody filled in.
+    """
     for step, text in _text_fields(item):
         if step not in (found.get("marked") or []) or not text:
             continue
         try:
-            client.call_tool(
-                "browser_type",
-                {
-                    "target": adapter.publish_target(step),
-                    "element": f"the {step} field",
-                    "text": str(text),
-                    "submit": False,
-                },
-            )
+            client.type_humanly(adapter.publish_target(step), f"the {step} field", str(text))
         except BrowserError as exc:
             raise PublishNotAttempted(f"could not fill {step}: {exc}", retryable=True) from exc
+        pause(FIELD_SETTLE_SEC)
 
 
 def _text_fields(item: dict) -> list:
@@ -261,6 +287,10 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
     # submits nothing — treating that as "may have gone through" would retire the item over a
     # missing photograph. Read fresh: the caller's `found` predates filling, when Next is always
     # disabled.
+    # Asked again on the safe side of the line, because a publish takes minutes and a wall can go
+    # up inside one. Everything past the Next below may have created a listing, so this is the last
+    # moment refusing still costs nothing.
+    _refuse_at_a_wall(client, adapter)
     ready = client.evaluate(adapter.publish_fields_js) or {}
     if ready.get("next_enabled") is False:
         raise PublishNotAttempted(

@@ -29,14 +29,22 @@ _VALID_PACING_MODES = {"normal", "fast"}
 # and it is what the fake API servers and the staged-release tests listen on.
 _PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 
-# Account-safety ceilings, in code. Pacing config is validated in two directions: a malformed
-# value is rejected (fail loud, like every other knob), but a well-formed value that is *looser*
-# than these ceilings is clamped down — a tampered or fat-fingered config can only ever tighten
-# pacing, never relax it past the ceiling. The delay ceiling also bounds how long a healthy
-# send intent can sit between reserve and send, so the stale-intent sweep's grace window can
-# never fold a merely-jittered send as a crash orphan.
+# Account-safety ceilings, in code. The two are not the same kind of bound, and treating them
+# alike is what made a human-looking reply impossible to configure.
+#
+# The cap is a safety bound: a higher cap is a *looser* one, so a malformed value is rejected and
+# a well-formed value above the ceiling is clamped down. A tampered or fat-fingered config can
+# only ever tighten pacing.
+#
+# The delay ceiling is mechanical. A longer pause before a reply is *tighter*, not looser — it is
+# the disguise, and clamping it down made the config say one thing and the daemon do another, so
+# an operator asking for a pause a person could plausibly have taken got 3 seconds instead. What
+# the ceiling actually protects is the stale-intent sweep: a healthy send sits between reserve and
+# send for the length of its jitter, and the sweep's grace (intent_sweep.GRACE_SEC, 600s) must
+# never fold one as a crash orphan. 45s leaves that an order of magnitude of headroom, and a value
+# past it is refused rather than quietly shortened.
 HARD_CAP_CEILING = 60
-HARD_DELAY_CEILING_SEC = 3.0
+HARD_DELAY_CEILING_SEC = 45.0
 
 
 class ConfigError(Exception):
@@ -115,6 +123,10 @@ class Config:
     # it deliberately drops the account-safety disguise. The pacing engine reads this; the
     # stored knob values themselves are untouched, so tuned values survive a round-trip.
     pacing_mode: str = "normal"
+    # When fast stops, as a Unix timestamp. Required whenever the mode is fast, because a demo
+    # ends and nothing else here would: left set afterwards, the account runs at five times the
+    # cap with no pause between sends, through the night, until somebody reads this file.
+    pacing_fast_until: float | None = None
     # How often the daemon looks for a new release, and where it looks. The check is one small
     # HTTP GET and it only ever queues a notice — nothing installs itself — so this is about how
     # soon a seller hears, not about load. Null base URL means the published one.
@@ -340,6 +352,12 @@ def _validate(raw: dict) -> Config:
         if key in raw:
             values[key] = _validate_delay_pair(key, raw[key])
 
+    if "pacing_fast_until" in raw:
+        until = raw["pacing_fast_until"]
+        if until is not None and not _is_real_number(until):
+            raise ConfigError(f"pacing_fast_until must be a Unix timestamp or null, got {until!r}")
+        values["pacing_fast_until"] = None if until is None else float(until)
+
     if "pacing_mode" in raw:
         mode = raw["pacing_mode"]
         if mode not in _VALID_PACING_MODES:
@@ -347,6 +365,11 @@ def _validate(raw: dict) -> Config:
                 f"pacing_mode must be one of {sorted(_VALID_PACING_MODES)}, got {mode!r}"
             )
         values["pacing_mode"] = mode
+        if mode == "fast" and values.get("pacing_fast_until") is None:
+            raise ConfigError(
+                "pacing_mode 'fast' needs pacing_fast_until (a Unix timestamp): it drops the cap, "
+                "the jitter and quiet hours all at once, so it has to say when it stops"
+            )
 
     if "update_check_interval_sec" in raw:
         interval = raw["update_check_interval_sec"]
@@ -391,14 +414,18 @@ def _validate(raw: dict) -> Config:
 
 
 def _validate_delay_pair(key: str, value: object) -> tuple:
-    """Validate a [min, max] jitter pair; clamp max (then min) down to the delay ceiling."""
+    """Validate a [min, max] jitter pair. Refused, not clamped, past the delay ceiling — see the
+    ceiling's own comment for why this one is loud where the cap is silent."""
     if not isinstance(value, list) or len(value) != 2 or not all(_is_real_number(v) for v in value):
         raise ConfigError(f"{key} must be a [min, max] pair of numbers, got {value!r}")
     delay_min, delay_max = float(value[0]), float(value[1])
     if delay_min < 0 or delay_max < delay_min:
         raise ConfigError(f"{key} must satisfy 0 <= min <= max, got {value!r}")
-    delay_max = min(delay_max, HARD_DELAY_CEILING_SEC)
-    delay_min = min(delay_min, delay_max)
+    if delay_max > HARD_DELAY_CEILING_SEC:
+        raise ConfigError(
+            f"{key} must be at most {HARD_DELAY_CEILING_SEC:g}s — a longer wait would let the "
+            f"stale-intent sweep fold a send that is merely waiting; got {value!r}"
+        )
     return (delay_min, delay_max)
 
 

@@ -59,6 +59,10 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 16),
         ("data", 17),
         ("data", 18),
+        # 19 and 20 are the craigslist and mail-relay work, in flight on their own branch. The
+        # numbers are reserved rather than reused: two branches that both took 19 would apply a
+        # different schema under the same version on whichever install saw them in the wrong order.
+        ("data", 21),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -82,6 +86,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "thread_listing_lookups")
     assert _table_exists(data_db, "market_surveys")
     assert _table_exists(data_db, "discovered_listings")
+    assert _table_exists(data_db, "market_blocks")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -102,6 +107,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         16,
         17,
         18,
+        # See the note on the applied-set above for why 19 and 20 are not ours to take.
+        21,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

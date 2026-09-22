@@ -104,6 +104,12 @@ class BrowserReplySink:
         url = self._thread_url(thread)
         if url is None:
             raise SendNotAttempted(f"no recorded thread URL for {thread['thread_id']!r}")
+        # Fail-closed backstop. The reply lane already holds passes for a blocked market, so
+        # reaching here means something else queued this one — and `SendNotAttempted` is exactly
+        # right: nothing was typed, the intent stays pending, and the buyer is answered when the
+        # market clears.
+        if self._store.market_block(market):
+            raise SendNotAttempted(f"{market!r} has asked us to stop, so nothing is being sent")
 
         try:
             with self._client.exclusive():
@@ -113,12 +119,9 @@ class BrowserReplySink:
                     # agent's tab brought forward first.
                     self._client.ensure_frontmost(url)
                 box = self._locate(market, adapter, _MESSAGE_BOX)
-                # Filled in one go rather than typed character by character, so a reply containing a
-                # newline cannot commit part-way through itself and send half a message.
-                self._client.call_tool(
-                    "browser_type",
-                    {"target": box.target, "element": "the reply message box", "text": text},
-                )
+                self._refuse_over_a_draft(market, thread, box, text)
+                self._client.type_humanly(box.target, "the reply message box", text)
+                self._refuse_at_a_wall(adapter, market, thread)
                 if not self._commit(adapter, market, box):
                     # The page did not take it, so nothing was delivered and this is still safe to
                     # retry — the one case a key press could never tell us about.
@@ -191,6 +194,51 @@ class BrowserReplySink:
         if not native:
             return None
         return marketplaces.market_url(thread["market"], "thread", self._region, thread_id=native)
+
+    def _refuse_at_a_wall(self, adapter, market: str, thread: dict) -> None:
+        """One more look, on the safe side of the commit.
+
+        The block is checked when the send starts, but typing a reply takes seconds and a wall can
+        go up inside them. Past the commit the buyer may already have the message, so this is the
+        last moment at which refusing still means nothing was delivered.
+        """
+        if not adapter.block_wall_js:
+            return
+        try:
+            wall = str(self._client.evaluate(adapter.block_wall_js) or "")
+        except BrowserError:
+            # Not evidence of a wall, and the read-back after the commit is what actually decides
+            # whether this landed.
+            return
+        if not wall:
+            return
+        self._publish(market, thread, "refused", f"the marketplace is refusing us ({wall})")
+        raise SendNotAttempted(f"{market!r} put up a {wall} wall before this could be sent")
+
+    def _refuse_over_a_draft(self, market: str, thread: dict, box, text: str) -> None:
+        """Fail closed on a composer that already holds something.
+
+        Typing appends, so a draft the seller was part-way through would be sent with our reply
+        stuck on the end of it; clearing first would throw their words away instead. Neither is
+        ours to choose, and both are worse than a send that did not happen — this raises before
+        anything is typed, so the intent stays pending and the reply is retried.
+
+        The one thing that is not a draft is our own text, already in the box from an attempt that
+        failed after typing and before committing. Retyping that would send it twice over, so it
+        is left where it is and the commit below picks it up.
+        """
+        try:
+            existing = self._client.composer_text(box.target, "the reply message box")
+        except BrowserError:
+            # A probe that would not run says nothing about what is in the box. Refusing here would
+            # strand every reply on a market whose composer we cannot read, and the read-back after
+            # the commit is what actually decides whether this landed.
+            log.debug("could not read the composer before typing on %s", market, exc_info=True)
+            return
+        if not existing or reconcile.same_text(existing, text):
+            return
+        self._publish(market, thread, "refused", "the composer already holds a draft")
+        raise SendNotAttempted("the composer already holds something that is not this reply")
 
     def _locate(self, market: str, adapter, step: str):
         """Resolve one composer control, or fail closed.

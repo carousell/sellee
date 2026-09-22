@@ -23,6 +23,7 @@ Three rules keep the lane honest:
 from __future__ import annotations
 
 import logging
+import random
 import re
 import time
 from dataclasses import dataclass, field
@@ -68,6 +69,24 @@ UNAVAILABLE_NOTICE = (
     "The carousell.ai side is unaffected. Details: {reason}"
 )
 
+# How long the lane sits on a conversation it has just read before moving to the next one.
+#
+# Not decoration. A sweep opened every active conversation back to back, as fast as the marketplace
+# would serve them, with nothing between the scrape of one and the navigation to the next — a shape
+# no person reading their messages produces. The base is the glance a conversation costs even when
+# nothing in it is new; the per-character part is the reading itself, and it is measured on what is
+# *new*, because that is what there is to read. The cap is what stops a buyer pasting an essay from
+# stalling every conversation queued behind them.
+READ_DWELL_BASE_SEC = 1.5
+READ_DWELL_PER_CHAR_SEC = 0.04
+READ_DWELL_CAP_SEC = 12.0
+# Applied to the whole dwell, so the pause is not itself a constant to measure.
+READ_DWELL_JITTER = (0.7, 1.3)
+# And what every dwell in one market's read may add up to. The read holds the browser exclusively
+# for its whole tick, so without this a sweep of twenty conversations could sit on it for minutes
+# and a buyer waiting on a reply would wait behind the reading of everyone else's.
+READ_DWELL_TICK_BUDGET_SEC = 30.0
+
 
 @dataclass
 class InboxDeps:
@@ -84,6 +103,10 @@ class InboxDeps:
     # is only set on the first failure of a run, so a market that flaps does not keep resetting it.
     blind_since: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
+    # How the lane waits, and where its randomness comes from. Injected so a test can drive the
+    # read dwell without spending it.
+    sleep: Callable[[float], None] = time.sleep
+    rng: object = random
 
 
 def seller_region(store) -> str | None:
@@ -156,6 +179,9 @@ def inbox_lane(deps: InboxDeps) -> None:
         adapter = market_adapters.get_adapter(market)
         if adapter is None:
             continue  # a registry entry with no adapter yet is not a market we can read
+        if deps.store.market_block(market):
+            # This market has told the account to stop. Every other market still reads.
+            continue
         try:
             with client.exclusive():
                 _read_market(deps, client, adapter, region)
@@ -176,6 +202,29 @@ def inbox_lane(deps: InboxDeps) -> None:
     # Recovery is a tick that ran into no unavailability, so a condition that persists mid-loop
     # keeps its one notice instead of being re-queued every tick.
     _clear_notice(deps, "unavailable")
+
+
+def _walled(deps: InboxDeps, client, adapter, market: str) -> bool:
+    """Whether the marketplace is refusing this account, asked before anything acts on the page.
+
+    Its own read rather than a by-product of a failed one. A wall used to be discoverable only by a
+    read that had already spent a navigation and dispatched a real key press at the rail — so the
+    first thing the agent did on seeing a warning about automated behaviour was press a key. One
+    extra evaluate on a lane that ticks every few minutes is not a cost worth that.
+    """
+    if not adapter.block_wall_js:
+        return False
+    try:
+        cause = str(client.evaluate(adapter.block_wall_js) or "")
+    except BrowserError:
+        # A probe that would not run is not evidence of a wall, and the reads below report their
+        # own failures.
+        log.debug("could not check %s for a wall", market, exc_info=True)
+        return False
+    if cause not in blindness.BLOCKING_CAUSES:
+        return False
+    _block_market(deps, market, cause)
+    return True
 
 
 def _list_unreadable(answer) -> bool:
@@ -223,14 +272,29 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         if market_adapters.can_survey(market, region):
             deps.store.request_market_survey(market)
 
+    if _walled(deps, client, adapter, market):
+        return
+
     _open_inbox_folder(client, adapter)
 
-    answer = client.evaluate(adapter.conversations_list_js)
+    # Decided before the read, because it chooses which read to make — but only committed to
+    # `deps.ticks` once one has answered, so a market that cannot be seen does not spend its way
+    # toward a sweep while blind.
+    tick = deps.ticks.get(market, 0) + 1
+    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+    # The sweep opens every conversation anyway, so it is the tick that can afford to paginate the
+    # whole folder; an ordinary tick reads the screenful already painted. Nothing is missed by that:
+    # the folder is ordered by recency, so a buyer who has written is at the top of it.
+    list_js = adapter.conversations_list_js
+    if not full_sweep and adapter.conversations_recent_js:
+        list_js = adapter.conversations_recent_js
+
+    answer = client.evaluate(list_js)
     if _list_unreadable(answer):
         # The quiet read abstained. A list that only builds itself while visible is the one read a
         # background tab cannot serve, so the tab is brought forward here — and only here, once the
         # cheap read has already said it was not enough.
-        answer = client.read_forward(adapter.conversations_list_js)
+        answer = client.read_forward(list_js)
     if _list_unreadable(answer):
         # The list came back as a failure rather than content; unlike a DOM read that finds
         # nothing, this cannot be mistaken for an empty inbox. Everything the artifact measured
@@ -249,10 +313,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         )
         return
     rows = answer["conversations"]
-
-    tick = deps.ticks.get(market, 0) + 1
     deps.ticks[market] = tick
-    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
 
     known = {t["thread_id"]: t for t in deps.store.list_threads(side="sell")}
     items = deps.store.list_items()
@@ -273,7 +334,9 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # Which conversations this tick already opened, so the chase below only pays for the ones the
     # list never named.
     visited: set = set()
-    for row in rows:
+    # Shared across every conversation this tick reads; see READ_DWELL_TICK_BUDGET_SEC.
+    dwell_budget = [READ_DWELL_TICK_BUDGET_SEC]
+    for row in _read_order(rows, market, unsettled, deps.rng):
         if not isinstance(row, dict):
             continue
         thread_id = _thread_key(market, row.get("thread_id"))
@@ -281,8 +344,11 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         if not thread_id or handle.lower() in adapter.system_handles:
             continue  # the platform talking to the seller, not a buyer
         thread = known.get(thread_id)
+        # Whether reading the listing id has already left this conversation on screen. Adoption
+        # between here and the tail read touches only the store, so the tab has not moved.
+        on_screen = False
         if thread is None:
-            row = _with_product_id(deps, client, adapter, market, thread_id, row, region)
+            row, on_screen = _with_product_id(deps, client, adapter, market, thread_id, row, region)
             if _adopt(deps, market, adapter, thread_id, row, handle, items, unplaceable):
                 thread = deps.store.get_thread(thread_id)
             if thread is None:
@@ -296,7 +362,18 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             continue
         opened += 1
         visited.add(thread_id)
-        fresh = _read_thread(deps, client, adapter, thread, region, row, unsettled, tail_measured)
+        fresh = _read_thread(
+            deps,
+            client,
+            adapter,
+            thread,
+            region,
+            row,
+            unsettled,
+            tail_measured,
+            on_screen=on_screen,
+            dwell_budget=dwell_budget,
+        )
         if fresh is None:
             unreadable += 1
         else:
@@ -409,9 +486,14 @@ def _listing_key(row: dict) -> str:
 
 def _with_product_id(
     deps: InboxDeps, client, adapter, market: str, thread_id: str, row: dict, region
-) -> dict:
+) -> tuple:
     """Fill in which listing a conversation is about, for a market that names it only inside the
     conversation itself.
+
+    Answers `(row, open)` — `open` saying the conversation is on screen right now, so the caller
+    can read its tail without loading the same page a second time. False whenever this returned
+    without navigating, and false when the navigation itself raised: the question is where the tab
+    actually is, not where it was sent.
 
     Facebook's folder rows carry the listing's title, not its id, and a title is never matched on —
     `reconcile.matching_items` joins on the id or refuses, which is what stops a conversation being
@@ -425,16 +507,16 @@ def _with_product_id(
     error here; it becomes an `unknown_listing` in `_adopt`.
     """
     if not adapter.product_id_js or row.get("product_id"):
-        return row
+        return row, False
     row_key = _listing_key(row)
     remembered = deps.store.thread_listing_lookup(thread_id)
     if remembered is not None and remembered["row_key"] == row_key:
         product_id = remembered["product_id"]
-        return {**row, "product_id": product_id} if product_id else row
+        return ({**row, "product_id": product_id} if product_id else row), False
     native = thread_id.split(":", 1)[1] if ":" in thread_id else ""
     url = marketplaces.market_url(market, "thread", region, thread_id=native) if native else None
     if url is None:
-        return row
+        return row, False
     try:
         # Quiet on purpose, with no forward retry: a thread whose listing cannot be resolved is an
         # ordinary `unknown_listing`, not a starved read, and those repeat on every sweep. Spending
@@ -443,12 +525,14 @@ def _with_product_id(
         answer = client.evaluate(adapter.product_id_js) or {}
     except BrowserError:
         # Not remembered: a failed read is not an answer, and caching it would hide the
-        # conversation for as long as it kept naming the same listing.
+        # conversation for as long as it kept naming the same listing. The navigation may or may
+        # not have landed before this raised, so the tab's whereabouts are unknown: say closed and
+        # let the tail read pay for its own navigation.
         log.warning("could not read the listing behind %s", thread_id, exc_info=True)
-        return row
+        return row, False
     product_id = str(answer.get("product_id") or "")
     deps.store.record_thread_listing(thread_id, market, product_id, row_key)
-    return {**row, "product_id": product_id} if product_id else row
+    return ({**row, "product_id": product_id} if product_id else row), True
 
 
 def _thread_key(market: str, native_id) -> str | None:
@@ -677,6 +761,8 @@ def _read_thread(
     row: dict | None = None,
     unsettled: dict | None = None,
     measured_out: dict | None = None,
+    on_screen: bool = False,
+    dwell_budget: list | None = None,
 ) -> int | None:
     """Open one thread and reconcile its tail. Returns how many rows were new, or None when the
     conversation could not be read at all — which the caller counts as being blind on this market,
@@ -687,6 +773,11 @@ def _read_thread(
     we cannot see what we were told is there; and if the list reports unread content but the
     reconciler finds nothing fresh, a repeat past the tail window would otherwise pass for a
     quiet buyer.
+
+    `on_screen` says this conversation is already the page the tab is on, so the tail is read
+    where it already is. Only the caller knows that — it is true of a thread just opened to read
+    the listing id off its banner, and a second load of the same address buys nothing but another
+    cold boot of the marketplace against a logged-in account.
     """
     market = thread["market"]
     native = thread["thread_id"].split(":", 1)[1] if ":" in thread["thread_id"] else ""
@@ -694,7 +785,8 @@ def _read_thread(
     if url is None:
         log.warning("no recorded thread URL template for %s", market)
         return None
-    client.navigate(url)
+    if not on_screen:
+        client.navigate(url)
     raw = client.evaluate(adapter.conversation_tail_js)
     if reconcile.unreadable_reason(raw) is not None:
         # Same bargain as the list read: the quiet read is tried first and the tab is only brought
@@ -775,7 +867,52 @@ def _read_thread(
                 "scam_verdict": verdict,
             },
         )
+    # Paid on every conversation we could actually read, including one with nothing new: a person
+    # who opens a chat and finds no new message still spent a moment finding that out. Not paid on
+    # an unreadable one, which returned above — there was nothing on screen to have been reading.
+    _dwell(deps, sum(len(entry["text"] or "") for entry in fresh), dwell_budget)
     return len(fresh)
+
+
+def _dwell(deps: InboxDeps, fresh_chars: int, budget: list | None) -> None:
+    """Sit on the conversation just read, within what this tick has left to spend."""
+    pause = _read_dwell_sec(fresh_chars, deps.rng)
+    if budget is not None:
+        pause = min(pause, budget[0])
+        budget[0] -= pause
+    if pause > 0:
+        deps.sleep(pause)
+
+
+def _read_order(rows: list, market: str, unsettled: dict, rng) -> list:
+    """The order this tick opens conversations in.
+
+    The marketplace hands the list back newest-first, and walking it top to bottom every sweep is a
+    fixed traversal of the same conversations in the same sequence — a shape that says a program
+    read the list, not a person.
+
+    Shuffled, except that a thread holding a send we cannot account for goes first whatever the
+    draw. That is not a preference: `_chase_unsettled` exists because an unconfirmed send has to be
+    resolved before the thread is reasoned about, and leaving it to land at the end of a shuffle
+    would put it behind every other conversation on the market.
+    """
+    chase, rest = [], []
+    for row in rows:
+        key = _thread_key(market, row.get("thread_id")) if isinstance(row, dict) else None
+        (chase if key and key in unsettled else rest).append(row)
+    rng.shuffle(rest)
+    return chase + rest
+
+
+def _read_dwell_sec(fresh_chars: int, rng) -> float:
+    """How long to sit on a conversation that has just been read.
+
+    The cap is applied after the jitter rather than before, so it bounds the pause actually taken —
+    capping the span first would still let a long message hold the lane for a third longer than the
+    ceiling says.
+    """
+    span = READ_DWELL_BASE_SEC + READ_DWELL_PER_CHAR_SEC * fresh_chars
+    return min(span * rng.uniform(*READ_DWELL_JITTER), READ_DWELL_CAP_SEC)
 
 
 def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
@@ -812,14 +949,18 @@ def paced_out_markets(store, config, now=None) -> tuple:
     Per market, because the cap is a per-marketplace-account ledger. `peek_action` records nothing,
     so asking never spends the slot the real send needs.
     """
-    cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store))
     now = time.time() if now is None else now
+    cfg = pacing_engine.resolve(config, settings.quiet_window_minutes(store), now=now)
     waiting = {row["market"] for row in store.threads_with_unhandled_inbound()}
+    # A blocked market joins the paced-out ones because the answer is the same shape: hold the
+    # pass, never the buyer. The rows stay eligible and a later tick claims them once it clears.
+    blocked = set(store.blocked_markets(now=now))
     return tuple(
         sorted(
             market
             for market in waiting
-            if store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
+            if market in blocked
+            or store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
             != "go"
         )
     )
@@ -897,6 +1038,12 @@ def _count_blind(
     payload = {k: v for k, v in (measured or {}).items() if isinstance(k, str)}
     payload.update({"market": market, "failures": failures, "cause": cause, "reason": reason[:200]})
     deps.bus.publish("browser.blind", payload)
+    if cause in blindness.BLOCKING_CAUSES:
+        # Not a fault of ours and not a run to wait out: the marketplace has said something about
+        # the account. Stop it now rather than after `browser_blind_after` more reads, and tell the
+        # seller on this tick rather than on the third.
+        _block_market(deps, market, cause, measured)
+        return
     if failures >= int(deps.config.browser_blind_after):
         _notify_once(
             deps,
@@ -911,6 +1058,38 @@ def _count_blind(
                 verify_notice=adapter.verify_notice if adapter else "",
             ),
         )
+
+
+def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | None = None) -> None:
+    """Stop driving a market that has told the account something, and say so once.
+
+    Durable, because a wall makes a restart likely — the seller is being told something is wrong —
+    and every other brake here is an in-process counter that a restart re-arms toward reading more.
+
+    The window escalates with strikes and never becomes indefinite: the seller clears it from the
+    notice, and an agent that locked itself out of a market forever on its own phrase match would be
+    a worse failure than the one being prevented.
+    """
+    adapter = market_adapters.get_adapter(market)
+    deps.store.block_market(
+        market,
+        cause,
+        ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
+    )
+    told = deps.store.report_market_block_once(
+        market,
+        blindness.notice_for(
+            cause,
+            name=marketplaces.display_name(market),
+            where=window.where(),
+            verify_notice=adapter.verify_notice if adapter else "",
+        ),
+        fastpaths.check_again_controls(market),
+    )
+    deps.bus.publish(
+        "browser.blocked",
+        {"market": market, "cause": cause, "told": told, **(measured or {})},
+    )
 
 
 def _clear_blind(deps: InboxDeps, market: str, *, read_content: bool = False) -> None:

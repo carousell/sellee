@@ -72,6 +72,18 @@ INBOX_FOLDER_JS = f"""() => {{
   }});
   let marked = false;
   let candidates = 0;
+  // Nothing to mark on a folder that is already open, and marking anyway wrote an attribute of
+  // ours onto one of Facebook's own nodes on every read — a mutation its own observers can see,
+  // for a click the caller was never going to make.
+  if (alreadyOpen) {{
+    return {{
+      marked: false,
+      already_open: true,
+      candidates: 0,
+      width: window.innerWidth,
+      visible: document.visibilityState === 'visible',
+    }};
+  }}
   document.querySelectorAll('div[role="button"]').forEach((el) => {{
     const r = el.getBoundingClientRect();
     if (r.left > RAIL_EDGE || r.width < 200 || r.height < 40 || r.height > 100) return;
@@ -91,6 +103,59 @@ INBOX_FOLDER_JS = f"""() => {{
   }};
 }}"""
 
+# Whether the marketplace is refusing us, and what kind of refusal it is. Answers one of
+# '' | 'verify' | 'automation' | 'checkpoint', most specific first.
+#
+# Hoisted out of the list artifact because it is needed on every read, not only on one that has
+# already failed: a wall inside a conversation was reported as our own broken reader, and a wall on
+# the listings page could not be reported at all.
+#
+# Two kinds of clause, deliberately not alike.
+#
+# `/checkpoint` needs no text pairing, because no buyer can type a URL. It is the one signal here
+# that nothing a person writes can forge.
+#
+# The rest keep the verification wall's discipline verbatim: a phrase AND a prompt-shaped element.
+# The reason was its own — the words alone appear in buyers' messages — and it applies harder to
+# "automated", "restricted" and "terms of use", which buyers and scammers both type. So the
+# automation phrases are whole sentences from the dialog Facebook actually served, long enough that
+# nobody types one by accident, and they count only inside a dialog.
+#
+# Matched against `body.innerText`, which joins separate elements with newlines, so each phrase has
+# to live inside a single element. The heading does. A phrase spanning the heading and the
+# paragraph beneath it would never match at all, which is why none of these try to.
+#
+# `restricted` is deliberately absent. It is the one cause whose block would not decay on its own,
+# so a phrase list guessed rather than copied from a real one could turn a buyer's message into a
+# permanent outage. It goes in when there is a real one to copy.
+BLOCK_WALL_JS = """() => {
+  // A whole path segment, not a prefix: Facebook serves checkpoints from `/checkpoint/...` but
+  // also from under other roots, and a prefix test misses every one of those. Anchored on the
+  // separators so `/mycheckpoints` is not one.
+  if (/(^|\\/)checkpoint(\\/|$)/.test(location.pathname || '')) return 'checkpoint';
+  const text = ((document.body && document.body.innerText) || '').toLowerCase();
+  const dialog = () => !!document.querySelector('[role="dialog"]');
+  const automation = [
+    'we suspect automated behavior on your account',
+    'we suspect automated behaviour on your account',
+    'ensure that no other users or tools have access to your account',
+  ];
+  if (automation.some((phrase) => text.includes(phrase)) && dialog()) return 'automation';
+  const asks = [
+    'enter your pin',
+    'enter pin',
+    'confirm your pin',
+    'restore your chats',
+    "confirm it's you",
+    'confirm your identity',
+  ];
+  if (!asks.some((phrase) => text.includes(phrase))) return '';
+  const field = document.querySelector(
+    'input[type="password"], input[autocomplete*="one-time"], input[inputmode="numeric"]'
+  );
+  return field || dialog() ? 'verify' : '';
+}"""
+
 # The conversations in the Marketplace folder.
 #
 # Proves the folder is open before answering: the rail heading is "Chats" on the personal inbox and
@@ -107,7 +172,7 @@ INBOX_FOLDER_JS = f"""() => {{
 # matched on — the id is read from the opened conversation. `unread` is 0 because the folder's
 # unread marker has not been captured and a guess would suppress reads; `_can_skip` errs toward
 # opening and the full sweep opens everything regardless.
-CONVERSATIONS_LIST_JS = """async () => {
+_CONVERSATIONS_LIST_TEMPLATE = """async () => {
   const RAIL_EDGE = 400;
   const SEPARATOR = ' \\u00b7 ';
   // The folder's own heading. Scoped to the rail: the right-hand pane shows the word
@@ -159,27 +224,7 @@ CONVERSATIONS_LIST_JS = """async () => {
     });
     return { conversations: out, skipped: skipped };
   };
-  // Facebook can put a wall in front of the messages rather than refusing us: a PIN prompt for
-  // encrypted chats, or a "confirm it's you" interstitial. From the lane it is indistinguishable
-  // from Facebook declining to hand over the list, and the seller would be told to check a login
-  // that is working perfectly. Deliberately hard to trigger — a phrase AND a prompt-shaped
-  // element — because the words alone appear in buyers' own messages.
-  const verifyWall = () => {
-    const text = (document.body.innerText || '').toLowerCase();
-    const asks = [
-      'enter your pin',
-      'enter pin',
-      'confirm your pin',
-      'restore your chats',
-      "confirm it's you",
-      'confirm your identity',
-    ];
-    if (!asks.some((phrase) => text.includes(phrase))) return '';
-    const field = document.querySelector(
-      'input[type="password"], input[autocomplete*="one-time"], input[inputmode="numeric"]'
-    );
-    return field || document.querySelector('[role="dialog"]') ? 'verify' : '';
-  };
+  const blockWall = __BLOCK_WALL__;
   // Back up to the newest end: `loadAll` finishes at the OLDEST row, and Messenger unmounts rows
   // far outside the viewport, so a read taken there is missing the most recent conversations
   // entirely.
@@ -221,7 +266,7 @@ CONVERSATIONS_LIST_JS = """async () => {
     await new Promise((r) => setTimeout(r, 250));
     result = read();
   }
-  if (result !== null) {
+  if (result !== null && __DEEP__) {
     await loadAll();
     const bottom = read();
     await scrollToTop();
@@ -233,11 +278,32 @@ CONVERSATIONS_LIST_JS = """async () => {
       rows: rows().length,
       width: window.innerWidth,
       visible: document.visibilityState === 'visible',
-      blocked: verifyWall(),
+      blocked: blockWall(),
     };
   }
+  // Carried on the success path too: a wall can sit over a list that still reads, and the tick
+  // that can read it is exactly the tick that should stop rather than carry on.
+  result.blocked = blockWall();
   return result;
 }"""
+
+# Two readings of the same folder, differing only in how far they scroll.
+#
+# The deep one paginates the whole folder: it is how a conversation nobody has written in for weeks
+# is still found, which is what adoption needs. It is also `loadAll` — up to sixty `scrollIntoView`
+# steps on a 400ms timer, each one triggering Messenger's own load-more fetch — and running that
+# every five minutes is a scroll pattern with no wheel event behind it and no variance in its
+# spacing, all day.
+#
+# The shallow one reads the screenful already painted. Nothing is lost by it: the folder is ordered
+# by recency and a buyer writing bumps their conversation to the top, so every conversation with
+# something new in it is in the first screenful by construction. The comment on `loadAll` says as
+# much — a plain read "looks exactly like a seller with a handful of buyers".
+#
+# So: shallow on an ordinary tick, deep on the sweep that already opens everything anyway.
+_LIST_WITH_WALL = _CONVERSATIONS_LIST_TEMPLATE.replace("__BLOCK_WALL__", BLOCK_WALL_JS)
+CONVERSATIONS_LIST_JS = _LIST_WITH_WALL.replace("__DEEP__", "true")
+CONVERSATIONS_RECENT_JS = _LIST_WITH_WALL.replace("__DEEP__", "false")
 
 # Which listing the open conversation is about.
 #
@@ -382,12 +448,15 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       width: window.innerWidth,
       height: window.innerHeight,
       visible: document.visibilityState === 'visible',
+      blocked: (__BLOCK_WALL__)(),
     };
   }
   return result;
 }"""
 
-CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS)
+CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS).replace(
+    "__BLOCK_WALL__", BLOCK_WALL_JS
+)
 
 # Is the seller logged in? Three-state, and it must never answer logged_out on thin evidence: a
 # false logged_out tells a signed-in seller to re-authenticate and stops their market. Only the
@@ -465,6 +534,7 @@ _MY_LISTINGS_TEMPLATE = """async () => {
       headings: document.querySelectorAll('h1,h2,h3,[role="heading"]').length,
       width: window.innerWidth,
       visible: document.visibilityState === 'visible',
+      blocked: (__BLOCK_WALL__)(),
     };
   }
   // The page's own count of what is live — the only thing that can tell a partial render from a
@@ -516,9 +586,11 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   };
 }"""
 
-MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
-    "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
-).replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
+MY_LISTINGS_JS = (
+    _MY_LISTINGS_TEMPLATE.replace("__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN))
+    .replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
+    .replace("__BLOCK_WALL__", BLOCK_WALL_JS)
+)
 
 # One listing's own page, read at adoption time.
 #

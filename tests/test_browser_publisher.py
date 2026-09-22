@@ -8,11 +8,13 @@ given.
 
 from __future__ import annotations
 
+import threading
+
 import pytest
 
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher
-from sellee.browser.client import BrowserToolError
+from sellee.browser.client import BrowserClient, BrowserToolError
 
 _CREATE = "https://www.facebook.com/marketplace/create/item"
 _ADAPTER = market_adapters.FACEBOOK
@@ -30,6 +32,11 @@ _ALL_FIELDS = [
 ]
 
 
+class _NoJitter:
+    def uniform(self, low: float, high: float) -> float:
+        return 0.0
+
+
 class StubForm:
     """A create form answering the publish artifacts from a script, recording every action."""
 
@@ -44,7 +51,14 @@ class StubForm:
         listing_id="999",
         next_enabled=True,
         fail_on=None,
+        wall="",
     ):
+        # The real typing, so what a publish test says the form received is what it would have.
+        # What the wall probe answers: '' is a marketplace that is not refusing the account.
+        self.wall = wall
+        self._lock = threading.RLock()
+        self._sleep = lambda _seconds: None
+        self._rng = _NoJitter()
         self.marked = list(_ALL_FIELDS if marked is None else marked)
         self.after_next = list(self.marked + ["publish"] if after_next is None else after_next)
         self.readback = readback
@@ -80,6 +94,9 @@ class StubForm:
     def navigate(self, url):
         self.navigate_visible(url)
 
+    type_humanly = BrowserClient.type_humanly
+    _click_into = BrowserClient._click_into
+
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
@@ -93,6 +110,8 @@ class StubForm:
         return ""
 
     def evaluate(self, function, **kwargs):
+        if function == _ADAPTER.block_wall_js:
+            return self.wall
         if function == _ADAPTER.publish_fields_js:
             marked = self.after_next if self._pressed_next else self.marked
             return {
@@ -438,3 +457,37 @@ def test_the_settles_between_form_steps_are_jittered(monkeypatch) -> None:
     assert max(slept) <= publisher.STEP_SETTLE_SEC * (1 + publisher._JITTER)
     # Jitter, not delay: the mean is where it always was.
     assert statistics.mean(slept) == pytest.approx(publisher.STEP_SETTLE_SEC, rel=0.08)
+
+
+def test_a_wall_stops_a_publish_before_anything_is_filled_in() -> None:
+    """A wall is exactly the condition that clears, so nothing is created and the pair keeps its
+    attempt."""
+    client = StubForm(wall="automation")
+
+    with pytest.raises(publisher.PublishNotAttempted) as caught:
+        _publish(client)
+
+    assert caught.value.retryable is True
+    assert "browser_type" not in [name for name, _ in client.actions]
+
+
+def test_a_wall_that_goes_up_mid_form_stops_before_the_commit() -> None:
+    """A publish takes minutes and a wall can go up inside one. Everything past Next may have
+    created a listing, so this is the last moment refusing still costs nothing."""
+    client = StubForm()
+    walls = {"n": 0}
+    real_evaluate = client.evaluate
+
+    def evaluate(function, **kwargs):
+        if function == _ADAPTER.block_wall_js:
+            walls["n"] += 1
+            return "automation" if walls["n"] > 1 else ""
+        return real_evaluate(function, **kwargs)
+
+    client.evaluate = evaluate
+
+    with pytest.raises(publisher.PublishNotAttempted):
+        _publish(client)
+
+    assert "next" not in _steps(client)
+    assert "publish" not in _steps(client)

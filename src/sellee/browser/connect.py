@@ -56,7 +56,11 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     asked to sign in: being asked to open a marketplace is being asked for a window, while a read
     probe that reordered tabs would elbow the seller mid-browse.
 
-    Returns (state, url) where state is logged_in | logged_out | unknown.
+    Returns (state, url, wall) where state is logged_in | logged_out | unknown and `wall` is the
+    marketplace's own refusal of the account ('' when there is none). The wall is read here rather
+    than left to the read lane because this is the probe a *blocked* market is cleared by, and
+    "signed in" is not the same question as "no longer being refused": Facebook answers a login
+    probe perfectly while holding a warning over the account.
     """
     region = store.seller_region()
     url = marketplaces.market_home(adapter.market, region)
@@ -82,6 +86,9 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
                     log.debug("could not bring the connect tab forward", exc_info=True)
                     client.navigate(url)
             answer = client.evaluate(adapter.login_js) or {}
+            wall = (
+                str(client.evaluate(adapter.block_wall_js) or "") if adapter.block_wall_js else ""
+            )
     except BrowserDetached:
         # Deliberately not flattened into BrowserDown. Everything below answers the seller's tap,
         # and the only honest answer to "am I signed in?" while our own server has lost Chrome is
@@ -91,7 +98,7 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     except BrowserError as exc:
         raise BrowserDown(str(exc)) from exc
     state = answer.get("state")
-    return (state if state in ("logged_in", "logged_out") else "unknown"), url
+    return (state if state in ("logged_in", "logged_out") else "unknown"), url, wall
 
 
 # --- the lane -----------------------------------------------------------------------------------
@@ -147,6 +154,15 @@ def _chrome_check(already_said: bool) -> str:
     return blindness.chrome_hint(chrome_up=False)
 
 
+# Said when a probe finds a market that had stopped us is clear again. Claims only what was
+# checked — that the wall is gone and the account is signed in — and not that whatever Meta was
+# unhappy about is resolved, which is not ours to assert.
+UNBLOCKED_NOTICE = (
+    "{name} isn't showing me that warning any more and the account is signed in, so I've started "
+    "reading and answering there again."
+)
+
+
 def connect_lane(deps: ConnectDeps) -> None:
     """One tick: serve every pending sign-in request the seller asked for from chat.
 
@@ -187,7 +203,7 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     name = marketplaces.display_name(market)
     opening = mode == CONNECT_MODE_OPEN
     try:
-        state, _url = open_and_probe(
+        state, _url, wall = open_and_probe(
             store=deps.store,
             browser_factory=deps.browser_factory,
             adapter=adapter,
@@ -215,6 +231,8 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
 
     deps.store.clear_market_connect_request(market)
     deps.bus.publish("browser.login", {"market": market, "state": state})
+    if not _settle_block(deps, market, name, state, wall):
+        return
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
         deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
@@ -226,6 +244,59 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
         template.format(name=name, where=window.where()),
         controls=fastpaths.check_again_controls(market),
     )
+
+
+def _settle_block(deps: ConnectDeps, market: str, name: str, state: str, wall: str) -> bool:
+    """Decide what this probe did to a blocked market. Answers whether to carry on reporting it.
+
+    The block stays on until something proves the market is clear, and this is that something. The
+    order matters and the fail-open version of it is the bug worth naming: clearing first and
+    probing afterwards leaves a window in which every lane resumes against a market nobody has
+    checked. So a wall still standing *renews* the block — escalating its window, because a wall
+    that comes straight back is telling us the last window was not the answer — and only a probe
+    that came back both signed in and unwalled clears it.
+
+    A read that merely happened to succeed is never enough, and does not come through here at all:
+    Facebook can drop an interstitial for a single page load, and letting that clear the block
+    would put the account back to full rate three hundred seconds later.
+
+    Which walls may block is `blindness.BLOCKING_CAUSES` and not "any wall", and this path has to
+    ask the same question every other one does. A `verify` wall is a PIN prompt, whose phrases are
+    things people type and which Facebook shows over a dialog it has open half the time — so it is
+    not evidence worth stopping a marketplace for. It is still not *proof the market is clear*
+    either, which is the asymmetry: on a blocked market a wall we do not block on leaves the block
+    exactly as it was, neither cleared nor escalated nor renamed.
+    """
+    block = deps.store.market_block(market)
+    if wall in blindness.BLOCKING_CAUSES:
+        deps.store.block_market(
+            market,
+            wall,
+            ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
+        )
+        deps.store.report_market_block_once(
+            market,
+            blindness.notice_for(wall, name=name, where=window.where()),
+            fastpaths.check_again_controls(market),
+        )
+        deps.bus.publish("browser.blocked", {"market": market, "cause": wall, "via": "probe"})
+        return False
+    if wall and block is not None:
+        # Something is in the way that we do not block on, so this probe proved nothing either
+        # direction. Left untouched, and reported no further: telling the seller they are signed in
+        # while the market is still stopped would be the wrong half of the truth.
+        deps.bus.publish("browser.probe_inconclusive", {"market": market, "wall": wall})
+        return False
+    if block is None:
+        return True
+    if state != "logged_in":
+        # Not walled, but not demonstrably fine either. Left blocked rather than cleared on half an
+        # answer; the sign-in copy below tells the seller what to do next.
+        return True
+    deps.store.clear_market_block(market)
+    deps.bus.publish("browser.unblocked", {"market": market, "cause": block["cause"]})
+    deps.store.queue_notice(UNBLOCKED_NOTICE.format(name=name))
+    return True
 
 
 def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:

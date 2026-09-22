@@ -48,19 +48,32 @@ class PacingConfig:
     mode: str
 
 
-def resolve(config, quiet_hours) -> PacingConfig:
+def resolve(config, quiet_hours, *, now: float | None = None) -> PacingConfig:
     """Build the effective pacing config from the daemon config plus the quiet-hours window. The
     window — a [start, end] pair of minutes since midnight — is passed in explicitly: it is a
     runtime *setting* (read from the settings store by the tool layer), not a config knob, and
     engines never touch the store. The jitter/cap knobs are already validated and clamped to the
     hard ceilings at load; FAST mode is applied here — it zeroes both jitter ranges, lifts the cap
-    to the ceiling, and disables quiet hours."""
+    to the ceiling, and disables quiet hours.
+
+    FAST also ends by itself. `pacing_fast_until` is required alongside the mode, and once `now` is
+    past it this answers exactly as `normal` does — so a demo cannot leave an account running at
+    five times the cap, jitter-free, through the night, because nobody went back to the file.
+
+    `now` is therefore required to resolve a FAST config and not otherwise, which is why it is
+    optional in the signature and raises here rather than defaulting: a caller that forgot it would
+    otherwise get fast-forever, the one answer this exists to make impossible. Nothing here reads
+    the clock — engines never do.
+    """
     from sellee import config as config_mod
 
     reply = tuple(config.reply_delay_sec)
     interactive = tuple(config.interactive_reply_delay_sec)
     quiet = tuple(quiet_hours)
-    if config.pacing_mode == "fast":
+    if config.pacing_mode == "fast" and now is None:
+        raise ValueError("resolving a fast pacing config needs `now` to know whether it has ended")
+    fast_until = getattr(config, "pacing_fast_until", None)
+    if config.pacing_mode == "fast" and fast_until is not None and float(now) < float(fast_until):
         return PacingConfig(
             cap=config_mod.HARD_CAP_CEILING,
             delay_min=0.0,

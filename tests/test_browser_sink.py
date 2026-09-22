@@ -9,17 +9,26 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 
 import pytest
 
+from sellee.browser import client as client_mod
 from sellee.browser import markets as market_adapters
 from sellee.browser import selectors, sink
-from sellee.browser.client import BrowserDetached, BrowserToolError
+from sellee.browser.client import BrowserClient, BrowserDetached, BrowserToolError
 from sellee.browser.markets import carousell as carousell_market
 from sellee.config import Config
 
 _THREAD_URL = "https://www.carousell.sg/inbox/99/"
 _FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
+
+
+class _NoJitter:
+    """Typing pauses a sink test should not pay for."""
+
+    def uniform(self, low: float, high: float) -> float:
+        return 0.0
 
 
 class StubClient:
@@ -35,6 +44,7 @@ class StubClient:
         detach_on=None,
         echo_on_send=True,
         page_accepts=True,
+        draft="",
     ):
         self.matches = {"textarea": 1}
         if matches is not None:
@@ -48,6 +58,18 @@ class StubClient:
         self.calls: list = []
         self.typed: str | None = None
         self.url = ""
+        # What the composer already holds when the sink looks. "" is an empty box.
+        self.draft = draft
+        # The real `type_humanly` is bound in below, so what a sink test asserts about the page is
+        # what the page would really have received. These are what it reaches for.
+        self._lock = threading.RLock()
+        self._sleep = lambda _seconds: None
+        self._rng = _NoJitter()
+
+    # Client logic the sink depends on, used rather than imitated.
+    composer_text = BrowserClient.composer_text
+    type_humanly = BrowserClient.type_humanly
+    _click_into = BrowserClient._click_into
 
     def ensure_frontmost(self, url):
         self.calls.append(("ensure_frontmost", url))
@@ -84,11 +106,16 @@ class StubClient:
         if self.fail_on == name:
             raise BrowserToolError(f"{name} refused")
         if name == "browser_type":
-            self.typed = arguments["text"]
+            # Appended, not replaced: `type_humanly` sends one call per line.
+            self.typed = (self.typed or "") + arguments["text"]
+        if name == "browser_press_key" and arguments.get("key") == "Shift+Enter":
+            self.typed = (self.typed or "") + "\n"
         # Both trusted commits — a real key press and a real click on a send control — make the
         # page render the bubble.
         if (
             name in ("browser_press_key", "browser_click")
+            and arguments.get("key") != "Shift+Enter"
+            and arguments.get("element") != "the reply message box"
             and self.echo_on_send
             and self.typed is not None
         ):
@@ -96,6 +123,8 @@ class StubClient:
         return "ok"
 
     def evaluate(self, function, **kwargs):
+        if function == client_mod.COMPOSER_TEXT_JS:
+            return self.draft
         if function == carousell_market.CONVERSATION_TAIL_JS:
             if self.detach_on == "tail":
                 raise BrowserDetached("the browser server lost its connection to Chrome")
@@ -114,6 +143,14 @@ class StubClient:
             raise AssertionError(f"unexpected evaluate: {function}")
         target = json.loads(found.group(1))
         return {"matches": self.matches.get(target, 0), "url": self.url}
+
+
+def _send_button_click_index(client):
+    """Where the send control was clicked in the call log, or None if it never was."""
+    for index, (name, args) in enumerate(client.calls):
+        if name == "browser_click" and args.get("element") != "the reply message box":
+            return index
+    return None
 
 
 @pytest.fixture
@@ -234,7 +271,11 @@ def test_the_commit_is_dispatched_onto_the_located_composer(store, bus, thread) 
 
     typed = next(args for name, args in client.calls if name == "browser_type")
     assert typed["target"] == "textarea"
-    assert "slowly" not in typed  # a filled newline must not commit half a message
+    # Typed, not filled: a composer is instrumented at the key level, and a message that arrives
+    # as one insertText carries no keystrokes and fires no typing indicator. A newline is safe
+    # because `type_humanly` sends it as Shift+Enter rather than letting a bare Enter commit half
+    # a message — see the newline tests in test_browser_client.py.
+    assert typed["slowly"] is True
     # the same element the composer resolved to, rather than a selector repeated inside the JS
     assert next(target for name, target in client.calls if name == "submit") == "textarea"
 
@@ -360,8 +401,9 @@ def test_a_send_button_is_clicked_after_the_text_is_typed(store, bus, thread, bu
     client = StubClient(matches={"textarea": 1, _SEND_QUERY: 1})
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
 
+    # The composer is clicked into before typing, so the send button is the *last* click.
     names = [name for name, _ in client.calls]
-    assert names.index("browser_type") < names.index("browser_click")
+    assert names.index("browser_type") < _send_button_click_index(client)
     assert "browser_press_key" not in names
     assert "submit" not in names
 
@@ -384,7 +426,9 @@ def test_a_send_button_that_cannot_be_found_stops_before_the_commit(
     with pytest.raises(sink.SendNotAttempted, match="send_button"):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
 
-    assert "browser_click" not in [name for name, _ in client.calls]
+    # Clicking into the composer is not a commit; what must not have happened is a click on
+    # anything that sends.
+    assert _send_button_click_index(client) is None
     assert _intent_status(store, intent) == "pending"
 
 
@@ -882,3 +926,96 @@ def test_a_detach_after_the_commit_is_unverified_and_never_resent(store, bus, th
         _sink(store, bus, client).send(thread, "hello", "reply", intent_id)
     assert _intent_status(store, intent_id) == "sent_unverified"
     assert len([1 for name, _ in client.calls if name == "submit"]) == 1
+
+
+# --- a composer that already holds something --------------------------------------------------
+#
+# Typing appends. A draft the seller was part-way through would go out with our reply stuck on the
+# end of it, and clearing the box first would throw their words away instead. Neither is ours to
+# choose, and both are worse than a send that did not happen.
+
+
+def test_a_sellers_draft_is_never_typed_over(store, bus, thread) -> None:
+    client = StubClient(draft="hold on, let me check the")
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="already holds"):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", intent)
+
+    assert "browser_type" not in [name for name, _ in client.calls]
+    assert _intent_status(store, intent) == "pending"
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["refused"]
+
+
+def test_our_own_half_sent_text_is_not_typed_twice(store, bus, thread) -> None:
+    """An attempt that typed and then failed before committing leaves our words in the box.
+    Retyping would send them doubled; this leaves them and lets the commit pick them up."""
+    text = "yes, still available!"
+    client = StubClient(draft=text)
+
+    _sink(store, bus, client).send(thread, text, "reply", _reserve(store))
+
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
+def test_a_composer_we_cannot_read_is_not_a_reason_to_strand_the_buyer(store, bus, thread) -> None:
+    """The probe failing says nothing about what is in the box, and the read-back after the commit
+    is what actually decides whether this landed."""
+
+    class Unreadable(StubClient):
+        def evaluate(self, function, **kwargs):
+            if function == client_mod.COMPOSER_TEXT_JS:
+                raise BrowserToolError("the composer would not read")
+            return super().evaluate(function, **kwargs)
+
+    _sink(store, bus, Unreadable()).send(thread, "yes!", "reply", _reserve(store))
+
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
+_WALL_JS = "() => 'probe'"
+
+
+@pytest.fixture
+def walled_market(monkeypatch):
+    """Carousell's adapter with a wall probe bolted on, standing in for a market that has one.
+    Facebook is the only market that does, and this file scripts Carousell's artifacts."""
+    import dataclasses
+
+    watched = dataclasses.replace(market_adapters.CAROUSELL, block_wall_js=_WALL_JS)
+    monkeypatch.setattr(market_adapters, "get_adapter", lambda market: watched)
+    return watched
+
+
+def test_a_wall_that_goes_up_while_typing_stops_before_the_commit(
+    store, bus, thread, walled_market
+) -> None:
+    """Typing a reply takes seconds and a wall can go up inside them. Past the commit the buyer may
+    already have the message, so this is the last moment refusing still means nothing was
+    delivered."""
+
+    class WallsMidType(StubClient):
+        def __init__(self, **kw):
+            super().__init__(**kw)
+            self.typed_yet = False
+
+        def evaluate(self, function, **kwargs):
+            if function == _WALL_JS:
+                return "automation" if self.typed_yet else ""
+            return super().evaluate(function, **kwargs)
+
+        def call_tool(self, name, arguments):
+            out = super().call_tool(name, arguments)
+            if name == "browser_type":
+                self.typed_yet = True
+            return out
+
+    client = WallsMidType()
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="wall"):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", intent)
+
+    assert _intent_status(store, intent) == "pending"
+    assert _send_button_click_index(client) is None
+    assert "submit" not in [name for name, _ in client.calls]
