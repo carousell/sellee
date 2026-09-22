@@ -522,7 +522,7 @@ def test_a_re_run_leaves_a_recorded_region_alone(world, capsys) -> None:
 def test_a_timezone_the_table_does_not_name_makes_no_guess(world, monkeypatch, capsys) -> None:
     # The zone table only ever suggests, so an unmapped machine is asked instead of being
     # given a default. A run with nobody to ask records nothing.
-    monkeypatch.setattr(region_guess, "system_timezone", lambda: "Asia/Kuala_Lumpur")
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "Asia/Riyadh")
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {}
     out = capsys.readouterr().out

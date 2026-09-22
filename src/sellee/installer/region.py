@@ -10,12 +10,43 @@ import os
 
 from sellee import countries
 
-
-# Timezones that identify a region unambiguously. US zones are listed rather than matched by an
-# `America/*` prefix: that prefix also covers Toronto, Mexico City and São Paulo, and answering
-# "US" for those would be wrong in a way the seller has no reason to double-check.
+# Timezones that identify a region unambiguously. Zones are listed rather than matched by an
+# `America/*`-style prefix: that prefix also covers Toronto, Mexico City and São Paulo, and
+# answering "US" for those would be wrong in a way the seller has no reason to double-check.
+# Canada is enumerated for the same reason rather than sharing the prefix.
+#
+# The countries here are the ones a price can be quoted in something other than USD, so a guess
+# and the currency shown beside it cover the same ground. A country absent here is not a country
+# the agent refuses — it is one the machine cannot vouch for, so setup asks instead.
 _ZONE_REGIONS = {
     "Asia/Singapore": "SG",
+    "Asia/Ho_Chi_Minh": "VN",
+    "Asia/Kuala_Lumpur": "MY",
+    "Asia/Kuching": "MY",
+    "Asia/Jakarta": "ID",
+    "Asia/Makassar": "ID",
+    "Asia/Jayapura": "ID",
+    "Asia/Bangkok": "TH",
+    "Asia/Manila": "PH",
+    "Asia/Taipei": "TW",
+    "Asia/Hong_Kong": "HK",
+    "Asia/Tokyo": "JP",
+    "Asia/Seoul": "KR",
+    "Asia/Kolkata": "IN",
+    "Asia/Karachi": "PK",
+    "Asia/Brunei": "BN",
+    "Europe/London": "GB",
+    "Europe/Berlin": "DE",
+    "Europe/Amsterdam": "NL",
+    "Europe/Brussels": "BE",
+    "Europe/Rome": "IT",
+    "Australia/Sydney": "AU",
+    "Pacific/Auckland": "NZ",
+    "America/Toronto": "CA",
+    "America/Vancouver": "CA",
+    "America/Edmonton": "CA",
+    "America/Winnipeg": "CA",
+    "America/Halifax": "CA",
     "America/New_York": "US",
     "America/Detroit": "US",
     "America/Chicago": "US",
@@ -30,8 +61,15 @@ _ZONE_REGIONS = {
     "Pacific/Honolulu": "US",
 }
 
-# The legacy `US/Eastern`-style aliases, still what some machines report.
-_ZONE_PREFIX_REGIONS = (("US/", "US"), ("America/Indiana/", "US"), ("America/Kentucky/", "US"))
+# The legacy `US/Eastern`-style aliases, still what some machines report. `Australia/` is a
+# prefix rather than a list because every zone under it is in Australia — the objection to
+# `America/` does not apply.
+_ZONE_PREFIX_REGIONS = (
+    ("US/", "US"),
+    ("America/Indiana/", "US"),
+    ("America/Kentucky/", "US"),
+    ("Australia/", "AU"),
+)
 
 
 def region_for_zone(zone: str):

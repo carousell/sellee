@@ -26,14 +26,37 @@ def test_us_zones_resolve_across_the_mainland_and_its_outliers() -> None:
 def test_other_countries_in_the_americas_are_not_guessed_as_the_us() -> None:
     # The reason US zones are listed rather than matched on an `America/` prefix: that prefix
     # also covers these, and a wrong country is not something a seller would think to check.
-    for zone in ("America/Toronto", "America/Mexico_City", "America/Sao_Paulo"):
+    # Toronto resolves, but to Canada — the prefix still decides nothing.
+    assert region.region_for_zone("America/Toronto") == "CA"
+    for zone in ("America/Mexico_City", "America/Sao_Paulo"):
         assert region.region_for_zone(zone) is None, zone
+
+
+def test_the_countries_a_seller_is_likeliest_to_be_in_are_all_guessable() -> None:
+    """Setup proposes rather than asking wherever the machine can vouch for the answer, and the
+    markets carousell.ai trades in are the ones that has to cover."""
+    guessable = set(region._ZONE_REGIONS.values())
+    guessable |= {code for _, code in region._ZONE_PREFIX_REGIONS}
+    for code in ("AU", "BN", "CA", "DE", "GB", "HK", "ID", "IN", "IT", "JP"):
+        assert code in guessable, code
+    for code in ("KR", "MY", "NL", "NZ", "PH", "PK", "SG", "TH", "TW", "US", "VN"):
+        assert code in guessable, code
+    assert region.region_for_zone("Europe/Brussels") == "BE"
+    # Every guessable country also has a zone to propose once it is known, so the timezone
+    # question never offers an example from the wrong side of the world.
+    for code in guessable:
+        assert region.zones_for(code), code
+
+
+def test_australia_is_a_prefix_because_every_zone_under_it_is_australian() -> None:
+    for zone in ("Australia/Sydney", "Australia/Perth", "Australia/Darwin", "Australia/Eucla"):
+        assert region.region_for_zone(zone) == "AU", zone
 
 
 def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
     # A guess is a convenience, so an absent country asks rather than proposing. Nothing here
     # decides where the seller may sell: the answer they type is accepted whatever it is.
-    for zone in ("Asia/Kuala_Lumpur", "Asia/Hong_Kong", "Australia/Sydney", "Europe/London"):
+    for zone in ("Asia/Riyadh", "Africa/Lagos", "Europe/Madrid", "America/Bogota"):
         assert region.guess(zone) is None, zone
 
 
