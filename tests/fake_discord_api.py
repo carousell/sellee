@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import threading
+import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 BOT_ID = "123456789012345678"
@@ -29,6 +30,10 @@ class FakeDiscordAPI:
         self.calls: list = []
         self.outbox: list = []
         self.typing_pulses: list = []
+        # Every reaction added, as {message_id, emoji}. The emoji arrives percent-encoded in the
+        # path and is decoded back here, so a test asserts on what the seller sees rather than on
+        # the encoding.
+        self.reactions: list = []
         self.acknowledged: list = []
         self.callbacks: list = []
         self.user_agents: list = []
@@ -133,6 +138,26 @@ class FakeDiscordAPI:
                     api.acknowledged.append(self.path)
                     # The body too: type 6 acks the click, type 7 acks it and strips the buttons.
                     api.callbacks.append(body)
+                    self._reply(204, {})
+                else:
+                    self._reply(404, {"message": "unknown"})
+
+            def do_PUT(self) -> None:
+                api.calls.append(("PUT", self.path))
+                api.user_agents.append(self.headers.get("User-Agent"))
+                if self._rejects_blocked_user_agent() or self._rejects_bad_bot_token():
+                    return
+                prefix = f"/api/v10/channels/{CHANNEL_ID}/messages/"
+                # `<message_id>/reactions/<percent-encoded emoji>/@me` — the emoji sits in the
+                # middle of the path, not at the end, so the match has to split rather than suffix.
+                if self.path.startswith(prefix) and self.path.endswith("/@me"):
+                    message_id, _, rest = self.path[len(prefix) :].partition("/reactions/")
+                    api.reactions.append(
+                        {
+                            "message_id": int(message_id),
+                            "emoji": urllib.parse.unquote(rest[: -len("/@me")]),
+                        }
+                    )
                     self._reply(204, {})
                 else:
                     self._reply(404, {"message": "unknown"})

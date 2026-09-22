@@ -99,7 +99,11 @@ class Scheduler:
             # Due-ness is only evaluated at tick boundaries, so an interval under the tick is a
             # request the loop cannot serve: the lane runs once per tick and no faster. Said out
             # loud because it is otherwise invisible — the typing pulse declared 4.0s, ran at
-            # ~5.14s, and carried a comment claiming it kept a 5s indicator alive.
+            # ~5.14s, and carried a comment claiming it kept a 5s indicator alive. That one is gone
+            # (it is a thread now, see channel/presence.py); the lanes that still warn here are all
+            # latency targets, where a tick's rounding costs nothing and a deadline is not being
+            # missed. If a lane ever appears here that is holding something *open*, it belongs on a
+            # thread too.
             log.warning(
                 "task %s asks for %.1fs but the scheduler ticks every %.1fs — it will run at the "
                 "tick, not its interval",

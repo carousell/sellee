@@ -35,12 +35,19 @@ class FakeTelegramAPI:
     def __init__(self, *, longpoll_cap_sec: float = 0.3):
         self._lock = threading.Lock()
         self._next_update_id = 1
+        self._next_msg_id = self._FIRST_MESSAGE_ID
+        # Every message id minted, in injection order — what a test points an assertion about a
+        # reaction or a stripped keyboard at, without restating the counter's arithmetic.
+        self.message_ids: list = []
         self._queue: list = []
         self.offset = 0
         self.outbox: list = []
         self.calls: list = []
         self.commands: list | None = None
         self.chat_actions: list = []
+        # Every setMessageReaction, as {message_id, emoji}: what the seller sees marked on their
+        # own message the moment it lands.
+        self.reactions: list = []
         self.answered: list = []
         # Every editMessageReplyMarkup, as {message_id, inline_keyboard}. `fail_edits` makes the
         # method answer the way Telegram does for a no-op edit ("message is not modified"), which is
@@ -73,6 +80,19 @@ class FakeTelegramAPI:
         return f"http://127.0.0.1:{port}"
 
     # --- injection (the seller side) ---
+    # Message ids the seller's own messages get, counting up from here. Distinct per message and
+    # distinct from the update id, the way Telegram's are: an update id is a cursor position and a
+    # message id is what a reaction or an edit points at, and code that conflated the two would
+    # pass against a double that reused one number for both.
+    _FIRST_MESSAGE_ID = 1000
+
+    def _next_message_id(self) -> int:
+        with self._lock:
+            mid = self._next_msg_id
+            self._next_msg_id += 1
+            self.message_ids.append(mid)
+            return mid
+
     def _append(self, update_body: dict) -> int:
         with self._lock:
             uid = self._next_update_id
@@ -84,7 +104,14 @@ class FakeTelegramAPI:
     def inject_text(self, text: str, *, chat_id: int = CHAT_ID) -> int:
         chat = {"id": chat_id, "type": "private", "first_name": "Seller"}
         return self._append(
-            {"message": {"message_id": 1000, "date": 1, "chat": chat, "text": text}}
+            {
+                "message": {
+                    "message_id": self._next_message_id(),
+                    "date": 1,
+                    "chat": chat,
+                    "text": text,
+                }
+            }
         )
 
     def inject_command(self, text: str, *, chat_id: int = CHAT_ID) -> int:
@@ -95,7 +122,7 @@ class FakeTelegramAPI:
         return self._append(
             {
                 "message": {
-                    "message_id": 1001,
+                    "message_id": self._next_message_id(),
                     "date": 2,
                     "chat": chat,
                     "caption": caption,
@@ -113,7 +140,7 @@ class FakeTelegramAPI:
                 "callback_query": {
                     "id": "cbq1",
                     "data": callback_data,
-                    "message": {"message_id": 1002, "date": 3, "chat": chat},
+                    "message": {"message_id": self._next_message_id(), "date": 3, "chat": chat},
                 }
             }
         )
@@ -165,6 +192,21 @@ class FakeTelegramAPI:
                 if method == "sendChatAction":
                     with api._lock:
                         api.chat_actions.append(p.get("chat_id"))
+                    return self._reply({"ok": True, "result": True})
+                if method == "setMessageReaction":
+                    with api._lock:
+                        api.reactions.append(
+                            {
+                                "message_id": p.get("message_id"),
+                                # Unwrapped to the one emoji: a bot may set exactly one reaction
+                                # per message, and the API's list-of-ReactionType shape is the
+                                # transport's business — a test asserting on it would be pinning
+                                # the wire format rather than what the seller sees.
+                                "emoji": next(
+                                    (r.get("emoji") for r in (p.get("reaction") or [])), None
+                                ),
+                            }
+                        )
                     return self._reply({"ok": True, "result": True})
                 if method == "editMessageReplyMarkup":
                     if api.fail_edits:

@@ -27,7 +27,7 @@ from __future__ import annotations
 import logging
 
 from sellee import paths, secrets
-from sellee.channel import asks, fastpaths, outbound, routing
+from sellee.channel import asks, fastpaths, outbound, presence, routing
 from sellee.channel.telegram import commands
 from sellee.channel.telegram.transport import (
     ChannelError,
@@ -237,11 +237,19 @@ class Poller:
         routing.settle_batch(
             self.store,
             self.bus,
-            [row for row in inserted if row["id"] not in handled],
+            inserted,
+            handled,
             reply=lambda text, ctrl: client.send_message(
                 ch["chat_id"], text, reply_markup=commands.render_controls(ctrl)
             ),
-            typing=lambda chat_id: client.send_chat_action(chat_id, "typing"),
+            # Bounded far tighter than this client's own send timeout: a pulse that outlives the
+            # indicator it is lighting has already failed, and the keeper re-lights in seconds.
+            typing=lambda chat_id: client.send_chat_action(
+                chat_id, "typing", timeout=presence.TYPING_CALL_TIMEOUT_SEC
+            ),
+            react=lambda message_id: client.set_message_reaction(
+                ch["chat_id"], message_id, routing.SEEN_REACTION
+            ),
         )
 
     def _ack_taps(self, client, inserted) -> None:
@@ -277,8 +285,9 @@ class Poller:
         decide, and the connect lane re-offers its own buttons on the notice that follows. What the
         seller is left holding is always current.
 
-        This is also the fastest feedback there is — the buttons go in the same tick, ahead of the
-        receipt the drain lane carries.
+        This is the fastest feedback there is, and since the arrival receipt was removed it is a
+        tap's only permanent one: the buttons go in this tick, where anything queued waits out a
+        lane, and unlike the typing indicator it is still there in the scrollback tomorrow.
 
         Only the chat is touched. The notice's `controls` stay, so a tap on another copy of the same
         ask further up the scrollback still resolves to the words it meant.
@@ -299,9 +308,11 @@ class Poller:
         pass. The row is marked handled so it never routes; everything else stays pending for the
         channel pass. Taps are already acked by `_ack_taps`, which covers the ones that route.
 
-        Returns the ids it answered, so the tail can receipt only what is still going to a pass — a
-        fast path has already replied, and a second "I'm working on it" after "Paused" contradicts
-        it.
+        Returns the ids it answered, so the tail routes, marks seen and speaks for only what is
+        still going to a pass. A fast path has already replied, and its reply *is* the
+        acknowledgement — marking a message that was answered in the same tick marks nothing, and a
+        second word after "Paused" contradicts it. The pulse still covers the whole batch: a reply
+        sent here clears the indicator even when a pass is mid-flight.
         """
         handled: list = []
         for row in inserted:

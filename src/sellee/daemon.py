@@ -43,7 +43,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
-from sellee.channel import outbound, routing
+from sellee.channel import outbound, presence, routing
 from sellee.channel.discord import provider as discord_provider
 from sellee.channel.manager import ChannelManager
 from sellee.channel.telegram import provider as telegram_provider
@@ -821,10 +821,22 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: outbound.buyer_waiting_notice(store=store),
         )
     )
+    # And the same from the other side: when the *seller* has been waiting longer than the typing
+    # indicator can honestly carry. Registered here rather than with a provider because it reads and
+    # writes durable rows only — it needs no `deliver`, so it is right whichever provider is bound,
+    # and it keeps working across a provider switch.
+    scheduler.register(
+        Task(
+            name="seller_waiting_notice",
+            interval_sec=presence.SELLER_WAITING_INTERVAL_SEC,
+            func=lambda: presence.seller_waiting_notice(store=store),
+        )
+    )
 
-    # Start the providers already configured (their poller + delivery lanes); a fresh `connect`
-    # starts one later at runtime. The delivery/typing scheduler tasks are registered inside the
-    # provider's start, so they exist only while a provider runs.
+    # Start the providers already configured (their receive loop + notice drain + typing keeper); a
+    # fresh `connect` starts one later at runtime. The drain lane is registered inside the
+    # provider's
+    # start, so it exists only while a provider runs; the keeper is a thread the handle owns.
     if channels is not None:
         channels.register_configured()
 

@@ -126,10 +126,14 @@ def _normalize(update: dict, authorized_chat: int | None) -> tuple:
     chat = msg.get("chat", {}).get("id")
     if authorized_chat is not None and chat != authorized_chat:
         return None, chat
+    # The seller's own message, so it can be reacted to. `event_id` is the *update* id — Telegram's
+    # cursor, unique per delivery and useless as a message reference — so the message id has to be
+    # carried deliberately or the row reaches the ingest tail with nothing to point a reaction at.
+    seen = {"message_id": msg.get("message_id")}
     if "photo" in msg:
         # The largest size is the full-resolution photo; smaller entries are Telegram's thumbnails.
         largest = max(msg["photo"], key=lambda p: p.get("file_size", 0))
-        payload = {"file_id": largest["file_id"]}
+        payload = {**seen, "file_id": largest["file_id"]}
         # media_group_id groups photos sent as one gallery selection — a batching hint only.
         if msg.get("media_group_id"):
             payload["media_group_id"] = msg["media_group_id"]
@@ -146,7 +150,7 @@ def _normalize(update: dict, authorized_chat: int | None) -> tuple:
     text = msg.get("text", "")
     if text.startswith("/"):
         command, _, argument = text.partition(" ")
-        payload = {"start_param": argument.strip()} if command == "/start" else {}
+        payload = {**seen, "start_param": argument.strip()} if command == "/start" else {**seen}
         return (
             {
                 "event_id": update["update_id"],
@@ -162,7 +166,7 @@ def _normalize(update: dict, authorized_chat: int | None) -> tuple:
             "event_id": update["update_id"],
             "kind": "text",
             "text": text,
-            "payload": {},
+            "payload": {**seen},
             "src_ts": msg.get("date"),
         },
         chat,
@@ -239,8 +243,29 @@ class TelegramClient:
                 message_ids.append(result.get("message_id"))
         return message_ids
 
-    def send_chat_action(self, chat_id: int, action: str = "typing") -> None:
-        self._api("sendChatAction", {"chat_id": chat_id, "action": action})
+    def send_chat_action(
+        self, chat_id: int, action: str = "typing", *, timeout: float | None = None
+    ) -> None:
+        self._api("sendChatAction", {"chat_id": chat_id, "action": action}, timeout=timeout)
+
+    def set_message_reaction(
+        self, chat_id: int, message_id: int, emoji: str, *, timeout: float | None = None
+    ) -> None:
+        """React to one of the seller's own messages.
+
+        A list because the API takes one, but always a single entry: a bot may set exactly one
+        reaction per message, and the emoji has to come from Telegram's own allowed set — an
+        arbitrary one is rejected at send. The caller's constant is the place that is pinned.
+        """
+        self._api(
+            "setMessageReaction",
+            {
+                "chat_id": chat_id,
+                "message_id": message_id,
+                "reaction": [{"type": "emoji", "emoji": emoji}],
+            },
+            timeout=timeout,
+        )
 
     def answer_callback_query(self, callback_query_id: str) -> None:
         self._api("answerCallbackQuery", {"callback_query_id": callback_query_id})

@@ -14,7 +14,7 @@ import pytest
 
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
 from sellee import secrets
-from sellee.channel import acks, asks, fastpaths
+from sellee.channel import asks, fastpaths, routing
 from sellee.channel.fastpaths import CB_PAUSE
 from sellee.channel.prompt import build_channel_prompt
 from sellee.channel.telegram.poller import Poller
@@ -262,13 +262,13 @@ def _label_for(msg, token):
     return next((b["text"] for b in buttons if b["callback_data"] == token), None)
 
 
-def _receipts(store):
-    return [n["text"] for n in store.list_queued_notices() if n["text"].startswith("Got it:")]
+def test_a_decision_tap_shows_the_wait_and_is_left_for_the_pass(store, bus, xdg_tmp) -> None:
+    """The whole point: the seller sees immediately that the tap landed, and the answer is still
+    the pass's to act on — minting a checkout link is not something the receive loop can do.
 
-
-def test_a_decision_tap_is_receipted_but_left_for_the_pass(store, bus, xdg_tmp) -> None:
-    """The whole point: the seller hears immediately that the tap landed, and the answer is still
-    the pass's to act on — minting a checkout link is not something the receive loop can do."""
+    What "sees" means is three things that all land in this tick and none of which is a message:
+    the spinner stops, the keyboard comes off the message they tapped, and the chat starts showing
+    the agent working."""
     _bound(store)
     notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
     with FakeTelegramAPI() as api:
@@ -278,19 +278,22 @@ def test_a_decision_tap_is_receipted_but_left_for_the_pass(store, bus, xdg_tmp) 
         assert api.answered == ["cbq1"]  # gap 3: an unacked tap spins for ~15s
         assert api.outbox == []  # no fast-path reply — nothing was answered deterministically
         assert api.chat_actions == [CHAT_ID]  # and the chat shows the agent working
+        assert api.edited == [{"message_id": api.message_ids[-1], "inline_keyboard": []}]
+        # No reaction: a tap is a callback, not a message of theirs to mark.
+        assert api.reactions == []
 
     rows = _inbox_rows(store)
     assert len(rows) == 1
     assert rows[0]["text"] == "🔗 Send checkout link"  # the words, not the token
     assert rows[0]["status"] == "claimed"  # claimed into the pass the tap enqueued
     assert bus.store.read(kinds=["pass.queued"])
-    # Queued rather than sent, which is what puts it in the pass's own transcript window.
-    assert _receipts(store) == ["Got it: 🔗 Send checkout link. " + acks.WORKING]
+    # Only the ask they tapped is still queued: the tap itself added nothing.
+    assert [n["text"] for n in store.list_queued_notices()] == [_CLOSE_ASK]
 
 
-def test_the_receipt_reaches_the_pass_that_is_about_to_answer(store, bus, xdg_tmp) -> None:
-    """So the pass knows the tap was already acknowledged and does not open by acknowledging it
-    again — with nothing added to the prompt asking it not to."""
+def test_the_pass_is_told_the_chat_is_already_showing_the_wait(store, bus, xdg_tmp) -> None:
+    """The receipt used to reach the pass through its own transcript window, which is how the pass
+    knew not to acknowledge a second time. With nothing queued, the instruction has to say it."""
     _bound(store)
     notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
     with FakeTelegramAPI() as api:
@@ -298,13 +301,14 @@ def test_the_receipt_reaches_the_pass_that_is_about_to_answer(store, bus, xdg_tm
         _poller(store, bus, api).tick()
 
     pass_id = store._db.query("SELECT pass_id FROM passes WHERE type = 'channel'")[0]["pass_id"]
-    window = _channel_prompt({}, store, pass_id).split("Messages to handle now:")[0]
-    assert "Got it: 🔗 Send checkout link" in window
+    prompt = _channel_prompt({}, store, pass_id)
+    assert "Got it:" not in prompt  # nothing was queued, so nothing acknowledged it
+    assert "already shows" in prompt and "don't open by saying" in prompt
 
 
-def test_a_double_tap_earns_one_receipt_not_two(store, bus, xdg_tmp) -> None:
-    """The field case: two taps a second apart, both in one batch. One pass answers both, so two
-    receipts would promise two answers."""
+def test_a_double_tap_is_recorded_twice_and_says_nothing(store, bus, xdg_tmp) -> None:
+    """The field case: two taps a second apart, both in one batch. One pass answers both — and the
+    keyboard came off on the first, which is what stops the second tap being attempted at all."""
     _bound(store)
     notice_id = store.queue_notice(_CLOSE_ASK, options=_CLOSE_OPTIONS)
     with FakeTelegramAPI() as api:
@@ -313,7 +317,7 @@ def test_a_double_tap_earns_one_receipt_not_two(store, bus, xdg_tmp) -> None:
         _poller(store, bus, api).tick()
 
     assert len(_inbox_rows(store)) == 2  # both taps are still durably recorded
-    assert len(_receipts(store)) == 1
+    assert [n["text"] for n in store.list_queued_notices()] == [_CLOSE_ASK]  # and said nothing
 
 
 def test_a_tap_taken_while_paused_says_so_and_offers_the_way_back(store, bus, xdg_tmp) -> None:
@@ -328,23 +332,27 @@ def test_a_tap_taken_while_paused_says_so_and_offers_the_way_back(store, bus, xd
 
         assert len(api.outbox) == 1
         sent = api.outbox[-1]
-    assert "paused" in sent["text"].lower() and "🔗 Send checkout link" in sent["text"]
+    assert "paused" in sent["text"].lower()
     assert sent["reply_markup"]["inline_keyboard"][0][0]["callback_data"] == fastpaths.CB_RESUME
 
 
-def test_a_fast_path_tap_is_never_also_receipted(store, bus, xdg_tmp) -> None:
-    """It already replied. "Paused." followed by "I'm working out what to do" is a contradiction."""
+def test_a_fast_path_tap_is_answered_once_and_not_also_acked(store, bus, xdg_tmp) -> None:
+    """It already replied, and its reply is the acknowledgement. "Paused." followed by anything else
+    from the same tick is one voice talking over itself."""
     _bound(store)
     with FakeTelegramAPI() as api:
         api.inject_tap(CB_PAUSE)
         _poller(store, bus, api).tick()
 
-    assert _receipts(store) == []
+        assert len(api.outbox) == 1
+
+    assert store.list_queued_notices() == []
 
 
-def test_a_typed_message_is_receipted_once_per_burst(store, bus, xdg_tmp) -> None:
-    """The second message lands while the first message's pass is still running — they have already
-    been told, and the same pass sweeps both."""
+def test_a_typed_burst_says_nothing_and_marks_each_message_seen(store, bus, xdg_tmp) -> None:
+    """The second message lands while the first message's pass is still running, and neither earns
+    a word. What each one does earn is a mark on itself — which is the thing a chat-level indicator
+    cannot do, and the reason a burst does not read as "only the first one landed"."""
     _bound(store)
     with FakeTelegramAPI() as api:
         p = _poller(store, bus, api)
@@ -353,12 +361,13 @@ def test_a_typed_message_is_receipted_once_per_burst(store, bus, xdg_tmp) -> Non
         api.inject_text("and the chair?")
         p.tick()
 
-    assert len(_receipts(store)) == 0  # text receipts carry no label to quote
-    working = [n["text"] for n in store.list_queued_notices() if acks.WORKING in n["text"]]
-    assert len(working) == 1
+        assert [r["message_id"] for r in api.reactions] == api.message_ids
+        assert {r["emoji"] for r in api.reactions} == {routing.SEEN_REACTION}
+
+    assert store.list_queued_notices() == []
 
 
-def test_traffic_from_another_chat_never_pulses_or_receipts(store, bus, xdg_tmp) -> None:
+def test_traffic_from_another_chat_never_pulses_reacts_or_speaks(store, bus, xdg_tmp) -> None:
     """Dropped before ingest, but the cursor still advances — so the tail must key off what was
     actually routed, not off the batch having been non-empty."""
     _bound(store)
@@ -367,6 +376,7 @@ def test_traffic_from_another_chat_never_pulses_or_receipts(store, bus, xdg_tmp)
         _poller(store, bus, api).tick()
 
         assert api.chat_actions == []
+        assert api.reactions == []
     assert store.list_queued_notices() == []
 
 
@@ -438,7 +448,7 @@ def test_answering_an_ask_takes_its_buttons_away(store, bus, xdg_tmp) -> None:
         api.inject_tap(f"n{notice_id}:a0")
         _poller(store, bus, api).tick()
 
-        assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
+        assert api.edited == [{"message_id": api.message_ids[-1], "inline_keyboard": []}]
 
 
 def test_a_tapped_control_row_is_spent_and_replaced_rather_than_left_stale(
@@ -455,7 +465,7 @@ def test_a_tapped_control_row_is_spent_and_replaced_rather_than_left_stale(
         api.inject_tap(CB_PAUSE)
         _poller(store, bus, api).tick()
 
-        assert api.edited == [{"message_id": 1002, "inline_keyboard": []}]
+        assert api.edited == [{"message_id": api.message_ids[-1], "inline_keyboard": []}]
         assert _label_for(api.outbox[-1], fastpaths.CB_RESUME) is not None  # the live way back
 
 
@@ -470,7 +480,6 @@ def test_a_second_tap_on_a_stripped_ask_does_not_break_the_tick(store, bus, xdg_
         _poller(store, bus, api).tick()
 
     assert store.has_active_channel_pass() is True  # routed regardless
-    assert len(_receipts(store)) == 1
 
 
 def test_a_stale_tap_still_resolves_after_its_keyboard_was_stripped(store, bus, xdg_tmp) -> None:

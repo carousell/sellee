@@ -11,12 +11,18 @@ register/deregister are the symmetric pair: `register` starts a provider and tra
 daemon stop. Handles are shut down outside the lock (shutdown joins a thread).
 
 At most one provider is ever meant to be running at a time: the bound channel is a singleton row
-with one `adapter` (see `store.arm_bind`), and every provider's delivery lanes are registered on
-the shared scheduler under the same literal task names (`notice_drain`, `typing_pulse` — see
-channel/*/provider.py). Two providers running at once would silently overwrite each other's
-scheduler tasks rather than error, so `register` enforces the invariant itself: starting a
-different provider first deregisters whichever one is currently running, and `register_configured`
-picks at most one when more than one happens to be configured.
+with one `adapter` (see `store.arm_bind`), and every provider registers its drain lane on the
+shared scheduler under the same literal task name (`notice_drain` — see channel/*/provider.py).
+Two providers running at once would silently overwrite each other's scheduler task rather than
+error, so `register` enforces the invariant itself: starting a different provider first deregisters
+whichever one is currently running, and `register_configured` picks at most one when more than one
+happens to be configured.
+
+The typing keeper is a thread rather than a lane, so it shares no namespace to collide in and the
+shared task name does not cover it. What covers it is the handle's own bounded join: `deregister`
+runs under the register lock and waits for the outgoing keeper to stop before the next provider
+starts, and a keeper that outlives that join is logged rather than left silently pulsing into a
+chat the new provider now owns.
 """
 
 from __future__ import annotations

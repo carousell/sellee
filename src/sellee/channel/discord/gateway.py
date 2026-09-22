@@ -37,7 +37,7 @@ import random
 import time
 
 from sellee import paths
-from sellee.channel import asks, fastpaths, outbound, routing
+from sellee.channel import asks, fastpaths, outbound, presence, routing
 from sellee.channel.discord import transport as discord_transport
 from sellee.channel.discord.transport import ChannelError, DiscordClient
 from sellee.channel.discord.ws_client import ConnectionClosed, connect
@@ -369,15 +369,24 @@ class DiscordGateway:
         self._settle(client, ch["chat_id"], inserted, handled)
 
     def _settle(self, client: DiscordClient, channel_id, inserted, handled: set) -> None:
-        """The shared ingest tail: route, receipt, pulse. Same call on both entry points, because
-        Discord splits into two handlers where Telegram has one loop and a receipt owed on a tap is
-        owed on a typed message too."""
+        """The shared ingest tail: route, say anything owed in words, show the wait. Same call on
+        both entry points, because Discord splits into two handlers where Telegram has one loop, and
+        what a tap is owed a typed message is owed too."""
         routing.settle_batch(
             self.store,
             self.bus,
-            [row for row in inserted if row["id"] not in handled],
+            inserted,
+            handled,
             reply=lambda text, ctrl: client.send_message(channel_id, text, components=ctrl),
-            typing=client.trigger_typing,
+            # Bounded far tighter than this client's own default: a pulse that outlives the
+            # indicator it is lighting has already failed, and this one runs on the Gateway's pump
+            # thread, where a stalled socket costs the session its heartbeat.
+            typing=lambda chat_id: client.trigger_typing(
+                chat_id, timeout=presence.TYPING_CALL_TIMEOUT_SEC
+            ),
+            react=lambda message_id: client.add_reaction(
+                channel_id, message_id, routing.SEEN_REACTION
+            ),
         )
 
     def _ack_taps(self, client: DiscordClient, inserted) -> None:
@@ -407,7 +416,8 @@ class DiscordGateway:
         even mid-pass. Everything else stays pending for the channel pass. Interactions are already
         acknowledged by `_ack_taps`, which covers the ones that route.
 
-        Returns the ids it answered, so `_settle` receipts only what is still going to a pass."""
+        Returns the ids it answered, so `_settle` routes, marks seen and speaks for only what is
+        still going to a pass — a fast path's reply is its own acknowledgement."""
         handled: list = []
         for row in inserted:
             event = {"kind": row["kind"], "text": row["text"], "payload": row["payload"]}

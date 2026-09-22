@@ -142,15 +142,38 @@ class PassesMixin:
                 )
         return pass_ids
 
+    def active_channel_pass(self) -> dict | None:
+        """The channel pass the seller is currently waiting on, as {pass_id, requested_ts,
+        started_ts}, or None.
+
+        `enqueue_channel_pass` refuses while any channel pass is queued or running, so there is
+        never more than one row to choose between; the ORDER BY is defensive rather than a policy,
+        and a caller can read it as "the one".
+
+        Rows, not a boolean, because the typing indicator needs the stamps as well as the fact:
+        `requested_ts` bounds how long the indicator may stay lit (a pass killed mid-run keeps its
+        `running` status until the stale sweep, which is a quarter of an hour away), and `pass_id`
+        is what says whether this pass has spoken yet. Keeping it to one read means the gate and
+        the coalescing check can never disagree about what is in flight.
+        """
+        rows = self._db.query(
+            "SELECT pass_id, requested_ts, started_ts FROM passes WHERE type = 'channel' "
+            "AND status IN ('queued', 'running') ORDER BY requested_ts DESC LIMIT 1"
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "pass_id": row["pass_id"],
+            "requested_ts": row["requested_ts"],
+            "started_ts": row["started_ts"],
+        }
+
     def has_active_channel_pass(self) -> bool:
         """True while a channel pass is queued or running — the coalescing gate: the poller only
         enqueues a new channel pass when this is False, so one pass sweeps all pending rows and
         later arrivals wait for the next (at most one in-flight + one queued batch)."""
-        rows = self._db.query(
-            "SELECT 1 FROM passes WHERE type = 'channel' "
-            "AND status IN ('queued', 'running') LIMIT 1"
-        )
-        return bool(rows)
+        return self.active_channel_pass() is not None
 
     def enqueue_channel_pass(self) -> str | None:
         """Coalescing route, one transaction: when pending inbox rows exist and no channel pass is

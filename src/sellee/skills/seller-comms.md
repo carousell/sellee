@@ -25,6 +25,9 @@ plain notices go via `send_message`. When the seller's answer arrives (live, or 
     no buttons to tap. A seller who answers "just send the link" is answering normally.
   - **A tap comes back as its label.** "🔗 Send checkout link" reads as the seller having said
     exactly that, so read it as their answer to that ask and act on it.
+  - **Name the decision you are answering.** A tap leaves no words in their chat — the buttons come
+    off the question and that is all — so nothing on screen says which option they chose until you
+    say it. "✅ Checkout link sent to nadia_88 for S$45", never "done".
   - **Never put a guessed value on a button.** `Counter` is a button; the amount is the follow-up
     question. A button reading "Counter $80" invents a number they never gave.
   - **Every option settles the question on its own.** A tap sends back only its label, so an answer

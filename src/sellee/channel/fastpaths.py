@@ -110,7 +110,7 @@ LOOK_AGAIN_LABEL = "Take another look"
 # line right above it carries the state, and a button that named the state would read as a claim.
 WATCH_ON_LABEL = "👀 Watch me work"
 WATCH_OFF_LABEL = "🌙 Work in background"
-# Named once because the receipt for an arrival that lands while paused offers the way back too
+# Named once because the line for an arrival that lands while paused offers the way back too
 # (channel/acks.py), and a door worded two ways is two doors as far as the seller can tell.
 PAUSE_LABEL = "⏸ Pause"
 RESUME_LABEL = "▶️ Resume"
@@ -149,7 +149,10 @@ CONNECT_ACK = (
     "Opening {name} in my Chrome now — it takes a few seconds to come up. I'll message you the "
     "moment the sign-in page is there."
 )
-CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — one moment while I look."
+# Same shape as CONNECT_ACK above, and for the same reason: the check drives a real browser, so it
+# promises a follow-up rather than a duration. "One moment while I look" was the phrasing
+# voice-and-style.md bans, sitting two lines under a comment explaining why not to write it.
+CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell you what I find."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."

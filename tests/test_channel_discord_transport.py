@@ -36,7 +36,7 @@ def test_normalize_text() -> None:
     ev = transport._normalize(_message_create("hello there"))
     assert ev["kind"] == "text"
     assert ev["text"] == "hello there"
-    assert ev["payload"] == {}
+    assert ev["payload"] == {"message_id": 1}
     assert ev["event_id"] == 1
 
 

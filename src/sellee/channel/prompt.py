@@ -36,7 +36,15 @@ _INSTRUCTIONS = (
     "Finish one thing before starting another: if a listing is mid-flow, don't begin a second one "
     "alongside it.\n"
     "If a decision is theirs to make — a price call, anything risky, anything only they know — "
-    "escalate it instead of guessing."
+    "escalate it instead of guessing.\n"
+    "Their message is already marked as seen and the chat already shows you working, for as long "
+    "as this runs — so don't open by saying you're looking into it. Send one message: the answer. "
+    "The exception is work that will take minutes or outlive this turn — researching comps, a "
+    "publish you've queued — where you go quiet for long enough that the seller needs telling: "
+    "there, say what you're doing and that you'll message back, once, and never imply it'll be "
+    "quick.\n"
+    "Always send something before you finish. They spoke, and from their side a turn that says "
+    "nothing is indistinguishable from you having crashed."
 )
 
 
