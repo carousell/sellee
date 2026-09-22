@@ -41,12 +41,8 @@ _UNSETTLED = ("queued", "running")
 
 
 def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
-    """Refuse a price whose currency is not the one carousell.ai will use: 500 USD published from
-    an account pricing in VND goes live as 500 VND, and a live listing cannot be un-published.
-
-    A local pre-check, not the enforcement: carousell.ai refuses the same mismatch. It runs before
-    reserve_action, so a refusal consumes no pacing slot.
-    """
+    """Refuse a price the seller approved in another currency: 500 USD on an account pricing in
+    VND goes live as 500 VND. A pre-check ahead of reserve_action; carousell.ai enforces it."""
     recorded = (item.get("currency") or "").strip().upper()
     if not recorded or not expected:
         # Nothing to contradict, or a seller provisioned before registration answered a code.
