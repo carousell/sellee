@@ -95,6 +95,7 @@ class StubForm:
         self.navigate_visible(url)
 
     type_humanly = BrowserClient.type_humanly
+    _click_into = BrowserClient._click_into
 
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")

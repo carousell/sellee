@@ -69,6 +69,7 @@ class StubClient:
     # Client logic the sink depends on, used rather than imitated.
     composer_text = BrowserClient.composer_text
     type_humanly = BrowserClient.type_humanly
+    _click_into = BrowserClient._click_into
 
     def ensure_frontmost(self, url):
         self.calls.append(("ensure_frontmost", url))

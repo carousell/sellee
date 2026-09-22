@@ -774,7 +774,7 @@ class BrowserClient:
         hold the browser open longer than the verify window it is followed by.
         """
         with self._lock:
-            self.call_tool("browser_click", {"target": target, "element": element})
+            self._click_into(target, element)
             budget = TYPE_MAX_PAUSE_SEC
             for index, line in enumerate(text.split("\n")):
                 if index:
@@ -791,6 +791,24 @@ class BrowserClient:
                     "browser_type",
                     {"target": target, "element": element, "text": line, "slowly": True},
                 )
+
+    def _click_into(self, target: str, element: str) -> None:
+        """Put a pointer event on the box before typing into it. Never fails the typing.
+
+        A click waits for its target to be *actionable* — visible, stable, not moving — and a chat
+        composer is a node the page repaints as it goes. So the click resolves the element and then
+        times out waiting for it to hold still, which on Carousell it never does: this failed ten
+        sends in a row against two that got through before anyone typed into a busy thread.
+
+        `COMPOSER_DEFAULTS` already records this about the send *button* and declines to use it for
+        the same reason. The pointer event is worth having — a composer that has never seen one is
+        its own answer — but it is a nicety, and a nicety must not be able to stop a buyer being
+        answered. `pressSequentially` focuses the locator itself, so typing works either way.
+        """
+        try:
+            self.call_tool("browser_click", {"target": target, "element": element})
+        except BrowserError:
+            log.debug("could not click into %s before typing", element, exc_info=True)
 
     def user_agent(self) -> str:
         """What the Chrome this client drives calls itself, or "" when it could not be asked.

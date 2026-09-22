@@ -1283,3 +1283,29 @@ def test_the_composer_can_be_read_before_typing(make_client) -> None:
     client = make_client({"tools": {"browser_evaluate": {"result": "half a draft"}}})
 
     assert client.composer_text("textarea", "box") == "half a draft"
+
+
+def test_a_composer_that_will_not_hold_still_is_still_typed_into(make_client) -> None:
+    """The regression that broke ten sends in a row on a live account.
+
+    A click waits for its target to be actionable, and a chat composer is a node the page repaints
+    as it goes — so the click resolves the element and then times out waiting for it to hold still.
+    `COMPOSER_DEFAULTS` already records exactly this about the send button and declines to use it.
+    The pointer event is worth having and must never be able to stop a buyer being answered.
+    """
+    client = make_client(
+        {
+            "tools": {
+                "browser_click": {"error": "TimeoutError: Timeout 5000ms exceeded."},
+                "browser_type": {"text": "ok"},
+            }
+        },
+        sleep=lambda _s: None,
+        rng=_MaxJitter(),
+    )
+
+    client.type_humanly("textarea", "the reply message box", "yes, still available!")
+
+    typed = [c for c in tool_calls(client) if c["tool"] == "browser_type"]
+    assert [c["arguments"]["text"] for c in typed] == ["yes, still available!"]
+    assert typed[0]["arguments"]["slowly"] is True
