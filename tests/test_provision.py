@@ -126,12 +126,33 @@ def test_the_payments_notice_comes_back_from_the_backend(xdg_tmp, guests_server)
     status = provision.ensure("VN", api_base=base)
 
     assert status["notice"] == notice
-    assert "currency" not in status
 
 
 def test_a_payable_country_gets_an_empty_notice(xdg_tmp, guests_server) -> None:
     server, base = guests_server  # the fixture response carries no notice at all
     assert provision.ensure("SG", api_base=base)["notice"] == ""
+
+
+def test_the_currency_comes_back_from_the_backend(xdg_tmp, guests_server) -> None:
+    # Registration is the earliest the backend can answer, and it is the only place the agent
+    # learns what its listings will be priced in.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "currency": "VND"}
+
+    assert provision.ensure("VN", api_base=base)["currency"] == "VND"
+
+
+def test_a_currency_that_is_not_a_three_letter_code_is_dropped(xdg_tmp, guests_server) -> None:
+    # Recording a malformed code would fail the basics write door later, far from the cause.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "currency": "dong"}
+
+    assert provision.ensure("VN", api_base=base)["currency"] == ""
+
+
+def test_a_response_without_a_currency_records_none(xdg_tmp, guests_server) -> None:
+    server, base = guests_server  # the fixture response carries no currency at all
+    assert provision.ensure("SG", api_base=base)["currency"] == ""
 
 
 def test_the_notices_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:

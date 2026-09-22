@@ -133,8 +133,8 @@ class RailClient:
         return self._web_base_url + _LISTING_PATH + str(listing_id)
 
     def create_listing(self, args: dict) -> dict:
-        """Create a listing and return {listing_id, url, currency}. Raises RailToolError when the
-        response carries no id, and the currency is carousell.ai's — the request asserts none."""
+        """Create a listing and return {listing_id, url}. Raises RailToolError when the response
+        carries no id. The currency is not read back: the request asserts the recorded one."""
         result = self.call_tool("create_listing", args)
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result
@@ -142,11 +142,7 @@ class RailClient:
         if not listing_id:
             raise RailToolError("create_listing returned no listing id")
         url = listing.get("url") or listing.get("listing_url") or self.listing_url(listing_id)
-        return {
-            "listing_id": listing_id,
-            "url": url,
-            "currency": str(listing.get("currency") or "").strip().upper(),
-        }
+        return {"listing_id": listing_id, "url": url}
 
     def upload_photo(self, data: bytes, content_type: str) -> str:
         """Mint a short-lived upload URL, POST the image bytes to it, and return the encrypted

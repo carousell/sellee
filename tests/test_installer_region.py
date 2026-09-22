@@ -37,20 +37,13 @@ def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
         assert region.guess(zone) is None, zone
 
 
-def test_the_confirm_line_names_the_currency_without_recording_it() -> None:
-    # The seller reads what their prices will mean before setting any, which is the whole point
-    # of showing it. Nothing here is stored: carousell.ai decides the currency.
-    assert region.render({"region": "SG", "timezone": "Asia/Singapore"}) == (
-        "SG · SGD · Asia/Singapore"
-    )
-    assert region.render({"region": "VN", "timezone": "Asia/Ho_Chi_Minh"}) == (
-        "VN · VND · Asia/Ho_Chi_Minh"
-    )
-    # A country carousell.ai has no currency for prices in USD, and the line says so rather
-    # than leaving the seller to assume their own.
-    assert region.render({"region": "BR"}) == "BR · USD"
-    # A recorded currency is shown as recorded, never overwritten.
-    assert region.render({"region": "SG", "currency": "VND"}) == "SG · VND"
+def test_the_confirm_line_shows_only_what_is_recorded() -> None:
+    # Before registration answers there is no currency to show, and predicting one here was the
+    # ported table this change deleted.
+    assert region.render({"region": "SG", "timezone": "Asia/Singapore"}) == ("SG · Asia/Singapore")
+    assert region.render({"region": "BR"}) == "BR"
+    # A recorded currency is shown as recorded.
+    assert region.render({"region": "SG", "currency": "SGD"}) == "SG · SGD"
 
 
 def test_an_unknown_or_missing_zone_produces_no_guess() -> None:
@@ -74,7 +67,8 @@ def test_a_tz_that_names_no_zone_falls_back_to_the_machine(monkeypatch) -> None:
 
 
 def test_render_reads_as_the_confirmation_it_is_used_for() -> None:
-    assert region.render(region.guess("Asia/Singapore")) == "SG · SGD · Asia/Singapore"
+    # A guess carries no currency, so the confirmation asks about country and zone alone.
+    assert region.render(region.guess("Asia/Singapore")) == "SG · Asia/Singapore"
 
 
 def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:

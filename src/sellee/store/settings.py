@@ -53,6 +53,12 @@ class SettingsMixin:
         region = (self.get_seller_config_section("basics") or {}).get("region")
         return str(region).strip().upper() or None if region else None
 
+    def seller_currency(self) -> str | None:
+        """The ISO 4217 code registration said this seller's listings are priced in, or None when
+        they were provisioned before registration answered one."""
+        code = (self.get_seller_config_section("basics") or {}).get("currency")
+        return str(code).strip().upper() or None if code else None
+
     def get_seller_config_public(self) -> dict:
         """Every section except the private origin address — the buyer-safe view a read tool may
         return."""

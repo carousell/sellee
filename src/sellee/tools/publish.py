@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 import time
 
-from sellee import currencies, settings
+from sellee import settings
 from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
@@ -40,18 +40,18 @@ _MEDIA_TYPE_IMAGE = 1
 _UNSETTLED = ("queued", "running")
 
 
-def _require_a_currency_the_seller_prices_in(ctx: ToolContext, item: dict) -> None:
+def _require_a_currency_the_seller_prices_in(ctx: ToolContext, expected: str, item: dict) -> None:
     """Refuse a price whose currency is not the one carousell.ai will use: 500 USD published from
-    an account pricing in VND goes live as 500 VND, and a live listing cannot be un-published."""
+    an account pricing in VND goes live as 500 VND, and a live listing cannot be un-published.
+
+    A local pre-check, not the enforcement: carousell.ai refuses the same mismatch. It runs first
+    so a refusal burns no pacing slot.
+    """
     recorded = (item.get("currency") or "").strip().upper()
-    if not recorded:
-        return  # no approved currency to contradict; the code arrives with the listing
-    region = ctx.store.seller_region()
-    if not region:
-        # Without a country there is nothing to compare against. Refusing here would mean
-        # guessing USD and rejecting prices carousell.ai would have accepted.
+    if not recorded or not expected:
+        # Nothing to contradict, or a seller provisioned before registration answered a code.
+        # Asserting one here would be a false refusal.
         return
-    expected = currencies.for_country(region)
     if recorded != expected:
         raise ToolError(
             f"this item is priced in {recorded}, but carousell.ai prices your listings in "
@@ -84,7 +84,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
-    _require_a_currency_the_seller_prices_in(ctx, item)
+    currency = ctx.store.seller_currency() or ""
+    _require_a_currency_the_seller_prices_in(ctx, currency, item)
     try:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
@@ -109,13 +110,15 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             f"{int(paced['delay_sec'])}s"
         )
 
-    # No currency is sent. carousell.ai derives it from the seller, and the field is only an
-    # assertion it refuses when it disagrees — a disagreement the agent cannot rule out.
+    # The recorded code is what registration answered, so asserting it turns a disagreement into
+    # a refusal before any listing exists. Omitted when none was recorded; the field is optional.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
         "price_cents": price_cents,
     }
+    if currency:
+        args["currency"] = currency
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
     # upload reference is skipped rather than blocking the publish; an item with no photos at all
@@ -152,28 +155,6 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    # The listing is live and its URL recorded by now, so anything below is logged rather than
-    # raised: reporting a failure here would send the caller back to publish it a second time.
-    currency = listing.get("currency") or ""
-    recorded = (item.get("currency") or "").strip().upper()
-    if not currency:
-        # The item keeps no currency, which every read already tolerates. This is the only
-        # place an authoritative code comes from, so a missing one is a fault upstream.
-        log.warning("%s: carousell.ai created a listing carrying no currency", item_id)
-    elif not recorded:
-        try:
-            ctx.store.update_item(item_id, {"currency": currency})
-        except StoreError as exc:
-            log.warning("could not record %s's currency %s: %s", item_id, currency, exc)
-    elif currency != recorded:
-        # The gate above rules this out from what the agent knows, so reaching it means the
-        # prediction was wrong. The approved amount is left as the seller approved it.
-        log.warning(
-            "%s: listed in %s but the item is priced in %s — the item is left unchanged",
-            item_id,
-            currency,
-            recorded,
-        )
     return {"listing_id": listing.get("listing_id"), "url": listing["url"], "currency": currency}
 
 

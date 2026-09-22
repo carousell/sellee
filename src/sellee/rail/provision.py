@@ -1,9 +1,9 @@
 """carousell.ai guest-key provisioning — zero-LLM, fail-soft, off the pass path.
 
-POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key, notice}; the key is
-stored 0600 through secrets.py and never printed. ensure is idempotent (a key already present
-means no network call); reprovision forces a fresh key. Operational failures are returned as a
-status dict with defer=True, never raised — a provisioning hiccup must not crash a caller.
+POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key, notice, currency};
+the key is stored 0600 through secrets.py and never printed. ensure is idempotent (a key already
+present means no network call); reprovision forces a fresh key. Operational failures are returned
+as a status dict with defer=True, never raised — a provisioning hiccup must not crash a caller.
 """
 
 from __future__ import annotations
@@ -81,6 +81,13 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
     return {**payload, "api_key": api_key}
 
 
+def _currency(payload: dict) -> str:
+    """The ISO 4217 code registration answered, or empty when it answered nothing usable.
+    A malformed code is dropped here rather than failing the basics write door later."""
+    code = str(payload.get("currency") or "").strip().upper()
+    return code if len(code) == 3 and code.isalpha() else ""
+
+
 def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
     """Ensure a guest key exists. Returns a status dict; the key value is never in it."""
     if not force and secrets.read_carousell_ai_api_key() is not None:
@@ -103,6 +110,7 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         # Whether carousell.ai can pay this seller out is the backend's answer, not ours. Empty
         # means there is nothing to tell them.
         "notice": _printable(str(payload.get("notice") or "")),
+        "currency": _currency(payload),
     }
 
 

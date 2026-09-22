@@ -103,7 +103,7 @@ def _run(args, ui: Ui) -> None:
         raise Abort("the daemon is running but minted no attended token", _daemon_diagnostics())
 
     region = _seller_region(ui, args, port, token)
-    _provision_rail(ui, region)
+    _provision_rail(ui, region, port, token)
     _connect_markets(ui, args, port, token, region)
     _browser_window(ui, port, token)
     _offer_channel(ui, args, port, token)
@@ -547,7 +547,7 @@ def _ask_timezone(ui: Ui, region: str) -> str:
 # --- the rail ----------------------------------------------------------------------------------
 
 
-def _provision_rail(ui: Ui, region) -> None:
+def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
     """Get the carousell.ai guest key. Quiet on success, and never fatal.
 
     A provisioning hiccup is a network problem, not an install problem: everything except the
@@ -561,6 +561,7 @@ def _provision_rail(ui: Ui, region) -> None:
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         ui.say("ready — always enabled, with nothing to sign in to")
+        _record_currency(ui, port, token, str(status.get("currency") or ""))
         # Whether carousell.ai can pay this seller out is the backend's answer, printed as given.
         notice = str(status.get("notice") or "")
         if notice:
@@ -568,6 +569,18 @@ def _provision_rail(ui: Ui, region) -> None:
         return
     ui.warn(f"carousell.ai setup did not complete: {status.get('error')}")
     ui.note("re-run `sellee provision carousell-ai` when back online")
+
+
+def _record_currency(ui: Ui, port: int, token: str, currency: str) -> None:
+    """Keep what registration answered beside the country. Every later price is checked against
+    it, and an idempotent re-run answers nothing new to record."""
+    if not currency:
+        return
+    status, body = control.post(port, token, "/control/seller-basics", {"currency": currency})
+    if status != 200:
+        ui.warn(f"could not record your currency: {body.get('error', status)}")
+        return
+    ui.say(f"your listings are priced in {currency}")
 
 
 # --- marketplaces ---------------------------------------------------------------------------

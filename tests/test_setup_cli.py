@@ -115,7 +115,9 @@ def world(monkeypatch, xdg_tmp, tree):
     )
     monkeypatch.setattr(pass_cli, "harness_config", lambda directory=None: 0)
     monkeypatch.setattr(
-        setup_cli, "_provision_rail", lambda ui, region: calls.__setitem__("provisioned", region)
+        setup_cli,
+        "_provision_rail",
+        lambda ui, region, port, token: calls.__setitem__("provisioned", region),
     )
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "Asia/Singapore")
 
@@ -485,9 +487,9 @@ def test_a_piped_run_that_never_said_yes_gets_the_line_not_an_edit(
 def test_the_region_is_proposed_from_the_machines_timezone(world, capsys) -> None:
     assert setup_main("--yes", "--manual") == 0
     assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
-    # The currency on the confirm line is a guess for the seller to read. It is not recorded:
-    # what a listing is priced in comes from the backend.
-    assert "You sell in SG · SGD · Asia/Singapore, correct?" in capsys.readouterr().out
+    # No currency on the confirm line: the backend answers that at registration, which has not
+    # happened yet.
+    assert "You sell in SG · Asia/Singapore, correct?" in capsys.readouterr().out
 
 
 def test_the_region_flag_wins_over_the_guess(world) -> None:
@@ -633,6 +635,32 @@ def test_the_backends_payments_notice_is_printed_before_the_marketplace_phase(
     out = capsys.readouterr().out
     assert notice in out
     assert out.index(notice) < out.index("Other marketplaces")
+
+
+def test_the_currency_registration_answered_is_recorded_beside_the_country(
+    world, monkeypatch, capsys
+) -> None:
+    # The agent asks the backend once and keeps the answer; every later price is checked
+    # against it rather than against a table the agent carries.
+    _real_rail_phase(
+        monkeypatch,
+        {"status": "ok", "provisioned": True, "country": "VN", "notice": "", "currency": "VND"},
+    )
+
+    assert setup_main("--yes", "--manual", "--region", "VN") == 0
+
+    assert world.calls["basics"]["currency"] == "VND"
+    assert "priced in VND" in capsys.readouterr().out
+
+
+def test_a_seller_the_backend_answers_no_currency_for_records_none(world, monkeypatch) -> None:
+    _real_rail_phase(
+        monkeypatch, {"status": "ok", "provisioned": True, "country": "VN", "notice": ""}
+    )
+
+    assert setup_main("--yes", "--manual", "--region", "VN") == 0
+
+    assert "currency" not in world.calls["basics"]
 
 
 def test_a_payable_country_is_told_nothing_extra(world, monkeypatch, capsys) -> None:
