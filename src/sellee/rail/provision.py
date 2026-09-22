@@ -82,10 +82,14 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
 
 
 def _currency(payload: dict) -> str:
-    """The ISO 4217 code registration answered, or empty when it answered nothing usable.
-    A malformed code is dropped here rather than failing the basics write door later."""
-    code = str(payload.get("currency") or "").strip().upper()
-    return code if len(code) == 3 and code.isalpha() else ""
+    """The ISO 4217 code registration answered, or empty when it answered nothing usable. Checked
+    by the write door's own validator, so one rule decides what a recordable code is."""
+    from sellee.tools.seller import BasicsError, validate_basics
+
+    try:
+        return validate_basics({"currency": str(payload.get("currency") or "")})["currency"]
+    except BasicsError:
+        return ""
 
 
 def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:

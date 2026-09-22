@@ -40,12 +40,12 @@ _MEDIA_TYPE_IMAGE = 1
 _UNSETTLED = ("queued", "running")
 
 
-def _require_a_currency_the_seller_prices_in(ctx: ToolContext, expected: str, item: dict) -> None:
+def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
     """Refuse a price whose currency is not the one carousell.ai will use: 500 USD published from
     an account pricing in VND goes live as 500 VND, and a live listing cannot be un-published.
 
-    A local pre-check, not the enforcement: carousell.ai refuses the same mismatch. It runs first
-    so a refusal burns no pacing slot.
+    A local pre-check, not the enforcement: carousell.ai refuses the same mismatch. It runs before
+    reserve_action, so a refusal consumes no pacing slot.
     """
     recorded = (item.get("currency") or "").strip().upper()
     if not recorded or not expected:
@@ -68,14 +68,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
-        # Same keys a fresh publish returns, so a caller reading `currency` gets the recorded
-        # code on the second call rather than "" — the shape must not depend on the attempt.
-        return {
-            "listing_id": None,
-            "url": existing,
-            "already_published": True,
-            "currency": (item.get("currency") or "").strip().upper(),
-        }
+        # Same keys a fresh publish returns: the shape must not depend on the attempt.
+        return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
     # no-op and stays allowed; a real publish is refused until resume.
@@ -85,7 +79,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
     currency = ctx.store.seller_currency() or ""
-    _require_a_currency_the_seller_prices_in(ctx, currency, item)
+    _require_a_currency_the_seller_prices_in(currency, item)
     try:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
@@ -111,7 +105,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         )
 
     # The recorded code is what registration answered, so asserting it turns a disagreement into
-    # a refusal before any listing exists. Omitted when none was recorded; the field is optional.
+    # a refusal before any listing exists.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
@@ -155,7 +149,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    return {"listing_id": listing.get("listing_id"), "url": listing["url"], "currency": currency}
+    return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
 
 
 register(

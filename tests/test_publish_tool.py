@@ -50,7 +50,7 @@ def test_publish_composes_create_verify_record_in_order(make_ctx, store) -> None
     item = _item(store)
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
-    assert result == {"listing_id": "L1", "url": rail.url, "currency": "SGD"}
+    assert result == {"listing_id": "L1", "url": rail.url}
     assert rail.calls == ["create:8000", f"verify:{rail.url}"]  # money in code, verify after
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
 
@@ -74,13 +74,7 @@ def test_publish_is_idempotent(make_ctx, store) -> None:
     second = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
     # Same keys either way: a caller reading `currency` must not get "" on the second call
     # merely because the listing already existed.
-    assert second == {
-        "listing_id": None,
-        "url": first["url"],
-        "already_published": True,
-        "currency": "SGD",
-    }
-    assert first["currency"] == "SGD"
+    assert second == {"listing_id": None, "url": first["url"], "already_published": True}
     assert rail.calls == calls_after_first  # never posted a second time
 
 
@@ -112,7 +106,7 @@ def test_publish_asserts_the_currency_registration_recorded(make_ctx, store) -> 
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
     assert rail.args["currency"] == "VND"
-    assert result["currency"] == "VND"
+    assert result["url"] == rail.url
 
 
 def test_publish_asserts_nothing_when_no_currency_was_recorded(make_ctx, store) -> None:
@@ -126,7 +120,7 @@ def test_publish_asserts_nothing_when_no_currency_was_recorded(make_ctx, store) 
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
     assert "currency" not in rail.args
-    assert result["currency"] == ""
+    assert result["url"] == rail.url
 
 
 def test_publish_never_relabels_the_item(make_ctx, store) -> None:
@@ -184,7 +178,7 @@ def test_publish_refuses_a_price_in_a_currency_the_seller_does_not_price_in(
 
 
 def test_the_gate_runs_before_anything_is_reserved(make_ctx, store) -> None:
-    # A refusal must not burn an hourly pacing slot on a publish the backend would refuse too.
+    # A refusal must not consume an hourly pacing slot on a publish the backend would refuse too.
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
     item = store.create_item(title="Bicycle", list_price=500.0, currency="USD")
