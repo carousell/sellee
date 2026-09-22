@@ -170,6 +170,44 @@ def test_a_reply_pass_that_sent_nothing_is_ledgered_no_send(
     assert _events(bus, "pass.end")[0].payload["is_error"] is True
 
 
+def test_a_channel_pass_that_said_nothing_is_not_filed_a_success(
+    bus, store, fake_harness, xdg_tmp
+) -> None:
+    """The same rule as the reply pass, arrived at by the same route. While the daemon receipted
+    every arrival, a channel pass that read and decided without writing had already been answered
+    for. Now the wait is shown rather than narrated, so a pass that exits rc 0 having called no
+    send_message is the seller watching the indicator stop and nothing arriving."""
+    paths.ensure_state_dirs()
+    store.ingest_updates(
+        [{"event_id": 1, "kind": "text", "text": "is the lamp still up?", "payload": {}}],
+        update_offset=2,
+    )
+    pid = store.enqueue_channel_pass()
+    claimed = store.claim_queued_pass()
+
+    cls = passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+
+    assert cls == "no_send"
+    row = store.get_pass(pid)
+    assert row["status"] == "error" and row["class"] == "no_send" and row["rc"] == 0
+
+
+def test_a_channel_pass_that_queued_a_word_is_a_success(bus, store, fake_harness, xdg_tmp) -> None:
+    """Queued, not delivered: the notice is the mark, and the drain lane is a separate concern. It
+    is the same read the typing indicator stops on, so the two can never disagree about whether the
+    seller is still owed something."""
+    paths.ensure_state_dirs()
+    store.ingest_updates(
+        [{"event_id": 1, "kind": "text", "text": "is the lamp still up?", "payload": {}}],
+        update_offset=2,
+    )
+    pid = store.enqueue_channel_pass()
+    claimed = store.claim_queued_pass()
+    store.queue_notice("Yes — S$35, still listed.", pass_id=pid)
+
+    assert passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed) == "ok"
+
+
 def test_a_pass_type_with_no_progress_hook_stays_ok(bus, store, fake_harness, xdg_tmp) -> None:
     """Only the reply type can answer "did this send anything" — a publish's success is its own."""
     paths.ensure_state_dirs()

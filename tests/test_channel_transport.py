@@ -36,21 +36,37 @@ def test_invalid_token_format(token) -> None:
 # --- _normalize (pure) ----------------------------------------------------------------------
 
 
-def _msg(text, uid=5, date=111):
-    return {"update_id": uid, "message": {"chat": {"id": CHAT_ID}, "date": date, "text": text}}
+def _msg(text, uid=5, date=111, message_id=77):
+    return {
+        "update_id": uid,
+        "message": {
+            "message_id": message_id,
+            "chat": {"id": CHAT_ID},
+            "date": date,
+            "text": text,
+        },
+    }
 
 
 def test_normalize_text() -> None:
     ev, chat = transport._normalize(_msg("hello there"), CHAT_ID)
     assert chat == CHAT_ID
     assert ev["kind"] == "text" and ev["text"] == "hello there"
-    assert ev["src_ts"] == 111 and ev["payload"] == {}
+    assert ev["src_ts"] == 111 and ev["payload"] == {"message_id": 77}
+
+
+def test_normalize_carries_the_message_id_apart_from_the_update_id() -> None:
+    """They are different numbers doing different jobs: `event_id` is the cursor position, and the
+    message id is what a reaction points at. Conflating them marks the wrong message."""
+    ev, _ = transport._normalize(_msg("hello", uid=5, message_id=77), CHAT_ID)
+
+    assert ev["event_id"] == 5 and ev["payload"]["message_id"] == 77
 
 
 def test_normalize_command_without_arg() -> None:
     ev, _ = transport._normalize(_msg("/status"), CHAT_ID)
     assert ev["kind"] == "command" and ev["text"] == "/status"
-    assert ev["payload"] == {}
+    assert ev["payload"] == {"message_id": 77}
 
 
 def test_normalize_start_lifts_nonce_payload() -> None:
@@ -222,3 +238,37 @@ def test_api_error_text_never_carries_the_token() -> None:
             client._api("bogusMethod", {})  # the fake returns HTTP 404 for an unknown method
         assert FAKE_TOKEN not in str(excinfo.value)
         assert "404" in str(excinfo.value)
+
+
+# Telegram's documented allowed reactions. A bot may only set one of these; anything else is
+# rejected at send — and `routing.mark_seen` swallows a failed reaction by design (it runs on the
+# receive thread, where a cosmetic call must never cost the loop its tick). So an emoji outside this
+# set would silently never appear, forever. Pinned here rather than discovered in production.
+TELEGRAM_ALLOWED_REACTIONS = frozenset(
+    "👍 👎 ❤ 🔥 🥰 👏 😁 🤔 🤯 😱 🤬 😢 🎉 🤩 🤮 💩 🙏 👌 🕊 🤡 🥱 🥴 😍 🐳 ❤‍🔥 🌚 🌭 💯 🤣 ⚡ 🍌 "
+    "🏆 💔 🤨 😐 🍓 🍾 💋 🖕 😈 😴 😭 🤓 👻 👨‍💻 👀 🎃 🙈 😇 😨 🤝 ✍ 🤗 🫡 🎅 🎄 ☃ 💅 🤪 🗿 🆒 "
+    "💘 🙉 🦄 😘 💊 🙊 😎 👾 🤷‍♂ 🤷 🤷‍♀ 😡".split()
+)
+
+
+def test_the_seen_reaction_is_one_telegram_actually_allows() -> None:
+    from sellee.channel import routing
+
+    assert routing.SEEN_REACTION in TELEGRAM_ALLOWED_REACTIONS
+
+
+def test_a_reaction_is_sent_as_a_single_emoji_entry() -> None:
+    """A bot may set exactly one reaction per message, so the list the API takes always has one
+    entry — sending two is a rejected call, not two reactions."""
+    sent = {}
+
+    class _Client(transport.TelegramClient):
+        def _api(self, method, params, *, timeout=None):
+            sent.update({"method": method, "params": params})
+            return True
+
+    _Client("t").set_message_reaction(CHAT_ID, 77, "👀")
+
+    assert sent["method"] == "setMessageReaction"
+    assert sent["params"]["reaction"] == [{"type": "emoji", "emoji": "👀"}]
+    assert sent["params"]["message_id"] == 77

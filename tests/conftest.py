@@ -8,15 +8,51 @@ import pkgutil
 import re
 import subprocess
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from sellee import migrations, paths
+from sellee import migrations, paths, secrets
 from sellee.browser import chrome
 from sellee.config import Config
 from sellee.db import Database
 from sellee.events import EventBus, EventStore
+
+# The developer's own config directory, resolved once at import — before any test has had a chance
+# to monkeypatch HOME or XDG_CONFIG_HOME out from under it.
+_REAL_CONFIG_DIR = paths.config_dir()
+
+
+@pytest.fixture(autouse=True)
+def _never_write_real_secrets(monkeypatch):
+    """Fail any test that writes a secret into the developer's real config directory.
+
+    Secrets are written by path, and the path comes from the environment — so a test that binds a
+    channel without the `xdg_tmp` fixture does not fail, or skip, or write somewhere harmless. It
+    silently overwrites `~/.config/sellee/telegram_bot_token` with the suite's FAKE_TOKEN, and the
+    developer's live bot starts answering every getUpdates with HTTP 401 until they fetch the real
+    token back from BotFather. The token is not recoverable from anywhere on disk.
+
+    This is not hypothetical and the guard is not speculative generality: it happened, from a new
+    test file whose author (me) simply did not know `_bound` had a filesystem side effect. Nothing
+    about the test's signature said so, and a passing suite said nothing either. The class of bug is
+    "a fixture is load-bearing and its absence is silent", which review does not reliably catch.
+
+    Autouse, so it covers tests that do not know they need it — which is exactly the set at risk.
+    """
+    real_write = secrets.write_secret
+
+    def guarded(path, value) -> None:
+        if _REAL_CONFIG_DIR in Path(path).parents:
+            raise AssertionError(
+                f"test tried to write a real secret to {path} — add the `xdg_tmp` fixture, which "
+                "points HOME and the XDG dirs at a tmpdir. Without it this overwrites your own "
+                "credentials."
+            )
+        real_write(path, value)
+
+    monkeypatch.setattr(secrets, "write_secret", guarded)
 
 
 @pytest.fixture(autouse=True)

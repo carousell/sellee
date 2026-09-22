@@ -1,11 +1,17 @@
-"""Provider-agnostic outbound policy: the notice-drain and typing-pulse *decisions*, the
-settled-pass inbox fold, the escalation-push bus subscriber, and the daemon-authored onboarding
-messages (the bind welcome and the first-listing nudge).
+"""Provider-agnostic outbound policy: the notice-drain *decision* and the gate deciding when the
+seller's chat should show 'typing…', the settled-pass inbox fold, the escalation-push bus
+subscriber, and the daemon-authored onboarding messages (the bind welcome and the first-listing
+nudge).
 
 The mechanism — how a message or typing action actually reaches the seller — is the provider's:
 `drain_notices` and `pulse_typing` take an injected `deliver(chat_id, text)` / `typing(chat_id)`
 callable, so the policy (when bound and not paused, FIFO, bump-and-retry on failure) lives here
 once and every provider reuses it.
+
+The indicator's *cadence* is not here — holding it lit needs a refresh faster than the scheduler's
+tick can deliver, so it belongs to a thread (`channel/presence.py`). What is here is the gate
+`typing_target` — the single answer to "should the chat be lit right now", shared by that thread and
+by the inline pulse at the end of an ingest, so the two can never disagree.
 """
 
 from __future__ import annotations
@@ -22,17 +28,18 @@ log = logging.getLogger(__name__)
 
 NOTICE_DRAIN_INTERVAL_SEC = 2.0
 INBOX_FOLD_INTERVAL_SEC = 2.0
-# Telegram's typing indicator lasts ~5s. This is a *lower bound* only: the scheduler evaluates
-# due-ness at tick boundaries, so a lane declaring less than `tick_interval_sec` (5.0) runs once per
-# tick. Measured over 32,961 pulses the real cadence is ~5.14s, which is fractionally longer than
-# the indicator lives — so it blinks off once a cycle rather than being held open, and no interval
-# below 5.0 can change that without the tick changing too.
-#
-# Left as-is because the indicator is a secondary signal: it is a header subtitle with no bubble, no
-# notification and no scrollback, and it closes ~5s of a 30s-15min wait. The receipt
-# (channel/acks.py) is what actually tells the seller anything.
-TYPING_PULSE_INTERVAL_SEC = 4.0
 _NOTICE_DRAIN_BATCH = 10
+
+# How long the indicator may stay lit for one pass before the gate gives up on it.
+#
+# It bounds a lie the store cannot otherwise detect: `fail_stale_running` only runs from `pass_lane`
+# and only past `pass_deadline_sec` (900s) plus slack, so a pass killed outright leaves a `running`
+# row for about sixteen minutes, and an unbounded gate would animate "typing…" the whole time.
+#
+# 300s is double the measured p75 of a channel pass (155s), so no ordinary wait reaches it. What
+# happens past it is not silence: `presence.seller_waiting_notice` has already said something in
+# words at 180s, which is the honest way to carry a wait this long anyway.
+TYPING_MAX_LIT_SEC = 300.0
 
 FAILED_PASS_NOTICE = "I couldn't process your last message — please send it again."
 
@@ -106,17 +113,51 @@ def _in_quiet_hours(store, now) -> bool:
     return pacing.in_quiet_window(dt.hour * 60 + dt.minute, start_min, end_min)
 
 
+def typing_target(store, *, now=None):
+    """The chat that should be showing 'typing…' right now, or None.
+
+    The whole policy for the indicator, in one pure-store read, so the keeper thread and the inline
+    pulse can never disagree about when the chat is lit. It answers one question — *is the seller
+    still owed a word, and is something actually going to produce it* — and every clause is a way
+    that can be false:
+
+      * **Paused.** Nothing runs: `pass_lane` claims nothing, the drain no-ops, a running pass is
+        killed. An indicator would be the agent miming work it is forbidden to do.
+      * **Unbound.** There is no chat to light.
+      * **No channel pass queued or running.** Nothing is going to answer.
+      * **The pass has already spoken.** `send_message` only *queues*; the drain delivers it a
+        moment later and clears the indicator itself. Without this clause the keeper re-arms behind
+        an answer already on screen, and a trailing "typing…" reads as "there's more coming".
+      * **The pass is older than `TYPING_MAX_LIT_SEC`.** A pass killed outright keeps its `running`
+        status until the stale sweep, which is `pass_deadline_sec` away — sixteen minutes of an
+        indicator with no process behind it. Measured from `requested_ts`, which every pass has;
+        `started_ts` is still None while one waits its turn on the lane, and that wait is the
+        seller's wait too. Past the bound the wait is carried by words: `presence.py`'s threshold
+        notice fires well before this, so nothing goes quiet that was not already spoken for.
+    """
+    if store.is_paused():
+        return None
+    active = store.active_channel_pass()
+    if active is None:
+        return None
+    if store.has_notice_for_pass(active["pass_id"]):
+        return None
+    now = time.time() if now is None else now
+    if now - active["requested_ts"] > TYPING_MAX_LIT_SEC:
+        return None
+    return store.get_channel()["chat_id"]
+
+
 def pulse_typing(*, store, typing) -> None:
-    """Keep the seller's chat showing 'typing…' while a channel pass is queued or running, via the
-    provider's `typing`. Best-effort: a failed pulse is swallowed. No-op while paused, unbound, or
-    with no channel pass in flight."""
-    if store.is_paused() or not store.has_active_channel_pass():
-        return
-    ch = store.get_channel()
-    if ch["chat_id"] is None:
+    """Light the seller's chat once, via the provider's `typing`, if `typing_target` says it should
+    be lit. Best-effort: a failed pulse is swallowed, because every caller of this one is on a
+    receive thread where a cosmetic send must never cost the loop its tick. The keeper
+    (`channel/presence.py`) does its own send so it can *see* the failures this hides."""
+    chat_id = typing_target(store)
+    if chat_id is None:
         return
     try:
-        typing(ch["chat_id"])
+        typing(chat_id)
     except Exception as exc:
         log.debug("typing pulse failed (ignored): %s", exc)
 

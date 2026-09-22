@@ -291,10 +291,33 @@ def _no_browser_tools(payload: dict, store, pass_id: str) -> tuple:
 def _always_progressed(payload: dict, store, pass_id: str) -> bool:
     """The default: a pass type that cannot tell a productive run from an empty one.
 
-    Right for a publish, whose success is its own verified listing, and for the channel pass, whose
-    job is often to read and decide rather than to write anything.
+    Right for a publish, whose success is its own verified listing.
     """
     return True
+
+
+def _channel_progressed(payload: dict, store, pass_id: str) -> bool:
+    """Whether a channel pass said anything to the seller.
+
+    This used to be `_always_progressed`, on the argument that the channel pass "is often to read
+    and decide rather than to write anything". That was true only while the daemon receipted every
+    arrival itself: whatever the pass did, the seller had already been told their message landed.
+    Now that the wait is shown rather than narrated, a pass that exits rc 0 having called no
+    `send_message` is the seller watching a typing indicator stop and nothing arriving — with the
+    rows folded handled, no notice, no error, and nothing anywhere to say it happened.
+
+    The queued notice is the honest mark, the same one the indicator stops on, so "this pass did its
+    job" and "the seller is no longer owed a word" can never disagree. Failing here routes it
+    through the fold's existing recovery, which queues `FAILED_PASS_NOTICE` — the seller is asked to
+    say it again, which is at least a door.
+
+    The threshold notice deliberately carries no `pass_id` for exactly this reason: the agent saying
+    "still working on it" must never count as the pass having answered.
+    """
+    started = (store.get_pass(pass_id) or {}).get("started_ts")
+    if started is None:
+        return True  # no start stamp to measure against — never invent a failure
+    return store.has_notice_for_pass(pass_id)
 
 
 def _reply_progressed(payload: dict, store, pass_id: str) -> bool:
@@ -404,13 +427,15 @@ PASS_TYPES = {
     ),
     # The channel pass is the seller conversation: it writes to a human, so it needs voice and the
     # escalation copy, and it runs the listing flow end to end — including the comps research the
-    # flow's pricing step calls for, and eyes on the photos the seller sent.
+    # flow's pricing step calls for, and eyes on the photos the seller sent. Because it writes to a
+    # human, saying nothing is a failure: the seller spoke and is owed an answer.
     "channel": PassType(
         tier=TIER_PASS_CHANNEL,
         build_prompt=_channel_prompt,
         skills=("sellee-conventions", "voice-and-style", "seller-comms", "listing-flow"),
         web_tools=True,
         build_media_paths=_channel_media_paths,
+        made_progress=_channel_progressed,
     ),
 }
 

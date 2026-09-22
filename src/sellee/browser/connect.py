@@ -9,9 +9,13 @@ the probe re-derives the answer every time it is asked.
 
 The lane exists because the tap arrives on the provider's receive loop, which answers fast paths
 inline. Opening Chrome cold takes seconds to tens of seconds, and blocking that loop would stall
-every other message and the typing pulse. So the tap writes a durable row and returns, and this
-runs off the row — which also makes a double-tap single-flight (the row's primary key is the
-market) and survives a restart between the tap and the open.
+every other message the seller sends. So the tap writes a durable row and returns, and this runs
+off the row — which also makes a double-tap single-flight (the row's primary key is the market) and
+survives a restart between the tap and the open.
+
+(The typing indicator is no longer among the casualties: it is held by its own thread now, so a
+blocked receive loop cannot put it out. The inline pulse at the end of an ingest still rides this
+loop, but it is only ever the first of many.)
 
 Every outcome ends in exactly one notice back to the seller. A request that cannot be served yet
 (a pass is driving the tab) is left pending rather than answered wrongly, and a request that has

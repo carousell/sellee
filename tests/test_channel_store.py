@@ -379,3 +379,71 @@ def test_redundant_pause_keeps_since(store, monkeypatch) -> None:
     store.set_paused(True, source="b")  # a redundant pause keeps the original since_ts
     since = store._db.query("SELECT since_ts FROM control WHERE id = 1")[0]["since_ts"]
     assert since == 111.0
+
+
+# --- what the indicator and the wait are measured from -------------------------------------------
+
+
+def test_has_notice_for_pass_sees_only_that_passs_words(store) -> None:
+    """The mark has to be pass-scoped. Unscoped — "has anything been queued since?" — the agent's
+    own threshold notice would satisfy it, putting the indicator out in the middle of the one wait
+    long enough to need it."""
+    store.queue_notice("from another pass", pass_id="pass_other")
+    store.queue_notice("from no pass at all")
+
+    assert store.has_notice_for_pass("pass_mine") is False
+
+    store.queue_notice("Yes — S$35, still listed.", pass_id="pass_mine")
+
+    assert store.has_notice_for_pass("pass_mine") is True
+
+
+def test_a_queued_notice_counts_as_spoken_before_it_is_delivered(store) -> None:
+    """The words exist the moment they are queued; the drain lane delivering them is a separate
+    concern, and it is the delivery that clears the indicator anyway."""
+    notice_id = store.queue_notice("here you go", pass_id="pass_1")
+    assert store.has_notice_for_pass("pass_1") is True
+
+    store.mark_notice_delivered(notice_id, "channel")
+
+    assert store.has_notice_for_pass("pass_1") is True
+
+
+def test_the_active_channel_pass_carries_its_stamps(store) -> None:
+    store.ingest_updates([_ev(1)], update_offset=2)
+    pass_id = store.enqueue_channel_pass()
+
+    active = store.active_channel_pass()
+
+    assert active["pass_id"] == pass_id
+    assert active["requested_ts"] is not None
+    assert active["started_ts"] is None  # queued, not yet claimed — and that wait is the seller's
+
+
+def test_no_active_channel_pass_reads_as_none_not_an_empty_row(store) -> None:
+    assert store.active_channel_pass() is None
+    assert store.has_active_channel_pass() is False
+
+
+def test_the_oldest_unanswered_message_is_what_a_wait_is_measured_from(store) -> None:
+    """Pending and claimed both count — from the seller's side "not routed yet" and "claimed by a
+    pass that hasn't settled" are one thing. Oldest, because a burst is one wait that started when
+    the first message landed."""
+    assert store.oldest_unanswered_message() is None
+
+    store.ingest_updates([_ev(1, text="first")], update_offset=2)
+    store.ingest_updates([_ev(2, text="second")], update_offset=3)
+    first = store.oldest_unanswered_message()
+
+    store.enqueue_channel_pass()  # both rows are now claimed rather than pending
+
+    assert store.oldest_unanswered_message() == first
+
+
+def test_a_handled_message_is_no_longer_waiting(store) -> None:
+    store.ingest_updates([_ev(1)], update_offset=2)
+    row_id = store.oldest_unanswered_message()["id"]
+
+    store.mark_inbox_handled([row_id], "fast_path")
+
+    assert store.oldest_unanswered_message() is None

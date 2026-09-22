@@ -275,6 +275,26 @@ class ChannelMixin:
         )
         return rows[0]["n"]
 
+    def oldest_unanswered_message(self) -> dict | None:
+        """The seller's longest-waiting unanswered message, as {id, received_ts}, or None.
+
+        The same two statuses `count_unsettled_inbox` counts, for the same reason — from the
+        seller's side "not routed yet" and "claimed by a pass that hasn't settled" are one thing.
+        What this adds is *when*, so a wait can be measured rather than only counted, and the row
+        id, which is what the threshold notice guards itself with: the same seller waiting twice is
+        two waits, and a `ref` keyed to the row reports each of them exactly once.
+
+        Oldest rather than newest: a burst of three messages is one wait, and it started when the
+        first one landed.
+        """
+        rows = self._db.query(
+            "SELECT id, received_ts FROM channel_inbox WHERE status IN ('pending', 'claimed') "
+            "ORDER BY received_ts ASC, id ASC LIMIT 1"
+        )
+        if not rows:
+            return None
+        return {"id": rows[0]["id"], "received_ts": rows[0]["received_ts"]}
+
     def recent_transcript(self, limit: int) -> list[TranscriptEntry]:
         """The recent conversational window: inbound inbox rows (any status) interleaved with the
         agent's own outbound notices, ordered by the local clock, the most-recent `limit` entries
@@ -409,3 +429,18 @@ class ChannelMixin:
         """Whether any notice — queued or delivered — was ever queued under `ref`. The durable
         once-guard for proactive pushes (retention never prunes notices)."""
         return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
+
+    def has_notice_for_pass(self, pass_id: str) -> bool:
+        """Whether a pass has said anything to the seller yet.
+
+        The honest mark that a pass has spoken: `send_message` stamps `pass_id` on every notice it
+        queues, so this is true from the moment the words exist rather than from when they are
+        delivered — which is what the typing indicator needs, since the drain lane clears the
+        indicator itself and would otherwise leave it re-arming behind an answer already on screen.
+
+        Two callers on purpose. The indicator stops here, and `made_progress` fails a channel pass
+        here, so "the seller is still owed a word" and "this pass did its job" are the same read
+        and cannot drift apart. Queued or delivered both count: a notice waiting on the drain is a
+        word said, not a word owed.
+        """
+        return bool(self._db.query("SELECT 1 FROM notices WHERE pass_id = ? LIMIT 1", (pass_id,)))

@@ -63,6 +63,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         # numbers are reserved rather than reused: two branches that both took 19 would apply a
         # different schema under the same version on whichever install saw them in the wrong order.
         ("data", 21),
+        ("data", 22),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -109,6 +110,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         18,
         # See the note on the applied-set above for why 19 and 20 are not ours to take.
         21,
+        22,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
