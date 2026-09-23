@@ -600,6 +600,19 @@ def test_a_country_typed_by_name_is_spelled_as_a_code_rather_than_bounced(
     assert "You sell in VN — Vietnam, correct?" in capsys.readouterr().out
 
 
+def test_uk_is_spelled_as_gb_rather_than_recorded_as_a_country_that_does_not_exist(
+    world, monkeypatch, capsys
+) -> None:
+    """Two letters, so the shape check alone would take "UK" as a code. It is not one."""
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    _answer(monkeypatch, ["UK", "", "Europe/London", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"]["region"] == "GB"
+    assert "You sell in GB — United Kingdom, correct?" in capsys.readouterr().out
+
+
 def test_a_typed_country_is_confirmed_by_name_so_a_wrong_code_can_be_caught(
     world, monkeypatch, capsys
 ) -> None:

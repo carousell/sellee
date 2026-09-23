@@ -527,13 +527,12 @@ def _ask_country(ui: Ui) -> str:
     default = (region_guess.guess() or {}).get("region", "")
     while True:
         answer = ui.ask("Which country do you sell in?", default=default, lead=False).strip()
-        code = answer.upper()
+        # Spelled before the shape check: "UK" is two letters but not a code, and resolves to GB.
+        # A real code is left alone by code_for_name, so "AU" is never read as a name.
+        code = countries.code_for_name(answer) or answer.upper()
         if len(code) != 2 or not code.isalpha():
-            spelled = countries.code_for_name(answer)
-            if not spelled:
-                ui.say("A country is its two-letter code, like US or CA.")
-                continue
-            code = spelled
+            ui.say("A country is its two-letter code, like US or CA.")
+            continue
         if ui.confirm(f"You sell in {countries.label(code)}, correct?", default=True):
             return code
 
