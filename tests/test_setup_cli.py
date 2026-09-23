@@ -506,6 +506,13 @@ def test_any_country_completes_setup(world, capsys) -> None:
     assert world.calls["provisioned"] == "VN"
 
 
+def test_a_uk_region_flag_is_spelled_as_gb(world) -> None:
+    # The flag passes the same shape check as the prompt, so it needs the same spelling.
+    assert setup_main("--yes", "--manual", "--region", "uk") == 0
+    assert world.calls["basics"]["region"] == "GB"
+    assert world.calls["provisioned"] == "GB"
+
+
 def test_a_malformed_country_flag_is_still_refused(world, capsys) -> None:
     assert setup_main("--yes", "--manual", "--region", "vnm") == 1
     assert world.calls["basics"] == {}

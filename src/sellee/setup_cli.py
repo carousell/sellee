@@ -498,7 +498,9 @@ def _stored_basics(port: int, token: str) -> dict:
 
 
 def _basics_from_flag(args) -> dict:
-    code = str(args.region).strip().upper()
+    # Spelled like a typed answer, so "--region UK" records GB rather than a country that does not
+    # exist.
+    code = countries.code_for_name(args.region) or str(args.region).strip().upper()
     zone = region_guess.default_zone(code)
     return {"region": code, "timezone": zone} if zone else {"region": code}
 
