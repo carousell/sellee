@@ -134,7 +134,7 @@ class RailClient:
 
     def create_listing(self, args: dict) -> dict:
         """Create a listing and return {listing_id, url}. Raises RailToolError when the response
-        carries no id — without one there is no listing to point at."""
+        carries no id. The currency is not read back: the request asserts the recorded one."""
         result = self.call_tool("create_listing", args)
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result

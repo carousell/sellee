@@ -1,34 +1,52 @@
 """Guessing where the seller sells, so setup can confirm rather than interrogate.
 
-Region is the first thing the agent needs and the least interesting thing to ask for: it decides
-which regional marketplace sites exist for this seller and which currency their prices are in.
-The machine already knows its timezone, so setup proposes an answer and asks for a yes.
-
-The table covers only the countries the rail serves, because those are the only ones the product
-works in — a guess outside them would hand someone a confident answer that setup then has to
-refuse. Anything unmapped produces no guess at all, and setup asks instead: one extra question is
-cheaper than a wrong default, and far cheaper than a seller configured for a country where
-nothing they list can go anywhere.
+Nothing here decides where a seller may sell: any country is accepted, and a zone the table does
+not name produces no guess at all, so setup asks rather than proposing a wrong default.
 """
 
 from __future__ import annotations
 
 import os
 
-from sellee import marketplaces
+from sellee import countries
 
-# What a region prices in. Only the regions the rail serves are here; `supported()` is the
-# authority on which those are, and this must not get ahead of it.
-CURRENCIES = {
-    "SG": "SGD",
-    "US": "USD",
-}
-
-# Timezones that identify a region unambiguously. US zones are listed rather than matched by an
-# `America/*` prefix: that prefix also covers Toronto, Mexico City and São Paulo, and answering
-# "US" for those would be wrong in a way the seller has no reason to double-check.
+# Timezones that identify a region unambiguously. Zones are listed rather than matched by an
+# `America/*`-style prefix: that prefix also covers Toronto, Mexico City and São Paulo, and
+# answering "US" for those would be wrong in a way the seller has no reason to double-check.
+# Canada is enumerated for the same reason rather than sharing the prefix.
+#
+# The countries here are the ones a price can be quoted in something other than USD, so a guess
+# and the currency shown beside it cover the same ground. A country absent here is not a country
+# the agent refuses — it is one the machine cannot vouch for, so setup asks instead.
 _ZONE_REGIONS = {
     "Asia/Singapore": "SG",
+    "Asia/Ho_Chi_Minh": "VN",
+    "Asia/Kuala_Lumpur": "MY",
+    "Asia/Kuching": "MY",
+    "Asia/Jakarta": "ID",
+    "Asia/Makassar": "ID",
+    "Asia/Jayapura": "ID",
+    "Asia/Bangkok": "TH",
+    "Asia/Manila": "PH",
+    "Asia/Taipei": "TW",
+    "Asia/Hong_Kong": "HK",
+    "Asia/Tokyo": "JP",
+    "Asia/Seoul": "KR",
+    "Asia/Kolkata": "IN",
+    "Asia/Karachi": "PK",
+    "Asia/Brunei": "BN",
+    "Europe/London": "GB",
+    "Europe/Berlin": "DE",
+    "Europe/Amsterdam": "NL",
+    "Europe/Brussels": "BE",
+    "Europe/Rome": "IT",
+    "Australia/Sydney": "AU",
+    "Pacific/Auckland": "NZ",
+    "America/Toronto": "CA",
+    "America/Vancouver": "CA",
+    "America/Edmonton": "CA",
+    "America/Winnipeg": "CA",
+    "America/Halifax": "CA",
     "America/New_York": "US",
     "America/Detroit": "US",
     "America/Chicago": "US",
@@ -43,17 +61,19 @@ _ZONE_REGIONS = {
     "Pacific/Honolulu": "US",
 }
 
-# The legacy `US/Eastern`-style aliases, still what some machines report.
-_ZONE_PREFIX_REGIONS = (("US/", "US"), ("America/Indiana/", "US"), ("America/Kentucky/", "US"))
-
-
-def supported() -> list:
-    """The regions setup will accept, straight from the registry."""
-    return marketplaces.supported_regions()
+# The legacy `US/Eastern`-style aliases, still what some machines report. `Australia/` is a
+# prefix rather than a list because every zone under it is in Australia — the objection to
+# `America/` does not apply.
+_ZONE_PREFIX_REGIONS = (
+    ("US/", "US"),
+    ("America/Indiana/", "US"),
+    ("America/Kentucky/", "US"),
+    ("Australia/", "AU"),
+)
 
 
 def region_for_zone(zone: str):
-    """The region a timezone implies, or None when it implies nothing we support."""
+    """The region a timezone implies, or None when it implies nothing."""
     if not zone:
         return None
     found = _ZONE_REGIONS.get(zone)
@@ -62,7 +82,7 @@ def region_for_zone(zone: str):
             if zone.startswith(prefix):
                 found = region
                 break
-    return found if found in supported() else None
+    return found
 
 
 def zones_for(region: str) -> list:
@@ -160,19 +180,16 @@ def zone_error(name: str) -> str:
 
 
 def guess(zone: str | None = None):
-    """A complete {region, currency, timezone} proposal, or None when the machine gives no hint."""
+    """A {region, timezone} proposal, or None when the machine gives no hint. No currency: what a
+    listing is priced in comes from the backend, so proposing one would be recording a guess."""
     zone = system_timezone() if zone is None else zone
     region = region_for_zone(zone)
-    if region is None:
-        return None
-    currency = CURRENCIES.get(region)
-    if currency is None:
-        return None
-    return {"region": region, "currency": currency, "timezone": zone}
+    return None if region is None else {"region": region, "timezone": zone}
 
 
 def render(basics: dict) -> str:
-    """How a proposal is put to the seller: `SG · SGD · Asia/Singapore`."""
-    return " · ".join(
-        str(basics.get(key, "")) for key in ("region", "currency", "timezone") if basics.get(key)
-    )
+    """How a proposal is put to the seller: `SG — Singapore · SGD · Asia/Singapore`. The country
+    is spelled out because "SA" and "SG" look equally right until one of them is named."""
+    parts = [countries.label(basics["region"])] if basics.get("region") else []
+    parts += [str(basics[key]) for key in ("currency", "timezone") if basics.get(key)]
+    return " · ".join(parts)

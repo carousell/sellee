@@ -97,7 +97,7 @@ def test_initialize_and_create_listing(fake_rail) -> None:
     server.tool_result = {"structuredContent": {"listing_id": "L1", "url": url}}
     client = _client(base)
     client.initialize()
-    listing = client.create_listing({"title": "Lamp", "price_cents": 8000, "currency": "SGD"})
+    listing = client.create_listing({"title": "Lamp", "price_cents": 8000})
     assert listing == {"listing_id": "L1", "url": url}
 
 
@@ -116,6 +116,13 @@ def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
     }
     listing = _client(base).create_listing({"title": "x"})
     assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3"}
+
+
+def test_create_listing_ignores_the_currency_the_response_carries(fake_rail) -> None:
+    """The request asserts the recorded code, so nothing is read back off the listing."""
+    server, base = fake_rail
+    server.tool_result = {"structuredContent": {"listing": {"id": "L5", "currency": "VND"}}}
+    assert "currency" not in _client(base).create_listing({"title": "x"})
 
 
 def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:

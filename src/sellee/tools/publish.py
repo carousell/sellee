@@ -10,6 +10,7 @@ transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+import logging
 import time
 
 from sellee import settings
@@ -30,11 +31,29 @@ from sellee.tools.registry import (
 )
 from sellee.tools.verify import verify_market_url
 
+log = logging.getLogger(__name__)
+
 _MARKET = "carousell-ai"
 # The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
 _MEDIA_TYPE_IMAGE = 1
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
+
+
+def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
+    """Refuse a price the seller approved in another currency: 500 USD on an account pricing in
+    VND goes live as 500 VND. A pre-check ahead of reserve_action; carousell.ai enforces it."""
+    recorded = (item.get("currency") or "").strip().upper()
+    if not recorded or not expected:
+        # Nothing to contradict, or a seller provisioned before registration answered a code.
+        # Asserting one here would be a false refusal.
+        return
+    if recorded != expected:
+        raise ToolError(
+            f"this item is priced in {recorded}, but carousell.ai prices your listings in "
+            f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
+            f"a different amount of money. Re-price the item in {expected} before publishing"
+        )
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -45,6 +64,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
+        # Same keys a fresh publish returns: the shape must not depend on the attempt.
         return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
@@ -54,8 +74,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
-    if not (item.get("currency") or "").strip():
-        raise ToolError("item has no currency — set one before publishing")
+    currency = ctx.store.seller_currency() or ""
+    _require_a_currency_the_seller_prices_in(currency, item)
     try:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
@@ -80,12 +100,15 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             f"{int(paced['delay_sec'])}s"
         )
 
+    # The recorded code is what registration answered, so asserting it turns a disagreement into
+    # a refusal before any listing exists.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
         "price_cents": price_cents,
-        "currency": item["currency"],
     }
+    if currency:
+        args["currency"] = currency
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
     # upload reference is skipped rather than blocking the publish; an item with no photos at all
@@ -121,6 +144,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         ctx.store.record_listing_url(item_id, _MARKET, listing["url"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+
     return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
 
 

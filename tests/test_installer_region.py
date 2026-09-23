@@ -1,28 +1,13 @@
-"""Guessing where the seller sells — and refusing to guess where the product does not work."""
+"""Guessing where the seller sells, and never deciding it."""
 
 from __future__ import annotations
 
-from sellee import marketplaces
 from sellee.installer import region
 
 
-def test_the_supported_regions_are_the_ones_the_rail_serves() -> None:
-    # Every listing goes on the rail, so a country the rail has no site for is a country the
-    # agent cannot sell in, whatever browser marketplaces happen to operate there.
-    assert region.supported() == ["SG", "US"]
-    assert marketplaces.supported_regions() == ["SG", "US"]
-
-
-def test_the_currency_table_never_gets_ahead_of_the_supported_set() -> None:
-    assert sorted(region.CURRENCIES) == region.supported()
-
-
 def test_a_singapore_machine_is_proposed_singapore() -> None:
-    assert region.guess("Asia/Singapore") == {
-        "region": "SG",
-        "currency": "SGD",
-        "timezone": "Asia/Singapore",
-    }
+    # No currency in the proposal: what a listing is priced in comes from the backend.
+    assert region.guess("Asia/Singapore") == {"region": "SG", "timezone": "Asia/Singapore"}
 
 
 def test_us_zones_resolve_across_the_mainland_and_its_outliers() -> None:
@@ -41,14 +26,58 @@ def test_us_zones_resolve_across_the_mainland_and_its_outliers() -> None:
 def test_other_countries_in_the_americas_are_not_guessed_as_the_us() -> None:
     # The reason US zones are listed rather than matched on an `America/` prefix: that prefix
     # also covers these, and a wrong country is not something a seller would think to check.
-    for zone in ("America/Toronto", "America/Mexico_City", "America/Sao_Paulo"):
+    # Toronto resolves, but to Canada — the prefix still decides nothing.
+    assert region.region_for_zone("America/Toronto") == "CA"
+    for zone in ("America/Mexico_City", "America/Sao_Paulo"):
         assert region.region_for_zone(zone) is None, zone
 
 
-def test_a_country_the_rail_does_not_serve_produces_no_guess() -> None:
-    # Better to ask than to hand someone a confident answer the write door will refuse.
-    for zone in ("Asia/Kuala_Lumpur", "Asia/Hong_Kong", "Australia/Sydney", "Europe/London"):
+def test_the_countries_a_seller_is_likeliest_to_be_in_are_all_guessable() -> None:
+    """Setup proposes rather than asking wherever the machine can vouch for the answer, and the
+    markets carousell.ai trades in are the ones that has to cover."""
+    guessable = set(region._ZONE_REGIONS.values())
+    guessable |= {code for _, code in region._ZONE_PREFIX_REGIONS}
+    for code in ("AU", "BN", "CA", "DE", "GB", "HK", "ID", "IN", "IT", "JP"):
+        assert code in guessable, code
+    for code in ("KR", "MY", "NL", "NZ", "PH", "PK", "SG", "TH", "TW", "US", "VN"):
+        assert code in guessable, code
+    assert region.region_for_zone("Europe/Brussels") == "BE"
+    # Every guessable country also has a zone to propose once it is known, so the timezone
+    # question never offers an example from the wrong side of the world.
+    for code in guessable:
+        assert region.zones_for(code), code
+
+
+def test_australia_is_a_prefix_because_every_zone_under_it_is_australian() -> None:
+    for zone in ("Australia/Sydney", "Australia/Perth", "Australia/Darwin", "Australia/Eucla"):
+        assert region.region_for_zone(zone) == "AU", zone
+
+
+def test_a_zone_the_table_does_not_name_produces_no_guess() -> None:
+    # A guess is a convenience, so an absent country asks rather than proposing. Nothing here
+    # decides where the seller may sell: the answer they type is accepted whatever it is.
+    for zone in ("Asia/Riyadh", "Africa/Lagos", "Europe/Madrid", "America/Bogota"):
         assert region.guess(zone) is None, zone
+
+
+def test_the_confirm_line_shows_only_what_is_recorded() -> None:
+    # Before registration answers there is no currency to show, and predicting one here was the
+    # ported table this change deleted.
+    assert region.render({"region": "SG", "timezone": "Asia/Singapore"}) == (
+        "SG — Singapore · Asia/Singapore"
+    )
+    assert region.render({"region": "BR"}) == "BR — Brazil"
+    # A recorded currency is shown as recorded.
+    assert region.render({"region": "SG", "currency": "SGD"}) == "SG — Singapore · SGD"
+    # A code no name is known for still renders: it is a country the agent accepts either way.
+    assert region.render({"region": "WW"}) == "WW"
+
+
+def test_the_confirm_line_names_the_country_so_a_code_can_be_proofread() -> None:
+    """The SA/SG class: two codes of identical shape, both real, one wrong. The name is what
+    makes the difference visible while the seller can still correct it."""
+    assert region.render({"region": "SA"}).startswith("SA — Saudi Arabia")
+    assert region.render({"region": "SG"}).startswith("SG — Singapore")
 
 
 def test_an_unknown_or_missing_zone_produces_no_guess() -> None:
@@ -72,7 +101,8 @@ def test_a_tz_that_names_no_zone_falls_back_to_the_machine(monkeypatch) -> None:
 
 
 def test_render_reads_as_the_confirmation_it_is_used_for() -> None:
-    assert region.render(region.guess("Asia/Singapore")) == "SG · SGD · Asia/Singapore"
+    # A guess carries no currency, so the confirmation names country and zone alone.
+    assert region.render(region.guess("Asia/Singapore")) == "SG — Singapore · Asia/Singapore"
 
 
 def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:
@@ -83,7 +113,7 @@ def test_a_mac_reports_its_zone_rather_than_nothing(monkeypatch) -> None:
         region.os.path, "realpath", lambda _: "/usr/share/zoneinfo.default/Asia/Singapore"
     )
     assert region.system_timezone() == "Asia/Singapore"
-    assert region.guess() == {"region": "SG", "currency": "SGD", "timezone": "Asia/Singapore"}
+    assert region.guess() == {"region": "SG", "timezone": "Asia/Singapore"}
 
 
 def test_the_plain_zoneinfo_layout_still_reads(monkeypatch) -> None:

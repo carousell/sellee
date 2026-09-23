@@ -65,8 +65,7 @@
         "path": "/listing/"
       },
       "domains": {
-        "US": "www.carousell.ai",
-        "SG": "www.carousell.ai"
+        "*": "www.carousell.ai"
       },
       "connector": {
         "type": "mcp"

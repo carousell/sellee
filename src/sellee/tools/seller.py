@@ -9,7 +9,6 @@ never enters the computation or the output.
 
 from __future__ import annotations
 
-from sellee import marketplaces
 from sellee.engines import shipping as shipping_engine
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -48,22 +47,13 @@ def validate_basics(basics: dict) -> dict:
     region = str(basics.get("region", "")).strip()
     if "region" in basics:
         if len(region) != 2 or not region.isalpha():
-            raise BasicsError(f"region must be a two-letter country code (e.g. SG), got {region!r}")
-        supported = marketplaces.supported_regions()
-        if region.upper() not in supported:
-            # Refused rather than stored, because storing it produces a seller who looks
-            # configured and is not: provisioning has no country to ask for, and every listing
-            # goes on the rail, so nothing they list can go anywhere.
-            raise BasicsError(
-                f"{region.upper()} isn't a country sellee works in yet — "
-                f"currently {', '.join(supported)}"
-            )
+            raise BasicsError(f"region must be a two-letter country code (e.g. US), got {region!r}")
         out["region"] = region.upper()
 
     currency = str(basics.get("currency", "")).strip()
     if "currency" in basics:
         if len(currency) != 3 or not currency.isalpha():
-            raise BasicsError(f"currency must be a three-letter code (e.g. SGD), got {currency!r}")
+            raise BasicsError(f"currency must be a three-letter code (e.g. USD), got {currency!r}")
         out["currency"] = currency.upper()
 
     timezone = str(basics.get("timezone", "")).strip()

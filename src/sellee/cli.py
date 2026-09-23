@@ -47,7 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
         const="manual",
         help="don't ask: start the daemon only on demand",
     )
-    setup.add_argument("--region", default=None, help="two-letter region code (e.g. SG)")
+    setup.add_argument("--region", default=None, help="two-letter region code (e.g. US)")
     setup.add_argument(
         "--skip-markets", action="store_true", help="don't offer marketplace sign-in"
     )
@@ -245,7 +245,7 @@ def _build_parser() -> argparse.ArgumentParser:
     provision = sub.add_parser("provision", help="provision an external rail")
     prsub = provision.add_subparsers(dest="provision_command", required=True)
     prov_ai = prsub.add_parser("carousell-ai", help="obtain the carousell.ai guest API key")
-    prov_ai.add_argument("--region", default=None, help="two-letter region code (e.g. SG)")
+    prov_ai.add_argument("--region", default=None, help="two-letter region code (e.g. US)")
 
     sub.add_parser("mcp-proxy", help="stdio<->HTTP MCP forwarder for stdio-only harnesses")
 

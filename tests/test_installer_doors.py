@@ -570,22 +570,33 @@ def test_a_structurally_invalid_timezone_is_refused_not_shrugged_at(server) -> N
     assert "not a valid timezone" in body["error"]
 
 
-def test_a_country_the_rail_does_not_serve_is_refused_at_the_door(server, store) -> None:
-    status, body = _call(server, "POST", "/control/seller-basics", body={"region": "MY"})
-    assert status == 400
-    assert "MY isn't a country sellee works in yet" in body["error"]
-    assert "SG, US" in body["error"]
+def test_any_real_country_is_recorded_at_the_door(server, store) -> None:
+    # The door checks the shape of a country code and nothing else. Where carousell.ai can pay
+    # out is the backend's answer to give, and it is not a reason to refuse a configuration.
+    for code in ("VN", "MY", "BR", "vn"):
+        status, body = _call(server, "POST", "/control/seller-basics", body={"region": code})
+        assert status == 200, body
+        assert store.seller_region() == code.upper()
+
+
+def test_a_malformed_country_code_is_still_refused_at_the_door(server, store) -> None:
+    for code in ("V", "VNM", "V1", ""):
+        status, body = _call(server, "POST", "/control/seller-basics", body={"region": code})
+        assert status == 400, code
+        assert "two-letter country code" in body["error"]
     assert store.seller_region() is None
 
 
-def test_the_model_is_held_to_the_same_region_rule_as_the_installer(make_ctx) -> None:
+def test_the_model_is_held_to_the_same_region_rule_as_the_installer(make_ctx, store) -> None:
     # One validator behind both writers, so the LLM cannot record what the door refuses.
     from sellee.tools.registry import ToolError, dispatch
 
     ctx = make_ctx("attended")
+    dispatch("update_seller_config", {"basics": {"region": "VN"}}, ctx)
+    assert store.seller_region() == "VN"
     with pytest.raises(ToolError) as caught:
-        dispatch("update_seller_config", {"basics": {"region": "MY"}}, ctx)
-    assert "isn't a country sellee works in yet" in str(caught.value)
+        dispatch("update_seller_config", {"basics": {"region": "VNM"}}, ctx)
+    assert "two-letter country code" in str(caught.value)
 
 
 def test_the_model_updating_one_basics_key_keeps_the_rest(make_ctx, store) -> None:
@@ -630,10 +641,10 @@ def test_the_control_client_returns_a_refusal_rather_than_calling_the_daemon_dow
     from sellee import control
 
     status, body = control.post(
-        server.port, "attended-secret", "/control/seller-basics", {"region": "ZZ"}
+        server.port, "attended-secret", "/control/seller-basics", {"region": "VNM"}
     )
     assert status == 400
-    assert "isn't a country" in body["error"]
+    assert "two-letter country code" in body["error"]
 
     status, _body = control.get(server.port, "wrong-token", "/control/seller-basics")
     assert status == 401

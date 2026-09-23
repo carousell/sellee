@@ -117,17 +117,6 @@ def market_url(market: str, key: str, region: str | None = None, **fields) -> st
     return f"https://{host}{path}"
 
 
-def supported_regions() -> list:
-    """Where the agent can be used at all — the regions the rail serves, in registry order.
-
-    Every listing goes on the rail, so a seller the rail has no site for cannot be sold for,
-    whatever browser marketplaces might exist around them. Derived from the registry rather than
-    listed a second time here: the day the rail opens a country, this answers with it and no code
-    changes.
-    """
-    return sorted((get_marketplace(RAIL) or {}).get("domains") or {})
-
-
 def market_home(market: str, region: str | None = None) -> str | None:
     """The marketplace's front page for a seller in this region, or None when it has no site there.
 
