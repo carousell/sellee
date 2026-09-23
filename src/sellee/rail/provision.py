@@ -12,7 +12,7 @@ import json
 import urllib.error
 import urllib.request
 
-from sellee import secrets
+from sellee import countries, secrets
 
 _GUESTS_PATH = "/api/v1/guests"
 _DEFAULT_TIMEOUT_SEC = 10.0
@@ -26,9 +26,12 @@ class ProvisionError(Exception):
 
 
 def _normalize_region(region: str | None) -> str:
-    if not region or len(region.strip()) != 2 or not region.strip().isalpha():
+    # Spelled as setup spells it, so `--region UK` registers GB rather than a country that does
+    # not exist.
+    code = countries.code_for_name(region or "") or (region or "").strip()
+    if len(code) != 2 or not code.isalpha():
         raise ValueError("a two-letter region code is required (e.g. --region US)")
-    return region.strip().upper()
+    return code.upper()
 
 
 def _printable(raw: str) -> str:

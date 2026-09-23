@@ -81,6 +81,14 @@ def test_reprovision_forces_fresh_key(xdg_tmp, guests_server) -> None:
     assert server.hits == 1
 
 
+def test_uk_registers_as_gb(xdg_tmp, guests_server) -> None:
+    # "UK" is two letters but not a code; `--region UK` must not register a country that does
+    # not exist.
+    server, base = guests_server
+    assert provision.ensure("uk", api_base=base)["status"] == "ok"
+    assert server.last_country == "GB"
+
+
 def test_bad_region_errors_without_network(xdg_tmp, guests_server) -> None:
     server, base = guests_server
     status = provision.ensure("SGP", api_base=base)
