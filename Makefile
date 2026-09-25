@@ -11,7 +11,7 @@ VERSION = $(shell $(RUN) python -c "import sys; sys.path.insert(0, 'src'); \
 	import sellee; print(sellee.__version__)")
 STAGE = $(DIST)/sellee-$(VERSION)
 
-.PHONY: bootstrap test test-serial lint fmt typecheck dist diagrams
+.PHONY: bootstrap test test-props test-serial lint fmt typecheck dist diagrams
 
 # Provision the toolchain this repo builds against: uv itself if it is missing or too old, the
 # pinned interpreter, then the dev dependency set. ./setup does the same thing for a user, from
@@ -22,6 +22,11 @@ bootstrap:
 # Runs tests in parallel.
 test:
 	$(RUN) python -m pytest -n auto --dist worksteal
+
+# Property tests only, at the deep Hypothesis budget. `make test` already runs them at the
+# default budget; this is the hard pass, for CI and before a release.
+test-props:
+	HYPOTHESIS_PROFILE=thorough $(RUN) python -m pytest tests/properties
 
 # Runs tests serially.
 test-serial:
