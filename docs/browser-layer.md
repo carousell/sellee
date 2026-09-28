@@ -273,6 +273,8 @@ process per recycle, in no holder and reaped by nobody.
 | `listing_id_pattern` | where a listing's id sits in a permalink, one regex group |
 | `composer` | shipped selector defaults, by step |
 | `publish_skill` | the skill holding this market's publish recipe |
+| `edit_entry_js`, `edit_fields_js`, `edit_readback_js`, `edit_target` | **editing a live listing by driving its form** — the listing page's own Edit control, the form's marked controls, and what the form holds before saving |
+| `editable_fields` | which item fields the edit driver can change; a change outside it is the seller's to make by hand, and they are told so |
 | `system_handles` | rows an inbox read must never treat as a buyer |
 
 `chat_message_submit_js` is per-market decision rather than a per-market fact.
@@ -873,9 +875,10 @@ than about this process, and is a table.
 ## Adding a marketplace
 
 **Connecting is one promise.** A seller who switches a marketplace on is told
-Sellee will list to it, read its inbox, answer its buyers, and adopt what they
-already have listed there. The unit of work is those four surfaces, plus signing
-back in and being offered at onboarding — not "an adapter".
+Sellee will list to it, read its inbox, answer its buyers, adopt what they
+already have listed there, and change a listing after it is up. The unit of work
+is those five surfaces, plus signing back in and being offered at onboarding —
+not "an adapter".
 
 A market can exist in the registry and still deliver none of the four. The guard
 against that is `tests/test_marketplace_surfaces.py`: it derives each surface from
@@ -893,6 +896,8 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
 5. **Inbox and replies** — a conversation list, a message read, a composer, and a
    way to name the listing a conversation is about.
 6. **Signing back in** — a login probe. Every adapter must have one.
+7. **Changing a live listing** — an `edit_flow` recipe (a skill an `edit` pass
+   follows), or the edit selectors `browser/editor.py` drives.
 
 Leave the page-dispatched submit mechanism empty unless someone has decided that
 market's account can afford it.
@@ -924,6 +929,12 @@ market's account can afford it.
   means retryable; a listing may exist means never re-driven. Read the form back
   before pressing anything, refuse to publish with a paid boost on, and confirm
   the listing from a page that names it.
+- **An edit is idempotent**, which inverts the publish rule: pressing Save twice
+  sets the same values twice, so an unverified edit may be retried within its
+  attempt bound. An edit form arrives already filled, so every box is emptied
+  with a real select-all before typing, and the form is read back before saving —
+  a box that did not empty would otherwise save "150120" as the price. The
+  outcome is read off the listing page itself, per field.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.

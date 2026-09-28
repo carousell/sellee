@@ -99,6 +99,16 @@ class MarketAdapter:
     # This market's own word for an item's free-text condition — the vocabulary its condition
     # dropdown offers is the market's, so the mapping lives with the market, not the driver.
     publish_condition_for: Callable[[str], str] = lambda said: ""
+    # Changing a live listing by driving its edit form (`browser/editor.py`). They move together,
+    # like the publish set: `edit_entry_js` marks the listing page's own Edit control,
+    # `edit_fields_js` marks the form's controls and says which it found, `edit_readback_js` says
+    # what the form holds. `editable_fields` names the item fields the driver can change — a field
+    # outside it is a change the seller makes by hand, and is told so rather than half-done.
+    edit_entry_js: str = ""
+    edit_fields_js: str = ""
+    edit_readback_js: str = ""
+    edit_target: Callable[[str], str] = lambda step: ""
+    editable_fields: frozenset = field(default_factory=frozenset)
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -154,6 +164,11 @@ FACEBOOK = MarketAdapter(
     publish_options_js=facebook.options_js,
     publish_default_category=facebook.DEFAULT_CATEGORY,
     publish_condition_for=facebook.condition_for,
+    edit_entry_js=facebook.EDIT_ENTRY_JS,
+    edit_fields_js=facebook.EDIT_FIELDS_JS,
+    edit_readback_js=facebook.EDIT_READBACK_JS,
+    edit_target=facebook.edit_target,
+    editable_fields=facebook.EDITABLE_FIELDS,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,

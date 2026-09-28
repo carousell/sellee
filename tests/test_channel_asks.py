@@ -48,6 +48,7 @@ def test_strips_surrounding_whitespace() -> None:
         ["🔗 Send checkout link", "🤝 I'll handle it"],
         ["👍 Not a scam — resume", "🛑 Keep it held"],
         ["✅ Sold", "💔 Fell through", "⏳ Still on it"],
+        ["✅ Change it", "✏️ Something else"],
     ],
 )
 def test_every_label_the_rulebook_pins_clears_the_legibility_cap(options) -> None:

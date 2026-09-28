@@ -864,6 +864,105 @@ def condition_for(said: str) -> str:
 # catch-all word, and one of the menu's options.
 DEFAULT_CATEGORY = "Miscellaneous"
 
+# --- editing a live listing ----------------------------------------------------------------------
+
+# Its own attribute rather than the publish one: a stale publish mark left in the DOM by an earlier
+# create must never be mistaken for a control on the edit form.
+EDIT_MARK_ATTR = "data-sellee-edit"
+
+# What the edit driver changes. Photos are not here: replacing Facebook's photo set means removing
+# each existing photo by its own hover control before adding any, and until that is modelled a
+# photo change on Facebook is the seller's to make by hand — said to them, never half-done.
+EDITABLE_FIELDS = frozenset({"title", "description", "list_price"})
+
+
+def edit_target(step: str) -> str:
+    """The selector for one marked edit control."""
+    return f"[{EDIT_MARK_ATTR}='{step}']"
+
+
+# The listing's own Edit control, on its item page, as its owner sees it. `LISTING_DETAIL_JS`
+# filters this same "Edit" line out of the panel as chrome — it is there on every listing the
+# seller owns. Marked rather than clicked, because the click has to be a real one.
+EDIT_ENTRY_JS = f"""() => {{
+  const MARK = '{EDIT_MARK_ATTR}';
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }};
+  const entry = Array.from(document.querySelectorAll('[role="button"],a,button')).filter(visible)
+    .find((el) => /^Edit( listing)?$/.test(
+      (el.getAttribute('aria-label') || el.innerText || '').trim()));
+  if (entry) entry.setAttribute(MARK, 'entry');
+  return {{
+    found: !!entry,
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
+# Mark the edit form's controls, and say which were found. The edit dialog is the create composer
+# with its values filled in, so fields are found by the label beside them exactly as the publish
+# artifact finds them — the two text inputs are indistinguishable otherwise, and a partly
+# recognised form could put the price in the title. The commit is a single button ("Update" on
+# the current layout, "Save" on older ones) rather than create's Next-then-Publish.
+EDIT_FIELDS_JS = f"""() => {{
+  const MARK = '{EDIT_MARK_ATTR}';
+  const labelOf = (el) => {{
+    for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {{
+      const t = (n.innerText || '').trim();
+      if (t && t.length < 60) return t.split('\\n')[0].trim();
+    }}
+    return '';
+  }};
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }};
+  const mark = (el, step) => {{ if (el) el.setAttribute(MARK, step); return !!el; }};
+  const byLabel = (selector, wanted) =>
+    Array.from(document.querySelectorAll(selector)).filter(visible)
+      .find((el) => labelOf(el) === wanted) || null;
+  const button = (re) =>
+    Array.from(document.querySelectorAll('[role="button"],button')).filter(visible)
+      .find((el) => re.test((el.getAttribute('aria-label') || el.innerText || '').trim()))
+    || null;
+  const found = {{
+    title: mark(byLabel('input[type="text"]', 'Title'), 'title'),
+    price: mark(byLabel('input[type="text"]', 'Price'), 'price'),
+    description: mark(byLabel('textarea', 'Description'), 'description'),
+    more: mark(button(/^More details/), 'more'),
+    save: mark(button(/^(Update|Save)$/), 'save'),
+  }};
+  const boost = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+    .find((el) => /Boost listing/i.test(el.getAttribute('aria-label') || ''));
+  mark(boost, 'boost');
+  const save = document.querySelector('[' + MARK + "='save']");
+  return {{
+    marked: Object.keys(found).filter((k) => found[k]),
+    missing: Object.keys(found).filter((k) => !found[k]),
+    save_enabled: !!save && save.getAttribute('aria-disabled') !== 'true',
+    boost_on: !!(boost && boost.checked),
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
+# What the edit form holds now — read before pressing Update, the last moment a mistake is free.
+EDIT_READBACK_JS = f"""() => {{
+  const value = (step) => {{
+    const el = document.querySelector("[{EDIT_MARK_ATTR}='" + step + "']");
+    return el ? el.value : null;
+  }};
+  return {{
+    title: value('title'),
+    price: value('price'),
+    description: value('description'),
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
 
 # The reply composer, as shipped defaults under the heal cache.
 #

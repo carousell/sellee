@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TypedDict
 
 from sellee import marketplaces, paths
+from sellee.money import to_price_cents
 
 # Fields a caller may set on an item. listing_urls is deliberately absent — it is written only
 # after a live listing verify, by the publish path. Sale-state transitions are not here either.
@@ -30,6 +31,23 @@ _ITEM_WRITABLE = (
     "photos",
 )
 _ITEM_STATUSES = ("draft", "ready")
+# What a live listing actually shows a buyer, and so what may be changed on one that is already
+# up. Narrower than _ITEM_WRITABLE on purpose, and each absence has a reason:
+#
+#   * status / size_bucket — bookkeeping; no marketplace renders either.
+#   * currency — carousell.ai's update verb has no currency argument at all (it is fixed at
+#     create), so the change could not be pushed anywhere it matters. It would also strand the
+#     stored floor, which snapshots its currency and is compared unit-blind: re-reading that
+#     number in a new unit is inventing a price the seller never gave.
+#   * condition — the rail takes it as an enum, and our create path does not send it. Editing it
+#     would give an edited listing a field a freshly published one does not have; it should change
+#     on both paths at once or on neither.
+_LIVE_EDITABLE = ("title", "description", "list_price", "photos")
+# What a buyer sees on a listing. Once an item is listed anywhere, the general writer refuses these:
+# changing one there would change the record and no listing, which is how the seller was once told
+# a price was updated that no buyer could see. Live changes go through `revise_item`; `status` and
+# `size_bucket` stay writable because no marketplace renders them.
+_BUYER_VISIBLE = ("title", "description", "condition", "list_price", "currency", "photos")
 # Photos are capped per item — the marketplace shows a handful, and an unbounded list would make
 # the upload bracket (mint URL, POST, repeat) run for minutes.
 MAX_PHOTOS = 12
@@ -222,6 +240,31 @@ class ItemRecord(TypedDict):
     photos: list
     created_ts: float
     updated_ts: float
+
+
+class ReviseAck(TypedDict):
+    """What `revise_item` returns. `floor_clamped` says the confidential floor moved down to the
+    new price; like `FloorAck`, the shape has nowhere to put the value."""
+
+    item: ItemRecord
+    floor_clamped: bool
+
+
+class RevisionRecord(TypedDict):
+    """One `listing_revisions` row: an edit owed to, or settled on, one browser marketplace."""
+
+    revision_id: str
+    item_id: str
+    market: str
+    changed: list[str]
+    accepted: dict | None
+    status: str
+    attempts: int
+    last_error: str | None
+    claimed_ts: float | None
+    pass_id: str | None
+    created_ts: float
+    finished_ts: float | None
 
 
 class FloorAck(TypedDict):
@@ -517,6 +560,82 @@ def validate_photos(value: object) -> list:
             photo["uploaded_url"] = uploaded
         out.append(photo)
     return out
+
+
+def validated_item_fields(fields: dict, writable=_ITEM_WRITABLE) -> dict:
+    """The item-write rules, in one place both item writers share.
+
+    Returns the fields ready for an UPDATE — photos canonicalized and JSON-encoded. `writable`
+    narrows the allowlist for a caller that may touch less than the general writer can.
+    """
+    if "listing_urls" in fields:
+        raise StoreError(
+            "listing_urls is not writable here — it is recorded by "
+            "carousell_ai_publish_listing after the listing is verified live"
+        )
+    unknown = [k for k in fields if k not in writable]
+    if unknown:
+        raise StoreError(
+            f"unknown or non-writable field(s): {', '.join(sorted(unknown))}; "
+            f"writable: {', '.join(writable)}"
+        )
+    if "status" in fields and fields["status"] not in _ITEM_STATUSES:
+        raise StoreError(
+            f"status may only move between {_ITEM_STATUSES}; sale-state transitions are "
+            "owned by their own flow"
+        )
+    if not fields:
+        raise StoreError("no fields to update")
+    if "list_price" in fields:
+        # Money was never checked here, so a negative, zero, non-finite or non-numeric price
+        # persisted and surfaced far from its cause — as "no valid list price to negotiate" from
+        # the engine, or "no numeric list price" when quoting shipping, long after whoever wrote
+        # it had gone. to_price_cents is the house rule for what a price may be, so this asks it
+        # rather than growing a second one that could disagree.
+        try:
+            to_price_cents(fields["list_price"])
+        except ValueError as exc:
+            raise StoreError(str(exc)) from exc
+    if "photos" in fields:
+        fields = dict(fields, photos=json.dumps(validate_photos(fields["photos"])))
+    return fields
+
+
+def _clamp_floor_in_txn(conn, item_id: str, now: float) -> bool:
+    """Bring a floor back under the item's list price, inside the transaction that moved the price.
+
+    `set_floor` validates `0 < floor <= list_price` against the item row, and that was the only
+    place the two were ever compared — so lowering the price under a recorded floor inverted the
+    invariant with nothing anywhere to notice. Inverted, the engine's `effective_min` rises above
+    the seller's own public price, the at-list branch accepts *under* their floor with no
+    below-floor backstop on that path, and the checkout gate then refuses the deal that branch
+    just agreed to.
+
+    Clamping rather than refusing: the seller asked for the new price, and a floor is the lowest
+    they would take — one sitting above what they are now asking cannot be a number they meant.
+    `source` is left alone, so a seller floor stays a seller floor and set_floor's overwrite
+    discipline is untouched.
+
+    Returns only whether it moved. The value is confidential, and a caller that learned it here
+    would be one return away from putting it in front of the model.
+    """
+    row = conn.execute(
+        "SELECT items.list_price AS list_price, floors.floor AS floor "
+        "FROM items JOIN floors ON floors.item_id = items.id WHERE items.id = ?",
+        (item_id,),
+    ).fetchone()
+    if row is None:
+        return False  # no floor recorded — nothing to hold under anything
+    list_price, floor = row["list_price"], row["floor"]
+    if not isinstance(list_price, (int, float)) or isinstance(list_price, bool):
+        return False
+    if list_price <= 0 or floor <= list_price:
+        return False
+    conn.execute(
+        "UPDATE floors SET floor = ?, updated_ts = ? WHERE item_id = ?",
+        (list_price, now, item_id),
+    )
+    return True
 
 
 _THREAD_FIELDS = (

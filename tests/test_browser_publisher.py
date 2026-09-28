@@ -12,8 +12,8 @@ import threading
 
 import pytest
 
+from sellee.browser import formfill, publisher
 from sellee.browser import markets as market_adapters
-from sellee.browser import publisher
 from sellee.browser.client import BrowserClient, BrowserToolError
 
 _CREATE = "https://www.facebook.com/marketplace/create/item"
@@ -450,13 +450,13 @@ def test_the_settles_between_form_steps_are_jittered(monkeypatch) -> None:
     monkeypatch.setattr("time.sleep", slept.append)
 
     for _ in range(400):
-        publisher._sleep(publisher.STEP_SETTLE_SEC)
+        formfill.sleep(formfill.STEP_SETTLE_SEC)
 
     assert len(set(slept)) > 300, "the pause is effectively constant"
-    assert min(slept) >= publisher.STEP_SETTLE_SEC * (1 - publisher._JITTER)
-    assert max(slept) <= publisher.STEP_SETTLE_SEC * (1 + publisher._JITTER)
+    assert min(slept) >= formfill.STEP_SETTLE_SEC * (1 - formfill.JITTER)
+    assert max(slept) <= formfill.STEP_SETTLE_SEC * (1 + formfill.JITTER)
     # Jitter, not delay: the mean is where it always was.
-    assert statistics.mean(slept) == pytest.approx(publisher.STEP_SETTLE_SEC, rel=0.08)
+    assert statistics.mean(slept) == pytest.approx(formfill.STEP_SETTLE_SEC, rel=0.08)
 
 
 def test_a_wall_stops_a_publish_before_anything_is_filled_in() -> None:

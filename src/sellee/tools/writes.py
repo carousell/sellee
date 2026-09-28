@@ -76,9 +76,11 @@ register(
 register(
     ToolSpec(
         name="update_item",
-        description="Update writable item fields (title, description, condition, list_price, "
+        description="Update a draft item's fields (title, description, condition, list_price, "
         "currency, photos, and draft<->ready status). Photos are paths already inside the media "
-        "store. Listing URLs and sale states are not writable here.",
+        "store. Changes the record only, never a listing: on an item that is already listed it "
+        "refuses anything a buyer sees — use update_live_listing for that. Listing URLs and sale "
+        "states are not writable here.",
         input_schema={
             "type": "object",
             "properties": {

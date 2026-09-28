@@ -86,10 +86,13 @@ the LLM surface: a stdlib MCP client over `urllib` (the guest key travels only i
 the Authorization header), a fail-closed live listing-URL verify, and guest-key
 provisioning. `mcp_proxy.py` is a stdio↔HTTP forwarder so a stdio-only harness
 reaches the same server — the HTTP server stays the single implementation.
-`rail.update_listing` has two callers with disjoint arguments: the
-`carousell_ai_update_listing` tool (take-down) passes status only, and the daemon's
+`rail.update_listing` has three callers with disjoint arguments: the
+`carousell_ai_update_listing` tool (take-down) passes status only, the daemon's
 cross-link push passes `external_urls` only — that field is daemon-owned, and no
-tool writes it.
+tool writes it — and `update_live_listing` passes only the content fields that
+changed (`title`, `description`, `price_cents`, `media`). The rail's update verb
+is PATCH and has no `currency`, which is fixed at create; that is why currency is
+not an editable field on a live listing.
 
 ## The harness seam
 
@@ -142,7 +145,8 @@ runner:
 |---|---|---|---|---|---|
 | `publish` | `pass:publish` — `get_item`, the photo/publish pair, `record_published_listing_url` (how a browser publish's result gets back at all), `send_message`, and the selector cache (`ui_cache_*`, `probe_selector`) | conventions + the market's own recipe | no | for a browser market only | full |
 | `reply` | `pass:reply` — its own threads and items, `negotiate_offer`/`status`, `search_qa_bank`, `send_reply`, `hold_thread`, `escalate`, `quote_shipping`, the checkout link, `scam_scan` | conventions, voice-and-style, buyer-conversation, scam-guard | no | no | its claimed threads + items |
-| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, `carousell_ai_create_signin_link`, escalations, settings, the Q&A bank, `carousell_ai_update_listing`, `queue_marketplace_publish`, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow | yes | no | full |
+| `edit` | `pass:edit` — `get_item`, the selector cache (`ui_cache_*`, `probe_selector`), and `record_listing_revision` (how a model-driven edit's result gets back, bound to the pass's own revision) | conventions + the market's own edit recipe | no | for a browser market with an edit recipe and no driver | full |
+| `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, `carousell_ai_create_signin_link`, escalations, settings, the Q&A bank, `carousell_ai_update_listing`, `update_live_listing`, `queue_marketplace_publish`, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow, listing-edit | yes | no | full |
 
 `carousell_ai_create_signin_link` — which mints the seller's one-time
 carousell.ai sign-in URL, the thing standing between a guest account and any

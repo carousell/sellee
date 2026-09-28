@@ -29,6 +29,7 @@
       "id": "carousell",
       "display_name": "Carousell",
       "listing_flow": "listing-flow-carousell",
+      "edit_flow": "edit-flow-carousell",
       "listing_url": {
         "host": "carousell.",
         "path": "/p/"

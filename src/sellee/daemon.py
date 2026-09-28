@@ -33,6 +33,7 @@ from sellee import (
     passes,
     paths,
     retention,
+    revise,
     secrets,
     settings,
 )
@@ -757,6 +758,19 @@ def run_daemon(*, once: bool) -> int:
             name="crosslist_lane",
             interval_sec=_CROSSLIST_LANE_INTERVAL_SEC,
             func=lambda: crosslist.crosslist_lane(crosslist_deps),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    # Carry a seller's listing edit out to each browser marketplace, and report each outcome. The
+    # rail half already happened inline, in the conversation that asked for it.
+    revise_deps = revise.ReviseDeps(
+        store=store, bus=bus, config=cfg, browser_factory=browser_factory
+    )
+    scheduler.register(
+        Task(
+            name="revise_lane",
+            interval_sec=_CROSSLIST_LANE_INTERVAL_SEC,
+            func=lambda: revise.revise_lane(revise_deps),
             jitter=_BROWSER_LANE_JITTER,
         )
     )

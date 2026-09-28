@@ -28,7 +28,8 @@ DEFAULT_CHANNEL_NAME = "chat"
 _INSTRUCTIONS = (
     "The seller is messaging you over {channel_name}. Read the messages below and handle them, "
     "replying with send_message.\n"
-    "What they'll want, in practice: listing something new (follow the listing flow), answering a "
+    "What they'll want, in practice: listing something new (follow the listing flow), changing a "
+    "listing that is already up (price, words, photos — update_live_listing), answering a "
     "question you escalated to them, changing a setting, or asking how things stand. Work out "
     'which from what they actually wrote — a short reply like "yes" or "80" almost always '
     "answers your own last message, so read the conversation above before treating it as a new "

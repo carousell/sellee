@@ -198,6 +198,17 @@ it writes each item's browser-listing URLs onto its carousell.ai listing (render
 to buyers as "Also available on"), pushing only when the recorded URLs differ from
 what the rail last accepted and retrying silently until it does.
 
+**`revise.py`** is its counterpart for a listing that is already up. When the
+seller asks to change a price, a description, a title or the photos,
+`update_live_listing` writes the item (clamping the confidential floor under a
+lowered price in the same transaction), edits the carousell.ai listing inline, and
+leaves one `listing_revisions` row per browser marketplace the item is live on.
+The lane drains those rows one at a time: a market with a driver (Facebook) is
+edited in process by `browser/editor.py`; a market with an edit recipe
+(Carousell) becomes an `edit` pass. Attempts are bounded and spaced, a second
+edit supersedes a pending one, and each outcome is reported by the daemon from the
+row — read back off the listing page, never assumed from having pressed Save.
+
 ### Skills and prompt composition
 
 A pass's prompt is split along what changes. The **system prompt** is the
