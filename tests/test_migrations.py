@@ -64,6 +64,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         # different schema under the same version on whichever install saw them in the wrong order.
         ("data", 21),
         ("data", 22),
+        ("data", 23),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -88,6 +89,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "market_surveys")
     assert _table_exists(data_db, "discovered_listings")
     assert _table_exists(data_db, "market_blocks")
+    assert _table_exists(data_db, "listing_revisions")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -111,6 +113,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         # See the note on the applied-set above for why 19 and 20 are not ours to take.
         21,
         22,
+        23,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

@@ -56,6 +56,7 @@ from sellee.store.helpers import (
 from sellee.store.items import ItemsMixin
 from sellee.store.negotiation import NegotiationMixin
 from sellee.store.passes import PassesMixin
+from sellee.store.revisions import RevisionsMixin
 from sellee.store.scam import ScamMixin
 from sellee.store.send import SendMixin
 from sellee.store.settings import SettingsMixin
@@ -99,6 +100,7 @@ class Store(
     EscalationsMixin,
     ScamMixin,
     PassesMixin,
+    RevisionsMixin,
     ChannelMixin,
     SettingsMixin,
     SurveyMixin,
@@ -169,6 +171,8 @@ class Scope:
 _SCOPE_GUARDED = {
     "get_item": (("item_id", "item"),),
     "update_item": (("item_id", "item"),),
+    "revise_item": (("item_id", "item"),),
+    "queue_listing_revision": (("item_id", "item"),),
     "record_listing_url": (("item_id", "item"),),
     "get_floor": (("item_id", "item"),),
     "set_floor": (("item_id", "item"),),
@@ -223,6 +227,8 @@ _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),
     "update_item": ("item", ItemNotFound),
+    "revise_item": ("item", ItemNotFound),
+    "queue_listing_revision": ("item", ItemNotFound),
     "record_listing_url": ("item", ItemNotFound),
     "set_floor": ("item", ItemNotFound),
     "record_checkout": ("item", ItemNotFound),

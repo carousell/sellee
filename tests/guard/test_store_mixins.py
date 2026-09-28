@@ -1,6 +1,6 @@
 """No two store mixins define the same attribute.
 
-`Store` composes ten mixins from `sellee/store/*.py`, so an accessor defined in two of them is
+`Store` composes a dozen mixins from `sellee/store/*.py`, so an accessor defined in two of them is
 resolved silently by the MRO: the first mixin in the bases list wins and the other body simply
 never runs. Nothing else would fail — the tests exercising the losing definition go on passing
 against the winner, which is usually near-identical. That is the one failure mode the split
@@ -28,6 +28,7 @@ _EXPECTED = {
     "EscalationsMixin",
     "ScamMixin",
     "PassesMixin",
+    "RevisionsMixin",
     "ChannelMixin",
     "SettingsMixin",
     "SurveyMixin",
