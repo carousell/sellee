@@ -21,6 +21,7 @@ from sellee.tools import (  # noqa: F401  imported for registration
     qa,
     reads,
     reply,
+    revise,
     scam,
     seller,
     settings,
@@ -33,6 +34,7 @@ from sellee.tools import (  # noqa: F401  imported for registration
 from sellee.tools.registry import (  # noqa: F401  re-exported as the package's public surface
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
+    TIER_PASS_EDIT,
     TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
     Session,

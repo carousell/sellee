@@ -46,7 +46,9 @@ log = logging.getLogger(__name__)
 _ACTIVE_STATUSES = ("active", "liaising", "agreed")
 
 # Pass types that drive the browser, and so must not overlap the lane's reads.
-_BROWSER_PASS_TYPES = ("reply", "publish")
+# Every edit pass is browser work: carousell.ai is edited inline by the tool, so an edit only ever
+# becomes a pass for a browser marketplace.
+_BROWSER_PASS_TYPES = ("reply", "publish", "edit")
 
 LOGGED_OUT_NOTICE = (
     "Your {name} session is signed out, so I've stopped reading that market. Tap below and I'll "

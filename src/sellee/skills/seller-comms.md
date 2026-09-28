@@ -97,7 +97,7 @@ rather than answering the floor question has decided this one offer, and the flo
 Record the answer with `set_floor`. A below-list decision implies the floor:
 "counter 80" or accepting a below-list offer means that amount *is* the floor — set it, don't ask
 twice. If `set_floor` rejects a floor above list, re-ask: give a lower floor, or say "raise the
-price to <n>" and update the listing instead.
+price to <n>" and change the listing with `update_live_listing` instead.
 
 **Above-list bid.** Too good to auto-commit — surface it: "📈 <buyer> bid <amount> on "<title>",
 ABOVE your list (<list_price>). Real and want to accept? I won't commit until you say so." On yes,

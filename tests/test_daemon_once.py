@@ -67,6 +67,7 @@ def test_run_once_migrates_heartbeats_and_ledgers(xdg_tmp) -> None:
         "inbox_read",
         "reply_lane",
         "crosslist_lane",
+        "revise_lane",
         "inbox_fold",
         "channel_route",
     } <= ran

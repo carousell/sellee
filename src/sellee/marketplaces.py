@@ -88,6 +88,16 @@ def listing_flow(market: str) -> str:
     return str((get_marketplace(market) or {}).get("listing_flow") or "")
 
 
+def edit_flow(market: str) -> str:
+    """The skill holding this market's recipe for changing a live listing, or "" when it has none.
+
+    Separate from `listing_flow` because creating a listing and changing one are different pages
+    and different risks: a market can be publishable long before anyone has written down how to
+    edit what it published.
+    """
+    return str((get_marketplace(market) or {}).get("edit_flow") or "")
+
+
 def browser_markets() -> list[str]:
     """Active markets the agent drives through Chrome, in registry order."""
     return [

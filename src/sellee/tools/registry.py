@@ -208,6 +208,10 @@ TIER_ATTENDED = "attended"
 # photos, publish, report — plus the selector cache, since a browser-market publish is the flow that
 # re-finds a moved control and records where it went.
 TIER_PASS_PUBLISH = "pass:publish"
+# The edit pass: changes one already-listed item on a marketplace with a recipe rather than a
+# driver. Narrower than publish — it reads the item, re-finds moved controls, and records how the
+# edit went, and nothing else; the change itself was decided and confirmed before it was queued.
+TIER_PASS_EDIT = "pass:edit"
 # The reply pass: the only flow acting on words a stranger wrote, and so the narrowest one that does
 # real work. It may read its own threads and items, decide offers, answer from the Q&A bank, send,
 # hold, and escalate — and nothing else. Absent by design: anything that writes on the seller's

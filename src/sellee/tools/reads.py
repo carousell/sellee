@@ -10,6 +10,7 @@ from sellee import __version__, heartbeat, paths, secrets, settings
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
+    TIER_PASS_EDIT,
     TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
     ToolContext,
@@ -157,7 +158,9 @@ register(
             "additionalProperties": False,
         },
         handler=_get_item,
-        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY}),
+        tiers=frozenset(
+            {TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY, TIER_PASS_EDIT}
+        ),
     )
 )
 register(

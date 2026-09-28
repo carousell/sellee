@@ -1,7 +1,8 @@
 """What connecting a marketplace promises, held to the code that implements it.
 
 Connecting is one promise: a seller who switches a marketplace on is told Sellee will list to it,
-read its inbox, answer its buyers, and pick up what they already have listed there. Each surface
+read its inbox, answer its buyers, pick up what they already have listed there, and change a
+listing after it is up. Each surface
 is derived from the artifact, registry template or skill that implements it — never from a flag,
 which could say yes while the adapter says no.
 
@@ -16,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from sellee import marketplaces
+from sellee.browser import editor
 from sellee.browser import markets as market_adapters
 
 # A gap someone has looked at and decided to ship without, with the reason. Delete the entry when
@@ -67,6 +69,8 @@ def _surfaces(market: str) -> dict:
         # 6 — getting back in when the session drops; `login_js` has no default, so an adapter
         # cannot be built without one.
         "signin": bool(adapter.login_js),
+        # 7 — changing a listing after it is up: a driven edit form, or a recipe a pass follows.
+        "edit": editor.can_edit(market) or bool(marketplaces.edit_flow(market)),
     }
 
 

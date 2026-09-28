@@ -22,7 +22,7 @@ from typing import Callable
 
 from sellee import channel, marketplaces, paths, settings, skills
 from sellee import reply_prompt as reply_prompt_mod
-from sellee.browser import chrome, publisher
+from sellee.browser import chrome, editor, publisher
 from sellee.browser import client as browser_client
 from sellee.browser import markets as market_adapters
 from sellee.browser import window as browser_window
@@ -34,6 +34,7 @@ from sellee.proc_tree import PASS_PROMPT_MARKER, confirm_dead, reap_strays
 from sellee.store import Scope
 from sellee.tools import (
     TIER_PASS_CHANNEL,
+    TIER_PASS_EDIT,
     TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
     tools_for_tier,
@@ -189,6 +190,40 @@ def validate_payload(pass_type: str, payload: dict, store) -> None:
         reason = _publish_market_error(publish_market(payload), store)
         if reason:
             raise PassPayloadError(reason)
+    if pass_type == "edit":
+        for key in ("revision_id", "item_id", "market"):
+            if not payload.get(key):
+                raise PassPayloadError(f"no {key} in payload")
+        reason = _edit_market_error(payload, store)
+        if reason:
+            raise PassPayloadError(reason)
+
+
+def _edit_market_error(payload: dict, store) -> str | None:
+    """Why this edit cannot be handed to a model pass, or None when it can.
+
+    The publish ladder's questions, asked of an edit and read at claim time: an edit queued before
+    a disconnect or a marketplace's wall must not still drive. Plus two of its own — a market the
+    editor can drive is never a model's work, and one with no edit recipe would hand a model a
+    logged-in account with no instructions.
+    """
+    market = str(payload.get("market") or "")
+    if marketplaces.get_marketplace(market) is None:
+        return f"no marketplace {market!r} in the registry"
+    if marketplaces.connector_type(market) != "browser":
+        return f"{market!r} is not edited in the browser"
+    if market not in settings.connected_markets(store):
+        return f"{market!r} isn't connected"
+    if store.market_block(market):
+        return f"{market!r} has asked us to stop — nothing is changed there until it clears"
+    if editor.can_edit_fields(market, payload.get("changed") or ()):
+        return f"{market!r} is edited by driving its form, not by a pass"
+    if not marketplaces.edit_flow(market):
+        return f"{market!r} has no recipe for editing a listing"
+    revision = store.get_listing_revision(payload["revision_id"])
+    if revision is None or revision["status"] != "running":
+        return "that edit is no longer in progress"
+    return None
 
 
 def _publish_prompt(payload: dict, store, pass_id: str) -> str:
@@ -232,6 +267,69 @@ def _publish_browser_tools(payload: dict, store, pass_id: str) -> tuple:
     if publisher.can_drive(market) or not marketplaces.listing_flow(market):
         return ()
     return PUBLISH_BROWSER_TOOLS
+
+
+def _edit_changes_photos(payload: dict) -> bool:
+    return "photos" in (payload.get("changed") or ())
+
+
+def _edit_prompt(payload: dict, store, pass_id: str) -> str:
+    """The one edit this pass is for: which listing, which fields, and the id to report against.
+
+    The listing URL comes from the item's record and is handed over rather than looked up — the
+    recipe never types a marketplace URL, the same rule the publish prompt keeps.
+    """
+    item_id, market = payload["item_id"], payload["market"]
+    item = store.get_item(item_id) or {}
+    url = (item.get("listing_urls") or {}).get(market)
+    if not url:
+        raise PassPayloadError(f"item {item_id} has no recorded {market} listing")
+    changed = ", ".join(payload.get("changed") or ())
+    photos = ""
+    if _edit_changes_photos(payload):
+        names = staged_photo_names(item_id, market, store)
+        photos = (
+            f"The new photo set, in order, is in your working directory: {', '.join(names)}\n"
+            if names
+            else ""
+        )
+    return (
+        f"{PASS_PROMPT_MARKER}\n"
+        f"Change item {item_id}'s listing on {marketplaces.display_name(market)} so it matches "
+        f"the item record, following the edit recipe.\n"
+        f"The listing is at {url}\n"
+        f"Change only these fields: {changed}. Read their new values with get_item. The change was "
+        f"already confirmed with the seller — do not second-guess it, and touch nothing else.\n"
+        f"{photos}"
+        f"When you are done, call record_listing_revision with revision_id "
+        f"{payload['revision_id']} and how it went."
+    )
+
+
+def _edit_skills(payload: dict, store, pass_id: str) -> tuple:
+    recipe = marketplaces.edit_flow(str(payload.get("market") or ""))
+    return ("sellee-conventions",) + ((recipe,) if recipe else ())
+
+
+def _edit_browser_tools(payload: dict, store, pass_id: str) -> tuple:
+    """The same diet a recipe publish gets, and on the same conditions: a browser market, with an
+    edit recipe, that the editor cannot drive itself. Anything else is authority without either
+    instructions or a reason — a guard test pins it over the registry."""
+    market = str(payload.get("market") or "")
+    if marketplaces.connector_type(market) != "browser":
+        return ()
+    if editor.can_edit_fields(market, payload.get("changed") or ()):
+        return ()
+    if not marketplaces.edit_flow(market):
+        return ()
+    return PUBLISH_BROWSER_TOOLS
+
+
+def _edit_progressed(payload: dict, store, pass_id: str) -> bool:
+    """Whether the pass said how its edit went. An edit left `running` was never recorded, which
+    the revise lane then settles as an interrupted attempt."""
+    revision = store.get_listing_revision(str(payload.get("revision_id") or ""))
+    return revision is not None and revision["status"] != "running"
 
 
 def _reply_prompt(payload: dict, store, pass_id: str) -> str:
@@ -414,6 +512,17 @@ PASS_TYPES = {
         build_browser_tools=_publish_browser_tools,
         max_turns=PUBLISH_MAX_TURNS,
     ),
+    # The edit pass changes one listing on a marketplace that has an edit recipe but no driver.
+    # Like publish, it is an already-decided job with no one to talk to; narrower than publish,
+    # because it creates nothing and records only how its one edit went.
+    "edit": PassType(
+        tier=TIER_PASS_EDIT,
+        build_prompt=_edit_prompt,
+        build_skills=_edit_skills,
+        build_browser_tools=_edit_browser_tools,
+        max_turns=PUBLISH_MAX_TURNS,
+        made_progress=_edit_progressed,
+    ),
     # The reply pass answers buyers. It is the one flow acting on words a stranger wrote, so it is
     # the most constrained: an entity scope covering only its own threads, no web research, and no
     # browser — the send goes through the daemon's sink, which the LLM never touches. What it needs
@@ -432,7 +541,13 @@ PASS_TYPES = {
     "channel": PassType(
         tier=TIER_PASS_CHANNEL,
         build_prompt=_channel_prompt,
-        skills=("sellee-conventions", "voice-and-style", "seller-comms", "listing-flow"),
+        skills=(
+            "sellee-conventions",
+            "voice-and-style",
+            "seller-comms",
+            "listing-flow",
+            "listing-edit",
+        ),
         web_tools=True,
         build_media_paths=_channel_media_paths,
         made_progress=_channel_progressed,
@@ -731,7 +846,7 @@ def run_pass(deps: PassDeps, claimed) -> str:
             )
             return "spawn_error"
         _write_workspace(workspace, spec)
-        if claimed.type == "publish":
+        if claimed.type == "publish" or (claimed.type == "edit" and _edit_changes_photos(payload)):
             _stage_photos(workspace, payload, deps.store)
         try:
             argv = deps.argv_builder(spec)
