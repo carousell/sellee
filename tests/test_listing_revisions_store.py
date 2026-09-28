@@ -208,3 +208,48 @@ def test_a_silent_report_closes_the_row_without_a_notice(store: Store) -> None:
     before = len(store.list_queued_notices())
     assert store.report_listing_revision(rev, None)
     assert len(store.list_queued_notices()) == before
+
+
+# --- update_item on a listed item ---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"list_price": 99.0},
+        {"title": "New"},
+        {"description": "x"},
+        {"currency": "USD"},
+        {"condition": "used"},
+    ],
+)
+def test_update_item_refuses_what_a_buyer_sees_once_listed(store: Store, fields) -> None:
+    # Review: only a prompt line kept the model from changing a live price on the record alone.
+    item = _item(store)
+    store.record_listing_url(item["id"], "fb", "https://www.facebook.com/marketplace/item/1/")
+    with pytest.raises(StoreError, match="update_live_listing"):
+        store.update_item(item["id"], fields)
+    assert store.get_item(item["id"])["list_price"] == 150.0
+
+
+def test_update_item_still_writes_bookkeeping_on_a_listed_item(store: Store) -> None:
+    item = _item(store)
+    store.record_listing_url(item["id"], "fb", "https://www.facebook.com/marketplace/item/1/")
+    assert store.update_item(item["id"], {"status": "ready"})["status"] == "ready"
+
+
+def test_update_item_writes_freely_before_anything_is_listed(store: Store) -> None:
+    item = _item(store)
+    assert store.update_item(item["id"], {"list_price": 99.0})["list_price"] == 99.0
+
+
+def test_a_new_edit_carries_the_fields_of_one_still_running(store: Store) -> None:
+    # Review: a running description edit that later failed was covered by nothing — the newer
+    # price edit neither pushed the description nor let the failure be reported.
+    item = _item(store)
+    first = store.queue_listing_revision(item["id"], "fb", ["description"])
+    store.claim_listing_revision()
+    second = store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    rows = {r["revision_id"]: r for r in store.list_listing_revisions()}
+    assert rows[first]["status"] == "running"  # mid-drive, so not superseded
+    assert rows[second]["changed"] == ["description", "list_price"]

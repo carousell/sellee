@@ -239,3 +239,56 @@ def test_a_result_overtaken_by_a_newer_edit_is_closed_silently(store, bus) -> No
     assert revise.report_settled(deps) == 0
     assert _notices(store) == []
     assert store.unreported_listing_revisions() == []
+
+
+def test_chrome_vanishing_mid_edit_spends_the_attempt(store, bus) -> None:
+    # Review: the attempt was handed back uncounted, so a Chrome that kept dying retried the edit
+    # every interval forever and the seller was never told.
+    item = _listed(store)
+    rev = store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] % 2 == 0:  # up for the pre-claim check, gone when the drive starts
+            raise BrowserUnavailable("Chrome closed")
+        return StubEditForm()
+
+    deps = revise.ReviseDeps(store=store, bus=bus, config=Config(), browser_factory=flaky)
+    revise.run_next(deps)
+    assert store.get_listing_revision(rev)["attempts"] == 1
+    assert store.get_listing_revision(rev)["status"] == "pending"
+
+
+def test_chrome_vanishing_every_time_ends_in_a_reported_failure(store, bus, monkeypatch) -> None:
+    item = _listed(store)
+    rev = store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    calls = {"n": 0}
+
+    def flaky():
+        calls["n"] += 1
+        if calls["n"] % 2 == 0:
+            raise BrowserUnavailable("Chrome closed")
+        return StubEditForm()
+
+    monkeypatch.setattr(revise, "REVISE_RETRY_AFTER_SEC", 0.0)
+    deps = revise.ReviseDeps(store=store, bus=bus, config=Config(), browser_factory=flaky)
+    for _ in range(revise.REVISE_MAX_ATTEMPTS + 2):
+        revise.run_next(deps)
+    assert store.get_listing_revision(rev)["status"] == "failed"
+    revise.report_settled(deps)
+    assert any("couldn't change the price" in text for text in _notices(store))
+
+
+def test_a_result_the_newer_edit_does_not_cover_is_still_reported(store, bus) -> None:
+    # Review: a newer price edit silently swallowed the failure of a description edit.
+    item = _listed(store)
+    first = store.queue_listing_revision(item["id"], "fb", ["description"])
+    store.claim_listing_revision()
+    store.finish_listing_revision(first, status="failed", error="the form refused it")
+    newer = store.queue_listing_revision(item["id"], "fb", ["list_price"])  # after it settled
+    assert store.get_listing_revision(newer)["changed"] == ["list_price"]
+
+    revise.report_settled(_deps(store, bus, StubEditForm()))
+    (text,) = _notices(store)
+    assert "couldn't change the description" in text

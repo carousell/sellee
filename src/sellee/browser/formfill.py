@@ -106,18 +106,24 @@ def type_fields(
     input, and a value set from script leaves React holding the old one.
 
     `replace` empties the box first with a real select-all and delete — an edit form arrives full,
-    and typing onto a price of 150 would leave it reading 150120. The caller's read-back before
-    committing is what catches a box that did not empty.
+    and typing onto a price of 150 would leave it reading 150120. An empty value is then the whole
+    change: clearing a description is emptying its box and typing nothing. Without `replace` an
+    empty value is skipped, because an untouched create-form box is already empty. The caller's
+    read-back before committing is what catches a box that did not empty.
     """
     for step, text in fields:
-        if step not in (marked or []) or text in (None, ""):
+        if step not in (marked or []):
+            continue
+        blank = text is None or text == ""
+        if blank and not replace:
             continue
         try:
             if replace:
                 client.call_tool("browser_click", {"target": target(step), "element": step})
                 client.call_tool("browser_press_key", {"key": _SELECT_ALL})
                 client.call_tool("browser_press_key", {"key": "Backspace"})
-            client.type_humanly(target(step), f"the {step} field", str(text))
+            if not blank:
+                client.type_humanly(target(step), f"the {step} field", str(text))
         except BrowserError as exc:
             raise refusal(f"could not fill {step}: {exc}") from exc
         pause(FIELD_SETTLE_SEC)

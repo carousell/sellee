@@ -47,8 +47,8 @@ _MEDIA_TYPE_IMAGE = 1
 # drop below list rewrites the front-runner and flips the item into bidding; a drop to a held
 # offer's amount consumes the hold and closes the sale. Neither should happen as a side effect.
 _DEAL_IN_FLIGHT = ("bidding", "reserved_provisional", "sold")
-# A buyer whose offer still stands, for counting offers the new price undercuts.
-_STANDING = ("passed", "lost")
+# Buyers whose offer no longer stands — excluded when counting offers the new price undercuts.
+_NOT_STANDING = ("passed", "lost")
 
 
 def _update_live_listing(ctx: ToolContext, params: dict) -> dict:
@@ -112,7 +112,8 @@ def _offers_above(status: dict, new_price) -> int:
     return sum(
         1
         for buyer in status["buyers"].values()
-        if buyer.get("status") not in _STANDING and (buyer.get("highest_offer") or 0) > new_price
+        if buyer.get("status") not in _NOT_STANDING
+        and (buyer.get("highest_offer") or 0) > new_price
     )
 
 

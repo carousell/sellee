@@ -6,6 +6,7 @@ import json
 
 from sellee.db import Database
 from sellee.store.helpers import (
+    _BUYER_VISIBLE,
     _FLOOR_SOURCES,
     _LIVE_EDITABLE,
     _QA_SEARCH_CAP,
@@ -17,6 +18,7 @@ from sellee.store.helpers import (
     FloorRecord,
     ItemNotFound,
     ItemRecord,
+    ReviseAck,
     StoreError,
     _clamp_floor_in_txn,
     _forget_thread_listings_in_txn,
@@ -81,14 +83,17 @@ class ItemsMixin:
     def update_item(self, item_id: str, fields: dict) -> ItemRecord:
         """Update writable item fields. Changes the record and nothing a buyer can see.
 
-        The floor is clamped here and not only in `revise_item`, because this is the writer every
-        other flow already reaches for: closing the invariant on the door built for it, while
-        leaving open the one it has always come through, would fix nothing.
+        So on an item that is already listed it refuses the fields a buyer sees, rather than
+        trusting the prompt to steer the model elsewhere: the whole failure this guards against was
+        a model that used this on a live listing and truthfully believed it had changed the price.
+
+        The floor is clamped here and not only in `revise_item`, because a draft's price changes
+        through this writer too, and a floor recorded before publishing must stay under it.
         """
-        self._write_item_fields(item_id, validated_item_fields(fields))
+        self._write_item_fields(item_id, validated_item_fields(fields), refuse_if_listed=True)
         return self.get_item(item_id)  # type: ignore[return-value]
 
-    def revise_item(self, item_id: str, fields: dict) -> dict:
+    def revise_item(self, item_id: str, fields: dict) -> ReviseAck:
         """Change what an item's live listing says, and report whether the floor moved with it.
 
         The narrower door: `_LIVE_EDITABLE` is what a marketplace actually renders, so a caller
@@ -98,17 +103,28 @@ class ItemsMixin:
         caller is told that it moved and never what to.
         """
         clamped = self._write_item_fields(item_id, validated_item_fields(fields, _LIVE_EDITABLE))
-        return {"item": self.get_item(item_id), "floor_clamped": clamped}
+        return {"item": self.get_item(item_id), "floor_clamped": clamped}  # type: ignore[typeddict-item]
 
-    def _write_item_fields(self, item_id: str, fields: dict) -> bool:
-        """One UPDATE plus the floor clamp, in one transaction. Returns whether the floor moved."""
+    def _write_item_fields(self, item_id: str, fields: dict, *, refuse_if_listed=False) -> bool:
+        """One UPDATE plus the floor clamp, in one transaction. Returns whether the floor moved.
+
+        `refuse_if_listed` is checked inside the transaction, so a publish recording its URL a
+        moment earlier cannot slip a buyer-visible change past it.
+        """
         assignments = ", ".join(f"{name} = ?" for name in fields)
         values = [fields[name] for name in fields]
         now = _now()
         with self._db.transaction() as conn:
-            exists = conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone()
-            if not exists:
+            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+            if not row:
                 raise ItemNotFound(f"no item with id {item_id!r}")
+            visible = sorted(name for name in fields if name in _BUYER_VISIBLE)
+            if refuse_if_listed and visible and any(json.loads(row["listing_urls"]).values()):
+                raise StoreError(
+                    f"this item is already listed, so changing {', '.join(visible)} here would "
+                    "change the record and no listing — use update_live_listing to change what "
+                    "buyers see (currency and condition cannot change on a live listing)"
+                )
             conn.execute(
                 f"UPDATE items SET {assignments}, updated_ts = ? WHERE id = ?",
                 (*values, now, item_id),

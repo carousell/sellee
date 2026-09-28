@@ -17,7 +17,14 @@ from __future__ import annotations
 import json
 
 from sellee.db import Database
-from sellee.store.helpers import ItemNotFound, StoreError, _insert_notice, _new_id, _now
+from sellee.store.helpers import (
+    ItemNotFound,
+    RevisionRecord,
+    StoreError,
+    _insert_notice,
+    _new_id,
+    _now,
+)
 
 # What a revision row may be. `superseded` is not a failure: the seller asked for something else
 # before this one ran, and the newer row carries the whole intent because the lane re-reads the
@@ -26,7 +33,7 @@ _REVISION_STATUSES = ("pending", "running", "done", "failed", "superseded")
 _REVISION_TERMINAL = ("done", "failed")
 
 
-def _revision_from_row(row) -> dict:
+def _revision_from_row(row) -> RevisionRecord:
     return {
         "revision_id": row["revision_id"],
         "item_id": row["item_id"],
@@ -64,6 +71,10 @@ class RevisionsMixin:
         drives minutes apart. The surviving row names the union of what changed, because the
         earlier row's fields are still divergent on that marketplace — dropping them would leave a
         description edit unpushed because a price edit followed it.
+
+        A row already running is not superseded — it is mid-drive — but its fields are carried
+        too. It may yet fail, and the new row is then the one that must still push them; pushing
+        a field the running edit did land is harmless, because an edit is idempotent.
         """
         changed = sorted({str(name) for name in changed})
         if not changed:
@@ -78,8 +89,13 @@ class RevisionsMixin:
                 "WHERE item_id = ? AND market = ? AND status = 'pending'",
                 (item_id, market),
             ).fetchall()
+            running = conn.execute(
+                "SELECT changed FROM listing_revisions "
+                "WHERE item_id = ? AND market = ? AND status = 'running'",
+                (item_id, market),
+            ).fetchall()
             carried = set(changed)
-            for row in pending:
+            for row in list(pending) + list(running):
                 carried.update(json.loads(row["changed"]))
             if pending:
                 conn.execute(
@@ -95,7 +111,7 @@ class RevisionsMixin:
             )
         return revision_id
 
-    def list_listing_revisions(self, status: str | None = None) -> list:
+    def list_listing_revisions(self, status: str | None = None) -> list[RevisionRecord]:
         """Revision rows, oldest first. The lane's view of what is owed and what has settled."""
         if status is None:
             rows = self._db.query(
@@ -117,13 +133,13 @@ class RevisionsMixin:
         )
         return bool(rows)
 
-    def next_listing_revision(self, *, retry_after_sec: float = 0.0) -> dict | None:
+    def next_listing_revision(self, *, retry_after_sec: float = 0.0) -> RevisionRecord | None:
         """The revision the next claim would take, without claiming it — so the lane can ask
         whether it could run at all before spending one of the row's attempts on finding out."""
         rows = self._db.query(*_next_pending_query(_now() - retry_after_sec))
         return _revision_from_row(rows[0]) if rows else None
 
-    def claim_listing_revision(self, *, retry_after_sec: float = 0.0) -> dict | None:
+    def claim_listing_revision(self, *, retry_after_sec: float = 0.0) -> RevisionRecord | None:
         """Claim the oldest pending revision that is due, stamping it running in one transaction.
 
         Single-flight by construction, exactly as `claim_queued_pass` is: two claimers can never
@@ -142,7 +158,10 @@ class RevisionsMixin:
                 (now, row["revision_id"]),
             )
             claimed = _revision_from_row(row)
-        return dict(claimed, status="running", attempts=row["attempts"] + 1, claimed_ts=now)
+        claimed["status"] = "running"
+        claimed["attempts"] = row["attempts"] + 1
+        claimed["claimed_ts"] = now
+        return claimed
 
     def attach_revision_pass(self, revision_id: str, pass_id: str) -> None:
         """Record which edit pass is driving a claimed revision, so its end can be recognised."""
@@ -152,7 +171,7 @@ class RevisionsMixin:
                 (pass_id, revision_id),
             )
 
-    def get_listing_revision(self, revision_id: str) -> dict | None:
+    def get_listing_revision(self, revision_id: str) -> RevisionRecord | None:
         rows = self._db.query(
             "SELECT * FROM listing_revisions WHERE revision_id = ?", (revision_id,)
         )
@@ -166,7 +185,7 @@ class RevisionsMixin:
         accepted: dict | None = None,
         error: str | None = None,
         retry: bool = False,
-    ) -> dict | None:
+    ) -> RevisionRecord | None:
         """Settle a claimed revision, or hand it back for another go.
 
         `retry=True` returns it to `pending` instead of settling it — for a refusal that says
@@ -201,7 +220,7 @@ class RevisionsMixin:
             ).fetchone()
         return _revision_from_row(row) if row else None
 
-    def unreported_listing_revisions(self) -> list:
+    def unreported_listing_revisions(self) -> list[RevisionRecord]:
         """Settled edits the seller has not been told about, oldest first.
 
         `superseded` rows are settled but owe nothing — the seller asked for something else and

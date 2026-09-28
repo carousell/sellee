@@ -43,6 +43,11 @@ _ITEM_STATUSES = ("draft", "ready")
 #     would give an edited listing a field a freshly published one does not have; it should change
 #     on both paths at once or on neither.
 _LIVE_EDITABLE = ("title", "description", "list_price", "photos")
+# What a buyer sees on a listing. Once an item is listed anywhere, the general writer refuses these:
+# changing one there would change the record and no listing, which is how the seller was once told
+# a price was updated that no buyer could see. Live changes go through `revise_item`; `status` and
+# `size_bucket` stay writable because no marketplace renders them.
+_BUYER_VISIBLE = ("title", "description", "condition", "list_price", "currency", "photos")
 # Photos are capped per item — the marketplace shows a handful, and an unbounded list would make
 # the upload bracket (mint URL, POST, repeat) run for minutes.
 MAX_PHOTOS = 12
@@ -235,6 +240,31 @@ class ItemRecord(TypedDict):
     photos: list
     created_ts: float
     updated_ts: float
+
+
+class ReviseAck(TypedDict):
+    """What `revise_item` returns. `floor_clamped` says the confidential floor moved down to the
+    new price; like `FloorAck`, the shape has nowhere to put the value."""
+
+    item: ItemRecord
+    floor_clamped: bool
+
+
+class RevisionRecord(TypedDict):
+    """One `listing_revisions` row: an edit owed to, or settled on, one browser marketplace."""
+
+    revision_id: str
+    item_id: str
+    market: str
+    changed: list[str]
+    accepted: dict | None
+    status: str
+    attempts: int
+    last_error: str | None
+    claimed_ts: float | None
+    pass_id: str | None
+    created_ts: float
+    finished_ts: float | None
 
 
 class FloorAck(TypedDict):

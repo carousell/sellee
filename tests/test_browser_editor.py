@@ -282,3 +282,21 @@ def test_prices_are_compared_as_numbers(shown, price, matches) -> None:
     from sellee.browser import formfill
 
     assert formfill.price_matches(shown, price) is matches
+
+
+def test_a_price_box_that_did_not_load_after_saving_is_a_mismatch() -> None:
+    # Review: a missing read used to count as a match, so an edit whose price box never loaded
+    # after Save was reported as landed.
+    form = StubEditForm(after_save={"title": "Dyson V8", "price": "", "description": "Works."})
+    outcome = _revise(form)
+    assert outcome.verified is False
+    assert outcome.mismatched == ("list_price",)
+
+
+def test_a_description_can_be_cleared() -> None:
+    # Review: an empty value was skipped, so clearing a description left the old one in place.
+    form = StubEditForm()
+    outcome = _revise(form, changed=("description",), item=dict(_ITEM, description=""))
+    assert form.saved["description"] == ""
+    assert outcome.verified is True
+    assert ("browser_press_key", "Backspace") in form.actions

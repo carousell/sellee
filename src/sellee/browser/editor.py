@@ -257,8 +257,12 @@ def _confirm(client, adapter, item: dict, listing_url: str, changed, pause) -> R
     wanted = set(changed)
     if "title" in wanted and _norm(seen.get("title")) != _norm(item.get("title")):
         mismatched.append("title")
-    if "list_price" in wanted and not formfill.price_matches(
-        seen.get("price"), item.get("list_price")
+    # A price box that did not load reads as nothing, and nothing is not the new price:
+    # `price_matches` treats silence as "no evidence", which is right for a caller that may carry
+    # on, and wrong here, where the answer is whether the listing shows what was asked.
+    if "list_price" in wanted and (
+        formfill.read_price(seen.get("price")) is None
+        or not formfill.price_matches(seen.get("price"), item.get("list_price"))
     ):
         mismatched.append("list_price")
     if "description" in wanted and _norm(seen.get("description")) != _norm(item.get("description")):

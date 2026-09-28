@@ -148,10 +148,11 @@ def _drive(deps: ReviseDeps, revision: dict, item: dict) -> None:
         _settle_or_retry(deps, revision, str(exc), retryable=True)
         return
     except BrowserUnavailable as exc:
+        # Checked before the claim, so reaching here means Chrome went away mid-edit. That spends
+        # the attempt like any other interruption: handing the row back uncounted would retry it
+        # every interval, forever, without the seller ever hearing the edit had not happened.
         deps.bus.publish("browser.unavailable", {"reason": str(exc)})
-        deps.store.finish_listing_revision(
-            revision["revision_id"], status="pending", retry=True, error=str(exc)
-        )
+        _settle_or_retry(deps, revision, f"the browser went away: {exc}", retryable=True)
         return
     except BrowserError as exc:
         _settle_or_retry(deps, revision, f"unexpected: {exc}", retryable=True)
@@ -257,19 +258,19 @@ def fields_phrase(changed) -> str:
 def report_settled(deps: ReviseDeps) -> int:
     """Tell the seller how each settled edit went. Returns how many were reported."""
     reported = 0
-    owed = {
-        (row["item_id"], row["market"])
-        for status in ("pending", "running")
-        for row in deps.store.list_listing_revisions(status)
-    }
+    owed: dict = {}
+    for status in ("pending", "running"):
+        for row in deps.store.list_listing_revisions(status):
+            owed.setdefault((row["item_id"], row["market"]), []).append(set(row["changed"]))
     for revision in deps.store.unreported_listing_revisions():
         item = deps.store.get_item(revision["item_id"]) or {}
         market = revision["market"]
-        if (revision["item_id"], market) in owed:
-            # A newer edit for this listing is already on its way — the seller changed it again
-            # while this one was being driven. This one's result is about values that are no
-            # longer the ask, so it closes silently and the newer row reports for both: the same
-            # rule a superseded row follows.
+        newer = owed.get((revision["item_id"], market), [])
+        if any(set(revision["changed"]) <= fields for fields in newer):
+            # A newer edit for this listing is on its way and covers every field this one touched,
+            # so this result is about values that are no longer the ask: it closes silently and
+            # the newer row reports for both. Only when it covers them all — a newer price edit
+            # must not swallow the news that a description edit failed, or that one landed.
             deps.store.report_listing_revision(revision["revision_id"], None)
             continue
         values = {
