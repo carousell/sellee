@@ -23,23 +23,16 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 from sellee import paths
+from sellee.browser import formfill, reconcile
 from sellee.browser import markets as market_adapters
-from sellee.browser import reconcile
 from sellee.browser.client import BrowserError
+from sellee.browser.formfill import COMMIT_SETTLE_SEC, STEP_SETTLE_SEC
 
 log = logging.getLogger(__name__)
-
-# Between one form field and the next. Shorter than a step, because moving between fields is not
-# the same act as waiting for a page to respond to one.
-FIELD_SETTLE_SEC = 1.5
 
 # The fields that must be marked before anything is typed. The two text inputs are
 # indistinguishable except by label, so a partly-recognised form could put the price in the title.
 REQUIRED_FIELDS = ("title", "price", "next")
-
-# How long the form is given to settle between steps, in seconds. A dropdown fetches its options.
-STEP_SETTLE_SEC = 2.0
-COMMIT_SETTLE_SEC = 6.0
 
 
 class PublishNotAttempted(BrowserError):
@@ -80,7 +73,7 @@ def publish(
     """
     if not adapter.publish_fields_js:
         raise PublishNotAttempted(f"{adapter.market} has no publish selectors")
-    pause = sleep or _sleep
+    pause = sleep or formfill.sleep
 
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
@@ -154,57 +147,29 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
         ) from exc
 
 
+def _retryable(message: str) -> PublishNotAttempted:
+    """A refusal before anything was created, caused by something that may clear by itself."""
+    return PublishNotAttempted(message, retryable=True)
+
+
 def _refuse_at_a_wall(client, adapter) -> None:
-    """Stop before acting if the marketplace is refusing the account.
-
-    Raised as `PublishNotAttempted` and retryable: a wall is exactly the condition that clears on
-    its own or by the seller, and nothing has been created, so the pair keeps its attempt.
-
-    A probe that will not run is not evidence of a wall — the form reads below report their own
-    failures, and refusing on a failed probe would stop publishing on a browser hiccup.
-    """
-    if not adapter.block_wall_js:
-        return
-    try:
-        wall = str(client.evaluate(adapter.block_wall_js) or "")
-    except BrowserError:
-        return
-    if wall:
-        raise PublishNotAttempted(
-            f"{adapter.market} is refusing the account ({wall}) — nothing was filled in",
-            retryable=True,
-        )
+    """Stop before acting if the marketplace is refusing the account. Retryable: a wall clears on
+    its own or by the seller, and nothing has been created, so the pair keeps its attempt."""
+    formfill.refuse_at_a_wall(client, adapter, _retryable)
 
 
 def _fill_text(client, adapter, item: dict, found: dict, pause) -> None:
-    """Type the fields that are text. Never `value =`: the form listens for real input, and a value
-    set from script leaves React holding the old one — which publishes an empty listing.
-
-    Typed rather than filled, and with a gap between fields. A create form is instrumented the same
-    way a composer is — per-field focus and input events feed its draft autosave and its abandonment
-    funnel — and three fields each receiving their whole value in one event, milliseconds apart, is
-    not a form anybody filled in.
-    """
-    for step, text in _text_fields(item):
-        if step not in (found.get("marked") or []) or not text:
-            continue
-        try:
-            client.type_humanly(adapter.publish_target(step), f"the {step} field", str(text))
-        except BrowserError as exc:
-            raise PublishNotAttempted(f"could not fill {step}: {exc}", retryable=True) from exc
-        pause(FIELD_SETTLE_SEC)
+    """Type the fields that are text, with a gap between them. Three fields each receiving their
+    whole value milliseconds apart is not a form anybody filled in."""
+    formfill.type_fields(
+        client, adapter.publish_target, _text_fields(item), found.get("marked"), _retryable, pause
+    )
 
 
 def _text_fields(item: dict) -> list:
-    price = item.get("list_price")
     return [
         ("title", item.get("title") or ""),
-        # Typed bare: the field formats what it is given, and a grouped "1,299" has been read
-        # as 1 by more than one marketplace form.
-        (
-            "price",
-            f"{price:.0f}" if isinstance(price, (int, float)) and price == int(price) else price,
-        ),
+        ("price", formfill.bare_price(item.get("list_price"))),
         ("description", item.get("description") or ""),
     ]
 
@@ -271,8 +236,7 @@ def _verify_form(client, adapter, item: dict) -> None:
     if title and got != title:
         raise PublishNotAttempted(f"the form shows the title as {got!r}, not {title!r}")
     price = item.get("list_price")
-    digits = "".join(ch for ch in str(seen.get("price") or "") if ch.isdigit())
-    if isinstance(price, (int, float)) and digits and int(digits) != int(price):
+    if not formfill.price_matches(seen.get("price"), price):
         raise PublishNotAttempted(f"the form shows the price as {seen.get('price')!r}, not {price}")
 
 
@@ -373,19 +337,6 @@ def _confirm_by_title(client, adapter, item: dict, listings_url, pause) -> Publi
     return PublishOutcome(
         listing_id=str(row.get("listing_id") or ""), url=str(row.get("url") or ""), verified=True
     )
-
-
-# How much a settle may vary either side. The same fields in the same order at fixed millisecond
-# pauses is nobody's way of filling a form; the point is variance, not slowness, so the average
-# pause is unchanged.
-_JITTER = 0.4
-
-
-def _sleep(seconds: float) -> None:
-    import random
-    import time
-
-    time.sleep(random.uniform(seconds * (1 - _JITTER), seconds * (1 + _JITTER)))
 
 
 def stage_photos(item_id: str, photos) -> list:
