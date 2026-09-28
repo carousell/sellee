@@ -86,6 +86,20 @@ def test_stale_lower_offer_never_undercuts_other_best(store: Store) -> None:
             assert res[key] >= 91
 
 
+def test_a_rival_offer_above_a_dropped_list_price_never_quotes_above_the_listing(
+    store: Store,
+) -> None:
+    # list 100 with a standing 90; the seller then drops the price to 60. Before the bound, a new
+    # buyer at 55 was countered at 91 — above the number the listing itself shows.
+    item = _item(store, list_price=100.0, floor=50.0)
+    _offer(store, item["id"], "fb:high", 90)
+    store.update_item(item["id"], {"list_price": 60.0})
+    res = _offer(store, item["id"], "fb:new", 55)
+    for key in ("counter_price", "accept_price"):
+        if res.get(key) is not None:
+            assert 50 <= res[key] <= 60, f"{key}={res[key]} outside [floor, list]"
+
+
 # --- the same offer, handed to us again ------------------------------------------------------
 
 

@@ -204,7 +204,11 @@ def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
             "message_intent": "pending_fcfs",
         }
     ob = other_best(led["buyers"], thread_id)
-    effective_min = max(floor, (ob + 1) if ob else floor)
+    # A rival's standing offer raises the bar, but never past the seller's own asking price: once
+    # the list price has dropped below an older offer, "beat the other buyer" would otherwise quote
+    # a number above what the listing itself says. The floor still wins over both, so the
+    # below-floor backstop underneath holds whatever the list price is.
+    effective_min = max(floor, min(list_price, (ob + 1) if ob else floor))
     dec, counter, hold, intent = decide_below_list(
         offer,
         buyer,
