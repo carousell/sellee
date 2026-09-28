@@ -279,6 +279,29 @@ def test_update_listing_with_neither_raises_before_any_call(recording_rail) -> N
     assert server.calls == []
 
 
+def test_update_listing_carries_only_the_content_fields_passed(recording_rail) -> None:
+    server, base = recording_rail
+    _client(base).update_listing("L1", price_cents=12000, description="with the box")
+    (call,) = server.calls
+    # PATCH: title, media, status and the cross-links are absent, so the rail leaves them alone
+    assert call["arguments"] == {"id": "L1", "price_cents": 12000, "description": "with the box"}
+
+
+def test_update_listing_sends_a_replacement_photo_set(recording_rail) -> None:
+    server, base = recording_rail
+    media = {"urls": [{"url": "https://cdn/a.jpg", "type": 1}]}
+    _client(base).update_listing("L1", title="Dyson V8", media=media)
+    (call,) = server.calls
+    assert call["arguments"] == {"id": "L1", "title": "Dyson V8", "media": media}
+
+
+def test_update_listing_has_no_currency_argument(recording_rail) -> None:
+    server, base = recording_rail
+    with pytest.raises(TypeError):
+        _client(base).update_listing("L1", currency="USD")  # type: ignore[call-arg]
+    assert server.calls == []
+
+
 def test_update_listing_sends_an_empty_set_as_present(recording_rail) -> None:
     """{"urls": []} travels — present-but-empty replaces the rail's whole set with nothing, which
     absent (unchanged) could never do."""

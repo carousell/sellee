@@ -181,20 +181,36 @@ class RailClient:
         return encrypted
 
     def update_listing(
-        self, listing_id: str, *, status: str | None = None, external_urls: dict | None = None
+        self,
+        listing_id: str,
+        *,
+        status: str | None = None,
+        external_urls: dict | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        price_cents: int | None = None,
+        media: dict | None = None,
     ) -> dict:
         """Change a listing on the rail. PATCH semantics all the way through: an argument not
         passed is left out of the call and stays unchanged, so a status flip never touches the
-        cross-links and a cross-link push never touches status. `external_urls` replaces the
-        rail's whole set — `{"urls": []}` clears it, which is not the same as leaving it out."""
-        if status is None and external_urls is None:
-            raise ValueError("update_listing needs a status or an external_urls set")
-        args: dict = {"id": str(listing_id)}
-        if status is not None:
-            args["status"] = status
-        if external_urls is not None:
-            args["external_urls"] = external_urls
-        return self.call_tool("update_listing", args)
+        cross-links, a cross-link push never touches status, and a price edit touches nothing but
+        the price. `external_urls` and `media` each replace the rail's whole set — `{"urls": []}`
+        clears it, which is not the same as leaving it out.
+
+        There is no `currency`: the rail fixes it at create and its update verb does not take one.
+        """
+        fields = {
+            "status": status,
+            "external_urls": external_urls,
+            "title": title,
+            "description": description,
+            "price_cents": price_cents,
+            "media": media,
+        }
+        present = {name: value for name, value in fields.items() if value is not None}
+        if not present:
+            raise ValueError("update_listing needs at least one field to change")
+        return self.call_tool("update_listing", {"id": str(listing_id), **present})
 
     def create_checkout(self, args: dict) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
