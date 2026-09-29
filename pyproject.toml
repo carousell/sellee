@@ -48,6 +48,9 @@ dev = [
     "mcp>=1.29,<2",
     # parallel test execution for `make test`
     "pytest-xdist",
+    # property-based tests under tests/properties (never shipped): generates inputs
+    # for contracts that hold over all inputs, not just the examples we thought of.
+    "hypothesis>=6,<7",
 ]
 
 [tool.uv]

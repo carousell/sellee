@@ -25,6 +25,16 @@ jobs:
       - run: uv sync --locked
       - run: uv run --no-sync python -m pytest -n auto --dist worksteal
 
+  # Properties also run inside the suite above, at the default budget. This job is the deep
+  # pass, kept separate so a generated counterexample is a distinct signal from a unit failure.
+  properties:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - run: uv sync --locked
+      - run: HYPOTHESIS_PROFILE=thorough uv run --no-sync python -m pytest tests/properties
+
   lint:
     runs-on: ubuntu-latest
     steps:
