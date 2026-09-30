@@ -80,15 +80,22 @@ def holds_whole(box_text: str, text: str) -> bool:
     emoji, turn `:)` into one, or re-space a line, and none of that is a lost key — while a dropped
     letter, a missing last word, or a half-typed reply all change the letters.
 
-    A reply with no letters or digits at all — a thumbs-up — leaves nothing to compare, since the
-    page may draw it as an element with no text. That is not a reason to strand the buyer: an empty
-    box sends nothing, and the read-back after the commit decides.
+    A reply with no letters or digits at all — a thumbs-up — is matched only exactly. Nothing to
+    compare is never a match: this is also how the send decides a box already holds our own reply,
+    and a yes there would press Send on whatever the seller had half-written. Whether such a reply
+    was typed is the send's to decide (`checkable`).
     """
     held, meant = normalize(box_text), normalize(text)
     if held == meant:
         return True
     letters = _letters(meant)
-    return not letters or _letters(held) == letters
+    return bool(letters) and _letters(held) == letters
+
+
+def checkable(text: str) -> bool:
+    """Whether a reply has anything a box read back could be checked against — letters or digits.
+    A page may draw an emoji as an element with no text, so a thumbs-up reads back as nothing."""
+    return bool(_letters(normalize(text)))
 
 
 def _letters(text: str) -> str:

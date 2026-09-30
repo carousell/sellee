@@ -968,6 +968,39 @@ def test_a_detach_after_the_commit_is_unverified_and_never_resent(store, bus, th
 # choose, and both are worse than a send that did not happen.
 
 
+def test_a_sellers_draft_is_never_sent_in_place_of_a_reply_with_no_letters(
+    store, bus, thread
+) -> None:
+    """A thumbs-up has no letters to compare, and "nothing to compare" must never read as "this is
+    our own reply already in the box" — that would press Send on the seller's half-written words."""
+    client = StubClient(draft="hold on, let me check with my husband first")
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="already holds"):
+        _sink(store, bus, client).send(thread, "👍", "reply", intent)
+
+    assert client.bubbles == []
+    assert _intent_status(store, intent) == "pending"
+
+
+def test_a_reply_with_no_letters_is_left_to_the_read_back(store, bus, thread) -> None:
+    """Facebook draws an emoji as an element whose text is a line break, so a thumbs-up we just
+    typed reads back as an empty box. There is nothing in it to check, and refusing over that would
+    mean it never went out; the read-back after the commit decides."""
+
+    class DrawsEmojiAsNothing(StubClient):
+        def evaluate(self, function, **kwargs):
+            if function == client_mod.COMPOSER_TEXT_JS and self.typed:
+                return ""
+            return super().evaluate(function, **kwargs)
+
+    client = DrawsEmojiAsNothing()
+
+    _sink(store, bus, client).send(thread, "👍", "reply", _reserve(store))
+
+    assert "submit" in [n for n, _ in client.calls]
+
+
 def test_a_sellers_draft_is_never_typed_over(store, bus, thread) -> None:
     client = StubClient(draft="hold on, let me check the")
     intent = _reserve(store)

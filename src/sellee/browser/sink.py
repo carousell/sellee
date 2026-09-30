@@ -239,6 +239,11 @@ class BrowserReplySink:
             if emptied_first:
                 self._empty(market, box)
             raise
+        if not reconcile.checkable(text):
+            # A thumbs-up leaves nothing in the box to check: the page may draw it as an element
+            # with no text. Refusing over that would mean it never went out, and an empty box sends
+            # nothing, so the read-back after the commit decides.
+            return
         try:
             held = self._client.composer_text(box.target, _BOX_NAME)
         except BrowserError:

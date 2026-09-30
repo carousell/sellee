@@ -382,7 +382,9 @@ def test_a_box_holding_more_than_the_reply_does_not_hold_it() -> None:
     assert not holds_whole("hold on let me check yes, still available!", "yes, still available!")
 
 
-def test_a_reply_with_nothing_to_compare_is_left_to_the_read_back() -> None:
-    """Facebook draws an emoji as an element whose text is a line break, so a thumbs-up reads back
-    as an empty box. Refusing over that would mean it never went out."""
-    assert holds_whole("\n", "👍")
+def test_a_reply_with_no_letters_is_never_matched_by_something_else() -> None:
+    """Nothing to compare is not a match. The draft check asks this question about a box that may
+    hold the seller's own half-written words, and a yes would press Send on them."""
+    assert not holds_whole("hold on, let me check with my husband first", "👍")
+    assert not holds_whole("\n", "👍")
+    assert holds_whole("👍", "👍")
