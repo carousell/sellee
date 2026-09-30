@@ -1529,3 +1529,44 @@ def test_a_control_the_page_has_not_drawn_is_left_to_the_locator(tmp_path) -> No
 
     assert names[-1] == "browser_click"
     assert "browser_mouse_click_xy" not in names
+
+
+def test_a_control_wider_than_the_window_is_pressed_on_the_part_that_shows(tmp_path) -> None:
+    wide = {**_IN_VIEW, "x": 900.0, "width": 800.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": wide}))
+    try:
+        client.click("button[name=next]", "Next")
+        presses = [c for c in tool_calls(client) if c["tool"] == "browser_mouse_click_xy"]
+    finally:
+        client.close()
+
+    assert len(presses) == 1
+    assert 900.0 <= presses[0]["arguments"]["x"] <= 1200.0
+
+
+def test_a_box_taller_than_the_window_is_pressed_where_it_shows(tmp_path) -> None:
+    """A tall message box would otherwise never count as in view, and be wheeled at uselessly."""
+    tall = {**_IN_VIEW, "y": -200.0, "height": 1400.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": tall}))
+    try:
+        client.click("div[role=textbox]", "the reply message box")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    assert "browser_mouse_wheel" not in [c["tool"] for c in calls]
+    press = [c for c in calls if c["tool"] == "browser_mouse_click_xy"][0]["arguments"]
+    assert 0.0 <= press["y"] <= 900.0
+
+
+def test_a_control_entirely_off_to_the_side_is_left_to_the_locator(tmp_path) -> None:
+    aside = {**_IN_VIEW, "x": 1500.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": aside}))
+    try:
+        client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names[-1] == "browser_click"
+    assert "browser_mouse_click_xy" not in names

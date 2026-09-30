@@ -887,15 +887,26 @@ class BrowserClient:
             return None
 
     def _box_in_view(self, target: str, element: str):
-        """The control's box once it is on screen, wheeled there notch by notch; None when it
-        cannot be brought there, which leaves the click to the locator."""
+        """The part of the control on screen, once it is there, wheeled there notch by notch; None
+        when it cannot be, which leaves the click to the locator.
+
+        What is aimed at is the part that shows, so a control wider than the window, or a box
+        taller than it, is pressed where it can be seen rather than wheeled at forever. One with
+        nothing on screen sideways is left to the locator, which scrolls for itself.
+        """
         placed = self._box(target, element)
         for _ in range(MAX_WHEEL_NOTCHES):
             if placed is None:
                 return None
             box, (width, height) = placed
-            if 0 <= box.y and box.y + box.height <= height and 0 <= box.x <= width:
-                return placed
+            left, right = max(box.x, 0.0), min(box.x + box.width, width)
+            top, bottom = max(box.y, 0.0), min(box.y + box.height, height)
+            if right - left < 1:
+                return None
+            whole = box.y >= 0 and box.y + box.height <= height
+            if (whole or box.height > height) and bottom - top >= 1:
+                shown = pointer.Box(x=left, y=top, width=right - left, height=bottom - top)
+                return shown, (width, height)
             if self._cursor is None:
                 self._travel((width * self._rng.uniform(0.35, 0.65), height / 2), (width, height))
             below = box.y + box.height > height
