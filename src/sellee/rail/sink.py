@@ -20,6 +20,9 @@ log = logging.getLogger(__name__)
 # Pauses before each retry; one more attempt than pauses.
 _RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
 
+# HTTP 4xx answers that mean "try again", as a gateway in front of bazaar may send.
+_TRY_AGAIN = frozenset({408, 429})
+
 # The text bazaar's MCP transport gives a 5xx, which carries no client copy.
 _TRANSIENT_TEXT = ("internal server error", "service unavailable", "gateway timeout", "bad gateway")
 
@@ -33,7 +36,7 @@ def _refused(exc: RailError) -> bool:
     if isinstance(exc, RailAuthError):
         return True
     if isinstance(exc, RailNetworkError):
-        return exc.status is not None and exc.status < 500
+        return exc.status is not None and exc.status < 500 and exc.status not in _TRY_AGAIN
     if isinstance(exc, RailToolRefused):
         return not str(exc).strip().lower().startswith(_TRANSIENT_TEXT)
     # A response we could not read is not a refusal: the call may have stored the reply.
