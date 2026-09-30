@@ -552,3 +552,28 @@ def test_a_probe_reaches_a_blocked_market_at_all(store, bus) -> None:
     connect.connect_lane(_deps(store, bus, client))
 
     assert client.navigations  # it went and looked
+
+
+def test_a_quiet_check_on_facebook_steps_off_it_afterwards(store, bus) -> None:
+    """The probe behind Check again is a visit like any other, and a tab left on Facebook looks
+    like someone sitting in front of it."""
+    from sellee.browser import doorbell
+
+    _signed_out_fb(store, mode=CONNECT_MODE_PROBE)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert client.navigations[-1] == doorbell.AWAY_URL
+
+
+def test_the_sign_in_page_is_left_open_for_the_seller(store, bus) -> None:
+    """Opening the page so the seller can sign in is the one visit that must stay where it is."""
+    from sellee.browser import doorbell
+
+    _signed_out_fb(store, mode=CONNECT_MODE_OPEN)
+    client = StubClient(login="logged_out", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert doorbell.AWAY_URL not in client.navigations

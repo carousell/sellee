@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sellee import deployment, marketplaces, settings
-from sellee.browser import blindness, inbox, window
+from sellee.browser import blindness, doorbell, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -93,6 +93,10 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
             wall = (
                 str(client.evaluate(adapter.block_wall_js) or "") if adapter.block_wall_js else ""
             )
+            if not bring_tab_forward:
+                # A quiet check is a visit like any other, so it leaves the page afterwards. A page
+                # opened for the seller to sign in on is theirs, and stays.
+                doorbell.step_away(client, adapter)
     except BrowserDetached:
         # Deliberately not flattened into BrowserDown. Everything below answers the seller's tap,
         # and the only honest answer to "am I signed in?" while our own server has lost Chrome is
