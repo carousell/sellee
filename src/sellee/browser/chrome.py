@@ -323,6 +323,116 @@ def enable_background_operation(port: int, *, timeout_sec: float = _PROBE_TIMEOU
     return prepared
 
 
+# How long to keep listening once the log has been asked for. Chrome sends the replay straight after
+# answering, so this only has to outlast a loopback round trip.
+_REPLAY_SETTLE_SEC = 0.5
+_BACKGROUND_EVENT = "BackgroundService.backgroundServiceEventReceived"
+_DISPLAYED = "Notification displayed"
+
+
+def recorded_notifications(port: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> list | None:
+    """Every notification Chrome has recorded a site showing, or None when it could not be asked.
+
+    Read from DevTools' background-services log, which Chrome keeps for itself. Armed with
+    `setRecording`, it records each notification a site displays — its title, body and tag — and
+    replays all of them to whoever starts observing, so a short connection now and then hears
+    everything that rang since the last. The recording outlives the connection but not forever,
+    which is why every look arms it again.
+
+    The log is not on the browser target. A session on any page has it, for every site in the
+    profile, so this attaches to whichever tab is open — not to a marketplace's page as such — and
+    asks that session nothing else: nothing is evaluated and nothing is enabled, so listening costs
+    the page nothing it could notice.
+
+    `None` is "could not be asked" (no tab, no answer, a Chrome that will not record) and is never
+    the same as `[]`, nothing rang.
+    """
+    from websockets.sync.client import connect as ws_connect
+
+    try:
+        with urllib.request.urlopen(version_url(port), timeout=timeout_sec) as resp:
+            version = json.loads(resp.read().decode("utf-8", "replace"))
+        with urllib.request.urlopen(list_url(port), timeout=timeout_sec) as resp:
+            targets = json.loads(resp.read().decode("utf-8", "replace"))
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    endpoint = version.get("webSocketDebuggerUrl") if isinstance(version, dict) else None
+    if not endpoint or not isinstance(targets, list):
+        return None
+    pages = [t.get("id") for t in targets if isinstance(t, dict) and t.get("type") == "page"]
+    if not pages:
+        return None
+
+    events: list = []
+    try:
+        with ws_connect(endpoint, open_timeout=timeout_sec, close_timeout=timeout_sec) as ws:
+            counter = 0
+
+            def call(method: str, params: dict, session: str | None = None) -> dict | None:
+                nonlocal counter
+                counter += 1
+                message: dict = {"id": counter, "method": method, "params": params}
+                if session is not None:
+                    message["sessionId"] = session
+                ws.send(json.dumps(message))
+                while True:
+                    answer = json.loads(ws.recv(timeout=timeout_sec))
+                    if answer.get("method") == _BACKGROUND_EVENT:
+                        events.append(answer)
+                    elif answer.get("id") == counter:
+                        return None if "error" in answer else (answer.get("result") or {})
+
+            attached = call("Target.attachToTarget", {"targetId": pages[0], "flatten": True})
+            session = (attached or {}).get("sessionId")
+            if not session:
+                return None
+            armed = {"shouldRecord": True, "service": "notifications"}
+            if call("BackgroundService.setRecording", armed, session) is None:
+                return None
+            if (
+                call("BackgroundService.startObserving", {"service": "notifications"}, session)
+                is None
+            ):
+                return None
+            deadline = time.monotonic() + _REPLAY_SETTLE_SEC
+            while time.monotonic() < deadline:
+                try:
+                    answer = json.loads(ws.recv(timeout=max(0.0, deadline - time.monotonic())))
+                except TimeoutError:
+                    break
+                if answer.get("method") == _BACKGROUND_EVENT:
+                    events.append(answer)
+            call("BackgroundService.stopObserving", {"service": "notifications"}, session)
+            call("Target.detachFromTarget", {"sessionId": session})
+    except Exception:  # noqa: BLE001 — a doorbell we could not hear must never fail a lane
+        log.debug("could not read Chrome's notification log", exc_info=True)
+        return None
+    return [ring for ring in (_ring(event) for event in events) if ring is not None]
+
+
+def _ring(message: dict) -> dict | None:
+    """One displayed notification, from the log's own event, or None for anything else."""
+    event = (message.get("params") or {}).get("backgroundServiceEvent") or {}
+    if event.get("eventName") != _DISPLAYED:
+        return None
+    meta = {
+        str(item.get("key")): str(item.get("value") or "")
+        for item in event.get("eventMetadata") or []
+        if isinstance(item, dict)
+    }
+    try:
+        shown = float(event.get("timestamp"))
+    except (TypeError, ValueError):
+        return None
+    return {
+        "origin": str(event.get("origin") or ""),
+        "tag": str(event.get("instanceId") or ""),
+        "shown_ts": shown,
+        "title": meta.get("Title", ""),
+        "body": meta.get("Body", ""),
+    }
+
+
 def ensure_window_width(port: int, minimum: int, *, timeout_sec: float = _PROBE_TIMEOUT_SEC) -> int:
     """Widen the agent's Chrome windows to at least `minimum` px, answering the narrowest seen.
 
