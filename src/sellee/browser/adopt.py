@@ -20,6 +20,7 @@ from __future__ import annotations
 import logging
 
 from sellee import crosslist, marketplaces, paths, settings
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser import photo_fetch, reconcile
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
@@ -57,6 +58,9 @@ RAIL_FAILED_NOTICE = (
 )
 SUMMARY_NOTICE = "Done with your {name} listings: {parts}."
 
+# The page one adoption costs: the listing's own.
+ADOPT_LOADS = 1
+
 
 # --- phase two: a yes becomes items ---------------------------------------------------------
 
@@ -77,6 +81,10 @@ def adopt_phase(deps) -> None:
         # Left accepted with no attempt spent, the same as a disconnected market: a block that
         # lifts in six hours must not be what retires the seller's listings.
         return
+    if page_governor.unprompted_held(
+        deps.store, deps.config, market, deps.now()
+    ) or not page_governor.has_room(deps.governor, market, ADOPT_LOADS):
+        return
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
         # Retired here rather than filtered out of the query: a row whose last attempt committed
         # but whose retirement did not would be unreachable forever, holding up the batch summary.
@@ -96,6 +104,9 @@ def adopt_phase(deps) -> None:
             "survey.adopt_dropped",
             {"market": market, "listing_id": listing_id, "reason": str(exc)[:200]},
         )
+    except page_governor.PagesSpent:
+        # Out of page loads partway; left accepted, no attempt spent, like the gate above.
+        pass
     except (BrowserUnavailable, BrowserDetached) as exc:
         # The whole layer is down, or our own server has lost Chrome; this listing is no more at
         # fault than any other. Left accepted, with no attempt spent, for a tick where the browser

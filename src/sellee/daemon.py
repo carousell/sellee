@@ -40,6 +40,7 @@ from sellee import (
 from sellee.browser import chrome, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
@@ -318,7 +319,9 @@ def _widen_window(bus, port: int, store) -> None:
         bus.publish("browser.window_narrow", {"width": width, "needed": minimum})
 
 
-def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic):
+def make_browser_factory(
+    cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic, governor=None
+):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
 
@@ -388,7 +391,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
                 recycle_browser_client(bus, holder, reason, now=now)
                 client = holder.get("client")
         if client is None:
-            client = browser_client.BrowserClient(command=command)
+            client = browser_client.BrowserClient(command=command, governor=governor)
             holder["client"] = client
             holder["command"] = command
         client.set_follow(bool(settings.get(store, browser_window.WATCH_SETTING)))
@@ -547,7 +550,12 @@ def run_daemon(*, once: bool) -> int:
     # factory so a machine with no Node still starts, with its browser lanes reporting unavailable
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
-    browser_factory = make_browser_factory(cfg, store, bus, browser_holder, stop.is_set)
+    # One for the daemon's lifetime, outliving every client the factory replaces, so a recycled
+    # server cannot reset what a policed marketplace has already been shown.
+    governor = page_governor.PageGovernor(page_governor.Allowance.from_config(cfg))
+    browser_factory = make_browser_factory(
+        cfg, store, bus, browser_holder, stop.is_set, governor=governor
+    )
     warm_browser_server(cfg, once=once)
 
     def reply_sink_factory():
@@ -699,6 +707,7 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        governor=governor,
     )
     scheduler.register(
         Task(
@@ -730,6 +739,7 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        governor=governor,
     )
     scheduler.register(
         Task(
@@ -751,7 +761,12 @@ def run_daemon(*, once: bool) -> int:
     # List what is on carousell.ai everywhere else the seller sells, and report each outcome. Driven
     # off stored rows, so rail-first is a precondition rather than a step a recipe could skip.
     crosslist_deps = crosslist.CrosslistDeps(
-        store=store, bus=bus, config=cfg, browser_factory=browser_factory, rail_factory=rail_factory
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+        rail_factory=rail_factory,
     )
     scheduler.register(
         Task(
@@ -764,7 +779,7 @@ def run_daemon(*, once: bool) -> int:
     # Carry a seller's listing edit out to each browser marketplace, and report each outcome. The
     # rail half already happened inline, in the conversation that asked for it.
     revise_deps = revise.ReviseDeps(
-        store=store, bus=bus, config=cfg, browser_factory=browser_factory
+        store=store, bus=bus, config=cfg, browser_factory=browser_factory, governor=governor
     )
     scheduler.register(
         Task(

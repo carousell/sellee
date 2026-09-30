@@ -31,6 +31,7 @@ from typing import Callable
 
 from sellee import marketplaces, settings
 from sellee.browser import blindness, reconcile, window
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -107,6 +108,8 @@ class InboxDeps:
     refused: dict = field(default_factory=dict)
     # And how many reads in a row saw the session signed out, toward SIGNED_OUT_CONFIRM_READS.
     signed_out: dict = field(default_factory=dict)
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
     # How the lane waits, and where its randomness comes from. Injected so a test can drive the
     # read dwell without spending it.
@@ -187,9 +190,15 @@ def inbox_lane(deps: InboxDeps) -> None:
         if deps.store.market_block(market):
             # This market has told the account to stop. Every other market still reads.
             continue
+        if not page_governor.has_room(deps.governor, market):
+            # Out of page loads for now. Not blindness: the market was never asked.
+            continue
         try:
             with client.exclusive():
                 _read_market(deps, client, adapter, region)
+        except page_governor.PagesSpent:
+            # Ran out partway through the tick. What was read is stored; the rest waits.
+            deps.bus.publish("browser.paced", {"market": market})
         except BrowserUnavailable as exc:
             # The same absence the factory reports, discovered one step later (the binary is
             # there but the server dies at startup). Every browser market is equally unreadable,
@@ -547,6 +556,10 @@ def _with_product_id(
         # a window raise on them would reinstate the focus theft this path exists to avoid.
         client.navigate(url)
         answer = client.evaluate(adapter.product_id_js) or {}
+    except page_governor.PagesSpent:
+        # Not a failed read of this conversation, and every later load this tick would be refused
+        # the same way, so the tick stops here.
+        raise
     except BrowserError:
         # Not remembered: a failed read is not an answer, and caching it would hide the
         # conversation for as long as it kept naming the same listing. The navigation may or may
@@ -763,6 +776,8 @@ def _chase_unsettled(deps: InboxDeps, client, adapter, market, region, unsettled
         chased += 1
         try:
             _read_thread(deps, client, adapter, thread, region, None, unsettled)
+        except page_governor.PagesSpent:
+            raise
         except BrowserError as exc:
             _unreadable(deps, market, thread_id, str(exc))
     return chased

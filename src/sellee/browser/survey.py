@@ -27,6 +27,7 @@ from urllib.parse import urljoin
 
 from sellee import marketplaces, settings
 from sellee.browser import adopt, inbox, reconcile
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -82,7 +83,13 @@ class SurveyDeps:
     bus: object
     config: object
     browser_factory: object
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
+
+
+# The pages one look costs: the selling page, and the profile page the listings are on.
+SURVEY_LOADS = 2
 
 
 def survey_lane(deps: SurveyDeps) -> None:
@@ -124,8 +131,16 @@ def discover_phase(deps: SurveyDeps) -> None:
             # the same reason the browser failures below are: five unserved looks abandon the ask
             # for good, and a wall that clears in six hours must not be what spends them.
             continue
+        if page_governor.unprompted_held(
+            deps.store, deps.config, market, deps.now()
+        ) or not page_governor.has_room(deps.governor, market, SURVEY_LOADS):
+            # Nobody asked for this look, so it waits for the morning or for the page loads, owed
+            # and costing no attempt.
+            continue
         try:
             _survey(deps, market, region)
+        except page_governor.PagesSpent:
+            continue
         except (BrowserUnavailable, BrowserDetached) as exc:
             # The layer cannot be driven at all, or our own server has lost Chrome. Either way this
             # market is no more at fault than any other, so the row is left owed and costs no

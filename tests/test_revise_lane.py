@@ -118,6 +118,41 @@ def test_a_busy_browser_costs_the_row_nothing(store, bus) -> None:
     assert store.get_listing_revision(rev)["attempts"] == 0
 
 
+class _NoRoom:
+    """A governor whose page loads for the market are spent."""
+
+    def can_start(self, market, loads=1):
+        return False
+
+
+def test_an_edit_with_no_page_loads_left_is_not_claimed(store, bus) -> None:
+    item = _listed(store)
+    rev = store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    form = StubEditForm()
+    deps = _deps(store, bus, form)
+    deps.governor = _NoRoom()
+
+    assert revise.run_next(deps) is None
+
+    row = store.get_listing_revision(rev)
+    assert row["status"] == "pending" and row["attempts"] == 0
+    assert form.actions == []
+
+
+def test_a_facebook_edit_waits_out_the_quiet_hours(store, bus, monkeypatch) -> None:
+    from sellee.browser import governor
+
+    item = _listed(store)
+    rev = store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    monkeypatch.setattr(governor, "in_quiet_hours", lambda store, config, now: True)
+    form = StubEditForm()
+
+    assert revise.run_next(_deps(store, bus, form)) is None
+
+    assert store.get_listing_revision(rev)["attempts"] == 0
+    assert form.actions == []
+
+
 def test_one_at_a_time(store, bus) -> None:
     item = _listed(store)
     store.queue_listing_revision(item["id"], "fb", ["list_price"])

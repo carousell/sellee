@@ -15,9 +15,10 @@ Two rules keep it from being expensive or surprising:
   * Bounded attempts per item and marketplace. Every attempt is minutes of browser work, so a
     failed publish is retried at most `PUBLISH_MAX_ATTEMPTS` times, spaced out (`_shots_spent`).
     What is retried freely is the cheap part: whether Chrome is up, whether Node is installed.
-  * Listing is not held by quiet hours. A listing sits there until someone looks at it, so the hour
-    it went up is not what a buyer sees. The window still holds follow-ups and nudges, which land
-    in someone's notifications at that hour.
+  * Listing is held by quiet hours only on a marketplace that polices automation. Elsewhere a
+    listing sits there until someone looks at it, so the hour it went up is not what a buyer sees;
+    on Facebook the account starting things at 4am is itself what gets noticed. The window also
+    holds follow-ups and nudges, which land in someone's notifications at that hour.
   * The outcome is reported by the daemon, from the rows the pass wrote. A publish pass has no
     conversation to report into, and asking a model to remember to send a message is how a listing
     went live once with nobody told.
@@ -40,10 +41,10 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher, reconcile
 from sellee.browser.client import BrowserError, BrowserUnavailable
-from sellee.engines import pacing as pacing_engine
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
 
@@ -91,6 +92,8 @@ class CrosslistDeps:
     # Consecutive transient publish refusals per (item, market). In process, like the notice
     # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
 
 
@@ -103,21 +106,6 @@ def _notify_once(deps: CrosslistDeps, key: str, text: str) -> None:
 
 def _clear_notice(deps: CrosslistDeps, key: str) -> None:
     deps.notified.pop(key, None)
-
-
-def in_quiet_hours(deps: CrosslistDeps) -> bool:
-    """Whether now is inside the seller's quiet window.
-
-    Not consulted by this lane (see the module docstring); kept as the one place that resolves the
-    window against the pacing config.
-    """
-    cfg = pacing_engine.resolve(
-        deps.config, settings.quiet_window_minutes(deps.store), now=deps.now()
-    )
-    stamp = time.localtime(deps.now())
-    return pacing_engine.in_quiet_window(
-        stamp.tm_hour * 60 + stamp.tm_min, cfg.quiet_start_min, cfg.quiet_end_min
-    )
 
 
 def crosslist_lane(deps: CrosslistDeps) -> None:
@@ -299,6 +287,11 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
     return pass_id
 
 
+# The pages one driven publish costs: the create form, then the selling page and the profile it
+# confirms the new listing on.
+PUBLISH_LOADS = 3
+
+
 def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     """Put one item on a marketplace by driving its form, and record what happened.
 
@@ -311,6 +304,11 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     create_url = marketplaces.market_url(market, "sell", region)
     adapter = market_adapters.get_adapter(market)
     if create_url is None or adapter is None:
+        return
+    if page_governor.unprompted_held(
+        deps.store, deps.config, market, deps.now()
+    ) or not page_governor.has_room(deps.governor, market, PUBLISH_LOADS):
+        # Left eligible with no attempt spent: the morning, or the next hour's page loads, will do.
         return
     # Staged where the browser server may read from: the media store is outside its roots.
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])

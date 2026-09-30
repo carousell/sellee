@@ -493,6 +493,28 @@ offered and is actually rendering (`tests/integration/test_facebook_login_probe.
 shares the strike count with the walls, so a wall after one rests the account longer — the error
 runs toward a longer rest, never a shorter one.
 
+**And it is moved through at a person's pace.** On 2026-09-29 the lane opened thirty-two Facebook
+conversations in three minutes and twenty seconds, and kept that rate all night. Every page load
+of a market that polices automation now goes through one governor (`browser/governor.py`), which
+`BrowserClient.navigate` asks before it loads anything — the recovery re-navigations included,
+since each is a load the marketplace sees. It holds two limits:
+
+- **a gap before each load**, drawn per load around `policed_page_gap_sec` (never under 6s) and
+  measured from that market's last load. It is slept, not refused;
+- **allowances per hour and per day.** A flow that needs several loads (a survey look, an
+  adoption, a driven publish or edit) asks before it starts, so it is turned away whole rather than
+  halfway through a form. A load past the allowance anyway raises `PagesSpent` — a `BrowserError`,
+  so every send, publish and edit already treats it as "nothing happened" — and the read lane
+  stops its tick without counting it as blindness.
+
+There is one governor per daemon, shared by every client the factory makes, so a recycled server
+cannot reset what the market has been shown. A pass drives a Playwright server of its own, which
+the governor never sees; `tests/guard/test_policed_market_pass_grant.py` is what keeps any pass on
+such a market from being granted a browser at all. Work nobody asked for on these markets — a
+survey, an adoption, a fan-out publish, an edit — also waits out the seller's quiet hours, because
+the account starting things at 4am is itself what gets noticed. Replies do not wait: a buyer who
+just wrote is awake.
+
 **None of them tells the seller to go and look at Chrome**, and that is load-bearing rather than
 tidy. Reaching the blind counter *proves* Chrome answered its CDP probe on that tick — every
 acquisition runs `ensure_chrome`, and a Chrome that is genuinely down raises `BrowserUnavailable`
@@ -825,9 +847,11 @@ listed on that marketplace or already under way, which is the mistake that would
 two live listings on the seller's own account. Quiet hours do not apply; they hold
 unprompted work, and this was prompted.
 
-The lane holds off while paused, while another publish is queued or running (passes run
-one at a time), and inside quiet hours — a publish is a visible burst on the seller's
-real account. Quiet hours hold the *start* of work; nothing running is interrupted.
+The lane holds off while paused and while another publish is queued or running (passes run
+one at a time). Quiet hours hold a publish only on a marketplace that polices automation, where
+the account starting things at 4am is what gets noticed; elsewhere a listing sits there until
+someone looks, so the hour it went up is not what a buyer sees. Quiet hours hold the *start* of
+work; nothing running is interrupted.
 
 **The outcome is read off the rows, not off the pass.** A recorded URL becomes a success
 notice with the link. Anything else — including a pass that exited clean having recorded
@@ -900,6 +924,8 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
 | `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
+| `policed_page_gap_sec` | `15.0` | the median gap before each page load of a market that polices automation; clamped up to 6s |
+| `policed_pages_per_hour` / `_per_day` | `30` / `150` | how many page loads such a market gets; clamped down to 60 / 400 |
 | `send_verify_window_sec` | `20.0` | how long the send read-back keeps looking for its own bubble. Every send that runs out of window here becomes work for the settle lane and, eventually, a question for the seller |
 | `RECYCLE_AFTER_FAILURES` | `3` (code) | consecutive tool failures that, with Chrome answering, mean the server has lost it |
 | `BROWSER_RECYCLE_MAX` / `_WINDOW_SEC` / `_COOLDOWN_SEC` | `3` / `3600` / `120` (code) | how often a server may be replaced before we stop and say so |

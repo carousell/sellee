@@ -17,9 +17,11 @@ so they cost it nothing. Conditions that will not (the item sold, the marketplac
 asking us to stop, no way to edit it) are checked after, and settle the row as failed with a
 message the seller can act on.
 
-Like the driven publish, a driven edit takes no pacing reserve and is not held by quiet hours: an
-edited listing sits there until someone looks at it, so the hour it changed is not what anyone
-sees, and the one-at-a-time and attempt bounds are what keep it from being a burst.
+Like the driven publish, a driven edit takes no pacing reserve. It is held by quiet hours only on a
+marketplace that polices automation (`browser/governor.py`), where the account starting things at
+4am is itself what gets noticed; elsewhere an edited listing sits there until someone looks at it,
+so the hour it changed is not what anyone sees. The one-at-a-time and attempt bounds are what keep
+it from being a burst.
 """
 
 from __future__ import annotations
@@ -31,6 +33,7 @@ from typing import Callable
 
 from sellee import marketplaces, settings
 from sellee.browser import editor
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.inbox import browser_busy
@@ -65,7 +68,13 @@ class ReviseDeps:
     # The daemon's browser acquisition: calling it verifies Node and makes Chrome answer, or raises
     # BrowserUnavailable.
     browser_factory: Callable[[], object]
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
+
+
+# The pages one driven edit costs: the listing to edit, and the listing again to confirm it.
+EDIT_LOADS = 2
 
 
 def revise_lane(deps: ReviseDeps) -> None:
@@ -86,6 +95,14 @@ def run_next(deps: ReviseDeps) -> str | None:
         return None
     upcoming = deps.store.next_listing_revision(retry_after_sec=REVISE_RETRY_AFTER_SEC)
     if upcoming is None:
+        return None
+    market = upcoming["market"]
+    if page_governor.unprompted_held(
+        deps.store, deps.config, market, deps.now()
+    ) or not page_governor.has_room(deps.governor, market, EDIT_LOADS):
+        # Not claimed, so it spends nothing: a retry waits for the morning or the page loads. The
+        # seller's own first ask is held the same way — it is theirs to have made at 3am, but the
+        # account starting an edit then is the same thing to Facebook.
         return None
     try:
         deps.browser_factory()
