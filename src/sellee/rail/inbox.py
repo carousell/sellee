@@ -24,6 +24,7 @@ from sellee.rail.client import (
     RailUnprovisioned,
     listing_id_from_url,
 )
+from sellee.store.send import UNSETTLED_STATUSES
 
 log = logging.getLogger(__name__)
 
@@ -138,12 +139,23 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> bool:
             if inbound:
                 history.append(message["text"])
         if author == "agent":
-            owed = owed or bool(message.get("pending_send"))
+            pending = bool(message.get("pending_send"))
+            owed = owed or pending
+            if not pending:
+                _settle_our_send(deps, message)
             # An agent reply answers the buyer only once bazaar has sent it everywhere it owes.
             if last_buyer and not owed:
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
     return owed
+
+
+def _settle_our_send(deps: RelayDeps, message: dict) -> None:
+    """Commit our own send whose outcome was unknown, now that bazaar shows it sent. Its
+    client_message_id is the intent id the sink sent it under."""
+    intent_id = message.get("client_message_id") or ""
+    if deps.store.intent_status(intent_id) in UNSETTLED_STATUSES:
+        deps.store.settle_intent_from_read(intent_id, msg_id=message["id"])
 
 
 def _item_for(items, listing_id: str) -> str | None:

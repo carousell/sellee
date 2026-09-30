@@ -29,6 +29,7 @@ from sellee import (
     heartbeat,
     intent_sweep,
     lock,
+    marketplaces,
     migrations,
     passes,
     paths,
@@ -55,6 +56,7 @@ from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
 from sellee.rail import inbox as relay_inbox
+from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
@@ -583,8 +585,8 @@ def run_daemon(*, once: bool) -> int:
     )
     warm_browser_server(cfg, once=once)
 
-    def reply_sink_factory():
-        """The marketplace send, built when a send actually needs it — never at context build, so
+    def reply_sink_factory(market: str):
+        """The market's send, built when a send actually needs it — never at context build, so
         only a tool that intends to send acquires the browser (and starts Chrome, if that is all
         that is missing). The sink writes through the unscoped store: it stamps the intent it was
         handed, which the tool has already checked against the session's scope."""
@@ -593,6 +595,9 @@ def run_daemon(*, once: bool) -> int:
             # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
             # rather than silently swallowing a real buyer's reply while the seller plays.
             return buyer_sim.SimReplySink(bus=bus)
+        if market == marketplaces.RAIL:
+            # carousell.ai email threads are answered through bazaar, not a browser.
+            return relay_sink.RelayReplySink(client=rail_factory(), store=store, bus=bus)
         return browser_sink.BrowserReplySink(
             client=browser_factory(),
             store=store,

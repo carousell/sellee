@@ -93,7 +93,7 @@ def wired(bus, store, xdg_tmp):
             store=ScopedStore(store, getattr(session, "scope", None)),
             bus=bus,
             config=Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0)),
-            reply_sink=lambda: sink,
+            reply_sink=lambda _market: sink,
             started_ts=1.0,
         )
 

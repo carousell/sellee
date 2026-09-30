@@ -56,7 +56,8 @@ class ToolContext:
     # acquires the daemon's scripted browser send, starting Chrome if that is all that is missing.
     # None where no browser is configured; send_reply then returns a structured no_send_path
     # rather than pretending.
-    reply_sink: Callable[[], object] | None = None
+    # Called with the thread's market; each market has its own send path.
+    reply_sink: Callable[[str], object] | None = None
     # Same shape as rail_factory, for the tools that drive the browser themselves (the selector
     # probe). Raises BrowserUnavailable when there is no browser to reach, which the tool reports.
     browser_factory: Callable[[], object] | None = None
