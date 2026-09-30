@@ -1351,7 +1351,10 @@ def test_nothing_is_read_until_a_ring_is_owed(store, bus, seeded) -> None:
 
 
 def test_a_visit_answers_the_ring_it_was_for(store, bus, seeded) -> None:
-    client = StubClient(conversations=[_conv()], tails={"99": []})
+    client = StubClient(
+        conversations=[_conv()],
+        tails={"99": [{"text": "is this still available?", "side": "in", "y": 1}]},
+    )
     deps = _deps(store, bus, client)
 
     _tick(deps)
@@ -1689,3 +1692,101 @@ def test_the_tab_steps_away_from_facebook_once_a_visit_is_over(store, bus, seede
 
     assert client.stepped_away == 1
     assert client.url == doorbell.AWAY_URL
+
+
+# --- a ring is answered by reading the conversation, not by reading the list ----------------------
+
+
+class _TailFails(StubClient):
+    """A folder that lists, over a conversation whose messages will not read."""
+
+    def evaluate(self, function, **kwargs):
+        if function == fb_market.CONVERSATION_TAIL_JS:
+            return {"error": "no_message_log", "logs": 0, "width": 1200, "visible": True}
+        return super().evaluate(function, **kwargs)
+
+
+def test_a_ring_is_not_answered_by_a_visit_that_could_not_read_the_conversation(
+    store, bus, seeded
+) -> None:
+    """The buyer who rang may be in exactly the conversation that would not read. Answering the
+    ring anyway leaves them unread until they write again — and on a market read only when it
+    rings, nothing else would ever look."""
+    client = _TailFails(conversations=[_conv(unread=1)], list_width=1200)
+    deps = _deps(store, bus, client)
+
+    _tick(deps)
+
+    assert store.ring_owed("fb")
+
+
+def test_a_conversation_that_never_reads_is_not_rung_for_forever(store, bus, seeded) -> None:
+    """Bounded: the seller has been told by then that the conversations will not read, and a ring
+    for one that never will must not keep Facebook open every ten minutes for good."""
+    client = _TailFails(conversations=[_conv(unread=1)], list_width=1200)
+    deps = _deps(store, bus, client)
+    deps.store.record_rings("fb", [("once", "message", 0.0)], due_ts=0.0, now=0.0)
+
+    for _ in range(inbox.RING_VISIT_ATTEMPTS):
+        deps.ring_retry_at.clear()
+        inbox.inbox_lane(deps, trigger="notification")
+
+    assert not store.ring_owed("fb")
+
+
+# --- a send we could not confirm is checked on once -----------------------------------------------
+
+
+def _unconfirmed_send(store, seeded, *, text="yes, still available!"):
+    from sellee.engines import pacing
+
+    store.create_thread(
+        thread_id="fb:99",
+        side="sell",
+        market="fb",
+        counterpart_handle="Gerry",
+        item_id=seeded["id"],
+    )
+    reserved = store.reserve_reply(
+        thread_id="fb:99",
+        kind="reply",
+        text=text,
+        in_msg_id=None,
+        cfg=pacing.resolve(Config(reply_delay_sec=(0, 0)), quiet_hours=(0, 0)),
+    )
+    store.mark_intent_sent_unverified(reserved["intent_id"])
+    return reserved["intent_id"]
+
+
+def test_an_unconfirmed_send_is_checked_on_once_a_while_after_it(store, bus, seeded) -> None:
+    """The one visit no ring asks for: a person who sent a message and could not see it go through
+    looks once, a few minutes later. Without it every such send waits the hour for the seller to
+    be asked."""
+    import time as _time
+
+    _unconfirmed_send(store, seeded)
+    client = StubClient(
+        conversations=[], tails={"99": [{"text": "yes, still available!", "side": "out", "y": 1}]}
+    )
+    deps = _deps(store, bus, client)
+    deps.now = lambda: _time.time() + inbox.CHASE_AFTER_SEC + 1
+
+    inbox.inbox_lane(deps, trigger="notification")
+    loads = len(client.navigations)
+    inbox.inbox_lane(deps, trigger="notification")
+
+    assert loads > 0
+    assert len(client.navigations) == loads
+
+
+def test_a_send_just_made_is_not_checked_on_yet(store, bus, seeded) -> None:
+    import time as _time
+
+    _unconfirmed_send(store, seeded)
+    client = StubClient(conversations=[], tails={"99": []})
+    deps = _deps(store, bus, client)
+    deps.now = _time.time
+
+    inbox.inbox_lane(deps, trigger="notification")
+
+    assert client.navigations == []

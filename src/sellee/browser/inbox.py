@@ -56,8 +56,15 @@ _BROWSER_PASS_TYPES = ("reply", "publish", "edit")
 # spent on one: the cost is a single extra page load on a session that really has ended.
 SIGNED_OUT_CONFIRM_READS = 2
 
-# How long a market read on a ring waits after a visit that could not read its conversation list.
+# How long a market read on a ring waits after a visit that could not read everything it opened,
+# and how many such visits a ring gets before it is let go. By then the seller has been told the
+# conversations will not read, and a ring for one that never will must not keep the market open
+# every ten minutes for good.
 RING_RETRY_SEC = 600.0
+RING_VISIT_ATTEMPTS = 3
+# How long after a send we could not confirm a market read on a ring is looked at once to see
+# whether it landed — the one visit no ring asks for, and only one per send.
+CHASE_AFTER_SEC = 300.0
 
 # Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
 # listings the seller made outside the agent, and calling that a fault would be a wrong guess
@@ -111,8 +118,12 @@ class InboxDeps:
     refused: dict = field(default_factory=dict)
     # And how many reads in a row saw the session signed out, toward SIGNED_OUT_CONFIRM_READS.
     signed_out: dict = field(default_factory=dict)
-    # When a market read on a ring may be visited again after a visit that could not read it.
+    # When a market read on a ring may be visited again after a visit that could not read it, and
+    # how many visits in a row could not.
     ring_retry_at: dict = field(default_factory=dict)
+    ring_misses: dict = field(default_factory=dict)
+    # The unconfirmed sends a market read on a ring has already been visited once to check.
+    checked_sends: set = field(default_factory=set)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
@@ -190,7 +201,9 @@ def _due_markets(deps: InboxDeps, trigger: str) -> list:
             # This market has told the account to stop. Every other market still reads.
             continue
         if trigger == "notification":
-            if now < deps.ring_retry_at.get(market, 0.0) or not deps.store.ring_owed(market, now):
+            if now < deps.ring_retry_at.get(market, 0.0):
+                continue
+            if not deps.store.ring_owed(market, now) and not _sends_to_check(deps, market, now):
                 continue
         if not page_governor.has_room(deps.governor, market):
             # Out of page loads for now. Not blindness: the market was never asked.
@@ -252,19 +265,41 @@ def inbox_lane(deps: InboxDeps, *, trigger: str = "timer") -> None:
     _clear_notice(deps, "unavailable")
 
 
+def _sends_to_check(deps: InboxDeps, market: str, now: float) -> list:
+    """The unconfirmed sends on this market old enough to look for, and not looked for yet."""
+    return [
+        intent["intent_id"]
+        for intent in deps.store.unsettled_intents()
+        if str(intent["thread_id"]).split(":", 1)[0] == market
+        and intent["intent_id"] not in deps.checked_sends
+        and now - float(intent["created_ts"]) >= CHASE_AFTER_SEC
+    ]
+
+
 def _settle_visit(deps: InboxDeps, market: str, began: float, read: bool) -> None:
     """Answer the rings a visit read for, or put the visit off.
 
-    A visit that read the conversation list answered every ring heard before it began; one heard
-    while it was under way stays owed. A visit that could not read the list answers nothing, and is
-    not tried again for RING_RETRY_SEC: the lane ticks every few seconds, and a market refusing us
-    would otherwise be asked again every few seconds.
+    A visit that read everything it opened answered every ring heard before it began; one heard
+    while it was under way stays owed. A visit that could not answers nothing — the buyer who rang
+    may be in exactly the conversation that would not read — and is not tried again for
+    RING_RETRY_SEC, because the lane ticks every few seconds. After RING_VISIT_ATTEMPTS such visits
+    the rings are let go, as the seller has been told the conversations will not read.
+
+    Any unconfirmed send the visit could have checked on is marked checked, so it is looked for
+    once and then left to its own escalation.
     """
-    if read:
+    now = deps.now()
+    deps.checked_sends.update(_sends_to_check(deps, market, float("inf")))
+    misses = 0 if read else deps.ring_misses.get(market, 0) + 1
+    if read or misses >= RING_VISIT_ATTEMPTS:
+        if misses:
+            deps.bus.publish("doorbell.gave_up", {"market": market, "visits": misses})
+        deps.ring_misses.pop(market, None)
         deps.ring_retry_at.pop(market, None)
-        deps.store.answer_rings(market, heard_before=began, now=deps.now())
+        deps.store.answer_rings(market, heard_before=began, now=now)
         return
-    deps.ring_retry_at[market] = deps.now() + RING_RETRY_SEC
+    deps.ring_misses[market] = misses
+    deps.ring_retry_at[market] = now + RING_RETRY_SEC
 
 
 def _walled(deps: InboxDeps, client, adapter, market: str) -> bool:
@@ -301,8 +336,8 @@ def _list_unreadable(answer) -> bool:
 
 
 def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> bool:
-    """Read one market's inbox. Answers whether its conversation list was read — the one thing a
-    visit a ring asked for has to have done to count as answering it."""
+    """Read one market's inbox. Answers whether it read everything it opened: the list, and every
+    conversation it went into — what a visit a ring asked for has to have done to answer it."""
     market = adapter.market
     inbox_url = marketplaces.market_url(market, "inbox", region)
     if inbox_url is None:
@@ -505,7 +540,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> bool:
         # What makes this a market we can see is that every thread we opened was legible, which is
         # exactly what `unreadable == 0` on a tick that opened something means.
         _clear_blind(deps, market, read_content=opened > 0)
-    return True
+    return not unreadable
 
 
 # Give the marked control keyboard focus. Generic on purpose: which control, and what it opens, is
