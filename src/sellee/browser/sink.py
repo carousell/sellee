@@ -183,9 +183,7 @@ class BrowserReplySink:
         """
         if adapter.composer_step(_SEND_BUTTON) is not None:
             button = self._locate(market, adapter, _SEND_BUTTON)
-            self._client.call_tool(
-                "browser_click", {"target": button.target, "element": "the send button"}
-            )
+            self._client.click(button.target, "the send button")
             return True
         if not adapter.chat_message_submit_js:
             self._client.call_tool("browser_press_key", {"key": _SEND_KEY})

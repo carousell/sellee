@@ -32,7 +32,7 @@ from contextlib import contextmanager
 
 from sellee import paths, proc_tree
 from sellee.browser import chrome
-from sellee.engines import typist
+from sellee.engines import pointer, typist
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +49,21 @@ FOCUS_BOX_JS = (
 HAS_CARET_JS = "(el) => el === document.activeElement || el.contains(document.activeElement)"
 # Select everything in the focused box: Cmd on macOS, Ctrl elsewhere.
 SELECT_ALL_KEY = "ControlOrMeta+a"
+
+# Where a control is, in the page's CSS pixels, and how big the viewport is; null for a control the
+# page has not drawn. What a person's cursor aims at.
+BOX_JS = (
+    "(el) => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return null; "
+    "return {x: r.x, y: r.y, width: r.width, height: r.height, vw: window.innerWidth, "
+    "vh: window.innerHeight}; }"
+)
+# One notch of a mouse wheel, and how many a control may take to come into view before the click
+# is left to the locator, which scrolls for itself.
+WHEEL_NOTCH_PX = 100
+MAX_WHEEL_NOTCHES = 30
+WHEEL_GAP_SEC = (0.06, 0.16)
+# The server flag that gives it the mouse, and so what `click` needs from the command.
+MOUSE_CAPS = "--caps=vision"
 
 # The package spawned via npx when config.playwright_mcp_cmd is unset. The installer verifies the
 # spawn and warms the package, and the daemon re-warms it at startup, so this resolves from the npx
@@ -167,6 +182,9 @@ def default_command(cdp_endpoint: str) -> list:
         str(paths.browser_output_dir()),
         "--output-max-size",
         str(OUTPUT_MAX_BYTES),
+        # The mouse tools, for `click`. They widen what the server offers to the daemon's own
+        # client and to nothing else: the server is its stdio subprocess.
+        MOUSE_CAPS,
     ]
 
 
@@ -298,6 +316,9 @@ class BrowserClient:
         # Asked before every page load, including the ones recovery makes: each is a load the
         # marketplace sees. See browser/governor.py; None for a client nothing paces.
         self._governor = governor
+        # Where the cursor was left, for the next path to start from; None until the first click.
+        self._cursor: tuple | None = None
+        self._has_mouse = MOUSE_CAPS in self._command
         self._timeout = timeout_sec
         self._startup_timeout = startup_timeout_sec
         # How typing paces itself. Injected so a test can prove the shape of a send without
@@ -808,6 +829,86 @@ class BrowserClient:
                 else:
                     self.call_tool("browser_press_key", {"key": key.key})
 
+    def click(self, target: str, element: str) -> None:
+        """Click a control the way a person does: the cursor travels to it and presses inside it.
+
+        A locator click lands at the exact centre with no movement before it, which a page recording
+        pointer events sees on every click. `engines/pointer.py` decides the aim and the path; this
+        moves the mouse along it, scrolling the control into view with the wheel first if it is
+        off-screen, and presses for a moment rather than for nothing.
+
+        The control is located again just before the press, and one that has moved is not clicked
+        at all: a press on whatever the page put there instead is a guess on someone's account.
+        Where the page cannot say where the control is (not drawn), or the server has no mouse, the
+        locator click is used as it always was.
+        """
+        with self._lock:
+            if not self._has_mouse:
+                self.call_tool("browser_click", {"target": target, "element": element})
+                return
+            placed = self._box_in_view(target, element)
+            if placed is None:
+                self.call_tool("browser_click", {"target": target, "element": element})
+                return
+            box, viewport = placed
+            aim = pointer.aim(box, self._rng)
+            self._travel(aim, viewport)
+            again = self._box(target, element)
+            if again is None or not again[0].contains(*aim):
+                raise BrowserToolError(f"{element} moved before it could be clicked")
+            self.call_tool(
+                "browser_mouse_click_xy",
+                {"x": aim[0], "y": aim[1], "delay": pointer.press_ms(self._rng)},
+            )
+
+    def _box(self, target: str, element: str):
+        """`(box, (viewport width, height))` for the control now, or None when it is not drawn."""
+        answer = self.evaluate(BOX_JS, target=target, element=element)
+        if not isinstance(answer, dict):
+            return None
+        try:
+            box = pointer.Box(
+                x=float(answer["x"]),
+                y=float(answer["y"]),
+                width=float(answer["width"]),
+                height=float(answer["height"]),
+            )
+            return box, (float(answer["vw"]), float(answer["vh"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _box_in_view(self, target: str, element: str):
+        """The control's box once it is on screen, wheeled there notch by notch; None when it
+        cannot be brought there, which leaves the click to the locator."""
+        placed = self._box(target, element)
+        for _ in range(MAX_WHEEL_NOTCHES):
+            if placed is None:
+                return None
+            box, (width, height) = placed
+            if 0 <= box.y and box.y + box.height <= height and 0 <= box.x <= width:
+                return placed
+            if self._cursor is None:
+                self._travel((width * self._rng.uniform(0.35, 0.65), height / 2), (width, height))
+            below = box.y + box.height > height
+            notch = WHEEL_NOTCH_PX * self._rng.uniform(0.8, 1.2)
+            self._sleep(self._rng.uniform(*WHEEL_GAP_SEC))
+            self.call_tool(
+                "browser_mouse_wheel", {"deltaX": 0, "deltaY": notch if below else -notch}
+            )
+            placed = self._box(target, element)
+        return None
+
+    def _travel(self, to: tuple, viewport: tuple) -> None:
+        width, height = viewport
+        start = self._cursor or (
+            width * self._rng.uniform(0.3, 0.7),
+            height * self._rng.uniform(0.3, 0.7),
+        )
+        for step in pointer.path(start, to, self._rng):
+            self._sleep(step.delay_sec)
+            self.call_tool("browser_mouse_move_xy", {"x": step.x, "y": step.y})
+        self._cursor = to
+
     def empty_box(self, target: str, element: str) -> None:
         """Empty a box with a real select-all and delete, the caret put in it first.
 
@@ -834,7 +935,7 @@ class BrowserClient:
         answered. The caret is put in the box without it, so typing works either way.
         """
         try:
-            self.call_tool("browser_click", {"target": target, "element": element})
+            self.click(target, element)
         except BrowserError:
             log.debug("could not click into %s before typing", element, exc_info=True)
 

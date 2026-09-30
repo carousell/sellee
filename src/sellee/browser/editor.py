@@ -131,9 +131,7 @@ def revise(client, adapter, item: dict, *, listing_url: str, changed, sleep=None
 
     # Everything past here may have saved.
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.edit_target("save"), "element": "Save"}
-        )
+        client.click(adapter.edit_target("save"), "Save")
         pause(COMMIT_SETTLE_SEC)
         return _confirm(client, adapter, item, listing_url, changed, pause)
     except ReviseUnverified:
@@ -156,9 +154,7 @@ def _open_form(client, adapter, pause) -> None:
     if not entry.get("found"):
         raise _retryable(f"the {adapter.market} listing page offers no Edit control")
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.edit_target("entry"), "element": "Edit listing"}
-        )
+        client.click(adapter.edit_target("entry"), "Edit listing")
     except BrowserError as exc:
         raise _retryable(f"the Edit control would not open: {exc}") from exc
     pause(STEP_SETTLE_SEC)
@@ -170,10 +166,7 @@ def _mark_fields(client, adapter, pause) -> dict:
     found = _evaluate(client, adapter.edit_fields_js)
     if "more" in (found.get("marked") or []) and "description" not in found.get("marked"):
         try:
-            client.call_tool(
-                "browser_click",
-                {"target": adapter.edit_target("more"), "element": "the rest of the fields"},
-            )
+            client.click(adapter.edit_target("more"), "the rest of the fields")
             pause(STEP_SETTLE_SEC)
             found = _evaluate(client, adapter.edit_fields_js)
         except BrowserError:
@@ -198,9 +191,7 @@ def _refuse_paid_promotion(client, adapter) -> None:
     if not _evaluate(client, adapter.edit_fields_js).get("boost_on"):
         return
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.edit_target("boost"), "element": "the paid boost"}
-        )
+        client.click(adapter.edit_target("boost"), "the paid boost")
     except BrowserError as exc:
         raise _retryable(f"the paid boost was on and would not turn off: {exc}") from exc
     if _evaluate(client, adapter.edit_fields_js).get("boost_on"):
@@ -243,9 +234,7 @@ def _confirm(client, adapter, item: dict, listing_url: str, changed, pause) -> R
     entry = client.evaluate(adapter.edit_entry_js) or {}
     if not entry.get("found"):
         raise ReviseUnverified("saved, but the edit form would not reopen to check it")
-    client.call_tool(
-        "browser_click", {"target": adapter.edit_target("entry"), "element": "Edit listing"}
-    )
+    client.click(adapter.edit_target("entry"), "Edit listing")
     pause(STEP_SETTLE_SEC)
     client.evaluate(adapter.edit_fields_js)  # marks the controls the read-back reads
     seen = client.evaluate(adapter.edit_readback_js) or {}

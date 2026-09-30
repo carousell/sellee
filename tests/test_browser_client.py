@@ -27,7 +27,7 @@ from sellee.browser.client import (
     same_page,
     sections,
 )
-from sellee.engines import typist
+from sellee.engines import pointer, typist
 
 # The real probe, bound at import so the conftest guard's stub cannot reach it. These are the
 # probe's own tests, so they are the ones that must call the real thing.
@@ -1395,3 +1395,117 @@ def test_a_refused_load_never_reaches_the_page(make_client) -> None:
         client.navigate("https://www.facebook.com/messages/")
 
     assert "browser_navigate" not in [c["tool"] for c in tool_calls(client)]
+
+
+# --- clicking the way a person does ---------------------------------------------------------------
+#
+# A locator click lands at the exact centre of the control with no movement before it: the cursor
+# is simply there. `click` moves it along a person's path and presses inside the control instead.
+
+_IN_VIEW = {"x": 400.0, "y": 600.0, "width": 120.0, "height": 36.0, "vw": 1200, "vh": 900}
+
+
+def _pointing_client(tmp_path, tools: dict, *, caps=True, rng=None):
+    script = tmp_path / "pointing.json"
+    script.write_text(json.dumps({"tools": tools}))
+    command = [sys.executable, str(FAKE), str(script)]
+    if caps:
+        command.append("--caps=vision")
+    client = BrowserClient(
+        command=command, sleep=lambda _s: None, rng=rng or random.Random(6), timeout_sec=10.0
+    )
+    client.calls_log = tmp_path / "pointing.json.calls"
+    return client
+
+
+def _mouse_tools(box_answers):
+    return {
+        "browser_evaluate": box_answers,
+        "browser_mouse_move_xy": {"text": "ok"},
+        "browser_mouse_click_xy": {"text": "ok"},
+        "browser_mouse_wheel": {"text": "ok"},
+        "browser_click": {"text": "ok"},
+    }
+
+
+def test_the_default_server_has_the_mouse() -> None:
+    from sellee.browser.client import default_command
+
+    assert "--caps=vision" in default_command("http://127.0.0.1:9222")
+
+
+def test_a_click_travels_to_the_control_and_presses_inside_it(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}))
+    try:
+        client.click("button[name=next]", "Next")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    names = [c["tool"] for c in calls]
+    assert "browser_click" not in names
+    moves = [c for c in calls if c["tool"] == "browser_mouse_move_xy"]
+    presses = [c for c in calls if c["tool"] == "browser_mouse_click_xy"]
+    assert len(moves) >= pointer.MIN_STEPS
+    assert len(presses) == 1
+    press = presses[0]["arguments"]
+    assert 400.0 <= press["x"] <= 520.0 and 600.0 <= press["y"] <= 636.0
+    assert (moves[-1]["arguments"]["x"], moves[-1]["arguments"]["y"]) == (press["x"], press["y"])
+    assert press["delay"] >= pointer.PRESS_MS[0]
+
+
+def test_a_control_that_moved_before_the_press_is_not_clicked(tmp_path) -> None:
+    """Never a guess: a page that reflowed under the cursor would take the press on whatever is
+    there now."""
+    moved = {**_IN_VIEW, "y": 100.0}
+    client = _pointing_client(tmp_path, _mouse_tools([{"result": _IN_VIEW}, {"result": moved}]))
+    try:
+        with pytest.raises(BrowserToolError, match="moved"):
+            client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert "browser_mouse_click_xy" not in names
+    assert "browser_click" not in names
+
+
+def test_a_control_out_of_view_is_scrolled_to_with_the_wheel(tmp_path) -> None:
+    below = {**_IN_VIEW, "y": 1500.0}
+    client = _pointing_client(
+        tmp_path, _mouse_tools([{"result": below}, {"result": _IN_VIEW}, {"result": _IN_VIEW}])
+    )
+    try:
+        client.click("button[name=next]", "Next")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    wheels = [c["arguments"]["deltaY"] for c in calls if c["tool"] == "browser_mouse_wheel"]
+    assert wheels and all(delta > 0 for delta in wheels)
+    assert [c["tool"] for c in calls].count("browser_mouse_click_xy") == 1
+
+
+def test_a_server_without_the_mouse_clicks_the_old_way(tmp_path) -> None:
+    """A server an operator configured by hand may not have the mouse tools, and a click must
+    still happen."""
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}), caps=False)
+    try:
+        client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names == ["browser_click"]
+
+
+def test_a_control_the_page_has_not_drawn_is_left_to_the_locator(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": None}))
+    try:
+        client.click("input[type=file]", "Add photos")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names[-1] == "browser_click"
+    assert "browser_mouse_click_xy" not in names

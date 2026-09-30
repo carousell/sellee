@@ -103,10 +103,7 @@ def _open_all_fields(client, adapter, pause) -> None:
     if "more" not in (found.get("marked") or []):
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("more"), "element": "the rest of the listing fields"},
-        )
+        client.click(adapter.publish_target("more"), "the rest of the listing fields")
         pause(STEP_SETTLE_SEC)
     except BrowserError:
         log.debug("could not expand the %s create form", adapter.market, exc_info=True)
@@ -130,10 +127,7 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
     """
     if "add_photos" in (found.get("marked") or []):
         try:
-            client.call_tool(
-                "browser_click",
-                {"target": adapter.publish_target("add_photos"), "element": "Add photos"},
-            )
+            client.click(adapter.publish_target("add_photos"), "Add photos")
             pause(STEP_SETTLE_SEC)
         except BrowserError as exc:
             raise PublishNotAttempted(
@@ -183,10 +177,7 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
     if step not in (found.get("marked") or []) or not wanted:
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target(step), "element": f"the {step} dropdown"},
-        )
+        client.click(adapter.publish_target(step), f"the {step} dropdown")
         pause(STEP_SETTLE_SEC)
         answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
         if not answer.get("chosen"):
@@ -194,10 +185,7 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
                 f"{adapter.market} offers no {step} called {wanted!r} "
                 f"(it offers {(answer.get('options') or [])[:8]})"
             )
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("option"), "element": f"the {step}"},
-        )
+        client.click(adapter.publish_target("option"), f"the {step}")
         pause(STEP_SETTLE_SEC)
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
@@ -213,10 +201,7 @@ def _refuse_paid_promotion(client, adapter) -> None:
     if not found.get("boost_on"):
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("boost"), "element": "the paid boost switch"},
-        )
+        client.click(adapter.publish_target("boost"), "the paid boost switch")
     except BrowserError as exc:
         raise PublishNotAttempted(
             f"the paid boost was on and would not turn off: {exc}", retryable=True
@@ -262,16 +247,12 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
             "something, and nothing was submitted"
         )
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("next"), "element": "Next"}
-        )
+        client.click(adapter.publish_target("next"), "Next")
         pause(COMMIT_SETTLE_SEC)
         after = client.evaluate(adapter.publish_fields_js) or {}
         if "publish" not in (after.get("marked") or []):
             raise PublishUnverified("the form moved on but offered no Publish button")
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("publish"), "element": "Publish"}
-        )
+        client.click(adapter.publish_target("publish"), "Publish")
         pause(COMMIT_SETTLE_SEC)
 
         # Reading the result stays inside the bracket on purpose: it runs on a page that just

@@ -695,6 +695,15 @@ Enter is the send; anything else (an accent, an emoji) is entered whole with
 `browser_type` and `slowly`. Never `browser_type` without `slowly`: that is a fill,
 and measured on Chrome 154 a fill replaced sixty typed characters with one.
 
+**A click travels there first** (`BrowserClient.click`, every click the agent makes on a
+marketplace). A locator click lands at the exact centre of the control with no movement before it,
+which a page recording pointer events sees on every click. `engines/pointer.py` aims inside the
+control but not at its middle and draws a curved path in a person's steps and time; the client
+moves the mouse along it, scrolls an off-screen control into view with the wheel, holds the press
+for a moment, and reads the control's position again just before pressing — one that moved is not
+clicked at all. The mouse tools need the server's `--caps=vision`; a hand-configured server without
+it, or a control the page has not drawn, gets the locator click as before.
+
 **A pressed key lands wherever focus is**, so the caret is put in the box before
 the first key and checked at every word, and the box is read back whole before
 anything commits it (`reconcile.holds_whole`, which, unlike `same_text`, forgives no

@@ -499,10 +499,7 @@ def _activate(client, adapter) -> None:
     if focused:
         client.call_tool("browser_press_key", {"key": "Enter"})
         return
-    client.call_tool(
-        "browser_click",
-        {"target": adapter.inbox_folder_target, "element": "the marketplace inbox folder"},
-    )
+    client.click(adapter.inbox_folder_target, "the marketplace inbox folder")
 
 
 def _listing_key(row: dict) -> str:

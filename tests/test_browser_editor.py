@@ -90,6 +90,10 @@ class StubEditForm:
     type_humanly = BrowserClient.type_humanly
     _click_into = BrowserClient._click_into
 
+    def click(self, target, element):
+        """The page receives a click on the control; how the cursor got there is the client's."""
+        return self.call_tool("browser_click", {"target": target, "element": element})
+
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else None

@@ -103,6 +103,10 @@ class StubClient:
             raise BrowserToolError("navigation refused")
         self.url = url
 
+    def click(self, target, element):
+        """The page receives a click on the control; how the cursor got there is the client's."""
+        return self.call_tool("browser_click", {"target": target, "element": element})
+
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
         if self.detach_on == name:

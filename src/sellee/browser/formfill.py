@@ -119,7 +119,7 @@ def type_fields(
             continue
         try:
             if replace:
-                client.call_tool("browser_click", {"target": target(step), "element": step})
+                client.click(target(step), step)
                 client.call_tool("browser_press_key", {"key": _SELECT_ALL})
                 client.call_tool("browser_press_key", {"key": "Backspace"})
             if not blank:
