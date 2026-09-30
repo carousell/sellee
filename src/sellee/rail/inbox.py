@@ -3,6 +3,9 @@
 Each tick pages list_threads from the stored cursor and reads every thread it names in full. Rows
 are deduped on bazaar's message id, so the cursor is stored only after they commit and a repeat
 or a crash between the two costs a refetch, never a doubled message.
+
+bazaar lists a thread again only when a message lands or its buyer is blocked, so a thread with
+something still unsettled is kept in relay_rereads and read on every tick until it settles.
 """
 
 from __future__ import annotations
