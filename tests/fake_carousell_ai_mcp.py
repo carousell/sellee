@@ -164,10 +164,10 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = body["params"]["name"]
         args = body["params"].get("arguments") or {}
-        if name == "reply_to_thread" and relay.reply_script[:1] == ["http503"]:
-            relay.reply_script.pop(0)
+        if name == "reply_to_thread" and relay.reply_script[:1] in (["http503"], ["http429"]):
+            status = int(relay.reply_script.pop(0)[4:])
             relay.reply_calls.append(dict(args))
-            self._send(503, {"error": "unavailable"})
+            self._send(status, {"error": "unavailable"})
             return
         handler = {
             "list_threads": relay.list_threads,
