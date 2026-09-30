@@ -74,12 +74,25 @@ def holds_whole(box_text: str, text: str) -> bool:
     Not `same_text`, which forgives a truncated read of a long message because a bubble may be read
     back cut short. A box is read in full, so a box holding the first part of a reply is a reply
     that has not been typed, and committing it would deliver half.
+
+    What it guards against is keys that went missing or somewhere else, so beyond an exact match it
+    compares the letters and digits, in order, and nothing else: a composer is free to redraw an
+    emoji, turn `:)` into one, or re-space a line, and none of that is a lost key — while a dropped
+    letter, a missing last word, or a half-typed reply all change the letters.
+
+    A reply with no letters or digits at all — a thumbs-up — leaves nothing to compare, since the
+    page may draw it as an element with no text. That is not a reason to strand the buyer: an empty
+    box sends nothing, and the read-back after the commit decides.
     """
     held, meant = normalize(box_text), normalize(text)
     if held == meant:
         return True
-    left, right = _as_drawn(held), _as_drawn(meant)
-    return bool(left) and left == right
+    letters = _letters(meant)
+    return not letters or _letters(held) == letters
+
+
+def _letters(text: str) -> str:
+    return "".join(char for char in text if char.isalnum())
 
 
 def _same_normalized(a: str, b: str) -> bool:

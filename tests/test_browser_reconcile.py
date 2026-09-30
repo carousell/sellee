@@ -365,3 +365,24 @@ def test_a_box_missing_a_letter_does_not_hold_the_reply() -> None:
 def test_an_emoji_the_page_draws_differently_still_counts() -> None:
     """Facebook draws an emoji as an element whose innerText is a line break."""
     assert holds_whole("see you at 6\n", "see you at 6 ✅")
+
+
+def test_an_emoticon_the_composer_turned_into_an_emoji_still_counts() -> None:
+    """Chat composers redraw `:)` as an emoji as it is typed. The check is for keys that went
+    missing, not for what the page chose to draw — and a reply refused over a smiley would never go
+    out at all."""
+    assert holds_whole("see you at 6 🙂", "see you at 6 :)")
+
+
+def test_a_box_missing_its_last_word_does_not_hold_the_reply() -> None:
+    assert not holds_whole("see you at", "see you at 6")
+
+
+def test_a_box_holding_more_than_the_reply_does_not_hold_it() -> None:
+    assert not holds_whole("hold on let me check yes, still available!", "yes, still available!")
+
+
+def test_a_reply_with_nothing_to_compare_is_left_to_the_read_back() -> None:
+    """Facebook draws an emoji as an element whose text is a line break, so a thumbs-up reads back
+    as an empty box. Refusing over that would mean it never went out."""
+    assert holds_whole("\n", "👍")
