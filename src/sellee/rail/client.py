@@ -40,6 +40,11 @@ class RailAuthError(RailError):
 class RailNetworkError(RailError):
     """The rail was unreachable, timed out, or returned an unparseable response."""
 
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        # The HTTP status the rail answered with, when it answered at all.
+        self.status = status
+
 
 class RailToolError(RailError):
     """The rail accepted the request but the tool call itself failed."""
@@ -84,7 +89,7 @@ class RailClient:
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RailAuthError("carousell.ai rejected the guest key") from exc
-            raise RailNetworkError(f"rail returned HTTP {exc.code}") from exc
+            raise RailNetworkError(f"rail returned HTTP {exc.code}", status=exc.code) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
         try:
@@ -252,6 +257,17 @@ class RailClient:
         if not isinstance(result.get("thread"), dict):
             raise RailToolError("get_thread returned no thread")
         return {"thread": result["thread"], "messages": result.get("messages") or []}
+
+    def reply_to_thread(self, thread_id: str, text: str, client_message_id: str) -> dict:
+        """Reply to the buyer on a relay thread. bazaar stores one reply per client_message_id,
+        so a retry under the same id returns the same {message_id} and sends nothing twice."""
+        result = self.call_tool(
+            "reply_to_thread",
+            {"id": str(thread_id), "text": text, "client_message_id": client_message_id},
+        )
+        if not result.get("message_id"):
+            raise RailToolError("reply_to_thread returned no message id")
+        return {"message_id": result["message_id"]}
 
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP

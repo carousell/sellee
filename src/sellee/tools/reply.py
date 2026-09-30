@@ -15,6 +15,7 @@ import time
 from sellee import marketplaces, settings
 from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
+from sellee.rail.client import RailError
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -126,8 +127,8 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     # recorded: no pacing slot spent, and no pending intent for the sweep to escalate as a send
     # nobody can verify — this send provably never happened.
     try:
-        sink = ctx.reply_sink() if ctx.reply_sink is not None else None
-    except BrowserError as exc:
+        sink = ctx.reply_sink(thread["market"]) if ctx.reply_sink is not None else None
+    except (BrowserError, RailError) as exc:
         return {
             "status": "no_send_path",
             "delivered": _NOT,
@@ -176,7 +177,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
 
     intent_id = reserved["intent_id"]
     try:
-        sink.send(thread, params["text"], kind, intent_id)
+        sent = sink.send(thread, params["text"], kind, intent_id) or {}
     except Exception:
         # The sink's own message never reaches here by design (it emits its own events). Whether
         # the message may be retried is the intent's durable status, and the return says which
@@ -194,6 +195,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
         text=params["text"],
         kind=kind,
         pass_id=ctx.session.pass_id,
+        msg_id=sent.get("msg_id"),
     )
     return {
         "status": "sent",
