@@ -1329,6 +1329,19 @@ def test_typing_stops_when_the_box_loses_the_caret(make_client) -> None:
     assert typed and "five" not in typed
 
 
+def test_no_key_follows_a_lost_caret(make_client) -> None:
+    """Checked before every key, not every word: a Space or a letter landing on whatever took focus
+    can press a button or fire one of the page's own keyboard shortcuts."""
+    client = _typing_client(
+        make_client, focused=[{"result": True}, {"result": True}, {"result": False}]
+    )
+
+    with pytest.raises(BrowserToolError):
+        client.type_humanly("textarea", "box", "abcdefgh")
+
+    assert _typed(tool_calls(client)) == "ab"
+
+
 def test_a_composer_that_will_not_hold_still_is_still_typed_into(make_client) -> None:
     """The regression that broke ten sends in a row on a live account.
 

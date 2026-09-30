@@ -40,8 +40,9 @@ log = logging.getLogger(__name__)
 COMPOSER_TEXT_JS = "(el) => (el.value !== undefined ? el.value : (el.innerText || '')).trim()"
 
 # Whether the box holds the caret. A key goes wherever focus is, so this is asked before the first
-# key — putting the caret there if it is not — and again, only asking, at every word: a caret that
-# moved away mid-message cannot be put back without guessing where in the text it belongs.
+# key — putting the caret there if it is not — and again, only asking, before every key after it: a
+# caret that moved away mid-message cannot be put back without guessing where in the text it
+# belongs.
 FOCUS_BOX_JS = (
     "(el) => { const holds = () => el === document.activeElement || el.contains(document"
     ".activeElement); if (!holds()) el.focus(); return holds(); }"
@@ -808,10 +809,13 @@ class BrowserClient:
         takes is taken off the wait rather than added to it.
 
         A pressed key carries no target: it lands wherever focus is. So the caret is put in the box
-        before the first key and checked again at every word, and a box that does not hold it
-        raises — before anything is typed, or before the rest of the message goes somewhere nobody
-        meant it to. What a keyboard cannot press is entered whole with `browser_type` and
-        `slowly`, never without it: that is a fill, and a fill replaces the box.
+        before the first key and checked again before every one after it, and a box that does not
+        hold it raises — before anything is typed, or before a single key goes somewhere nobody
+        meant it to. Every word would not do: a Space landing on a focused button presses it, and a
+        letter on the page itself can fire one of its own keyboard shortcuts. The check runs inside
+        the gap the schedule already waits, so it costs the typing no time. What a keyboard cannot
+        press is entered whole with `browser_type` and `slowly`, never without it: that is a fill,
+        and a fill replaces the box.
         """
         keys = typist.plan(text, self._rng)
         with self._lock:
@@ -820,8 +824,7 @@ class BrowserClient:
                 raise BrowserToolError(f"could not put the caret in {element}")
             last = time.monotonic()
             for index, key in enumerate(keys):
-                starts_word = index > 0 and keys[index - 1].key in (" ", typist.NEWLINE_KEY)
-                if starts_word and not self.evaluate(HAS_CARET_JS, target=target, element=element):
+                if index and not self.evaluate(HAS_CARET_JS, target=target, element=element):
                     raise BrowserToolError(f"{element} lost the caret partway through typing")
                 wait = key.delay_sec - (time.monotonic() - last)
                 if wait > 0:
