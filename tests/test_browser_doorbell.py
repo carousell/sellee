@@ -315,3 +315,18 @@ def test_stepping_away_is_done_even_when_the_visit_failed_and_never_fails_it() -
     broken = _Tab(fail=True)
     with doorbell.visiting(broken, market_adapters.get_adapter("fb")):
         pass  # a tab that will not leave must not turn a finished visit into a failed one
+
+
+def test_a_blocked_market_is_not_also_called_silent(store, bus, xdg_tmp) -> None:
+    """A signed-out account gets no pushes, and the seller has already been told why it stopped.
+    Days of silence on top of that is the same news in a worse sentence."""
+    _preferences(1)
+    store.block_market("fb", "logged_out", ttl_sec=None)
+    clock = _Clock()
+    deps = _deps(store, bus, _Chrome(), clock)
+
+    doorbell.doorbell_lane(deps)
+    clock.t += doorbell.SILENT_AFTER_SEC + 1
+    doorbell.doorbell_lane(deps)
+
+    assert not [t for t in _texts(store) if "haven't heard" in t]

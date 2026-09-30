@@ -135,7 +135,12 @@ def doorbell_lane(deps: DoorbellDeps) -> None:
         deps.notified.pop(f"deaf:{market}", None)
         _hear(deps, market, heard, now)
         _check_permission(deps, market, now)
-        _check_silence(deps, market, now)
+        if deps.store.market_block(market):
+            # A stopped market gets no pushes, and the seller has been told why it stopped. The
+            # silence clock starts again from whenever the block lifts.
+            deps.listening_since[market] = now
+        else:
+            _check_silence(deps, market, now)
 
 
 def _hosts(market: str) -> set:
