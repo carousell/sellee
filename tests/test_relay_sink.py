@@ -80,8 +80,8 @@ def test_a_waiting_thread_is_answered_with_one_reply_to_thread_call(make_ctx, st
     assert _outbound(store) == ["r1"]
 
 
-@pytest.mark.parametrize("failure", ["http503", "internal", "busy"])
-def test_a_5xx_or_503_is_retried_with_the_same_id(make_ctx, store, bus, waiting, failure):
+@pytest.mark.parametrize("failure", ["http503", "http429", "internal", "busy"])
+def test_a_5xx_503_or_429_is_retried_with_the_same_id(make_ctx, store, bus, waiting, failure):
     waiting.reply_script = [failure]
 
     res = _send(make_ctx, store, bus, waiting)
