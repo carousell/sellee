@@ -56,6 +56,9 @@ _BROWSER_PASS_TYPES = ("reply", "publish", "edit")
 # spent on one: the cost is a single extra page load on a session that really has ended.
 SIGNED_OUT_CONFIRM_READS = 2
 
+# How long a market read on a ring waits after a visit that could not read its conversation list.
+RING_RETRY_SEC = 600.0
+
 # Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
 # listings the seller made outside the agent, and calling that a fault would be a wrong guess
 # about their own marketplace. No buttons on purpose, and said once; see `_report_unplaceable`.
@@ -108,6 +111,8 @@ class InboxDeps:
     refused: dict = field(default_factory=dict)
     # And how many reads in a row saw the session signed out, toward SIGNED_OUT_CONFIRM_READS.
     signed_out: dict = field(default_factory=dict)
+    # When a market read on a ring may be visited again after a visit that could not read it.
+    ring_retry_at: dict = field(default_factory=dict)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
@@ -168,11 +173,46 @@ def browser_busy(store) -> str:
     return store.browser_hold_reason()
 
 
-def inbox_lane(deps: InboxDeps) -> None:
-    """One tick: read every browser market's inbox and fold what is new into durable rows."""
+def _due_markets(deps: InboxDeps, trigger: str) -> list:
+    """The connected markets this tick reads, as (market, adapter) pairs.
+
+    Read at use: only the markets the seller has connected. One they have not connected — or have
+    removed — is not one to open, probe, or tell them they are signed out of. A market read when it
+    rings is due only once a ring is owed and any failed visit's back-off has passed.
+    """
+    now = deps.now()
+    due = []
+    for market in settings.connected_markets(deps.store):
+        adapter = market_adapters.get_adapter(market)
+        if adapter is None or adapter.read_trigger != trigger:
+            continue  # no adapter yet, or read by the other trigger
+        if deps.store.market_block(market):
+            # This market has told the account to stop. Every other market still reads.
+            continue
+        if trigger == "notification":
+            if now < deps.ring_retry_at.get(market, 0.0) or not deps.store.ring_owed(market, now):
+                continue
+        if not page_governor.has_room(deps.governor, market):
+            # Out of page loads for now. Not blindness: the market was never asked.
+            continue
+        due.append((market, adapter))
+    return due
+
+
+def inbox_lane(deps: InboxDeps, *, trigger: str = "timer") -> None:
+    """One tick: read the inbox of every market due on this trigger, and fold what is new into
+    durable rows.
+
+    "timer" is every few minutes. "notification" runs often and is almost always a no-op: it reads a
+    market only once the doorbell has heard it ring and a person's reaction time has passed, and it
+    decides that before the browser is acquired, so an idle tick touches nothing at all.
+    """
     if deps.store.is_paused():
         return
     if browser_busy(deps.store):
+        return
+    due = _due_markets(deps, trigger)
+    if not due:
         return
     try:
         client = deps.browser_factory()
@@ -181,21 +221,12 @@ def inbox_lane(deps: InboxDeps) -> None:
         return
 
     region = seller_region(deps.store)
-    # Read at use: only the markets the seller has connected. One they have not connected — or
-    # have removed — is not one to open, probe, or tell them they are signed out of.
-    for market in settings.connected_markets(deps.store):
-        adapter = market_adapters.get_adapter(market)
-        if adapter is None:
-            continue  # a registry entry with no adapter yet is not a market we can read
-        if deps.store.market_block(market):
-            # This market has told the account to stop. Every other market still reads.
-            continue
-        if not page_governor.has_room(deps.governor, market):
-            # Out of page loads for now. Not blindness: the market was never asked.
-            continue
+    for market, adapter in due:
+        visit_began = deps.now()
+        read = False
         try:
             with client.exclusive():
-                _read_market(deps, client, adapter, region)
+                read = _read_market(deps, client, adapter, region)
         except page_governor.PagesSpent:
             # Ran out partway through the tick. What was read is stored; the rest waits.
             deps.bus.publish("browser.paced", {"market": market})
@@ -213,9 +244,27 @@ def inbox_lane(deps: InboxDeps) -> None:
             _count_blind(deps, market, str(exc), cause=blindness.CAUSE_PLUMBING)
         except BrowserError as exc:
             _count_blind(deps, market, str(exc))
+        finally:
+            if trigger == "notification":
+                _settle_visit(deps, market, visit_began, read)
     # Recovery is a tick that ran into no unavailability, so a condition that persists mid-loop
     # keeps its one notice instead of being re-queued every tick.
     _clear_notice(deps, "unavailable")
+
+
+def _settle_visit(deps: InboxDeps, market: str, began: float, read: bool) -> None:
+    """Answer the rings a visit read for, or put the visit off.
+
+    A visit that read the conversation list answered every ring heard before it began; one heard
+    while it was under way stays owed. A visit that could not read the list answers nothing, and is
+    not tried again for RING_RETRY_SEC: the lane ticks every few seconds, and a market refusing us
+    would otherwise be asked again every few seconds.
+    """
+    if read:
+        deps.ring_retry_at.pop(market, None)
+        deps.store.answer_rings(market, heard_before=began, now=deps.now())
+        return
+    deps.ring_retry_at[market] = deps.now() + RING_RETRY_SEC
 
 
 def _walled(deps: InboxDeps, client, adapter, market: str) -> bool:
@@ -251,12 +300,14 @@ def _list_unreadable(answer) -> bool:
     return not isinstance(answer, dict) or not isinstance(answer.get("conversations"), list)
 
 
-def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
+def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> bool:
+    """Read one market's inbox. Answers whether its conversation list was read — the one thing a
+    visit a ring asked for has to have done to count as answering it."""
     market = adapter.market
     inbox_url = marketplaces.market_url(market, "inbox", region)
     if inbox_url is None:
         log.warning("no recorded inbox URL for %s — skipping", market)
-        return
+        return False
 
     # Quiet for every market, folder or not — nothing in a read brings the window forward any more.
     client.navigate(inbox_url)
@@ -276,14 +327,14 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             if seen >= SIGNED_OUT_CONFIRM_READS:
                 deps.signed_out.pop(market, None)
                 _block_market(deps, market, blindness.CAUSE_LOGGED_OUT)
-            return
+            return False
         _notify_once(
             deps,
             f"logged_out:{market}",
             blindness.LOGGED_OUT_NOTICE.format(name=marketplaces.display_name(market)),
             controls=fastpaths.signin_controls(market),
         )
-        return
+        return False
     # Only a confirmed sign-in re-arms the notice. `unknown` is "no answer" everywhere else in this
     # module, and clearing on it made the once-guard worthless in exactly the case it exists for: a
     # probe that flaps between logged_out and unknown re-armed on every flap, so a seller who was
@@ -297,7 +348,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             deps.store.request_market_survey(market)
 
     if _walled(deps, client, adapter, market):
-        return
+        return False
 
     _open_inbox_folder(client, adapter)
 
@@ -305,7 +356,12 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # `deps.ticks` once one has answered, so a market that cannot be seen does not spend its way
     # toward a sweep while blind.
     tick = deps.ticks.get(market, 0) + 1
-    full_sweep = tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+    # Only a market read on a timer sweeps. One read when it rings is read the way a person reads a
+    # notification: the conversations that moved, not every one in the folder.
+    full_sweep = (
+        adapter.read_trigger == "timer"
+        and tick % max(1, int(deps.config.inbox_full_sweep_every)) == 0
+    )
     # The sweep opens every conversation anyway, so it is the tick that can afford to paginate the
     # whole folder; an ordinary tick reads the screenful already painted. Nothing is missed by that:
     # the folder is ordered by recency, so a buyer who has written is at the top of it.
@@ -336,7 +392,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             measured=measured,
             refused=True,
         )
-        return
+        return False
     deps.refused.pop(market, None)
     # The list carries its own wall on the success path, and a wall that went up after the check
     # above is still a wall: this is the tick that should stop, not the one that opens every
@@ -344,7 +400,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     wall = str(answer.get("blocked") or "")
     if wall in blindness.BLOCKING_CAUSES:
         _block_market(deps, market, wall)
-        return
+        return False
     rows = answer["conversations"]
     deps.ticks[market] = tick
 
@@ -449,6 +505,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
         # What makes this a market we can see is that every thread we opened was legible, which is
         # exactly what `unreadable == 0` on a tick that opened something means.
         _clear_blind(deps, market, read_content=opened > 0)
+    return True
 
 
 # Give the marked control keyboard focus. Generic on purpose: which control, and what it opens, is

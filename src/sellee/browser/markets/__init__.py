@@ -131,6 +131,15 @@ class MarketAdapter:
     # account that has been shown the door is what gets it checkpointed. Off, a signed-out market
     # keeps being probed and picks itself back up when the seller signs in.
     polices_automation: bool = False
+    # What makes the read lane look at this market's inbox. "timer" reads it every few minutes.
+    # "notification" reads it only when the market rings — a notification the agent's Chrome
+    # displayed (browser/doorbell.py) — and a person's reaction time afterwards, which is how
+    # someone checks marketplace messages rather than how a poller does.
+    read_trigger: str = "timer"
+    # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
+    # recorded only. The default treats every ring as a message; a market narrows it only from
+    # notifications it has actually been seen to send.
+    ring_kind: Callable[[str, str], str] = lambda title, body: "message"
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -185,6 +194,7 @@ FACEBOOK = MarketAdapter(
     verify_notice=facebook.VERIFY_NOTICE,
     min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
     polices_automation=True,
+    read_trigger="notification",
 )
 
 _ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}

@@ -200,6 +200,18 @@ def _deps(store, bus, client, **overrides):
     )
 
 
+def _tick(deps, *, waited: bool = True) -> None:
+    """One visit, the way the daemon pays one: Facebook is read only when it rings, so each tick
+    here is a ring that has come due, then the read it asks for. `waited` lets a failed visit's
+    back-off pass first, as it would between two real rings."""
+    rings = getattr(deps, "_rings", 0) + 1
+    deps._rings = rings
+    deps.store.record_rings("fb", [(f"test.{rings}", "message", 0.0)], due_ts=0.0, now=0.0)
+    if waited:
+        deps.ring_retry_at.clear()
+    inbox.inbox_lane(deps, trigger="notification")
+
+
 def _conv(**overrides):
     """One conversation as the Marketplace folder reports it; `product_id` is absent because the
     folder names the listing by title only."""
@@ -236,7 +248,7 @@ def test_a_market_whose_inbox_is_a_page_is_never_clicked(store, bus, carousell_o
 
     client = CarousellStub()
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert client.clicks == []
     # And it is never brought forward either: a market with no folder to click is read quietly,
@@ -255,7 +267,7 @@ def test_a_folder_market_is_read_without_bringing_the_window_forward(store, bus,
     """
     client = StubClient(conversations=[_conv()])
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert client.visible_navigations == []
     # Without the re-assertion the folder's Enter goes nowhere and the read raises the window.
@@ -273,7 +285,7 @@ def test_a_folder_that_will_not_open_still_lets_the_read_report_for_itself(
         focus_works=False, click_fails=True, list_error="the Marketplace folder is not open"
     )
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     blind = _kinds(bus, "browser.blind")
     assert blind, "a folder that never opened must be reported, not passed over in silence"
@@ -286,7 +298,7 @@ def test_a_folder_that_did_not_open_is_blindness_and_never_an_empty_inbox(
     empty one."""
     client = StubClient(list_error="the Marketplace folder is not open")
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     blind = _kinds(bus, "browser.blind")
     assert blind, "a refusing reader must count as blind"
@@ -301,7 +313,7 @@ def test_an_unmarked_folder_control_does_not_stop_the_read(store, bus, seeded) -
     """An unmarked control means no click, and the read still reports for itself."""
     client = StubClient(folder_marked=False, list_error="the Marketplace folder is not open")
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert client.clicks == []
     assert _kinds(bus, "browser.blind")
@@ -314,7 +326,7 @@ def test_the_listing_id_is_read_from_the_opened_conversation_and_adopts(store, b
     """The folder names the listing by title; the id is on a banner inside the conversation."""
     client = StubClient(conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     thread = store.get_thread("fb:99")
     assert thread is not None, "the conversation was never adopted"
@@ -329,7 +341,7 @@ def test_a_conversation_whose_listing_cannot_be_read_is_never_guessed_onto_an_it
     """With no id the conversation is left alone and reported as an unknown listing."""
     client = StubClient(conversations=[_conv()], product_id=None)
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.get_thread("fb:99") is None
     reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unmatched")]
@@ -340,7 +352,7 @@ def test_a_listing_id_that_is_not_ours_does_not_adopt(store, bus, seeded) -> Non
     """A listing the seller did not publish through us does not adopt."""
     client = StubClient(conversations=[_conv()], product_id="1111111111")
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.get_thread("fb:99") is None
     assert [e.payload["reason"] for e in _kinds(bus, "browser.unmatched")] == ["unknown_listing"]
@@ -357,7 +369,7 @@ def test_the_conversation_is_not_reopened_for_a_thread_we_already_know(store, bu
     )
     client = StubClient(conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     evaluated_ids = [c for c in client.calls if c[0] == "navigate" and c[1] == _THREAD]
     assert len(evaluated_ids) == 1, "the thread was navigated more than once for one read"
@@ -373,7 +385,7 @@ def test_a_conversation_being_adopted_is_opened_once(store, bus, seeded) -> None
     """
     client = StubClient(conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.get_thread("fb:99") is not None, "the thread should have been adopted"
     assert client.product_id_reads == 1
@@ -384,7 +396,7 @@ def test_a_row_the_folder_reports_with_an_id_is_taken_at_its_word(store, bus, se
     """A row already carrying the listing id must not pay for a second navigation."""
     client = StubClient(conversations=[_conv(product_id=_PRODUCT_ID)], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.get_thread("fb:99") is not None
     assert client.navigations.count(_THREAD) == 1
@@ -960,7 +972,7 @@ def test_the_folder_is_opened_by_focus_and_a_real_key(store, bus, seeded) -> Non
     passes its stability check."""
     client = StubClient(conversations=[_conv()])
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     order = [c for c in client.calls if c[0] in ("focus", "browser_press_key", "browser_click")]
     assert [c[0] for c in order][:2] == ["focus", "browser_press_key"]
@@ -972,7 +984,7 @@ def test_a_control_that_will_not_take_focus_falls_back_to_a_click(store, bus, se
     """Focus is the better route, not the only one; a non-focusable control still gets clicked."""
     client = StubClient(conversations=[_conv()], focus_works=False)
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert client.clicks, "nothing tried to open the folder at all"
     assert client.clicks[0]["target"] == fb_market.INBOX_FOLDER_TARGET
@@ -983,7 +995,7 @@ def test_an_open_folder_is_left_alone(store, bus, seeded) -> None:
     folder is shut, so trusting it would skip an activation that never happened."""
     client = StubClient(conversations=[_conv()], folder_already_open=True)
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert not [c for c in client.calls if c[0] in ("focus", "browser_press_key")]
     assert client.clicks == []
@@ -1001,8 +1013,8 @@ def test_a_conversation_we_could_not_place_is_not_reopened_next_sweep(store, bus
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    _tick(deps)
+    _tick(deps)
 
     assert client.product_id_reads == 1, "the conversation was opened twice"
     # The refusal event still fires each sweep; the unplaceable report counts on it.
@@ -1014,9 +1026,9 @@ def test_a_row_that_names_another_listing_asks_again(store, bus, seeded) -> None
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.conversations = [_conv(title="Black office chair")]
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert client.product_id_reads == 2
 
@@ -1027,9 +1039,9 @@ def test_a_buyer_writing_again_does_not_reopen_the_conversation(store, bus, seed
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.conversations = [_conv(last_message="Gerry: what about the desk?")]
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert client.product_id_reads == 1
 
@@ -1038,11 +1050,11 @@ def test_adopting_a_listing_makes_the_lane_ask_again(store, bus, seeded) -> None
     """A remembered "none of ours" stops being true the moment the seller adopts the listing."""
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     store.clear_thread_listings("fb")  # what adoption does, in its own transaction
     client.product_id = _PRODUCT_ID
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert client.product_id_reads == 2
     assert store.get_thread("fb:99") is not None
@@ -1059,12 +1071,12 @@ def test_linking_an_item_to_this_listing_reaches_the_buyer_already_waiting(store
     item = store.create_item(title="White study desk", list_price=65.0, currency="SGD")
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert store.get_thread("fb:99") is None
 
     store.record_listing_url(item["id"], "fb", _LISTING)  # what the survey's twin link does
     client.product_id = _PRODUCT_ID
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert store.get_thread("fb:99") is not None, "the buyer was left in a conversation nobody read"
 
@@ -1087,7 +1099,7 @@ def test_buyers_nobody_can_place_are_reported(store, bus, seeded) -> None:
     deps = _deps(store, bus, client)
     _surveyed(store)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     texts = _notice_texts(store)
     assert len(texts) == 1
@@ -1100,8 +1112,8 @@ def test_the_same_buyers_are_not_reported_every_sweep(store, bus, seeded) -> Non
     deps = _deps(store, bus, client)
     _surveyed(store)
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    _tick(deps)
+    _tick(deps)
 
     assert len(_notice_texts(store)) == 1
 
@@ -1112,10 +1124,10 @@ def test_more_unplaceable_buyers_do_not_earn_a_second_notice(store, bus, seeded)
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     _surveyed(store)
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     client.conversations = [_conv(), _conv(thread_id="100", handle="Muhd")]
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     texts = _notice_texts(store)
     assert len(texts) == 1
@@ -1127,12 +1139,12 @@ def test_the_report_does_not_re_arm_when_the_set_empties(store, bus, seeded) -> 
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     _surveyed(store)
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     client.conversations = []  # everyone placed, or gone
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.conversations = [_conv()]
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert len(_notice_texts(store)) == 1
 
@@ -1141,9 +1153,9 @@ def test_the_report_survives_a_restart(store, bus, seeded) -> None:
     """The guard is durable, not lane state: a daemon restart must not re-send it."""
     client = StubClient(conversations=[_conv()], product_id=None)
     _surveyed(store)
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
-    inbox.inbox_lane(_deps(store, bus, client))  # a fresh process, same database
+    _tick(_deps(store, bus, client))  # a fresh process, same database
 
     assert len(_notice_texts(store)) == 1
 
@@ -1154,11 +1166,11 @@ def test_asking_for_a_fresh_look_re_arms_the_report(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()], product_id=None)
     deps = _deps(store, bus, client)
     _surveyed(store)
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     store.reopen_market_survey("fb")
     _surveyed(store)  # the fresh look ran and found nothing to adopt
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert len(_notice_texts(store)) == 2
 
@@ -1170,17 +1182,17 @@ def test_nothing_is_reported_while_the_seller_is_still_being_asked(store, bus, s
     deps = _deps(store, bus, client)
 
     store.request_market_survey("fb")  # due, not yet run
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert _notice_texts(store) == []
 
     store.record_survey_result(
         "fb", [{"listing_id": "1", "url": _LISTING, "title": "Desk", "price": 65.0}]
     )
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert _notice_texts(store) == [], "reported while the seller had not answered the ask"
 
     store.decide_discovered_listings("fb", decision="decline")
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert len(_notice_texts(store)) == 1
 
 
@@ -1191,7 +1203,7 @@ def _adopted_thread(store, bus, seeded):
     """One sweep that adopts the conversation, so a thread exists to be re-read."""
     client = StubClient(conversations=[_conv()], tails={"99": [{"text": "hi", "side": "in"}]})
     deps = _deps(store, bus, client)
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert store.get_thread("fb:99") is not None
     return deps, client
 
@@ -1205,7 +1217,7 @@ def test_a_conversation_facebook_says_is_unavailable_is_not_opened_again(
     before = len(client.navigations)
 
     client.conversations = [_conv(last_message="Message unavailable")]
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert len(client.navigations) == before + 1, "only the inbox itself should have been opened"
 
@@ -1219,7 +1231,7 @@ def test_an_unavailable_conversation_does_not_mark_the_market_blind(store, bus, 
     deps = _deps(store, bus, client)
     deps.config = Config(inbox_full_sweep_every=1)  # open it anyway, as a full sweep does
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert not _kinds(bus, "browser.unreadable")
     assert not _kinds(bus, "browser.blind")
@@ -1232,7 +1244,7 @@ def test_an_ordinary_empty_read_is_still_blindness(store, bus, seeded) -> None:
     deps = _deps(store, bus, client)
     deps.config = Config(inbox_full_sweep_every=1)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     reasons = [e.payload["reason"] for e in _kinds(bus, "browser.unreadable")]
     assert any("read as empty" in r for r in reasons)
@@ -1274,7 +1286,7 @@ def test_facebooks_pin_wall_is_named_in_its_own_words(store, bus, seeded) -> Non
     client = StubClient(list_error="the Marketplace folder is not open", blocked="verify")
     deps = _deps(store, bus, client, browser_blind_after=1)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert _kinds(bus, "browser.blind")[0].payload["cause"] == blindness.CAUSE_VERIFY
     assert "PIN" in _notice_texts(store)[0]
@@ -1291,37 +1303,68 @@ def test_facebooks_pin_wall_is_named_in_its_own_words(store, bus, seeded) -> Non
 def test_an_ordinary_tick_reads_only_the_screenful(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client, inbox_full_sweep_every=6))
+    _tick(_deps(store, bus, client, inbox_full_sweep_every=6))
 
     assert client.list_reads == ["recent"]
 
 
-def test_the_sweep_paginates_the_whole_folder(store, bus, seeded) -> None:
+def test_a_visit_a_ring_asked_for_never_sweeps_the_folder(store, bus, seeded) -> None:
+    """A person opening a notification reads what moved, not every conversation they have. The
+    sweep — every active thread, the whole folder paginated, every thirty minutes — was most of
+    what Facebook saw."""
     client = StubClient(conversations=[_conv()], tails={"99": []})
-    deps = _deps(store, bus, client, inbox_full_sweep_every=2)
+    deps = _deps(store, bus, client, inbox_full_sweep_every=1)
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    for _ in range(3):
+        _tick(deps)
 
-    assert client.list_reads == ["recent", "deep"]
+    assert set(client.list_reads) == {"recent"}
+    assert not any(e.payload["full_sweep"] for e in _kinds(bus, "browser.read"))
 
 
-def test_a_tick_that_could_not_be_read_does_not_spend_its_way_to_a_sweep(store, bus, seeded):
-    """The counter is what picks the deep read, so a market that was blind for five ticks must not
-    arrive at one having 'used' them."""
-    blind = StubClient(list_error="the Marketplace folder is not open")
-    deps = _deps(store, bus, blind, inbox_full_sweep_every=2)
+def test_facebook_is_not_read_on_the_timer(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
-    assert set(blind.list_reads) == {"recent"}
+    inbox.inbox_lane(_deps(store, bus, client))
 
-    seeing = StubClient(conversations=[_conv()], tails={"99": []})
-    deps.browser_factory = lambda: seeing
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    assert client.navigations == []
 
-    assert seeing.list_reads == ["recent", "deep"]
+
+def test_nothing_is_read_until_a_ring_is_owed(store, bus, seeded) -> None:
+    """And the browser is not even acquired: an idle tick of this lane touches nothing."""
+    acquired = []
+    deps = _deps(store, bus, StubClient())
+    deps.browser_factory = lambda: acquired.append(True)
+
+    inbox.inbox_lane(deps, trigger="notification")
+
+    assert acquired == []
+
+
+def test_a_visit_answers_the_ring_it_was_for(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client)
+
+    _tick(deps)
+    loads = len(client.navigations)
+
+    assert not store.ring_owed("fb")
+    inbox.inbox_lane(deps, trigger="notification")
+    assert len(client.navigations) == loads
+
+
+def test_a_visit_that_could_not_read_the_list_is_put_off(store, bus, seeded) -> None:
+    """The ring is still owed, but this lane ticks every few seconds and a market refusing us would
+    otherwise be asked again every few seconds."""
+    client = StubClient(list_error="the Marketplace folder is not open", list_width=1200)
+    deps = _deps(store, bus, client)
+
+    _tick(deps)
+    loads = len(client.navigations)
+    _tick(deps, waited=False)
+
+    assert store.ring_owed("fb")
+    assert len(client.navigations) == loads
 
 
 # --- a marketplace that tells the account to stop -------------------------------------------------
@@ -1333,7 +1376,7 @@ def test_a_tick_that_could_not_be_read_does_not_spend_its_way_to_a_sweep(store, 
 def test_a_wall_stops_the_market_and_is_found_before_anything_is_pressed(store, bus, seeded):
     client = StubClient(wall="automation", conversations=[_conv()], tails={"99": []})
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.market_block("fb")["cause"] == "automation"
     # Before the folder click: the first thing the agent did on seeing a warning about automated
@@ -1344,7 +1387,7 @@ def test_a_wall_stops_the_market_and_is_found_before_anything_is_pressed(store, 
 
 
 def test_the_seller_is_told_what_facebook_said(store, bus, seeded) -> None:
-    inbox.inbox_lane(_deps(store, bus, StubClient(wall="automation")))
+    _tick(_deps(store, bus, StubClient(wall="automation")))
 
     text = store.claim_queued_notices(10)[0]["text"]
     assert "automated" in text.lower()
@@ -1356,11 +1399,11 @@ def test_the_seller_is_told_what_facebook_said(store, bus, seeded) -> None:
 
 def test_a_blocked_market_is_not_read_again(store, bus, seeded) -> None:
     deps = _deps(store, bus, StubClient(wall="automation"))
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     second = StubClient(conversations=[_conv()], tails={"99": []})
     deps.browser_factory = lambda: second
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert second.navigations == []
 
@@ -1376,7 +1419,7 @@ def test_another_market_keeps_being_read(store, bus, seeded) -> None:
 
 
 def test_a_checkpoint_blocks_without_any_wording_at_all(store, bus, seeded) -> None:
-    inbox.inbox_lane(_deps(store, bus, StubClient(wall="checkpoint")))
+    _tick(_deps(store, bus, StubClient(wall="checkpoint")))
 
     assert store.market_block("fb")["cause"] == "checkpoint"
 
@@ -1387,7 +1430,7 @@ def test_a_clean_read_does_not_clear_a_block(store, bus, seeded) -> None:
     store.block_market("fb", "automation", ttl_sec=3600.0)
     deps = _deps(store, bus, StubClient(conversations=[_conv()], tails={"99": []}))
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert store.market_block("fb") is not None
 
@@ -1407,7 +1450,7 @@ def test_a_signed_out_facebook_stops_until_the_seller_signs_back_in(store, bus, 
     deps = _deps(store, bus, client)
 
     for _ in range(4):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     block = store.market_block("fb")
     assert block["cause"] == blindness.CAUSE_LOGGED_OUT
@@ -1423,7 +1466,7 @@ def test_one_signed_out_read_is_not_yet_a_block(store, bus, seeded) -> None:
     """The block has no window and only a sign-in lifts it, so it is not spent on one look."""
     deps = _deps(store, bus, StubClient(login="logged_out"))
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert store.market_block("fb") is None
     assert store.count_queued_notices() == 0
@@ -1435,11 +1478,11 @@ def test_a_signed_in_read_between_two_signed_out_ones_starts_the_count_again(
     client = StubClient(login="logged_out", conversations=[_conv()], tails={"99": []})
     deps = _deps(store, bus, client)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.login = "logged_in"
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.login = "logged_out"
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert store.market_block("fb") is None
 
@@ -1449,11 +1492,11 @@ def test_an_unknown_read_between_two_signed_out_ones_still_confirms(store, bus, 
     client = StubClient(login="logged_out", conversations=[_conv()], tails={"99": []})
     deps = _deps(store, bus, client)
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.login = "unknown"
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.login = "logged_out"
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert store.market_block("fb")["cause"] == blindness.CAUSE_LOGGED_OUT
 
@@ -1462,7 +1505,7 @@ def test_the_seller_is_offered_the_sign_in_door_once(store, bus, seeded) -> None
     deps = _deps(store, bus, StubClient(login="logged_out"))
 
     for _ in range(4):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     notices = store.claim_queued_notices(10)
     assert len(notices) == 1
@@ -1475,11 +1518,11 @@ def test_a_run_of_refusals_stops_facebook_instead_of_knocking(store, bus, seeded
     deps = _deps(store, bus, client, browser_blind_after=3)
 
     for _ in range(3):
-        inbox.inbox_lane(deps)
+        _tick(deps)
     assert store.market_block("fb")["cause"] == blindness.CAUSE_REFUSED
 
     loads = len(client.navigations)
-    inbox.inbox_lane(deps)
+    _tick(deps)
     assert len(client.navigations) == loads
 
 
@@ -1491,7 +1534,7 @@ def test_the_refusal_block_is_said_once_and_does_not_promise_to_keep_trying(
     )
 
     for _ in range(3):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     texts = [n["text"] for n in store.claim_queued_notices(10)]
     assert len(texts) == 1
@@ -1505,7 +1548,7 @@ def test_a_refusal_block_rests_the_account_and_a_repeat_rests_it_longer(store, b
     )
 
     for _ in range(3):
-        inbox.inbox_lane(deps)
+        _tick(deps)
     first = store.market_block("fb")
     assert first["expires_ts"] - first["blocked_ts"] == pytest.approx(blindness.block_window_sec(1))
 
@@ -1513,7 +1556,7 @@ def test_a_refusal_block_rests_the_account_and_a_repeat_rests_it_longer(store, b
     with store._db.transaction() as conn:  # noqa: SLF001 — arranging an expired block
         conn.execute("UPDATE market_blocks SET expires_ts = 0 WHERE market = 'fb'")
     for _ in range(3):
-        inbox.inbox_lane(deps)
+        _tick(deps)
     second = store.market_block("fb")
     assert second["expires_ts"] - second["blocked_ts"] == pytest.approx(
         blindness.block_window_sec(2)
@@ -1526,8 +1569,8 @@ def test_fewer_refusals_than_the_threshold_are_not_a_block(store, bus, seeded) -
         store, bus, StubClient(list_error=_REFUSED, list_width=1200), browser_blind_after=3
     )
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    _tick(deps)
+    _tick(deps)
 
     assert store.market_block("fb") is None
 
@@ -1536,13 +1579,13 @@ def test_a_good_read_between_refusals_starts_the_count_again(store, bus, seeded)
     client = StubClient(list_error=_REFUSED, list_width=1200, conversations=[_conv()])
     deps = _deps(store, bus, client, browser_blind_after=3)
 
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    _tick(deps)
+    _tick(deps)
     client.list_error = None
-    inbox.inbox_lane(deps)
+    _tick(deps)
     client.list_error = _REFUSED
-    inbox.inbox_lane(deps)
-    inbox.inbox_lane(deps)
+    _tick(deps)
+    _tick(deps)
 
     assert store.market_block("fb") is None
 
@@ -1554,7 +1597,7 @@ def test_pages_that_never_load_never_block_facebook(store, bus, seeded) -> None:
     deps = _deps(store, bus, client, browser_blind_after=3)
 
     for _ in range(6):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     assert store.market_block("fb") is None
 
@@ -1564,7 +1607,7 @@ def test_a_window_too_narrow_to_read_is_not_a_refusal(store, bus, seeded) -> Non
     deps = _deps(store, bus, StubClient(list_error=_REFUSED, list_width=756), browser_blind_after=3)
 
     for _ in range(4):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     assert store.market_block("fb") is None
 
@@ -1572,7 +1615,7 @@ def test_a_window_too_narrow_to_read_is_not_a_refusal(store, bus, seeded) -> Non
 def test_a_wall_over_a_list_that_still_reads_stops_the_market(store, bus, seeded) -> None:
     client = StubClient(conversations=[_conv(unread=1)], tails={"99": []}, blocked="automation")
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.market_block("fb")["cause"] == "automation"
     # Nothing past the list that carried it: no conversation was opened.
@@ -1583,7 +1626,7 @@ def test_a_pin_prompt_over_a_list_that_reads_does_not_block(store, bus, seeded) 
     """`verify` is not strong enough evidence to stop a market on, wherever it turns up."""
     client = StubClient(conversations=[_conv()], tails={"99": []}, blocked="verify")
 
-    inbox.inbox_lane(_deps(store, bus, client))
+    _tick(_deps(store, bus, client))
 
     assert store.market_block("fb") is None
 
@@ -1601,7 +1644,7 @@ def test_facebook_with_no_page_loads_left_is_not_read_and_not_blind(store, bus, 
     deps = _deps(store, bus, client)
     deps.governor = _NoRoom()
 
-    inbox.inbox_lane(deps)
+    _tick(deps)
 
     assert client.navigations == []
     assert _kinds(bus, "browser.blind") == []
@@ -1623,7 +1666,7 @@ def test_running_out_of_page_loads_partway_is_not_blindness(store, bus, seeded) 
     deps = _deps(store, bus, client, browser_blind_after=1)
 
     for _ in range(3):
-        inbox.inbox_lane(deps)
+        _tick(deps)
 
     assert _kinds(bus, "browser.blind") == []
     assert _kinds(bus, "browser.paced")

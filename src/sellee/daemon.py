@@ -40,6 +40,7 @@ from sellee import (
 from sellee.browser import chrome, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
+from sellee.browser import doorbell as browser_doorbell
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
@@ -92,6 +93,13 @@ _BROWSER_WARM_TIMEOUT_SEC = 600.0
 # account-integrity model can notice about an account. 0.3 keeps a 300s read inside 3.5-6.5 minutes,
 # which costs nobody anything: a buyer's message is found on the next read either way.
 _BROWSER_LANE_JITTER = 0.3
+# How often the doorbell listens for a marketplace ringing. One short CDP connection to Chrome's own
+# notification log, which the marketplace's page never sees, so this is only about how soon a ring
+# is heard — and the reaction time drawn after it dwarfs the interval either way.
+_DOORBELL_INTERVAL_SEC = 20.0
+# How often the ring lane checks for a visit that has come due. A no-op, without so much as a
+# browser acquisition, on every tick that has none.
+_RING_READ_INTERVAL_SEC = 15.0
 
 # Said whenever acquiring the browser had to start Chrome. Deliberately names no flow: any actor
 # that needs the browser may be the one that opens the window, and the seller only needs to know
@@ -174,6 +182,19 @@ def ensure_chrome(cfg, store, bus, should_stop=None) -> int:
         store.queue_notice(CHROME_STARTED_NOTICE)
         bus.publish("browser.chrome_launched", {"port": port})
     return port
+
+
+def doorbell_port(cfg, store, bus, should_stop=None) -> int | None:
+    """The agent's Chrome's CDP port for the doorbell, or None when Chrome cannot be made to answer.
+
+    Ensured the way every acquisition is, because a push only reaches a Chrome that is running and a
+    doorbell whose Chrome is closed hears nothing — but never through the browser factory, which
+    would start the page server and re-assert focus on every tab on each tick.
+    """
+    try:
+        return ensure_chrome(cfg, store, bus, should_stop)
+    except browser_client.BrowserUnavailable:
+        return None
 
 
 def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
@@ -715,6 +736,38 @@ def run_daemon(*, once: bool) -> int:
             name="inbox_read",
             interval_sec=float(cfg.inbox_read_interval_sec),
             func=lambda: inbox.inbox_lane(inbox_deps),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    # A marketplace that polices automation is not read on the timer above. The doorbell hears it
+    # ring without touching its page, and the ring lane pays the visit each ring asks for once a
+    # person's reaction time has passed. Its own lane state, so the two readers share no counters.
+    ring_deps = inbox.InboxDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+    )
+    scheduler.register(
+        Task(
+            name="ring_read",
+            interval_sec=_RING_READ_INTERVAL_SEC,
+            func=lambda: inbox.inbox_lane(ring_deps, trigger="notification"),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    doorbell_deps = browser_doorbell.DoorbellDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        port=lambda: doorbell_port(cfg, store, bus, stop.is_set),
+    )
+    scheduler.register(
+        Task(
+            name="doorbell",
+            interval_sec=_DOORBELL_INTERVAL_SEC,
+            func=lambda: browser_doorbell.doorbell_lane(doorbell_deps),
             jitter=_BROWSER_LANE_JITTER,
         )
     )
