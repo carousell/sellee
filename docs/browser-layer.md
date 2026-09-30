@@ -657,12 +657,31 @@ kept anywhere; the state that decides is the state that persists.
 
 `browser/sink.py` fills the `ReplySink` seam `send_reply` sends through. One call
 does the whole bracket: navigate the recorded thread URL → (bring the tab forward,
-if this market sends with a real key) → locate the composer → fill it in one go
-→ commit → stamp the intent → confirm by reading our own words back off the page.
+if this market sends with a real key) → locate the composer → type the reply →
+read the box back → commit → stamp the intent → confirm by reading our own words
+back off the page.
 
-The text is filled whole rather than typed character by character, so a reply
-containing a newline cannot commit part-way through itself and send half a
-message. Verification is strict: "no error from the key press" is not success — a
+**The reply is typed a key at a time, at a person's pace.** A composer is
+instrumented at the key level, and the gap between keydowns is something the page
+can measure: typing used to go out one tool call per line, and the page saw every
+key of a line 2.5ms after the last. `engines/typist.py` now decides the keys and
+the pauses — a speed drawn per message between 35 and 55 words a minute, a spread
+around it, longer pauses at spaces and punctuation, never a gap under 30ms, and a
+90-second ceiling that a long reply types faster to meet rather than holding the
+shared tab. Printable ASCII is pressed; a line break is Shift+Enter, because a bare
+Enter is the send; anything else (an accent, an emoji) is entered whole with
+`browser_type` and `slowly`. Never `browser_type` without `slowly`: that is a fill,
+and measured on Chrome 154 a fill replaced sixty typed characters with one.
+
+**A pressed key lands wherever focus is**, so the caret is put in the box before
+the first key and checked at every word, and the box is read back whole before
+anything commits it (`reconcile.holds_whole`, which, unlike `same_text`, forgives no
+truncation: the first part of a reply is a reply not yet typed). A box read as
+empty before typing is emptied again after a failed attempt, since whatever is in
+it is ours; one that could not be read beforehand is never emptied, because it may
+have held the seller's words. Our own whole reply already in the box, from an
+attempt that failed before its commit, is committed as it is rather than typed a
+second time. Verification is strict: "no error from the key press" is not success — a
 refused validation, a composer that silently cleared, or a chat that ignored the
 key because it thought the box was empty all look like success from outside. Only
 our own words in an outbound bubble count (`reconcile.contains_outbound`, the one

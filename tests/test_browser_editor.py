@@ -7,10 +7,12 @@ act on it — so "the form received 120" means the box ends up reading 120, not 
 
 from __future__ import annotations
 
+import random
 import threading
 
 import pytest
 
+from sellee.browser import client as client_mod
 from sellee.browser import editor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserClient, BrowserToolError
@@ -46,7 +48,9 @@ class StubEditForm:
     ):
         self._lock = threading.RLock()
         self._sleep = lambda _s: None
-        self._rng = _NoJitter()
+        self._rng = random.Random(0)
+        # Which fields received text, however it arrived.
+        self.typed_into: set = set()
         self.entry = entry
         self.marked = list(marked)
         # What the marketplace has stored, and what the open form's boxes hold. Opening the form
@@ -111,11 +115,21 @@ class StubEditForm:
                 self.selected = False
             elif arguments["key"] == "Shift+Enter":
                 self.values[self.focused] = self.values.get(self.focused, "") + "\n"
+            elif len(arguments["key"]) == 1:
+                self.values[self.focused] = self.values.get(self.focused, "") + arguments["key"]
+                self.typed_into.add(self.focused)
         elif name == "browser_type":
             self.values[step] = self.values.get(step, "") + arguments["text"]
+            self.typed_into.add(step)
         return ""
 
     def evaluate(self, function, **kwargs):
+        if function == client_mod.FOCUS_BOX_JS:
+            target = kwargs.get("target") or ""
+            self.focused = target.split("'")[1] if "'" in target else self.focused
+            return True
+        if function == client_mod.HAS_CARET_JS:
+            return True
         if function == _ADAPTER.block_wall_js:
             return self.wall
         if function == _ADAPTER.edit_entry_js:
@@ -164,8 +178,7 @@ def test_only_the_named_fields_are_touched() -> None:
     form = StubEditForm()
     _revise(form, changed=("list_price",))
     assert form.saved["title"] == "Dyson V8" and form.saved["description"] == "Works."
-    typed = {step for name, step in form.actions if name == "browser_type"}
-    assert typed == {"price"}
+    assert form.typed_into == {"price"}
 
 
 def test_a_multi_line_description_is_verified_whole() -> None:
@@ -197,7 +210,7 @@ def test_a_form_missing_a_field_it_needs_changes_nothing() -> None:
     form = StubEditForm(marked=("title", "description", "save"))
     with pytest.raises(editor.ReviseNotAttempted, match="price"):
         _revise(form)
-    assert not any(name == "browser_type" for name, _ in form.actions)
+    assert not form.typed_into
 
 
 def test_a_wall_stops_it_before_anything_is_typed() -> None:
@@ -205,7 +218,7 @@ def test_a_wall_stops_it_before_anything_is_typed() -> None:
     with pytest.raises(editor.ReviseNotAttempted, match="refusing the account") as info:
         _revise(form)
     assert info.value.retryable is True
-    assert not any(name == "browser_type" for name, _ in form.actions)
+    assert not form.typed_into
 
 
 def test_a_field_the_driver_cannot_change_is_not_attempted_at_all() -> None:

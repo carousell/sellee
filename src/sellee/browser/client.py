@@ -32,17 +32,23 @@ from contextlib import contextmanager
 
 from sellee import paths, proc_tree
 from sellee.browser import chrome
+from sellee.engines import typist
 
 log = logging.getLogger(__name__)
 
 # What is already in a text box, whether it is an input or a contenteditable.
 COMPOSER_TEXT_JS = "(el) => (el.value !== undefined ? el.value : (el.innerText || '')).trim()"
 
-# The gap between the lines of a typed message, and the ceiling on all of them together. A person
-# pauses at a line break; the ceiling is what stops a message with many of them from holding the
-# browser — and every other lane waiting on it — longer than the read-back that follows.
-TYPE_LINE_PAUSE_SEC = (0.4, 1.2)
-TYPE_MAX_PAUSE_SEC = 6.0
+# Whether the box holds the caret. A key goes wherever focus is, so this is asked before the first
+# key — putting the caret there if it is not — and again, only asking, at every word: a caret that
+# moved away mid-message cannot be put back without guessing where in the text it belongs.
+FOCUS_BOX_JS = (
+    "(el) => { const holds = () => el === document.activeElement || el.contains(document"
+    ".activeElement); if (!holds()) el.focus(); return holds(); }"
+)
+HAS_CARET_JS = "(el) => el === document.activeElement || el.contains(document.activeElement)"
+# Select everything in the focused box: Cmd on macOS, Ctrl elsewhere.
+SELECT_ALL_KEY = "ControlOrMeta+a"
 
 # The package spawned via npx when config.playwright_mcp_cmd is unset. The installer verifies the
 # spawn and warms the package, and the daemon re-warms it at startup, so this resolves from the npx
@@ -753,44 +759,53 @@ class BrowserClient:
         return str(answer or "")
 
     def type_humanly(self, target: str, element: str, text: str) -> None:
-        """Put `text` in a box the way a person would: clicked into, then typed.
+        """Put `text` in a box the way a person would: clicked into, then typed a key at a time.
 
-        Two things separate this from a fill, and both are what the marketplace is watching.
+        A chat composer is instrumented at the key level — it is how the page draws a draft and
+        emits the typing indicator its server relays to the buyer — and the gap between keydowns is
+        something it can measure. `engines/typist.py` decides the keys and a person's pauses; this
+        presses them. Each wait is measured from the previous key's dispatch, so the time a call
+        takes is taken off the wait rather than added to it.
 
-        A fill arrives as one `Input.insertText` — a single `beforeinput`/`input` pair carrying the
-        whole message and not one `keydown`. A chat composer is instrumented at the key level:
-        that is how it renders a draft and how it emits the typing indicator its server relays to
-        the buyer. A message that appears with no keystrokes and no typing indicator is a message
-        nobody typed.
-
-        And a person clicks into the box first. Typing into a composer that received no pointer
-        event, from a page that has seen none all session, is its own answer.
-
-        Typed one line at a time, `slowly` per line rather than in small chunks: `slowly` is a real
-        per-character key stream inside one tool call, so a line costs one locator resolution
-        instead of a dozen. Line breaks are sent as Shift+Enter, never a bare Enter — in most
-        composers a bare Enter *is* the send, which is what makes typing a multi-line reply a way
-        to deliver half of one. The pauses between lines are jittered and bounded: a reply must not
-        hold the browser open longer than the verify window it is followed by.
+        A pressed key carries no target: it lands wherever focus is. So the caret is put in the box
+        before the first key and checked again at every word, and a box that does not hold it
+        raises — before anything is typed, or before the rest of the message goes somewhere nobody
+        meant it to. What a keyboard cannot press is entered whole with `browser_type` and
+        `slowly`, never without it: that is a fill, and a fill replaces the box.
         """
+        keys = typist.plan(text, self._rng)
         with self._lock:
             self._click_into(target, element)
-            budget = TYPE_MAX_PAUSE_SEC
-            for index, line in enumerate(text.split("\n")):
-                if index:
-                    self.call_tool("browser_press_key", {"key": "Shift+Enter"})
-                    pause = min(self._rng.uniform(*TYPE_LINE_PAUSE_SEC), budget)
-                    budget -= pause
-                    if pause > 0:
-                        self._sleep(pause)
-                if not line:
-                    # A blank line is the Shift+Enter above and nothing else; typing "" would still
-                    # cost a locator resolution and tell the page nothing.
-                    continue
-                self.call_tool(
-                    "browser_type",
-                    {"target": target, "element": element, "text": line, "slowly": True},
-                )
+            if not self.evaluate(FOCUS_BOX_JS, target=target, element=element):
+                raise BrowserToolError(f"could not put the caret in {element}")
+            last = time.monotonic()
+            for index, key in enumerate(keys):
+                starts_word = index > 0 and keys[index - 1].key in (" ", typist.NEWLINE_KEY)
+                if starts_word and not self.evaluate(HAS_CARET_JS, target=target, element=element):
+                    raise BrowserToolError(f"{element} lost the caret partway through typing")
+                wait = key.delay_sec - (time.monotonic() - last)
+                if wait > 0:
+                    self._sleep(wait)
+                last = time.monotonic()
+                if key.insert:
+                    self.call_tool(
+                        "browser_type",
+                        {"target": target, "element": element, "text": key.key, "slowly": True},
+                    )
+                else:
+                    self.call_tool("browser_press_key", {"key": key.key})
+
+    def empty_box(self, target: str, element: str) -> None:
+        """Empty a box with a real select-all and delete, the caret put in it first.
+
+        The select-all lands wherever focus is, so a box that will not take the caret raises before
+        anything is selected — never a select-all and delete aimed at some other part of the page.
+        """
+        with self._lock:
+            if not self.evaluate(FOCUS_BOX_JS, target=target, element=element):
+                raise BrowserToolError(f"could not put the caret in {element}")
+            self.call_tool("browser_press_key", {"key": SELECT_ALL_KEY})
+            self.call_tool("browser_press_key", {"key": "Backspace"})
 
     def _click_into(self, target: str, element: str) -> None:
         """Put a pointer event on the box before typing into it. Never fails the typing.
@@ -803,7 +818,7 @@ class BrowserClient:
         `COMPOSER_DEFAULTS` already records this about the send *button* and declines to use it for
         the same reason. The pointer event is worth having — a composer that has never seen one is
         its own answer — but it is a nicety, and a nicety must not be able to stop a buyer being
-        answered. `pressSequentially` focuses the locator itself, so typing works either way.
+        answered. The caret is put in the box without it, so typing works either way.
         """
         try:
             self.call_tool("browser_click", {"target": target, "element": element})

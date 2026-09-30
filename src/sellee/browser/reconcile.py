@@ -68,6 +68,20 @@ def same_text(left: str, right: str) -> bool:
     return _same_normalized(normalize(left), normalize(right))
 
 
+def holds_whole(box_text: str, text: str) -> bool:
+    """Whether a composer holds `text`, all of it, however the page draws it.
+
+    Not `same_text`, which forgives a truncated read of a long message because a bubble may be read
+    back cut short. A box is read in full, so a box holding the first part of a reply is a reply
+    that has not been typed, and committing it would deliver half.
+    """
+    held, meant = normalize(box_text), normalize(text)
+    if held == meant:
+        return True
+    left, right = _as_drawn(held), _as_drawn(meant)
+    return bool(left) and left == right
+
+
 def _same_normalized(a: str, b: str) -> bool:
     if _same_or_truncated(a, b):
         return True
