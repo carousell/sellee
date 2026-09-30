@@ -65,6 +65,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 21),
         ("data", 22),
         ("data", 23),
+        # 24 and 25 are the hosted work, in flight on its own branch, and reserved the same way.
+        ("data", 26),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -90,6 +92,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "discovered_listings")
     assert _table_exists(data_db, "market_blocks")
     assert _table_exists(data_db, "listing_revisions")
+    assert _table_exists(data_db, "market_rings")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -114,6 +117,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         21,
         22,
         23,
+        26,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
