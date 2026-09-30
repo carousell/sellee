@@ -551,8 +551,9 @@ def run_daemon(*, once: bool) -> int:
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
     # One for the daemon's lifetime, outliving every client the factory replaces, so a recycled
-    # server cannot reset what a policed marketplace has already been shown.
-    governor = page_governor.PageGovernor(page_governor.Allowance.from_config(cfg))
+    # server cannot reset what a policed marketplace has already been shown. Its gap waits on the
+    # stop event, so a shutdown is not held up by a paced page load.
+    governor = page_governor.PageGovernor(page_governor.Allowance.from_config(cfg), sleep=stop.wait)
     browser_factory = make_browser_factory(
         cfg, store, bus, browser_holder, stop.is_set, governor=governor
     )
