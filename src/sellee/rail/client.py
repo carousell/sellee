@@ -232,6 +232,27 @@ class RailClient:
             raise RailToolError("create_promotion_url returned no promotion URL")
         return {"promotion_url": url}
 
+    def list_threads(self, cursor: str, limit: int) -> dict:
+        """The seller's relay threads changed since `cursor`, as {threads, next_cursor}. At least
+        once: a thread can come back on a later page, so the caller drops repeats."""
+        args: dict = {"limit": limit}
+        if cursor:
+            args["cursor"] = cursor
+        result = self.call_tool("list_threads", args)
+        if not isinstance(result.get("threads", []), list):
+            raise RailToolError("list_threads returned no thread list")
+        return {
+            "threads": result.get("threads") or [],
+            "next_cursor": result.get("next_cursor", ""),
+        }
+
+    def get_thread(self, thread_id: str) -> dict:
+        """One relay thread and all its messages in the order bazaar stored them."""
+        result = self.call_tool("get_thread", {"id": str(thread_id)})
+        if not isinstance(result.get("thread"), dict):
+            raise RailToolError("get_thread returned no thread")
+        return {"thread": result["thread"], "messages": result.get("messages") or []}
+
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
         200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""
