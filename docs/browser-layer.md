@@ -29,6 +29,15 @@ forwarder and a Chrome the seller starts by hand. The readiness probe
 (`chrome.is_ready`) also checks *whose* Chrome answered, not just that something served
 JSON on the port.
 
+**`navigator.webdriver` stays false.** Measured on Chrome 154, `--remote-debugging-port` on its
+own turns it true on every page, before anything has attached — so every Facebook page the agent
+loaded answered the cheapest automation check there is with yes. `launch_command` and both
+`start-chrome` scripts pass `--disable-blink-features=AutomationControlled`, which keeps it false
+with Playwright attached too, and leaves CDP working. A Chrome started before this has to be
+restarted for it to apply. The same measurements found nothing else a page could see: Chrome 154
+does not trigger the old `Runtime.enable` console-serialisation leak, and Playwright leaves no
+globals in the page.
+
 **Raising that window is macOS-only.** `browser/foreground.py` finds the agent's Chrome
 by the pid listening on its CDP port — the only thing that tells it apart from the
 seller's own Chrome — and activates that pid. `browser/window.py` is the seam over it:

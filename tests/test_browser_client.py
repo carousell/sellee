@@ -651,6 +651,13 @@ def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_t
     assert "--disable-backgrounding-occluded-windows" in chrome.launch_command(9222)
 
 
+def test_the_launch_command_does_not_announce_automation_to_every_page(xdg_tmp) -> None:
+    """Measured on Chrome 154: `--remote-debugging-port` on its own turns `navigator.webdriver`
+    true, on every page, before anything has attached — the cheapest automation check a site can
+    make, answered yes on every Facebook load. This keeps it false, and CDP keeps working."""
+    assert "--disable-blink-features=AutomationControlled" in chrome.launch_command(9222)
+
+
 def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     """A SIGKILLed Chrome leaves these behind and the next launch hangs on them."""
     from sellee import paths
