@@ -110,11 +110,11 @@ def _import_thread(deps: RelayDeps, summary: dict, messages: list, items) -> tup
     owed = _record_messages(deps, thread_id, messages)
     if not summary.get("buyer_blocked"):
         return True, not owed
-    if thread["status"] == "active":
-        deps.store.update_thread(thread_id, {"status": "closed"})
-        return True, True
-    # Held or escalated threads return to active later; the close waits for that.
-    return True, thread["status"] not in ("held", "escalated")
+    # Held or escalated threads return to their earlier status later; the close waits for that.
+    if thread["status"] in ("held", "escalated"):
+        return True, False
+    deps.store.close_blocked_relay_thread(thread_id)
+    return True, True
 
 
 def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> bool:

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from sellee.db import Database
-from sellee.store.helpers import ThreadNotFound, _now
+from sellee.store.helpers import _REPLY_THREAD_STATUSES, ThreadNotFound, _now
 
 
 class RelayMixin:
@@ -53,6 +53,23 @@ class RelayMixin:
             conn.execute(
                 "DELETE FROM relay_rereads WHERE bazaar_thread_id = ?", (bazaar_thread_id,)
             )
+
+    def close_blocked_relay_thread(self, thread_id: str) -> bool:
+        """Close a thread whose buyer bazaar blocked, from any status still open to replies.
+        False when it is held, escalated or already finished."""
+        ts = _now()
+        open_statuses = ",".join("?" * len(_REPLY_THREAD_STATUSES))
+        with self._db.transaction() as conn:
+            if not conn.execute(
+                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone():
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            cur = conn.execute(
+                "UPDATE threads SET status = 'closed', closed_ts = ?, updated_ts = ? "
+                f"WHERE thread_id = ? AND status IN ({open_statuses})",
+                (ts, ts, thread_id, *_REPLY_THREAD_STATUSES),
+            )
+            return cur.rowcount > 0
 
     def mark_relay_answered(self, thread_id: str, msg_id: str, ts: float) -> None:
         """Move the reply cursor to a buyer message bazaar shows answered, and never back."""
