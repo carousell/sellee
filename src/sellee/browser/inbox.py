@@ -50,13 +50,11 @@ _ACTIVE_STATUSES = ("active", "liaising", "agreed")
 # becomes a pass for a browser marketplace.
 _BROWSER_PASS_TYPES = ("reply", "publish", "edit")
 
-LOGGED_OUT_NOTICE = (
-    "Your {name} session is signed out, so I've stopped reading that market. Tap below and I'll "
-    "open the sign-in page in my Chrome for you — I never sign in for you."
-)
-# The notice is read on a phone, so the way out of it has to be reachable from one: the button
-# hands the job to the connect lane. The CLI still exists, and browser/connect.py names it in the
-# one case where the lane could not drive Chrome at all.
+# How many signed-out reads in a row stop a market that polices automation. That block has no
+# window and only the seller signing in lifts it, so it waits for a second look rather than being
+# spent on one: the cost is a single extra page load on a session that really has ended.
+SIGNED_OUT_CONFIRM_READS = 2
+
 # Buyers waiting in conversations we cannot place. Claims only what is evidenced — most are
 # listings the seller made outside the agent, and calling that a fault would be a wrong guess
 # about their own marketplace. No buttons on purpose, and said once; see `_report_unplaceable`.
@@ -104,6 +102,11 @@ class InboxDeps:
     # When each market last went blind, so a recovery can say how long it lasted — and, because it
     # is only set on the first failure of a run, so a market that flaps does not keep resetting it.
     blind_since: dict = field(default_factory=dict)
+    # How many list reads in a row each market refused, counted apart from `blind` because only a
+    # refusal is evidence about the market: a page that never loaded is evidence about the network.
+    refused: dict = field(default_factory=dict)
+    # And how many reads in a row saw the session signed out, toward SIGNED_OUT_CONFIRM_READS.
+    signed_out: dict = field(default_factory=dict)
     now: Callable[[], float] = time.time
     # How the lane waits, and where its randomness comes from. Injected so a test can drive the
     # read dwell without spending it.
@@ -256,10 +259,19 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     state = login.get("state")
     if state == "logged_out":
         deps.bus.publish("browser.login", {"market": market, "state": state})
+        if adapter.polices_automation:
+            # Stopped until the seller signs in, rather than looked at again every few minutes:
+            # an ended session is exactly when a marketplace like this is watching most closely.
+            seen = deps.signed_out.get(market, 0) + 1
+            deps.signed_out[market] = seen
+            if seen >= SIGNED_OUT_CONFIRM_READS:
+                deps.signed_out.pop(market, None)
+                _block_market(deps, market, blindness.CAUSE_LOGGED_OUT)
+            return
         _notify_once(
             deps,
             f"logged_out:{market}",
-            LOGGED_OUT_NOTICE.format(name=marketplaces.display_name(market)),
+            blindness.LOGGED_OUT_NOTICE.format(name=marketplaces.display_name(market)),
             controls=fastpaths.signin_controls(market),
         )
         return
@@ -268,6 +280,7 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
     # probe that flaps between logged_out and unknown re-armed on every flap, so a seller who was
     # signed out for two hours got the same message seven times instead of once.
     if state == "logged_in":
+        deps.signed_out.pop(market, None)
         _clear_notice(deps, f"logged_out:{market}")
         # The backfill half of the ask: reaches markets connected before the survey existed. The
         # probe has just run, so the login check costs nothing; the primary key makes it ask-once.
@@ -312,7 +325,16 @@ def _read_market(deps: InboxDeps, client, adapter, region: str | None) -> None:
             f"conversation list unavailable: {reason}",
             cause=blindness.CAUSE_MARKET,
             measured=measured,
+            refused=True,
         )
+        return
+    deps.refused.pop(market, None)
+    # The list carries its own wall on the success path, and a wall that went up after the check
+    # above is still a wall: this is the tick that should stop, not the one that opens every
+    # conversation under it.
+    wall = str(answer.get("blocked") or "")
+    if wall in blindness.BLOCKING_CAUSES:
+        _block_market(deps, market, wall)
         return
     rows = answer["conversations"]
     deps.ticks[market] = tick
@@ -1018,6 +1040,7 @@ def _count_blind(
     cause: str = blindness.CAUSE_MARKET,
     count: int = 0,
     measured: dict | None = None,
+    refused: bool = False,
 ) -> None:
     """Count a failed read, and raise one notice once a run of them means we are genuinely blind.
 
@@ -1029,6 +1052,11 @@ def _count_blind(
     carried into the event so a run of these is diagnosable from the log rather than from a
     screenshot. Merged under the reserved keys rather than over them, so an artifact cannot
     overwrite the market or the count by naming a field the same thing.
+
+    `refused` marks a read whose page ran its JS and answered with something other than the
+    conversations. On a market that polices automation, a run of those stops the market — but only
+    while the cause is still the market's: a window too narrow to lay the page out is the seller's
+    to widen, and costing them the market for it would be the wrong fix.
     """
     failures = deps.blind.get(market, 0) + 1
     deps.blind[market] = failures
@@ -1046,6 +1074,13 @@ def _count_blind(
         # seller on this tick rather than on the third.
         _block_market(deps, market, cause, measured)
         return
+    if refused and cause == blindness.CAUSE_MARKET and adapter and adapter.polices_automation:
+        refusals = deps.refused.get(market, 0) + 1
+        deps.refused[market] = refusals
+        if refusals >= int(deps.config.browser_blind_after):
+            deps.refused.pop(market, None)
+            _block_market(deps, market, blindness.CAUSE_REFUSED, measured)
+            return
     if failures >= int(deps.config.browser_blind_after):
         _notify_once(
             deps,
@@ -1068,15 +1103,22 @@ def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | Non
     Durable, because a wall makes a restart likely — the seller is being told something is wrong —
     and every other brake here is an in-process counter that a restart re-arms toward reading more.
 
-    The window escalates with strikes and never becomes indefinite: the seller clears it from the
-    notice, and an agent that locked itself out of a market forever on its own phrase match would be
-    a worse failure than the one being prevented.
+    The window escalates with strikes and never becomes indefinite for a wall: the seller clears it
+    from the notice, and an agent that locked itself out of a market forever on its own phrase match
+    would be a worse failure than the one being prevented. A signed-out session is the exception,
+    and the notice carries the sign-in door instead, because signing in is the only thing that ends
+    it.
     """
     adapter = market_adapters.get_adapter(market)
     deps.store.block_market(
         market,
         cause,
-        ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
+        ttl_sec=blindness.block_ttl_sec(cause, deps.store.market_block_strikes(market) + 1),
+    )
+    controls = (
+        fastpaths.signin_controls(market)
+        if cause == blindness.CAUSE_LOGGED_OUT
+        else fastpaths.check_again_controls(market)
     )
     told = deps.store.report_market_block_once(
         market,
@@ -1086,7 +1128,7 @@ def _block_market(deps: InboxDeps, market: str, cause: str, measured: dict | Non
             where=window.where(),
             verify_notice=adapter.verify_notice if adapter else "",
         ),
-        fastpaths.check_again_controls(market),
+        controls,
     )
     deps.bus.publish(
         "browser.blocked",

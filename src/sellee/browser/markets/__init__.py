@@ -125,6 +125,12 @@ class MarketAdapter:
     # 0 means no width is too narrow. Only a floor — it never claims a read failed, it only
     # reframes one that already did.
     min_usable_width_px: int = 0
+    # Whether this marketplace watches accounts for automation. On one that does, a signed-out
+    # session or a run of refused reads stops every lane on it durably (the `logged_out` and
+    # `refused` causes in blindness.py) instead of being re-probed on a timer — knocking on an
+    # account that has been shown the door is what gets it checkpointed. Off, a signed-out market
+    # keeps being probed and picks itself back up when the seller signs in.
+    polices_automation: bool = False
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -178,6 +184,7 @@ FACEBOOK = MarketAdapter(
     empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
     verify_notice=facebook.VERIFY_NOTICE,
     min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
+    polices_automation=True,
 )
 
 _ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}

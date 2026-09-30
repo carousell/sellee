@@ -472,6 +472,27 @@ failed reads earns is decided by *how far the read got*, and the copy of each cl
 | the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice carries a **Sign in on desktop** button |
 | `BrowserUnavailable` | the browser can't be driven at all; browser markets paused, the rail unaffected |
 
+**A marketplace that polices automation is stopped, not knocked on.** Facebook
+(`MarketAdapter.polices_automation`) watches accounts for automated behaviour, and the shape
+that got this seller's account flagged twice was the lane loading a page that had
+already shown it the door, every few minutes, for hours. So on such a market every one of these
+writes a durable `market_blocks` row, which every lane honours, and says so once:
+
+| what the read found | block | lifted by |
+| --- | --- | --- |
+| a wall: `/checkpoint`, or the automation warning | 6h, 24h, then 72h on repeat | a probe that comes back signed in and unwalled (**Check again**) |
+| the login probe says `logged_out` on two reads in a row | no window: nothing a timer does can sign an account back in, which is also why one look is not enough | the sign-in probe (**Sign in on desktop**) |
+| `browser_blind_after` list reads in a row answered `{error}`, in a window wide enough to lay the page out | 6h, 24h, then 72h on repeat | the same probe as a wall |
+
+A page that never loaded is never a refusal: a navigation that times out is the laptop asleep or
+the network gone, which is evidence about our side, and it only counts toward the blind notice. A
+window too narrow to read is not one either — it is the seller's to widen. Facebook ends a session
+in place, too: the address asked for comes back as a "Continue as" profile chooser with no password
+field, which the login probe reads as `logged_out` by the sign-up link only a signed-out visitor is
+offered and is actually rendering (`tests/integration/test_facebook_login_probe.py`). A refusal
+shares the strike count with the walls, so a wall after one rests the account longer — the error
+runs toward a longer rest, never a shorter one.
+
 **None of them tells the seller to go and look at Chrome**, and that is load-bearing rather than
 tidy. Reaching the blind counter *proves* Chrome answered its CDP probe on that tick — every
 acquisition runs `ensure_chrome`, and a Chrome that is genuinely down raises `BrowserUnavailable`
@@ -868,9 +889,10 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 
 Lane counters (tick count, consecutive failures, which notices are already
 queued) live **in process** on purpose: they are all counters, and a restart
-re-arming them errs toward reading more rather than less. The exception is the
+re-arming them errs toward reading more rather than less. The exceptions are the
 unplaceable-conversations notice, whose "already said" is about people rather
-than about this process, and is a table.
+than about this process, and the market block above, where reading more after a
+restart is exactly the wrong direction. Both are tables.
 
 ## Adding a marketplace
 
