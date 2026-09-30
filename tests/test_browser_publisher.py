@@ -511,3 +511,64 @@ def test_a_wall_that_goes_up_mid_form_stops_before_the_commit() -> None:
 
     assert "next" not in _steps(client)
     assert "publish" not in _steps(client)
+
+
+# --- what a failure before the commit says --------------------------------------------------------
+
+
+def test_a_create_form_that_will_not_open_is_nothing_attempted() -> None:
+    """Nothing exists yet, so it is safe to try again — never the bare error the fan-out would
+    have had to treat as "a listing may exist"."""
+
+    class WillNotOpen(StubForm):
+        def navigate_visible(self, url):
+            raise BrowserToolError("net::ERR_TIMED_OUT")
+
+    with pytest.raises(publisher.PublishNotAttempted) as caught:
+        _publish(WillNotOpen())
+
+    assert caught.value.retryable is True
+
+
+def test_running_out_of_page_loads_is_passed_through_untouched() -> None:
+    """Being paced is not an attempt at all, and the fan-out spends nothing on it — so it is not
+    dressed up as one."""
+    from sellee.browser.governor import PagesSpent
+
+    class Paced(StubForm):
+        def navigate_visible(self, url):
+            raise PagesSpent("spent")
+
+    with pytest.raises(PagesSpent):
+        _publish(Paced())
+
+
+def test_a_next_button_that_moved_before_it_was_pressed_submitted_nothing() -> None:
+    """The click refuses to press a control that moved, which is proof nothing was submitted —
+    not the "may have gone through" every other failure past this point has to be."""
+    from sellee.browser.client import ControlMoved
+
+    class NextMoves(StubForm):
+        def click(self, target, element):
+            if element == "Next":
+                raise ControlMoved("Next moved before it could be clicked")
+            return super().click(target, element)
+
+    with pytest.raises(publisher.PublishNotAttempted) as caught:
+        _publish(NextMoves())
+
+    assert caught.value.retryable is True
+
+
+def test_a_publish_button_that_moved_is_still_treated_as_maybe_published() -> None:
+    """Past Next the form may already have made the listing, so the conservative answer stands."""
+    from sellee.browser.client import ControlMoved
+
+    class PublishMoves(StubForm):
+        def click(self, target, element):
+            if element == "Publish":
+                raise ControlMoved("Publish moved before it could be clicked")
+            return super().click(target, element)
+
+    with pytest.raises(publisher.PublishUnverified):
+        _publish(PublishMoves())

@@ -323,6 +323,11 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 photos=photos,
                 listings_url=marketplaces.market_url(market, "my_listings", region),
             )
+    except page_governor.PagesSpent:
+        # Another lane spent the page loads between the check above and the drive. Nothing was
+        # attempted, so nothing is counted; the pair is simply still eligible.
+        deps.bus.publish("browser.paced", {"market": market, "item_id": item["id"]})
+        return
     except publisher.PublishNotAttempted as exc:
         # A terminal refusal spends the pair's shot immediately; a transient one gets
         # `MAX_DRIVE_ATTEMPTS` goes and then spends it too.

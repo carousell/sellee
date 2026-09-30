@@ -149,6 +149,12 @@ class BrowserToolError(BrowserError):
     """
 
 
+class ControlMoved(BrowserToolError):
+    """A control that moved between the cursor setting off and the press, so nothing was pressed.
+    Proof of that, unlike most tool failures, which a caller past an irreversible step cannot tell
+    from a click that landed."""
+
+
 class BrowserDetached(BrowserError):
     """The server is answering us and has lost Chrome.
 
@@ -855,7 +861,7 @@ class BrowserClient:
             self._travel(aim, viewport)
             again = self._box(target, element)
             if again is None or not again[0].contains(*aim):
-                raise BrowserToolError(f"{element} moved before it could be clicked")
+                raise ControlMoved(f"{element} moved before it could be clicked")
             self.call_tool(
                 "browser_mouse_click_xy",
                 {"x": aim[0], "y": aim[1], "delay": pointer.press_ms(self._rng)},

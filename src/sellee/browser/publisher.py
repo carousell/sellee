@@ -24,8 +24,9 @@ from urllib.parse import urljoin
 
 from sellee import paths
 from sellee.browser import formfill, reconcile
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
-from sellee.browser.client import BrowserError
+from sellee.browser.client import BrowserError, ControlMoved
 from sellee.browser.formfill import COMMIT_SETTLE_SEC, STEP_SETTLE_SEC
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,22 @@ def publish(
         raise PublishNotAttempted(f"{adapter.market} has no publish selectors")
     pause = sleep or formfill.sleep
 
+    try:
+        _fill_in(client, adapter, item, create_url, photos, pause)
+    except (PublishNotAttempted, page_governor.PagesSpent):
+        # Already the answer. Being paced is not an attempt at all, and the fan-out spends nothing
+        # on it, so it is passed through as it is rather than dressed up as one.
+        raise
+    except BrowserError as exc:
+        # Nothing has been submitted yet, so whatever failed, trying again is safe.
+        raise PublishNotAttempted(f"could not fill in the form: {exc}", retryable=True) from exc
+
+    # Everything past here may have created a listing.
+    return _commit(client, adapter, item, listings_url, pause)
+
+
+def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> None:
+    """Everything on the safe side of the commit: open the form, fill it, read it back."""
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
     _refuse_at_a_wall(client, adapter)
@@ -91,9 +108,6 @@ def publish(
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
     _refuse_paid_promotion(client, adapter)
     _verify_form(client, adapter, item)
-
-    # Everything past here may have created a listing.
-    return _commit(client, adapter, item, listings_url, pause)
 
 
 def _open_all_fields(client, adapter, pause) -> None:
@@ -248,6 +262,13 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
         )
     try:
         client.click(adapter.publish_target("next"), "Next")
+    except ControlMoved as exc:
+        # Refused before the press, so nothing was submitted: the one failure here that is proof
+        # rather than doubt.
+        raise PublishNotAttempted(f"nothing was submitted: {exc}", retryable=True) from exc
+    except BrowserError as exc:
+        raise PublishUnverified(f"the publish may have gone through: {exc}") from exc
+    try:
         pause(COMMIT_SETTLE_SEC)
         after = client.evaluate(adapter.publish_fields_js) or {}
         if "publish" not in (after.get("marked") or []):
