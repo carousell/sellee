@@ -20,7 +20,8 @@ class FakeRelay:
         self.threads: dict = {}
         self.messages: dict = {}
         self.down = False
-        self.calls: list = []
+        # Threads whose get_thread fails, as a thread bazaar cannot serve would.
+        self.broken: set = set()
         # Resend the last thread already paged past, as bazaar's 30-second overlap does.
         self.repeat_tail = True
         self._clock = 1_800_000_000.0
@@ -55,6 +56,12 @@ class FakeRelay:
         )
         self.threads[thread_id]["updated"] = ts
 
+    def finish_send(self, thread_id, msg_id):
+        """An agent reply's owed send completes. bazaar moves no thread stamp for this."""
+        for message in self.messages[thread_id]:
+            if message["id"] == msg_id:
+                message["pending_send"] = False
+
     def block(self, thread_id):
         self.threads[thread_id]["buyer_blocked"] = True
         self.threads[thread_id]["updated"] = self.tick()
@@ -84,6 +91,8 @@ class FakeRelay:
 
     def get_thread(self, args: dict) -> dict:
         thread_id = args["id"]
+        if thread_id in self.broken:
+            raise LookupError(thread_id)
         return {"thread": self._summary(thread_id), "messages": list(self.messages[thread_id])}
 
 
@@ -102,12 +111,14 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = body["params"]["name"]
         args = body["params"].get("arguments") or {}
-        relay.calls.append((name, args))
         handler = {"list_threads": relay.list_threads, "get_thread": relay.get_thread}.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}
         else:
-            result = {"structuredContent": handler(args)}
+            try:
+                result = {"structuredContent": handler(args)}
+            except LookupError:
+                result = {"isError": True, "content": [{"type": "text", "text": "not found"}]}
         self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
 
     def _send(self, status, obj):

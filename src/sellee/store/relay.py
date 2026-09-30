@@ -1,4 +1,4 @@
-"""The relay lane's state: its list_threads cursor, and the reply cursor a relayed answer moves."""
+"""The relay lane's state: its cursor, the threads it reads again, and the reply cursor it moves."""
 
 from __future__ import annotations
 
@@ -22,6 +22,36 @@ class RelayMixin:
                 "ON CONFLICT (id) DO UPDATE SET cursor = excluded.cursor, "
                 "updated_ts = excluded.updated_ts",
                 (cursor, _now()),
+            )
+
+    def relay_rereads(self) -> list[dict]:
+        """The relay threads the lane reads again this tick, oldest first."""
+        rows = self._db.query(
+            "SELECT bazaar_thread_id, listing_id, placed FROM relay_rereads ORDER BY added_ts"
+        )
+        return [
+            {
+                "id": r["bazaar_thread_id"],
+                "listing_id": r["listing_id"],
+                "placed": bool(r["placed"]),
+            }
+            for r in rows
+        ]
+
+    def keep_relay_reread(self, bazaar_thread_id: str, listing_id: str, *, placed: bool) -> None:
+        """Remember a thread to read again. `placed` is False while no item has its listing."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO relay_rereads (bazaar_thread_id, listing_id, placed, added_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (bazaar_thread_id) DO UPDATE SET "
+                "listing_id = excluded.listing_id, placed = excluded.placed",
+                (bazaar_thread_id, listing_id, int(placed), _now()),
+            )
+
+    def drop_relay_reread(self, bazaar_thread_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM relay_rereads WHERE bazaar_thread_id = ?", (bazaar_thread_id,)
             )
 
     def mark_relay_answered(self, thread_id: str, msg_id: str, ts: float) -> None:

@@ -76,11 +76,7 @@ def test_a_crash_before_the_cursor_is_stored_doubles_nothing(store, bus, fake, i
     fake.add_message("t1", "m1", "buyer", "Still there?")
     deps = _deps(store, bus, fake)
     real = store.set_relay_cursor
-
-    def crash(_cursor):
-        raise RuntimeError("killed before the cursor was stored")
-
-    monkeypatch.setattr(store, "set_relay_cursor", crash)
+    monkeypatch.setattr(store, "set_relay_cursor", _raise)
     with pytest.raises(RuntimeError):
         relay.relay_lane(deps)
     monkeypatch.setattr(store, "set_relay_cursor", real)
@@ -228,3 +224,72 @@ def test_property_every_message_is_stored_once_across_crashes_and_refetches(
 
 def _raise(_cursor):
     raise RuntimeError("killed before the cursor was stored")
+
+
+def test_a_thread_whose_item_is_linked_later_is_imported_then(store, bus, fake):
+    made = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Is it still available?")
+    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    relay.relay_lane(deps)
+    assert store.get_thread("carousell-ai:t1") is None
+
+    store.record_listing_url(made["id"], "carousell-ai", f"{_WEB}/listing/L1")
+    relay.relay_lane(deps)
+
+    assert store.get_thread("carousell-ai:t1")["item_id"] == made["id"]
+    assert _waiting(store) == {"carousell-ai:t1"}
+
+
+def test_an_agent_reply_that_finishes_sending_later_answers_the_buyer(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Would you take 60?")
+    fake.add_message("t1", "m2", "agent", "70 is my lowest.", pending_send=True, client_id="c1")
+    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    relay.relay_lane(deps)
+    assert _waiting(store) == {"carousell-ai:t1"}
+
+    fake.finish_send("t1", "m2")
+    relay.relay_lane(deps)
+
+    assert _waiting(store) == set()
+
+
+def test_a_block_on_a_held_thread_closes_it_once_released(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "hi")
+    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    store.hold_thread("carousell-ai:t1", "seller asked to wait")
+    fake.block("t1")
+    relay.relay_lane(deps)
+    relay.relay_lane(deps)
+    assert store.get_thread("carousell-ai:t1")["status"] == "held"
+
+    store.release_thread("carousell-ai:t1")
+    relay.relay_lane(deps)
+
+    assert store.get_thread("carousell-ai:t1")["status"] == "closed"
+
+
+def test_a_thread_that_fails_to_read_holds_back_no_other_thread(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "first")
+    fake.add_thread("t2", listing_id="L1", email="t2@reply.carousell.ai")
+    fake.add_message("t2", "m2", "buyer", "second")
+    fake.broken.add("t1")
+    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
+    deps = _deps(store, bus, fake)
+
+    relay.relay_lane(deps)
+
+    assert [m["msg_id"] for m in store.get_thread("carousell-ai:t2")["messages"]] == ["m2"]
+    fake.broken.clear()
+    relay.relay_lane(deps)
+    relay.relay_lane(deps)
+    assert [m["msg_id"] for m in store.get_thread("carousell-ai:t1")["messages"]] == ["m1"]
