@@ -26,7 +26,7 @@ from typing import Callable
 from urllib.parse import urljoin
 
 from sellee import marketplaces, settings
-from sellee.browser import adopt, inbox, reconcile
+from sellee.browser import adopt, doorbell, inbox, reconcile
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
@@ -179,7 +179,7 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     adapter = market_adapters.get_adapter(market)
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
-    with client.exclusive():
+    with client.exclusive(), doorbell.visiting(client, adapter):
         client.prepare_background()
         client.navigate(url)
         login = client.evaluate(adapter.login_js) or {}

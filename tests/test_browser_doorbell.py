@@ -261,3 +261,57 @@ def test_a_recent_ring_means_the_doorbell_is_not_silent(store, bus, xdg_tmp) -> 
     doorbell.doorbell_lane(deps)
 
     assert _texts(store) == []
+
+
+# --- leaving the page once the visit is over ------------------------------------------------------
+
+
+class _Tab:
+    def __init__(self, fail=False):
+        self.urls: list = []
+        self.fail = fail
+
+    def navigate(self, url):
+        if self.fail:
+            from sellee.browser.client import BrowserToolError
+
+            raise BrowserToolError("gone")
+        self.urls.append(url)
+
+
+def test_a_visit_to_a_market_that_rings_ends_with_the_tab_stepping_away() -> None:
+    """Every acquisition tells the tab it is focused and visible. Left on Facebook, it is someone
+    sitting in front of Messenger, and a marketplace may hold back a push from a person it thinks
+    is already looking — which would silence the doorbell exactly when a buyer writes."""
+    from sellee.browser import markets as market_adapters
+
+    tab = _Tab()
+    with doorbell.visiting(tab, market_adapters.get_adapter("fb")):
+        tab.navigate("https://www.facebook.com/messages/")
+
+    assert tab.urls[-1] == doorbell.AWAY_URL
+
+
+def test_a_market_read_on_a_timer_is_left_where_it_is() -> None:
+    from sellee.browser import markets as market_adapters
+
+    tab = _Tab()
+    with doorbell.visiting(tab, market_adapters.get_adapter("carousell")):
+        tab.navigate("https://www.carousell.sg/inbox/")
+
+    assert doorbell.AWAY_URL not in tab.urls
+
+
+def test_stepping_away_is_done_even_when_the_visit_failed_and_never_fails_it() -> None:
+    from sellee.browser import markets as market_adapters
+    from sellee.browser.client import BrowserToolError
+
+    tab = _Tab()
+    with pytest.raises(BrowserToolError):
+        with doorbell.visiting(tab, market_adapters.get_adapter("fb")):
+            raise BrowserToolError("the read failed")
+    assert tab.urls == [doorbell.AWAY_URL]
+
+    broken = _Tab(fail=True)
+    with doorbell.visiting(broken, market_adapters.get_adapter("fb")):
+        pass  # a tab that will not leave must not turn a finished visit into a failed one

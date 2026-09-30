@@ -588,6 +588,14 @@ market that rings several times a day on its own has not rung at all in three da
 permission must be the seller's own Allow: DevTools' `Browser.grantPermissions` lasts only as long
 as the connection that granted it, measured on Chrome 154.
 
+**Once a visit is over, the tab steps away** (`doorbell.visiting`, around the ring visit, the reply
+send, the survey look, the adoption, the driven publish and the driven edit). Every acquisition
+tells the tab it is focused and visible, which is what lets it be read in the background — and a
+tab left on Facebook like that is someone sitting in front of Messenger. A marketplace may hold
+back a push from a person it thinks is already looking, which would silence the doorbell exactly
+when a buyer writes. `about:blank` is not a page of the marketplace, and its push subscription
+lives in its service worker, not the tab.
+
 What a ring was is the adapter's (`ring_kind`), and today every Facebook ring counts as a message —
 the agent opens Messenger when Facebook notifies it, as the seller would. It narrows only from
 notifications Facebook has actually been seen to send.

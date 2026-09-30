@@ -22,8 +22,8 @@ import logging
 import time
 
 from sellee import marketplaces
+from sellee.browser import doorbell, reconcile, selectors
 from sellee.browser import markets as market_adapters
-from sellee.browser import reconcile, selectors
 from sellee.browser.client import BrowserError
 
 log = logging.getLogger(__name__)
@@ -118,7 +118,7 @@ class BrowserReplySink:
             raise SendNotAttempted(f"{market!r} has asked us to stop, so nothing is being sent")
 
         try:
-            with self._client.exclusive():
+            with self._client.exclusive(), doorbell.visiting(self._client, adapter):
                 self._client.navigate(url)
                 if _needs_the_foreground(adapter):
                     # A real key event lands only on the active tab, so this market's send needs the

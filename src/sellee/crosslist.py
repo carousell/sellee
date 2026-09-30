@@ -41,9 +41,9 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
+from sellee.browser import doorbell, publisher, reconcile
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
-from sellee.browser import publisher, reconcile
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
@@ -314,7 +314,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])
     try:
         client = deps.browser_factory()
-        with client.exclusive():
+        with client.exclusive(), doorbell.visiting(client, adapter):
             outcome = publisher.publish(
                 client,
                 adapter,

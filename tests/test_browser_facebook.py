@@ -12,7 +12,7 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee.browser import blindness, inbox
+from sellee.browser import blindness, doorbell, inbox
 from sellee.browser.client import BrowserToolError, BrowserTransportError
 from sellee.browser.markets import facebook as fb_market
 from sellee.channel import fastpaths
@@ -62,6 +62,7 @@ class StubClient:
         self.tails = tails or {}
         self.click_fails = click_fails
         self.navigations: list = []
+        self.stepped_away = 0
         self.prepared = 0
         self.clicks: list = []
         self.calls: list = []
@@ -101,6 +102,12 @@ class StubClient:
         self.prepared += 1
 
     def navigate(self, url):
+        if url == doorbell.AWAY_URL:
+            # Leaving Facebook once a visit is over: not a page of the marketplace, so not counted
+            # among its loads.
+            self.stepped_away += 1
+            self.url = url
+            return
         self.navigations.append(url)
         self.calls.append(("navigate", url))
         if self.navigate_error is not None:
@@ -444,6 +451,8 @@ class SurveyStub:
         self.prepared += 1
 
     def navigate(self, url):
+        if url == doorbell.AWAY_URL:
+            return  # leaving Facebook once the look is over, not a page of it
         self.navigations.append(url)
 
     def evaluate(self, function, **kwargs):
@@ -1671,3 +1680,12 @@ def test_running_out_of_page_loads_partway_is_not_blindness(store, bus, seeded) 
     assert _kinds(bus, "browser.blind") == []
     assert _kinds(bus, "browser.paced")
     assert store.market_block("fb") is None
+
+
+def test_the_tab_steps_away_from_facebook_once_a_visit_is_over(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+
+    _tick(_deps(store, bus, client))
+
+    assert client.stepped_away == 1
+    assert client.url == doorbell.AWAY_URL

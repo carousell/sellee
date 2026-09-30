@@ -31,12 +31,14 @@ import logging
 import random
 import time
 import urllib.parse
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, paths, settings
 from sellee.browser import chrome, window
 from sellee.browser import markets as market_adapters
+from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
 
 log = logging.getLogger(__name__)
@@ -55,6 +57,8 @@ PERMISSION_CHECK_SEC = 600.0
 SILENT_AFTER_SEC = 3 * 86400.0
 # What Chrome records an allowed site notification permission as.
 _ALLOWED = 1
+# Where the agent's tab goes once a visit to a market that rings is over.
+AWAY_URL = "about:blank"
 
 DEAF_NOTICE = (
     "I can't hear {name} ringing right now, so I'm not opening your {name} messages — I only look "
@@ -230,3 +234,31 @@ def _say_once(deps: DoorbellDeps, key: str, text: str) -> None:
     deps.notified[key] = True
     deps.store.queue_notice(text)
     deps.bus.publish("doorbell.notice", {"condition": key})
+
+
+def step_away(client, adapter) -> None:
+    """Take the agent's tab off a market read when it rings, now the visit is over.
+
+    Every acquisition tells the tab it is focused and visible, which is what lets it be read in the
+    background — and a page left like that is, to the marketplace, someone sitting in front of it.
+    A marketplace may hold back a push from a person it thinks is already looking, which would
+    silence the doorbell exactly when a buyer writes. Leaving is not a page of the marketplace, and
+    its push subscription lives in its service worker, not in the tab. Best-effort: a tab that will
+    not leave must never turn a finished visit into a failed one.
+    """
+    if adapter is None or adapter.read_trigger != "notification":
+        return
+    try:
+        client.navigate(AWAY_URL)
+    except BrowserError:
+        log.debug("could not take the tab off %s", adapter.market, exc_info=True)
+
+
+@contextmanager
+def visiting(client, adapter):
+    """Around any flow that drives a market read when it rings: steps away afterwards, however the
+    flow ended."""
+    try:
+        yield
+    finally:
+        step_away(client, adapter)

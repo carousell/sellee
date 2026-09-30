@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sellee import marketplaces, settings
-from sellee.browser import editor
+from sellee.browser import doorbell, editor
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
@@ -153,7 +153,7 @@ def _drive(deps: ReviseDeps, revision: dict, item: dict) -> None:
     url = item["listing_urls"][market]
     try:
         client = deps.browser_factory()
-        with client.exclusive():
+        with client.exclusive(), doorbell.visiting(client, adapter):
             outcome = editor.revise(
                 client, adapter, item, listing_url=url, changed=revision["changed"]
             )

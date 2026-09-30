@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
-from sellee.browser import blindness, reconcile, window
+from sellee.browser import blindness, doorbell, reconcile, window
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
@@ -225,7 +225,7 @@ def inbox_lane(deps: InboxDeps, *, trigger: str = "timer") -> None:
         visit_began = deps.now()
         read = False
         try:
-            with client.exclusive():
+            with client.exclusive(), doorbell.visiting(client, adapter):
                 read = _read_market(deps, client, adapter, region)
         except page_governor.PagesSpent:
             # Ran out partway through the tick. What was read is stored; the rest waits.
