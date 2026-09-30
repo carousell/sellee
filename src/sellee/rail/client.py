@@ -50,6 +50,10 @@ class RailToolError(RailError):
     """The rail accepted the request but the tool call itself failed."""
 
 
+class RailToolRefused(RailToolError):
+    """The rail itself answered the call with an error, rather than an answer we could not read."""
+
+
 class RailClient:
     def __init__(
         self,
@@ -100,7 +104,7 @@ class RailClient:
             raise RailNetworkError("rail response is not a JSON-RPC object")
         if envelope.get("error"):
             message = str(envelope["error"].get("message", "rail error"))
-            raise RailToolError(message)
+            raise RailToolRefused(message)
         result = envelope.get("result")
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
@@ -119,7 +123,7 @@ class RailClient:
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
-            raise RailToolError(_text_content(result) or f"{name} failed")
+            raise RailToolRefused(_text_content(result) or f"{name} failed")
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
             return structured

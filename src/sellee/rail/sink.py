@@ -1,10 +1,10 @@
 """The relay send: a reply to a carousell.ai email thread, through bazaar's reply_to_thread.
 
-bazaar stores one reply per `client_message_id`, and the id sent is the send intent's own, written
-before the first call. So a timeout or a 5xx is retried under that id, and bazaar's answer to the
-retry is the same message. A refusal (a blocked buyer, an unknown thread) stored nothing, so it is
-final and its intent is dropped. A send still failing after its retries may or may not be stored;
-it is left unverified for the relay lane to settle once bazaar shows the reply sent.
+bazaar stores one reply per `client_message_id`, and answers success only once every copy it owes
+is sent. The id is the send intent's own, written before the first call, so any failure short of a
+refusal is retried under it. A refusal on the first attempt stored nothing, so its intent is
+dropped; after an attempt that may have stored the reply, the send is left unverified for the relay
+lane to settle once bazaar shows it sent.
 """
 
 from __future__ import annotations
@@ -13,14 +13,14 @@ import logging
 import time
 
 from sellee.browser.sink import SendUnverified, SinkError
-from sellee.rail.client import RailError, RailNetworkError, RailToolError
+from sellee.rail.client import RailAuthError, RailError, RailNetworkError, RailToolRefused
 
 log = logging.getLogger(__name__)
 
 # Pauses before each retry; one more attempt than pauses.
 _RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
 
-# The text bazaar's MCP transport gives a 5xx or a 503, which carry no client copy.
+# The text bazaar's MCP transport gives a 5xx, which carries no client copy.
 _TRANSIENT_TEXT = ("internal server error", "service unavailable", "gateway timeout", "bad gateway")
 
 
@@ -28,12 +28,15 @@ class SendRefused(SinkError):
     """bazaar refused the reply and stored nothing. Final; the intent is dropped."""
 
 
-def _transient(exc: Exception) -> bool:
+def _refused(exc: RailError) -> bool:
+    """Whether bazaar answered with a refusal, as opposed to a failure that may have stored it."""
+    if isinstance(exc, RailAuthError):
+        return True
     if isinstance(exc, RailNetworkError):
-        # No status means no answer at all: a timeout or a dropped connection.
-        return exc.status is None or exc.status >= 500
-    if isinstance(exc, RailToolError):
-        return str(exc).strip().lower().startswith(_TRANSIENT_TEXT)
+        return exc.status is not None and exc.status < 500
+    if isinstance(exc, RailToolRefused):
+        return not str(exc).strip().lower().startswith(_TRANSIENT_TEXT)
+    # A response we could not read is not a refusal: the call may have stored the reply.
     return False
 
 
@@ -57,12 +60,15 @@ class RelayReplySink:
             try:
                 result = self._client.reply_to_thread(native, text, intent_id)
             except RailError as exc:
-                if not _transient(exc):
+                if _refused(exc) and failure is None:
                     self._store.drop_refused_intent(intent_id)
                     self._publish(thread, "refused", str(exc))
                     raise SendRefused(str(exc)) from exc
-                log.info("relay reply failed (%s); retrying under the same id", exc)
                 failure = exc
+                if _refused(exc):
+                    # An earlier attempt may have stored it, so this is unknown, not refused.
+                    break
+                log.info("relay reply failed (%s); retrying under the same id", exc)
                 continue
             self._publish(thread, "sent", None)
             return {"msg_id": result["message_id"]}

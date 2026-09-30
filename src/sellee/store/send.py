@@ -53,7 +53,8 @@ UNCHECKED_SEND_CONTEXT = (
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
-# Markets whose replies are not browser sends, so the reply cap has nothing to guard.
+# Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
+# carousell.ai replies per buyer itself.
 UNPACED_MARKETS = frozenset({marketplaces.RAIL})
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
@@ -102,8 +103,9 @@ class SendMixin:
         interactive: bool = False,
     ) -> dict:
         """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
-        one transaction. A wait/quiet/unverified_open verdict records no pacing action and no
-        intent — a blocked reply leaves nothing behind for a sweep to re-drive. Returns the verdict
+        one transaction; an unpaced market skips the reserve. A wait/quiet/unverified_open verdict
+        records no pacing action and no intent — a blocked reply leaves nothing behind for a sweep
+        to re-drive. Returns the verdict
         and, on go, the intent id; the caller performs the sink send outside this transaction."""
         now = now if now is not None else _now()
         with self._db.transaction() as conn:

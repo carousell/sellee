@@ -92,6 +92,35 @@ def test_a_5xx_or_503_is_retried_with_the_same_id(make_ctx, store, bus, waiting,
     assert [m["id"] for m in waiting.messages["t1"] if m["author"] == "agent"] == ["r1"]
 
 
+def test_a_success_without_a_message_id_is_retried_not_refused(make_ctx, store, bus, waiting):
+    waiting.reply_script = ["no_id"]
+
+    res = _send(make_ctx, store, bus, waiting)
+
+    assert res["status"] == "sent"
+    assert len(waiting.reply_calls) == 2
+    assert len([m for m in waiting.messages["t1"] if m["author"] == "agent"]) == 1
+
+
+def test_a_refusal_after_an_uncertain_attempt_keeps_the_intent(make_ctx, store, bus, waiting):
+    """The first attempt may have stored the reply, so a later refusal proves nothing about it."""
+    waiting.reply_script = ["busy"]
+    original = waiting.reply_to_thread
+
+    def block_after_first(args):
+        if waiting.reply_calls:
+            waiting.threads["t1"]["buyer_blocked"] = True
+        return original(args)
+
+    waiting.reply_to_thread = block_after_first
+
+    res = _send(make_ctx, store, bus, waiting)
+
+    assert res["status"] == "send_unverified"
+    assert _intent_statuses(store) == ["sent_unverified"]
+    assert len(waiting.reply_calls) == 2
+
+
 def test_a_timeout_is_retried_with_the_same_id(make_ctx, store, bus, waiting):
     waiting.reply_script = ["slow"]
     waiting.slow_sec = 0.6
