@@ -1352,3 +1352,46 @@ def test_the_composer_can_be_read_before_typing(make_client) -> None:
     client = make_client({"tools": {"browser_evaluate": {"result": "half a draft"}}})
 
     assert client.composer_text("textarea", "box") == "half a draft"
+
+
+# --- every page load is the governor's first ------------------------------------------------------
+
+
+class _Governor:
+    def __init__(self, refuse=False):
+        self.loads: list = []
+        self.refuse = refuse
+
+    def before_load(self, url):
+        if self.refuse:
+            from sellee.browser.governor import PagesSpent
+
+            raise PagesSpent("spent")
+        self.loads.append(url)
+
+
+def test_a_navigation_asks_the_governor_before_it_loads(make_client) -> None:
+    gov = _Governor()
+    client = make_client(
+        {"tools": {"browser_tabs": {"text": "ok"}, "browser_navigate": {"text": "ok"}}},
+        governor=gov,
+    )
+
+    client.navigate("https://www.facebook.com/messages/")
+
+    assert gov.loads == ["https://www.facebook.com/messages/"]
+    assert [c["tool"] for c in tool_calls(client)].count("browser_navigate") == 1
+
+
+def test_a_refused_load_never_reaches_the_page(make_client) -> None:
+    from sellee.browser.governor import PagesSpent
+
+    client = make_client(
+        {"tools": {"browser_tabs": {"text": "ok"}, "browser_navigate": {"text": "ok"}}},
+        governor=_Governor(refuse=True),
+    )
+
+    with pytest.raises(PagesSpent):
+        client.navigate("https://www.facebook.com/messages/")
+
+    assert "browser_navigate" not in [c["tool"] for c in tool_calls(client)]

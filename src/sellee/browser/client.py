@@ -292,8 +292,12 @@ class BrowserClient:
         startup_timeout_sec: float = STARTUP_TIMEOUT_SEC,
         sleep=time.sleep,
         rng=None,
+        governor=None,
     ):
         self._command = list(command)
+        # Asked before every page load, including the ones recovery makes: each is a load the
+        # marketplace sees. See browser/governor.py; None for a client nothing paces.
+        self._governor = governor
         self._timeout = timeout_sec
         self._startup_timeout = startup_timeout_sec
         # How typing paces itself. Injected so a test can prove the shape of a send without
@@ -609,7 +613,7 @@ class BrowserClient:
         try:
             self.ensure_tab()
             if self._last_url is not None:
-                self._call_once("browser_navigate", {"url": self._last_url})
+                self._load(self._last_url, once=True)
         finally:
             self._reopening = False
 
@@ -637,7 +641,7 @@ class BrowserClient:
     def navigate(self, url: str) -> None:
         with self._lock:
             self.ensure_tab()
-            self.call_tool("browser_navigate", {"url": url})
+            self._load(url)
             self._last_url = url
             if self._follow:
                 self._follow_page(url)
@@ -705,6 +709,15 @@ class BrowserClient:
         except BrowserError:
             log.debug("could not bring our tab forward for watch mode", exc_info=True)
             self.ensure_tab()
+            self._load(url)
+
+    def _load(self, url: str, *, once: bool = False) -> None:
+        """Load `url` in our tab, once the governor has let it through."""
+        if self._governor is not None:
+            self._governor.before_load(url)
+        if once:
+            self._call_once("browser_navigate", {"url": url})
+        else:
             self.call_tool("browser_navigate", {"url": url})
 
     def ensure_tab(self) -> None:

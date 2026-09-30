@@ -189,6 +189,44 @@ def test_a_cap_above_the_ceiling_clamps_down(xdg_tmp) -> None:
     assert load().max_actions_per_hour == 60
 
 
+def test_the_policed_page_allowances_clamp_down_and_the_gap_clamps_up(xdg_tmp) -> None:
+    """Tighten-only in both directions: more loads is looser, and so is a shorter gap."""
+    _write_config(
+        {"policed_page_gap_sec": 1, "policed_pages_per_hour": 500, "policed_pages_per_day": 9999}
+    )
+    cfg = load()
+    assert cfg.policed_page_gap_sec == 6.0
+    assert cfg.policed_pages_per_hour == 60
+    assert cfg.policed_pages_per_day == 400
+
+
+def test_a_slower_pace_on_a_policed_market_is_obeyed(xdg_tmp) -> None:
+    _write_config(
+        {"policed_page_gap_sec": 40, "policed_pages_per_hour": 10, "policed_pages_per_day": 50}
+    )
+    cfg = load()
+    assert (cfg.policed_page_gap_sec, cfg.policed_pages_per_hour, cfg.policed_pages_per_day) == (
+        40.0,
+        10,
+        50,
+    )
+
+
+@pytest.mark.parametrize(
+    "key, value",
+    [
+        ("policed_page_gap_sec", 0),
+        ("policed_page_gap_sec", "fast"),
+        ("policed_pages_per_hour", 0),
+        ("policed_pages_per_day", 2.5),
+    ],
+)
+def test_a_malformed_policed_allowance_is_refused(xdg_tmp, key, value) -> None:
+    _write_config({key: value})
+    with pytest.raises(ConfigError, match=key):
+        load()
+
+
 def test_a_human_paced_reply_delay_is_allowed(xdg_tmp) -> None:
     """A longer delay is a tighter one. It used to be silently clamped to 3s, so an operator
     asking for a pause a person could plausibly have taken got one no person would."""
