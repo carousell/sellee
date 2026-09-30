@@ -460,8 +460,18 @@ CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHRO
 
 # Is the seller logged in? Three-state, and it must never answer logged_out on thin evidence: a
 # false logged_out tells a signed-in seller to re-authenticate and stops their market. Only the
-# password field proves logged_out; only a signed-in-only control (the chat rail) proves logged_in —
-# a logged-out visitor gets the marketplace nav too, so that is deliberately not the marker.
+# password field or a sign-up link proves logged_out; only a signed-in-only control (the chat rail)
+# proves logged_in — a logged-out visitor gets the marketplace nav too, so that is deliberately not
+# the marker.
+#
+# The sign-up link is for the way Facebook actually ends a session: the address asked for comes
+# back as its "Continue as" profile chooser, served in place, with no password field until a
+# profile is picked. Only a signed-out visitor is offered an account to create: across every
+# Facebook page the agent saved while signed in — thousands, home feeds and selling pages without a
+# chat rail among them — none carried one, and every chooser did. It is asked after the signed-in
+# markers on purpose, since a buyer can paste that link into a conversation and a conversation only
+# renders on a signed-in page. And only a link the page is rendering counts: a menu built ahead of
+# being opened is in the DOM all the same, and `querySelector` does not care what is on screen.
 LOGIN_JS = """() => {
   try {
     if (document.querySelector('input[name="pass"], input[type="password"]')) {
@@ -470,6 +480,10 @@ LOGIN_JS = """() => {
     const rail = !!document.querySelector('a[href*="/messages/t/"]');
     const compose = !!document.querySelector('[aria-label="New message"], [role="textbox"]');
     if (rail || compose) return { state: 'logged_in' };
+    const signUp = document.querySelectorAll('a[href^="/reg/"], a[href*="facebook.com/reg/"]');
+    if (Array.from(signUp).some((a) => a.getClientRects().length > 0)) {
+      return { state: 'logged_out' };
+    }
     const text = (document.body && document.body.innerText) || '';
     if (/\\bLog in to Facebook\\b|\\bLog Into Facebook\\b/i.test(text)) {
       return { state: 'logged_out' };
