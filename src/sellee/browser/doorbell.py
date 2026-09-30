@@ -53,7 +53,10 @@ WAKE_SETTLE_SEC = 300.0
 DEAF_AFTER = 6
 # How often the permission is read off Chrome's profile; a file read, not a question to Chrome.
 PERMISSION_CHECK_SEC = 600.0
-# Facebook rings a few times a day by itself. This long listening with no ring at all is not quiet.
+# How long listening with no ring at all counts as the doorbell failing rather than a quiet spell.
+# Facebook rings by itself: this seller's own Chrome profile recorded it showing between one and
+# five notifications a day on each of ten days in September, buyers or not, so three silent days
+# is not a quiet listing.
 SILENT_AFTER_SEC = 3 * 86400.0
 # What Chrome records an allowed site notification permission as.
 _ALLOWED = 1
@@ -184,19 +187,47 @@ def _deaf(deps: DoorbellDeps, market: str) -> None:
 
 def notifications_allowed(market: str) -> bool | None:
     """Whether Chrome's profile lets this market show notifications, or None when this machine
-    cannot read that profile (a container, whose Chrome is on the seller's own desktop)."""
+    cannot read that profile (a container, whose Chrome is on the seller's own desktop).
+
+    A rule for the site wins over one for every subdomain, which wins over the profile's default,
+    as Chrome resolves them; an unset default is Chrome's own, which asks rather than allows.
+    """
     prefs = paths.browser_profile_dir() / "Default" / "Preferences"
     try:
         data = json.loads(prefs.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    content = (data.get("profile") or {}).get("content_settings") or {}
-    rules = (content.get("exceptions") or {}).get("notifications") or {}
-    for host in _hosts(market):
-        rule = rules.get(f"https://{host}:443,*") or {}
-        if rule.get("setting") == _ALLOWED:
-            return True
-    return False
+    profile = data.get("profile") or {}
+    rules = ((profile.get("content_settings") or {}).get("exceptions") or {}).get(
+        "notifications"
+    ) or {}
+    best = None
+    for pattern, rule in rules.items():
+        if not isinstance(rule, dict):
+            continue
+        rank = max((_specificity(pattern, host) for host in _hosts(market)), default=0)
+        if rank and (best is None or rank > best[0]):
+            best = (rank, rule.get("setting"))
+    if best is not None:
+        return best[1] == _ALLOWED
+    default = (profile.get("default_content_setting_values") or {}).get("notifications")
+    return default == _ALLOWED
+
+
+def _specificity(pattern: str, host: str) -> int:
+    """How closely a content-setting pattern names `host`: 3 for the site itself, 2 for a rule over
+    its domain's subdomains, 1 for every site, 0 for another site."""
+    primary = str(pattern).split(",", 1)[0].strip().lower()
+    if primary == "*":
+        return 1
+    for scheme in ("https://", "http://"):
+        if primary.startswith(scheme):
+            primary = primary[len(scheme) :]
+    primary = primary.split(":", 1)[0]
+    if primary.startswith("[*.]"):
+        domain = primary[len("[*.]") :]
+        return 2 if host == domain or host.endswith("." + domain) else 0
+    return 3 if primary == host else 0
 
 
 def _check_permission(deps: DoorbellDeps, market: str, now: float) -> None:

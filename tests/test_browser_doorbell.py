@@ -330,3 +330,40 @@ def test_a_blocked_market_is_not_also_called_silent(store, bus, xdg_tmp) -> None
     doorbell.doorbell_lane(deps)
 
     assert not [t for t in _texts(store) if "haven't heard" in t]
+
+
+# --- the shapes Chrome records a permission in ----------------------------------------------------
+
+
+def _raw_preferences(exceptions: dict, default: int | None = None) -> None:
+    profile = paths.browser_profile_dir() / "Default"
+    profile.mkdir(parents=True, exist_ok=True)
+    content: dict = {"exceptions": {"notifications": exceptions}}
+    prefs: dict = {"profile": {"content_settings": content}}
+    if default is not None:
+        prefs["profile"]["default_content_setting_values"] = {"notifications": default}
+    (profile / "Preferences").write_text(json.dumps(prefs))
+
+
+def test_a_rule_for_every_facebook_subdomain_counts(xdg_tmp) -> None:
+    _raw_preferences({"[*.]facebook.com,*": {"setting": 1}})
+
+    assert doorbell.notifications_allowed("fb") is True
+
+
+def test_notifications_allowed_for_every_site_count(xdg_tmp) -> None:
+    _raw_preferences({}, default=1)
+
+    assert doorbell.notifications_allowed("fb") is True
+
+
+def test_a_block_on_facebook_wins_over_allowing_every_site(xdg_tmp) -> None:
+    _raw_preferences({"https://www.facebook.com:443,*": {"setting": 2}}, default=1)
+
+    assert doorbell.notifications_allowed("fb") is False
+
+
+def test_a_rule_for_another_site_is_not_facebooks(xdg_tmp) -> None:
+    _raw_preferences({"https://www.notfacebook.com:443,*": {"setting": 1}})
+
+    assert doorbell.notifications_allowed("fb") is False

@@ -196,3 +196,16 @@ def test_a_port_with_nothing_on_it_cannot_be_asked() -> None:
 
 def test_nothing_rang_is_an_empty_list_not_none(fake_cdp) -> None:
     assert chrome.recorded_notifications(fake_cdp.port) == []
+
+
+def test_a_chrome_page_is_not_the_tab_listened_from(fake_cdp) -> None:
+    """A tab on a browser page may not offer the log; an ordinary one does."""
+    fake_cdp.http.targets = [
+        {"id": "c1", "type": "page", "url": "chrome://newtab/"},
+        {"id": "t1", "type": "page", "url": "about:blank"},
+    ]
+
+    chrome.recorded_notifications(fake_cdp.port)
+
+    sessions = {s for m, s in fake_cdp.calls if m.startswith("BackgroundService.")}
+    assert sessions == {"s-t1"}
