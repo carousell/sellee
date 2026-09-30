@@ -351,3 +351,28 @@ def test_a_block_on_a_held_negotiation_closes_it_once_released(store, bus, fake,
     relay.relay_lane(deps)
 
     assert store.get_thread("carousell-ai:t1")["status"] == "closed"
+
+
+def test_a_hold_landing_mid_read_keeps_the_block_pending(store, bus, fake, item, monkeypatch):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "hi")
+    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    fake.block("t1")
+    record = relay._record_messages
+
+    def hold_mid_read(*args):
+        owed = record(*args)
+        store.hold_thread("carousell-ai:t1", "seller asked to wait")
+        return owed
+
+    monkeypatch.setattr(relay, "_record_messages", hold_mid_read)
+    relay.relay_lane(deps)
+    monkeypatch.setattr(relay, "_record_messages", record)
+    assert store.get_thread("carousell-ai:t1")["status"] == "held"
+
+    store.release_thread("carousell-ai:t1")
+    relay.relay_lane(deps)
+
+    assert store.get_thread("carousell-ai:t1")["status"] == "closed"
