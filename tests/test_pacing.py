@@ -231,3 +231,29 @@ def test_fast_mode_holds_until_then() -> None:
 
     assert cfg.mode == "fast"
     assert cfg.cap == 60
+
+
+# --- how long after a ring the conversation is opened ---------------------------------------------
+
+
+def test_a_reaction_is_never_quicker_or_slower_than_a_person_manages() -> None:
+    import random
+
+    from sellee.engines import pacing as engine
+
+    delays = [engine.reaction_delay_sec(random.Random(seed), 90.0) for seed in range(500)]
+
+    assert min(delays) >= engine.REACTION_FLOOR_SEC
+    assert max(delays) <= engine.REACTION_CEILING_SEC
+
+
+def test_a_reaction_centres_on_the_median_and_is_not_a_constant() -> None:
+    import random
+    import statistics
+
+    from sellee.engines import pacing as engine
+
+    delays = [engine.reaction_delay_sec(random.Random(seed), 90.0) for seed in range(500)]
+
+    assert 70.0 <= statistics.median(delays) <= 110.0
+    assert statistics.pstdev(delays) > 20.0

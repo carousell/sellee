@@ -120,6 +120,9 @@ class Config:
     policed_page_gap_sec: float = 15.0
     policed_pages_per_hour: int = 30
     policed_pages_per_day: int = 150
+    # How long, at the median, after a marketplace that polices automation rings before the agent
+    # opens the conversation. Drawn per ring and kept between 20 seconds and six minutes.
+    ring_reaction_sec: float = 90.0
     # How long the send read-back keeps looking for its own bubble before giving up and calling the
     # send unverified. A chat that commits the message to its server and re-renders afterwards is
     # slower than it looks, and every send that runs out of window here becomes work for the settle
@@ -355,6 +358,12 @@ def _validate(raw: dict) -> Config:
         if not _is_real_number(gap) or gap <= 0:
             raise ConfigError(f"policed_page_gap_sec must be a positive number, got {gap!r}")
         values["policed_page_gap_sec"] = max(float(gap), POLICED_PAGE_GAP_FLOOR_SEC)
+
+    if "ring_reaction_sec" in raw:
+        reaction = raw["ring_reaction_sec"]
+        if not _is_real_number(reaction) or reaction <= 0:
+            raise ConfigError(f"ring_reaction_sec must be a positive number, got {reaction!r}")
+        values["ring_reaction_sec"] = float(reaction)
 
     for key, ceiling in (
         ("policed_pages_per_hour", POLICED_PAGES_PER_HOUR_CEILING),
