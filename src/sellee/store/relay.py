@@ -56,20 +56,23 @@ class RelayMixin:
 
     def close_blocked_relay_thread(self, thread_id: str) -> bool:
         """Close a thread whose buyer bazaar blocked, from any status still open to replies.
-        False when it is held, escalated or already finished."""
+        False while it is held or escalated, so the close waits for its release."""
         ts = _now()
-        open_statuses = ",".join("?" * len(_REPLY_THREAD_STATUSES))
         with self._db.transaction() as conn:
-            if not conn.execute(
-                "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
-            ).fetchone():
+            row = conn.execute(
+                "SELECT status FROM threads WHERE thread_id = ?", (thread_id,)
+            ).fetchone()
+            if not row:
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
-            cur = conn.execute(
-                "UPDATE threads SET status = 'closed', closed_ts = ?, updated_ts = ? "
-                f"WHERE thread_id = ? AND status IN ({open_statuses})",
-                (ts, ts, thread_id, *_REPLY_THREAD_STATUSES),
-            )
-            return cur.rowcount > 0
+            if row["status"] in ("held", "escalated"):
+                return False
+            if row["status"] in _REPLY_THREAD_STATUSES:
+                conn.execute(
+                    "UPDATE threads SET status = 'closed', closed_ts = ?, updated_ts = ? "
+                    "WHERE thread_id = ?",
+                    (ts, ts, thread_id),
+                )
+            return True
 
     def mark_relay_answered(self, thread_id: str, msg_id: str, ts: float) -> None:
         """Move the reply cursor to a buyer message bazaar shows answered, and never back."""
