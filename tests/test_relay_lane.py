@@ -295,9 +295,7 @@ def test_a_thread_that_fails_to_read_holds_back_no_other_thread(store, bus, fake
     assert [m["msg_id"] for m in store.get_thread("carousell-ai:t1")["messages"]] == ["m1"]
 
 
-def test_the_reply_lane_holds_relay_threads_until_they_have_a_send_path(
-    store, bus, fake, item, monkeypatch
-):
+def test_the_reply_lane_claims_relay_threads(store, bus, fake, item, monkeypatch):
     from sellee.browser import inbox as browser_inbox
 
     fake.add_thread("t1", listing_id="L1")
@@ -312,8 +310,7 @@ def test_the_reply_lane_holds_relay_threads_until_they_have_a_send_path(
     monkeypatch.setattr(store, "enqueue_reply_pass", enqueue)
     browser_inbox.reply_lane(store=store, bus=bus, config=Config())
 
-    assert "carousell-ai" in skipped
-    assert "carousell" not in skipped
+    assert "carousell-ai" not in skipped
 
 
 def _set_status(store, thread_id, status):

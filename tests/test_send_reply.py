@@ -68,7 +68,7 @@ def test_a_browser_that_cannot_start_returns_no_send_path_recording_nothing(
     _sell_thread(store)
     ctx = make_ctx("attended", config=_FAST)
 
-    def _no_browser():
+    def _no_browser(_market):
         raise BrowserUnavailable("Chrome is not running on port 9222")
 
     ctx.reply_sink = _no_browser

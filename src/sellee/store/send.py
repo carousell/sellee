@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING
 
+from sellee import marketplaces
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
 from sellee.store.helpers import ThreadNotFound, _new_id, _now
@@ -51,6 +52,9 @@ UNCHECKED_SEND_CONTEXT = (
     "buyer until this is settled, and the message is never re-sent without the seller's answer."
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
+
+# Markets whose replies are not browser sends, so the reply cap has nothing to guard.
+UNPACED_MARKETS = frozenset({marketplaces.RAIL})
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
 # the composer, `sent_unverified` was taken by the page and could not be read back, and
@@ -121,6 +125,14 @@ class SendMixin:
             if unverified:
                 return {"verdict": "unverified_open", "delay_sec": 0.0}
             marketplace = thread["market"]
+            if marketplace in UNPACED_MARKETS:
+                return {
+                    "verdict": "go",
+                    "delay_sec": 0.0,
+                    "intent_id": self._new_intent_in_txn(
+                        conn, thread_id, in_msg_id, text, kind, now
+                    ),
+                }
             cutoff = now - pacing_engine.WINDOW_SECONDS
             rows = conn.execute(
                 "SELECT ts FROM pacing_actions WHERE marketplace = ? AND ts > ?",
@@ -139,18 +151,21 @@ class SendMixin:
                 "DELETE FROM pacing_actions WHERE marketplace = ? AND ts <= ?",
                 (marketplace, cutoff),
             )
-            intent_id = _new_id("intent")
-            conn.execute(
-                "INSERT INTO send_intents "
-                "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-                (intent_id, thread_id, in_msg_id, text, kind, now),
-            )
             return {
                 "verdict": "go",
                 "delay_sec": verdict["delay_sec"],
-                "intent_id": intent_id,
+                "intent_id": self._new_intent_in_txn(conn, thread_id, in_msg_id, text, kind, now),
             }
+
+    def _new_intent_in_txn(self, conn, thread_id, in_msg_id, text, kind, now) -> str:
+        intent_id = _new_id("intent")
+        conn.execute(
+            "INSERT INTO send_intents "
+            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (intent_id, thread_id, in_msg_id, text, kind, now),
+        )
+        return intent_id
 
     def commit_reply(
         self,
@@ -162,6 +177,7 @@ class SendMixin:
         kind: str,
         pass_id: str | None = None,
         now: float | None = None,
+        msg_id: str | None = None,
     ) -> dict:
         """Transaction B: fold the outbound row (a deterministic msg_id from the intent id makes a
         retried commit a UNIQUE no-op), advance the cursor over the handled inbound, mark the intent
@@ -182,15 +198,18 @@ class SendMixin:
                 kind=kind,
                 pass_id=pass_id,
                 now=now,
+                msg_id=msg_id,
             )
 
     def _commit_reply_in_txn(
-        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now
+        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now, msg_id=None
     ) -> dict:
         """Transaction B's body, callable from inside a larger transaction — shared with the settle
         path, so "a reply is committed" has exactly one definition wherever the confirmation came
         from (the send's own read-back, or a later lane finding the bubble on the page)."""
-        out_msg_id = f"out|{intent_id}"
+        # A market that names its own messages is recorded under that name, so the read lane
+        # finding the same message later adds nothing.
+        out_msg_id = msg_id or f"out|{intent_id}"
         conn.execute(
             "INSERT OR IGNORE INTO thread_messages "
             "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
@@ -280,6 +299,16 @@ class SendMixin:
                 (_now(), intent_id),
             )
 
+    def drop_refused_intent(self, intent_id: str) -> None:
+        """Remove a send the market refused outright. Nothing was delivered, so, like a blocked
+        verdict, it leaves nothing for the sweep to ask the seller about."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM send_intents WHERE intent_id = ? "
+                "AND status IN ('pending', 'sent_unverified')",
+                (intent_id,),
+            )
+
     def unsettled_intents(self, max_attempts: int = MAX_VERIFY_ATTEMPTS) -> list[dict]:
         """Every send whose fate is still unknown and still worth looking for.
 
@@ -319,7 +348,9 @@ class SendMixin:
             ).fetchone()
         return row["verify_attempts"] if row else 0
 
-    def settle_intent_from_read(self, intent_id: str, now: float | None = None) -> dict | None:
+    def settle_intent_from_read(
+        self, intent_id: str, now: float | None = None, msg_id: str | None = None
+    ) -> dict | None:
         """Commit an unsettled intent because its message was just found on the page.
 
         The whole point of the self-settling loop: the reply is folded exactly as a verified send
@@ -353,6 +384,7 @@ class SendMixin:
                 # so the cursor falls back to the message the intent itself named.
                 pass_id=None,
                 now=now,
+                msg_id=msg_id,
             )
             resolved = self._resolve_escalations_in_txn(
                 conn,
