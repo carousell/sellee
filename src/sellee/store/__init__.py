@@ -56,6 +56,7 @@ from sellee.store.helpers import (
 from sellee.store.items import ItemsMixin
 from sellee.store.negotiation import NegotiationMixin
 from sellee.store.passes import PassesMixin
+from sellee.store.relay import RelayMixin
 from sellee.store.revisions import RevisionsMixin
 from sellee.store.scam import ScamMixin
 from sellee.store.send import SendMixin
@@ -104,6 +105,7 @@ class Store(
     ChannelMixin,
     SettingsMixin,
     SurveyMixin,
+    RelayMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
 
@@ -174,6 +176,7 @@ _SCOPE_GUARDED = {
     "revise_item": (("item_id", "item"),),
     "queue_listing_revision": (("item_id", "item"),),
     "record_listing_url": (("item_id", "item"),),
+    "mark_relay_answered": (("thread_id", "thread"),),
     "get_floor": (("item_id", "item"),),
     "set_floor": (("item_id", "item"),),
     "get_budget": (("want_id", "want"),),
@@ -236,6 +239,7 @@ _SCOPE_MISS_NOTFOUND = {
     "archive_listing_url": ("item", ItemNotFound),
     "adopt_discovered_listing": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
+    "mark_relay_answered": ("thread", ThreadNotFound),
     "record_inbound": ("thread", ThreadNotFound),
     "qa_add": ("item", ItemNotFound),
     "update_thread": ("thread", ThreadNotFound),
