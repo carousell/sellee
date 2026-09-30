@@ -178,7 +178,6 @@ _SCOPE_GUARDED = {
     "revise_item": (("item_id", "item"),),
     "queue_listing_revision": (("item_id", "item"),),
     "record_listing_url": (("item_id", "item"),),
-    "mark_relay_answered": (("thread_id", "thread"),),
     "get_floor": (("item_id", "item"),),
     "set_floor": (("item_id", "item"),),
     "get_budget": (("want_id", "want"),),
@@ -193,6 +192,7 @@ _SCOPE_GUARDED = {
     # adoption that mints its own item is never refused.
     "adopt_discovered_listing": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
+    "mark_relay_answered": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "record_inbound": (("thread_id", "thread"),),

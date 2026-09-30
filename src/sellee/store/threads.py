@@ -228,8 +228,8 @@ class ThreadsMixin:
             raise StoreError(
                 f"unknown or non-writable thread field(s): {', '.join(sorted(unknown))}; "
                 f"writable: {', '.join(self._THREAD_WRITABLE)} (transcript/cursor advance via "
-                "send_reply/record_manual_reply; held via hold_thread; sale states via the "
-                "confirm flows)"
+                "send_reply/record_manual_reply/mark_relay_answered; held via hold_thread; "
+                "sale states via the confirm flows)"
             )
         if not fields:
             raise StoreError("no fields to update")
