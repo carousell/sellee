@@ -72,6 +72,11 @@ def adopt_phase(deps) -> None:
         # accepted; reconnecting resumes it. Not `_fail`: an attempt would retire a good row
         # while the market is off.
         return
+    if deps.store.market_block(market):
+        # The marketplace has told the account to stop, and reading a listing page is driving it.
+        # Left accepted with no attempt spent, the same as a disconnected market: a block that
+        # lifts in six hours must not be what retires the seller's listings.
+        return
     if row["attempts"] >= ADOPT_MAX_ATTEMPTS:
         # Retired here rather than filtered out of the query: a row whose last attempt committed
         # but whose retirement did not would be unreachable forever, holding up the batch summary.

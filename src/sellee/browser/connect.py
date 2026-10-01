@@ -299,7 +299,10 @@ def _settle_block(deps: ConnectDeps, market: str, name: str, state: str, wall: s
         return True
     deps.store.clear_market_block(market)
     deps.bus.publish("browser.unblocked", {"market": market, "cause": block["cause"]})
-    deps.store.queue_notice(UNBLOCKED_NOTICE.format(name=name))
+    if block["cause"] in blindness.BLOCKING_CAUSES:
+        # Only a wall had something to say it no longer shows. A block that was only a signed-out
+        # session or a run of refusals is answered in full by the signed-in notice that follows.
+        deps.store.queue_notice(UNBLOCKED_NOTICE.format(name=name))
     return True
 
 

@@ -11,7 +11,8 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee.browser import connect
+from sellee import marketplaces
+from sellee.browser import blindness, connect
 from sellee.browser import markets as market_adapters
 from sellee.channel import fastpaths
 from sellee.config import Config
@@ -509,6 +510,37 @@ def test_a_pin_wall_mid_recovery_neither_clears_nor_escalates(store, bus) -> Non
     assert after["cause"] == "automation" == before["cause"]
     assert after["strikes"] == before["strikes"]
     assert after["expires_ts"] == before["expires_ts"]
+
+
+def _signed_out_fb(store, mode=CONNECT_MODE_PROBE):
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", blindness.CAUSE_LOGGED_OUT, ttl_sec=None)
+    store.request_market_connect("fb", mode)
+
+
+def test_signing_back_in_lifts_a_signed_out_block_with_one_message(store, bus) -> None:
+    """Nothing warned the account, so there is no warning to say has gone — "signed in" is the
+    whole of the news, and saying it twice in two wordings reads as two events."""
+    _signed_out_fb(store)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="")))
+
+    assert store.market_block("fb") is None
+    texts = [n["text"] for n in _notices(store)]
+    assert texts == [connect.SIGNED_IN_NOTICE.format(name=marketplaces.display_name("fb"))]
+
+
+def test_a_sign_in_page_still_showing_leaves_the_signed_out_block_on(store, bus) -> None:
+    _signed_out_fb(store, mode=CONNECT_MODE_OPEN)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_out", wall="")))
+
+    block = store.market_block("fb")
+    assert block is not None
+    assert block["cause"] == blindness.CAUSE_LOGGED_OUT
+    assert block["expires_ts"] is None
 
 
 def test_a_probe_reaches_a_blocked_market_at_all(store, bus) -> None:

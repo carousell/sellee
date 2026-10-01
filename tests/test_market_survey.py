@@ -914,6 +914,21 @@ def test_a_listing_capped_mid_crash_is_still_retired(store, bus, monkeypatch, xd
     assert any(n["text"].startswith("Done with") for n in store.list_queued_notices())
 
 
+def test_adoption_waits_while_the_market_is_blocked(store, bus) -> None:
+    """A market that told the account to stop is not driven by any lane, and reading a listing page
+    is driving it. The row stays accepted with no attempt spent, for when the block lifts."""
+    _accepted(store, bus)
+    store.block_market(_MARKET, "automation", ttl_sec=3600.0)
+    client = StubClient(detail=_detail())
+
+    adopt.adopt_phase(_deps(store, bus, client))
+
+    assert client.navigations == []
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["status"] == "accepted"
+    assert row["attempts"] == 0
+
+
 def test_a_partial_listings_read_never_closes_the_survey(store, bus) -> None:
     """Asking on a half-read list would close the ask-once survey, so the seller would be asked
     about some of their listings and never about the rest."""

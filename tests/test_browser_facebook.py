@@ -13,8 +13,9 @@ import pytest
 from tests.conftest import seed_setting
 
 from sellee.browser import blindness, inbox
-from sellee.browser.client import BrowserToolError
+from sellee.browser.client import BrowserToolError, BrowserTransportError
 from sellee.browser.markets import facebook as fb_market
+from sellee.channel import fastpaths
 from sellee.config import Config
 
 _THREAD = "https://www.facebook.com/messages/t/99/"
@@ -39,8 +40,16 @@ class StubClient:
         click_fails=False,
         blocked=None,
         wall="",
+        navigate_error=None,
+        list_width=756,
     ):
         self.login = login
+        # Raised by every navigation: a page that never loads, which is the laptop asleep or the
+        # network gone rather than anything Facebook said.
+        self.navigate_error = navigate_error
+        # The window width a failing list read reports. The default is under Facebook's floor, so a
+        # refusal reads as the window's fault unless a test says the window was wide enough.
+        self.list_width = list_width
         self.conversations = conversations
         self.list_error = list_error
         self.blocked = blocked
@@ -94,6 +103,8 @@ class StubClient:
     def navigate(self, url):
         self.navigations.append(url)
         self.calls.append(("navigate", url))
+        if self.navigate_error is not None:
+            raise self.navigate_error
         self.url = url
 
     def call_tool(self, name, arguments):
@@ -129,11 +140,20 @@ class StubClient:
                 "deep" if function == fb_market.CONVERSATIONS_LIST_JS else "recent"
             )
             if self.list_error is not None:
-                answer = {"error": self.list_error, "rows": 0, "width": 756, "visible": True}
+                answer = {
+                    "error": self.list_error,
+                    "rows": 0,
+                    "width": self.list_width,
+                    "visible": True,
+                }
                 if self.blocked:
                     answer["blocked"] = self.blocked
                 return answer
-            return {"conversations": list(self.conversations)}
+            answer = {"conversations": list(self.conversations)}
+            if self.blocked:
+                # The folder artifact carries its wall on the success path too.
+                answer["blocked"] = self.blocked
+            return answer
         if function == fb_market.PRODUCT_ID_JS:
             self.product_id_reads += 1
             return {"product_id": self.product_id, "visible": True}
@@ -1366,3 +1386,199 @@ def test_a_clean_read_does_not_clear_a_block(store, bus, seeded) -> None:
     inbox.inbox_lane(deps)
 
     assert store.market_block("fb") is not None
+
+
+# --- an account Facebook has signed out, or keeps refusing ----------------------------------------
+#
+# On 2026-09-30 Facebook ended the session by serving its profile chooser in place of Messenger. The
+# probe could not call that signed out, the folder read refused, and the lane loaded Facebook every
+# few minutes for eleven hours until the seller paused it. On 2026-09-09 the same shape ended at a
+# checkpoint. Knocking on an account that has been shown the door is the thing to stop doing.
+
+_REFUSED = "the Marketplace folder is not open"
+
+
+def test_a_signed_out_facebook_stops_until_the_seller_signs_back_in(store, bus, seeded) -> None:
+    client = StubClient(login="logged_out", conversations=[_conv()])
+    deps = _deps(store, bus, client)
+
+    for _ in range(4):
+        inbox.inbox_lane(deps)
+
+    block = store.market_block("fb")
+    assert block["cause"] == blindness.CAUSE_LOGGED_OUT
+    # No window lifts it. Only the sign-in probe the seller asks for does.
+    assert block["expires_ts"] is None
+    # The look and the one that confirms it, and then nothing: a signed-out account is not probed
+    # again on a timer.
+    assert len(client.navigations) == inbox.SIGNED_OUT_CONFIRM_READS
+    assert client.list_reads == []
+
+
+def test_one_signed_out_read_is_not_yet_a_block(store, bus, seeded) -> None:
+    """The block has no window and only a sign-in lifts it, so it is not spent on one look."""
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+    assert store.count_queued_notices() == 0
+
+
+def test_a_signed_in_read_between_two_signed_out_ones_starts_the_count_again(
+    store, bus, seeded
+) -> None:
+    client = StubClient(login="logged_out", conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    client.login = "logged_in"
+    inbox.inbox_lane(deps)
+    client.login = "logged_out"
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+
+
+def test_an_unknown_read_between_two_signed_out_ones_still_confirms(store, bus, seeded) -> None:
+    """Unknown is no answer, not a sign-in, so it neither confirms nor starts the count again."""
+    client = StubClient(login="logged_out", conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client)
+
+    inbox.inbox_lane(deps)
+    client.login = "unknown"
+    inbox.inbox_lane(deps)
+    client.login = "logged_out"
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb")["cause"] == blindness.CAUSE_LOGGED_OUT
+
+
+def test_the_seller_is_offered_the_sign_in_door_once(store, bus, seeded) -> None:
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    for _ in range(4):
+        inbox.inbox_lane(deps)
+
+    notices = store.claim_queued_notices(10)
+    assert len(notices) == 1
+    assert "signed out" in notices[0]["text"]
+    assert notices[0]["controls"] == [[fastpaths.SIGN_IN_LABEL, "fb:connectmkt"]]
+
+
+def test_a_run_of_refusals_stops_facebook_instead_of_knocking(store, bus, seeded) -> None:
+    client = StubClient(list_error=_REFUSED, list_width=1200)
+    deps = _deps(store, bus, client, browser_blind_after=3)
+
+    for _ in range(3):
+        inbox.inbox_lane(deps)
+    assert store.market_block("fb")["cause"] == blindness.CAUSE_REFUSED
+
+    loads = len(client.navigations)
+    inbox.inbox_lane(deps)
+    assert len(client.navigations) == loads
+
+
+def test_the_refusal_block_is_said_once_and_does_not_promise_to_keep_trying(
+    store, bus, seeded
+) -> None:
+    deps = _deps(
+        store, bus, StubClient(list_error=_REFUSED, list_width=1200), browser_blind_after=3
+    )
+
+    for _ in range(3):
+        inbox.inbox_lane(deps)
+
+    texts = [n["text"] for n in store.claim_queued_notices(10)]
+    assert len(texts) == 1
+    assert "stopped" in texts[0]
+    assert "keep trying" not in texts[0]
+
+
+def test_a_refusal_block_rests_the_account_and_a_repeat_rests_it_longer(store, bus, seeded) -> None:
+    deps = _deps(
+        store, bus, StubClient(list_error=_REFUSED, list_width=1200), browser_blind_after=3
+    )
+
+    for _ in range(3):
+        inbox.inbox_lane(deps)
+    first = store.market_block("fb")
+    assert first["expires_ts"] - first["blocked_ts"] == pytest.approx(blindness.block_window_sec(1))
+
+    # The window runs out with nobody having tapped Check again, and the market refuses again.
+    with store._db.transaction() as conn:  # noqa: SLF001 — arranging an expired block
+        conn.execute("UPDATE market_blocks SET expires_ts = 0 WHERE market = 'fb'")
+    for _ in range(3):
+        inbox.inbox_lane(deps)
+    second = store.market_block("fb")
+    assert second["expires_ts"] - second["blocked_ts"] == pytest.approx(
+        blindness.block_window_sec(2)
+    )
+    assert blindness.block_window_sec(2) > blindness.block_window_sec(1)
+
+
+def test_fewer_refusals_than_the_threshold_are_not_a_block(store, bus, seeded) -> None:
+    deps = _deps(
+        store, bus, StubClient(list_error=_REFUSED, list_width=1200), browser_blind_after=3
+    )
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+
+
+def test_a_good_read_between_refusals_starts_the_count_again(store, bus, seeded) -> None:
+    client = StubClient(list_error=_REFUSED, list_width=1200, conversations=[_conv()])
+    deps = _deps(store, bus, client, browser_blind_after=3)
+
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+    client.list_error = None
+    inbox.inbox_lane(deps)
+    client.list_error = _REFUSED
+    inbox.inbox_lane(deps)
+    inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+
+
+def test_pages_that_never_load_never_block_facebook(store, bus, seeded) -> None:
+    """A navigation that times out is the laptop asleep or the network gone. That is our side,
+    not Facebook's, and a block would stop the seller's marketplace for it."""
+    client = StubClient(navigate_error=BrowserTransportError("Timeout 60000ms exceeded"))
+    deps = _deps(store, bus, client, browser_blind_after=3)
+
+    for _ in range(6):
+        inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+
+
+def test_a_window_too_narrow_to_read_is_not_a_refusal(store, bus, seeded) -> None:
+    """The one cause the seller fixes by dragging a window wider must not cost them the market."""
+    deps = _deps(store, bus, StubClient(list_error=_REFUSED, list_width=756), browser_blind_after=3)
+
+    for _ in range(4):
+        inbox.inbox_lane(deps)
+
+    assert store.market_block("fb") is None
+
+
+def test_a_wall_over_a_list_that_still_reads_stops_the_market(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv(unread=1)], tails={"99": []}, blocked="automation")
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb")["cause"] == "automation"
+    # Nothing past the list that carried it: no conversation was opened.
+    assert len(client.navigations) == 1
+
+
+def test_a_pin_prompt_over_a_list_that_reads_does_not_block(store, bus, seeded) -> None:
+    """`verify` is not strong enough evidence to stop a market on, wherever it turns up."""
+    client = StubClient(conversations=[_conv()], tails={"99": []}, blocked="verify")
+
+    inbox.inbox_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb") is None

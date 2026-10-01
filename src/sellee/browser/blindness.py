@@ -42,6 +42,23 @@ CAUSE_VERIFY = "verify"
 # The marketplace has not merely declined a read — it has told the account something about itself.
 CAUSE_AUTOMATION = "automation"
 CAUSE_CHECKPOINT = "checkpoint"
+# Two more reasons to stop a market rather than keep reading it, for a marketplace that polices
+# automation (`MarketAdapter.polices_automation`). Neither is a wall and neither joins
+# `BLOCKING_CAUSES`: the account has not been told anything about itself, it has only been shown the
+# door, and what stops is our knocking on it.
+#
+# `logged_out` — the session has ended. Nothing a timer does can bring it back, only the seller
+# signing in, so this block has no window at all and the sign-in probe is what lifts it.
+CAUSE_LOGGED_OUT = "logged_out"
+# `refused` — the marketplace has served something other than the conversations, read after read,
+# on a page whose JS ran in a window wide enough to lay it out. That is the shape a session ending
+# takes before anything names it, and loading the page again every few minutes is the one response
+# guaranteed to look automated.
+#
+# Both share the market's strike count with the walls, so a wall that follows a refusal rests the
+# account longer than a first wall would. That is deliberate: the account was already being refused,
+# and the direction of any error is a longer rest, never a shorter one.
+CAUSE_REFUSED = "refused"
 
 # Which causes are strong enough to stop every lane on the market rather than only say so.
 #
@@ -71,6 +88,13 @@ def block_window_sec(strikes: int) -> float:
     """How long a block lasts for a market that has hit a wall `strikes` times."""
     index = min(max(int(strikes), 1), len(_BLOCK_WINDOWS_SEC)) - 1
     return _BLOCK_WINDOWS_SEC[index]
+
+
+def block_ttl_sec(cause: str, strikes: int) -> float | None:
+    """How long a block for `cause` lasts, or None for one only a sign-in lifts."""
+    if cause == CAUSE_LOGGED_OUT:
+        return None
+    return block_window_sec(strikes)
 
 
 # Claims only what is evidenced: that Chrome is answering us, and that reads have stopped. Not that
@@ -172,6 +196,23 @@ CHECKPOINT_NOTICE = (
     "asks, then tap below and I'll check."
 )
 
+# A signed-out session. The way out is tappable from the phone the notice is read on: the button
+# hands the job to the connect lane, which opens the sign-in page in the agent's Chrome.
+LOGGED_OUT_NOTICE = (
+    "Your {name} session is signed out, so I've stopped reading that market. Tap below and I'll "
+    "open the sign-in page in my Chrome for you — I never sign in for you."
+)
+
+# The market kept serving something other than the conversations. Says that we stopped, since a
+# seller who is not told will assume their buyers are still being answered, and sends them to their
+# own app for the same reason the automation notice does.
+REFUSED_NOTICE = (
+    "{name} keeps showing me something other than your conversations, so I've stopped going to "
+    "{name} rather than keep knocking — no reading, no replies, no new listings. Your other "
+    "marketplaces are unaffected. Open {name} on your phone or your own browser to see whether "
+    "it's asking you for something, then tap below and I'll look once."
+)
+
 _NOTICES = {
     CAUSE_PLUMBING: PLUMBING_NOTICE,
     CAUSE_MARKET: MARKET_NOTICE,
@@ -180,6 +221,8 @@ _NOTICES = {
     CAUSE_VERIFY: VERIFY_NOTICE,
     CAUSE_AUTOMATION: AUTOMATION_NOTICE,
     CAUSE_CHECKPOINT: CHECKPOINT_NOTICE,
+    CAUSE_LOGGED_OUT: LOGGED_OUT_NOTICE,
+    CAUSE_REFUSED: REFUSED_NOTICE,
 }
 
 
