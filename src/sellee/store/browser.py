@@ -13,6 +13,9 @@ from typing import TypedDict
 from sellee.db import Database
 from sellee.store.helpers import UNPLACEABLE_REPORTED_META, _insert_notice, _now
 
+# How long an answered ring is kept, as the record of when the marketplace last rang.
+_RING_KEPT_SEC = 30 * 86400.0
+
 # What the lane should do for a request. `open` is the seller asking to be signed in: navigate,
 # pull the tab forward, and raise the window. `probe` is them saying they already have — re-read
 # the login state without touching what is in front of them.
@@ -193,6 +196,75 @@ class BrowserMixin:
                 return False
             _insert_notice(conn, text, controls=controls)
             return True
+
+    # --- a marketplace ringing --------------------------------------------------------------
+
+    def record_rings(
+        self,
+        market: str,
+        rings,
+        *,
+        due_ts: float,
+        now: float | None = None,
+        answered: bool = False,
+    ) -> int:
+        """Record the rings `(ring_key, kind, shown_ts)` not heard before. Returns how many were.
+
+        `answered` records them as already dealt with — what the doorbell hears the first time it
+        listens can be days old, and is evidence the doorbell works, not a reason to visit. Answered
+        rings older than a month are let go in the same transaction.
+        """
+        now = _now() if now is None else now
+        handled = now if answered else None
+        added = 0
+        with self._db.transaction() as conn:
+            for ring_key, kind, shown_ts in rings:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO market_rings "
+                    "(market, ring_key, kind, shown_ts, heard_ts, due_ts, handled_ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (market, str(ring_key), kind, float(shown_ts), now, due_ts, handled),
+                )
+                added += cur.rowcount
+            conn.execute(
+                "DELETE FROM market_rings WHERE handled_ts IS NOT NULL AND heard_ts < ?",
+                (now - _RING_KEPT_SEC,),
+            )
+        return added
+
+    def ring_owed(self, market: str, now: float | None = None) -> bool:
+        """Whether a message ring on this market is due a visit that has not happened."""
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT 1 FROM market_rings WHERE market = ? AND kind = 'message' "
+            "AND handled_ts IS NULL AND due_ts <= ? LIMIT 1",
+            (market, now),
+        )
+        return bool(rows)
+
+    def answer_rings(self, market: str, *, heard_before: float, now: float | None = None) -> int:
+        """Mark answered every ring heard before the visit began. One heard while it was under way
+        was not read by it, and stays owed."""
+        now = _now() if now is None else now
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE market_rings SET handled_ts = ? "
+                "WHERE market = ? AND handled_ts IS NULL AND heard_ts <= ?",
+                (now, market, heard_before),
+            )
+            return cur.rowcount
+
+    def last_ring_ts(self, market: str) -> float | None:
+        """When this market last rang with anything at all, or None if it never has."""
+        rows = self._db.query(
+            "SELECT MAX(shown_ts) AS shown FROM market_rings WHERE market = ?", (market,)
+        )
+        shown = rows[0]["shown"] if rows else None
+        return float(shown) if shown is not None else None
+
+    def ring_count(self, market: str) -> int:
+        rows = self._db.query("SELECT COUNT(*) AS n FROM market_rings WHERE market = ?", (market,))
+        return int(rows[0]["n"]) if rows else 0
 
     # --- what a conversation is about -------------------------------------------------------
 

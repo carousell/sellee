@@ -20,9 +20,9 @@ from __future__ import annotations
 import logging
 
 from sellee import crosslist, marketplaces, paths, settings
+from sellee.browser import doorbell, photo_fetch, reconcile
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
-from sellee.browser import photo_fetch, reconcile
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.store import MAX_PHOTOS, StoreError
@@ -228,7 +228,7 @@ def _adopt_one(deps, row: dict, adapter) -> None:
         return
 
     client = deps.browser_factory()
-    with client.exclusive():
+    with client.exclusive(), doorbell.visiting(client, adapter):
         client.navigate(row["url"])
         detail = client.evaluate(adapter.listing_detail_js)
 

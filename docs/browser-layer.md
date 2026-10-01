@@ -387,8 +387,9 @@ Mercari link.
 
 ## The read lane
 
-`browser/inbox.py`, on the `inbox_read` scheduler task. One tick asks each
-browser market which conversations exist, opens the ones that look like they
+`browser/inbox.py`, on two scheduler tasks — `inbox_read` for a market read on a
+timer (Carousell), `ring_read` for one read only when it rings (Facebook; see
+[The doorbell](#the-doorbell)). One tick asks each due market which conversations exist, opens the ones that look like they
 moved, and reconciles each tail against the rows already stored — a navigate and
 one JS evaluate per thread, **no model turns at all**. That is what lets the reply
 pass above it stay browser-free: by the time it runs, what the buyer said is
@@ -544,6 +545,60 @@ The reply lane (`reply_lane`, every 10s) is a sibling: it claims every waiting
 thread into **one** coalesced reply pass, refuses to enqueue a second while one is
 in flight, and auto-refires nothing — eligibility comes from the rows, so a failed
 pass's threads are simply picked up next tick.
+
+## The doorbell
+
+A person does not reload Messenger every five minutes to see whether a buyer wrote: the phone or
+the browser pings, and a minute or two later they open the conversation. Facebook was shown the
+other thing — its inbox loaded eleven to thirteen times an hour around the clock, with every
+conversation opened every half hour — and flagged the account for automation twice. So a market
+whose adapter has `read_trigger = "notification"` is read only when it rings.
+
+**What rings is a notification the agent's Chrome displayed**, and it is heard without going near
+the page. DevTools keeps a background-services log of every notification a site shows — its title,
+body and tag — and replays all of it to whoever starts observing (`chrome.recorded_notifications`).
+The log is not on the browser target; a session on any tab has it, for every site in the profile.
+So the `doorbell` lane attaches to whichever tab is open, re-arms the recording (it outlives the
+connection but not forever), reads the replay and detaches — nothing evaluated, nothing enabled,
+no page loaded, and never through the browser factory, which would start the page server and
+re-assert focus on every tab on each tick. It does ensure Chrome is running, because a push only
+reaches a Chrome that is.
+
+**A ring is heard once and owed one visit.** `market_rings` is keyed on the notification's own
+identity, so the replay adds nothing and a restart neither loses a ring nor answers it twice. Each
+is due `pacing.reaction_delay_sec` after it was heard — around `ring_reaction_sec` (90s), never
+under 20 seconds or over six minutes. The `ring_read` task (every 15s) pays a due visit through the
+same read as the timer, with three differences: it never sweeps (a person opening a notification
+reads what moved), it answers only the rings heard before it began, and a visit that could not read
+the conversation list waits ten minutes before the next rather than asking again every tick. Every
+other tick it returns before acquiring the browser at all. Replies are not affected: a buyer who
+rang is awake, and the reply is sent the usual way.
+
+**Two things are deliberately not rings.** What rang while nobody was listening — the first look
+after an install or a restart replays days of it — is recorded answered: evidence the doorbell
+works, not a reason to visit. And after the laptop sleeps, the pushes that arrive together on wake
+wait until it has been awake for five minutes, because the network is still coming back and a burst
+of page loads on wake is its own tell.
+
+**The doorbell must never pass for a quiet inbox.** Silence from it is the one state that looks
+exactly like nothing happening, so three conditions are said out loud, once each, until they clear:
+Chrome cannot be asked for its log; the market's notifications are not allowed in Chrome's profile
+(read off `Preferences`; a container, whose Chrome is on the seller's desktop, skips this); or a
+market that rings several times a day on its own has not rung at all in three days. Facebook's
+permission must be the seller's own Allow: DevTools' `Browser.grantPermissions` lasts only as long
+as the connection that granted it, measured on Chrome 154.
+
+**Once a visit is over, the tab steps away** (`doorbell.visiting`, around the ring visit, the reply
+send, the survey look, the adoption, the driven publish and the driven edit). Every acquisition
+tells the tab it is focused and visible, which is what lets it be read in the background — and a
+tab left on Facebook like that is someone sitting in front of Messenger. A marketplace may hold
+back a push from a person it thinks is already looking, which would silence the doorbell exactly
+when a buyer writes. `about:blank` is not a page of the marketplace, and its push subscription
+lives in its service worker, not the tab.
+
+What a ring was is the adapter's (`ring_kind`), and today every Facebook ring counts as a message —
+the agent opens Messenger when Facebook notifies it, as the seller would. It narrows only from
+notifications Facebook has actually been seen to send.
 
 ## The survey: taking over what the seller already had
 
@@ -915,6 +970,10 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `survey.relist_retry` | it recorded no URL and is owed another go |
 | `survey.relist_failed` | it ran out of attempts and the seller was told |
 | `browser.chrome_launched` | the daemon started Chrome because an acquisition needed it |
+| `doorbell.rang` | a marketplace rang with new notifications, how many, and in how long the visit is due |
+| `doorbell.woke` | the machine slept, and for how long; visits wait for it to settle |
+| `doorbell.notice` | the doorbell told the seller it cannot hear, and which condition |
+| `browser.paced` | a market ran out of page loads partway through a read |
 | `browser.read` | one market's tick: rows listed, threads opened, rows recorded, unreadable count, whether it was a full sweep, and how many opens were to settle a send of our own (`settling`) |
 | `browser.inbound` | one message folded into a durable row, with its scam verdict |
 | `browser.thread_new` | a buyer's conversation adopted as a thread |
@@ -944,6 +1003,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
 | `policed_page_gap_sec` | `15.0` | the median gap before each page load of a market that polices automation; clamped up to 6s |
 | `policed_pages_per_hour` / `_per_day` | `30` / `150` | how many page loads such a market gets; clamped down to 60 / 400 |
+| `ring_reaction_sec` | `90.0` | the median delay between a market ringing and the agent opening it; every draw is kept between 20s and 6 minutes |
 | `send_verify_window_sec` | `20.0` | how long the send read-back keeps looking for its own bubble. Every send that runs out of window here becomes work for the settle lane and, eventually, a question for the seller |
 | `RECYCLE_AFTER_FAILURES` | `3` (code) | consecutive tool failures that, with Chrome answering, mean the server has lost it |
 | `BROWSER_RECYCLE_MAX` / `_WINDOW_SEC` / `_COOLDOWN_SEC` | `3` / `3600` / `120` (code) | how often a server may be replaced before we stop and say so |

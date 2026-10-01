@@ -159,3 +159,18 @@ def evaluate(
         lo, hi = (cfg.idelay_min, cfg.idelay_max) if interactive else (cfg.delay_min, cfg.delay_max)
         delay = random.uniform(lo, hi) if hi > 0 else 0.0
     return {**base, "verdict": "go", "delay_sec": round(delay, 2), "record": True}
+
+
+# How long after a marketplace rings the agent opens the conversation: someone glancing at a ping,
+# then opening the chat. Bounded both ways — nobody answers every notification inside twenty
+# seconds, and six minutes is as long as a buyer should wait for a person who saw the message.
+REACTION_FLOOR_SEC = 20.0
+REACTION_CEILING_SEC = 360.0
+# The spread around the median — the sigma of a lognormal.
+REACTION_SPREAD = 0.6
+
+
+def reaction_delay_sec(rng, median_sec: float) -> float:
+    """A person's delay between a notification and opening it, drawn around `median_sec`."""
+    drawn = median_sec * rng.lognormvariate(0.0, REACTION_SPREAD)
+    return min(max(drawn, REACTION_FLOOR_SEC), REACTION_CEILING_SEC)

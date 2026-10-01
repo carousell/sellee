@@ -219,12 +219,20 @@ def test_a_slower_pace_on_a_policed_market_is_obeyed(xdg_tmp) -> None:
         ("policed_page_gap_sec", "fast"),
         ("policed_pages_per_hour", 0),
         ("policed_pages_per_day", 2.5),
+        ("ring_reaction_sec", 0),
+        ("ring_reaction_sec", "soon"),
     ],
 )
 def test_a_malformed_policed_allowance_is_refused(xdg_tmp, key, value) -> None:
     _write_config({key: value})
     with pytest.raises(ConfigError, match=key):
         load()
+
+
+def test_a_slower_reaction_to_a_ring_is_obeyed(xdg_tmp) -> None:
+    """The median only: every draw is still held between twenty seconds and six minutes."""
+    _write_config({"ring_reaction_sec": 180})
+    assert load().ring_reaction_sec == 180.0
 
 
 def test_a_human_paced_reply_delay_is_allowed(xdg_tmp) -> None:

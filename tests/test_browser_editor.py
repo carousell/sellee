@@ -87,6 +87,11 @@ class StubEditForm:
     def navigate_visible(self, url):
         self.actions.append(("navigate", url))
 
+    def navigate(self, url):
+        """Only ever leaving the listing once the edit is over; the form itself is reached
+        through `navigate_visible`."""
+        self.stepped_away = getattr(self, "stepped_away", 0) + 1
+
     type_humanly = BrowserClient.type_humanly
     _click_into = BrowserClient._click_into
 
