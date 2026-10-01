@@ -1,10 +1,10 @@
 """The relay send: a reply to a carousell.ai email thread, through bazaar's reply_to_thread.
 
-bazaar stores one reply per `client_message_id`, and answers success only once every copy it owes
-is sent. The id is the send intent's own, written before the first call, so any failure short of a
-refusal is retried under it. A refusal on the first attempt stored nothing, so its intent is
-dropped; after an attempt that may have stored the reply, the send is left unverified for the relay
-lane to settle once bazaar shows it sent.
+bazaar stores one reply per `client_message_id` and answers once it is stored; its outbox sends
+it from there. The id is the send intent's own, written before the first call, so any failure
+short of a refusal is retried under it. A refusal on the first attempt stored nothing, so its
+intent is dropped; after an attempt that may have stored the reply, the send is left unverified
+for the relay lane to settle once bazaar shows it stored, or to retry under the same id.
 """
 
 from __future__ import annotations

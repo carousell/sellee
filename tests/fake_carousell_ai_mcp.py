@@ -30,9 +30,8 @@ class FakeRelay:
         # Resend the last thread already paged past, as bazaar's 30-second overlap does.
         self.repeat_tail = True
         self._clock = 1_800_000_000.0
-        # One outcome per reply_to_thread call, consumed in order; "ok" once empty. "http503" fails
-        # before bazaar sees it, "internal" fails before storing, "busy" stores and answers 503,
-        # "slow" stores and answers after `slow_sec`, "no_id" stores and answers without an id.
+        # One reply_to_thread outcome per call ("ok" once empty): http503, internal store nothing;
+        # pending (not sent yet), lost (answer lost as a 5xx), slow and no_id store the reply first.
         self.reply_script: list = []
         self.reply_calls: list = []
         self.slow_sec = 0.0
@@ -103,16 +102,13 @@ class FakeRelay:
                 msg_id,
                 "agent",
                 args["text"],
-                pending_send=step == "busy",
+                pending_send=step == "pending",
                 client_id=args["client_message_id"],
             )
         else:
             msg_id = existing["id"]
-            # A retry that succeeds has sent what the first attempt left owed, as bazaar's does.
-            if step != "busy":
-                existing["pending_send"] = False
-        if step == "busy":
-            raise ToolFailure("service unavailable")
+        if step == "lost":
+            raise ToolFailure("internal server error")
         if step == "slow":
             time.sleep(self.slow_sec)
         if step == "no_id":
