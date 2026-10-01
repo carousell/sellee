@@ -11,7 +11,8 @@ something still unsettled is kept in relay_rereads and read on every tick until 
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Callable
 
@@ -20,16 +21,20 @@ from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.rail.client import (
     RailAuthError,
+    RailError,
     RailNetworkError,
     RailUnprovisioned,
     listing_id_from_url,
 )
+from sellee.rail.sink import is_refusal
 from sellee.store.send import UNSETTLED_STATUSES
 
 log = logging.getLogger(__name__)
 
 MARKET = marketplaces.RAIL
 PAGE_SIZE = 50
+# How long a send is left to the call that made it, which retries for under a minute itself.
+RETRY_SEND_AFTER_SEC = 120.0
 # Our side of the conversation: the seller from their inbox, or an agent's reply.
 _OWN_AUTHORS = {"seller": "manual", "agent": "agent"}
 
@@ -40,10 +45,14 @@ class RelayDeps:
     bus: object
     config: object
     rail_factory: Callable
+    now: Callable[[], float] = time.time
+    # Our sends bazaar showed this tick as stored and still owed, which its own worker finishes.
+    held_sends: set = field(default_factory=set)
 
 
 def relay_lane(deps: RelayDeps) -> None:
     """One tick. An unreachable rail logs and waits for the next tick."""
+    deps.held_sends.clear()
     try:
         rail = deps.rail_factory()
         items = deps.store.list_items()
@@ -62,6 +71,7 @@ def relay_lane(deps: RelayDeps) -> None:
             # An unplaced thread costs a call only once an item has its listing.
             if pending["placed"] or _item_for(items, pending["listing_id"]):
                 _import(deps, rail, None, items, bazaar_id=pending["id"])
+        _finish_our_sends(deps, rail)
     except RailUnprovisioned:
         return
     except (RailNetworkError, RailAuthError) as exc:
@@ -141,7 +151,9 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> bool:
         if author == "agent":
             pending = bool(message.get("pending_send"))
             owed = owed or pending
-            if not pending:
+            if pending:
+                deps.held_sends.add(message.get("client_message_id") or "")
+            else:
                 _settle_our_send(deps, message)
             # An agent reply answers the buyer only once bazaar has sent it everywhere it owes.
             if last_buyer and not owed:
@@ -156,6 +168,26 @@ def _settle_our_send(deps: RelayDeps, message: dict) -> None:
     intent_id = message.get("client_message_id") or ""
     if deps.store.intent_status(intent_id) in UNSETTLED_STATUSES:
         deps.store.settle_intent_from_read(intent_id, msg_id=message["id"])
+
+
+def _finish_our_sends(deps: RelayDeps, rail) -> None:
+    """Retry our unsettled sends under their own id, which bazaar stores once. Its answer settles
+    each: success commits it, and a refusal means it was never sent and never will be."""
+    cutoff = deps.now() - RETRY_SEND_AFTER_SEC
+    for intent in deps.store.unsettled_intents_on(MARKET, created_before=cutoff):
+        if intent["intent_id"] in deps.held_sends:
+            continue
+        native = intent["thread_id"].split(":", 1)[1]
+        try:
+            result = rail.reply_to_thread(native, intent["text"], intent["intent_id"])
+        except (RailNetworkError, RailAuthError):
+            raise
+        except RailError as exc:
+            if is_refusal(exc):
+                log.info("relay send %s refused on retry: %s", intent["intent_id"], exc)
+                deps.store.drop_refused_intent(intent["intent_id"])
+            continue
+        deps.store.settle_intent_from_read(intent["intent_id"], msg_id=result["message_id"])
 
 
 def _item_for(items, listing_id: str) -> str | None:

@@ -31,7 +31,7 @@ class SendRefused(SinkError):
     """bazaar refused the reply and stored nothing. Final; the intent is dropped."""
 
 
-def _refused(exc: RailError) -> bool:
+def is_refusal(exc: RailError) -> bool:
     """Whether bazaar answered with a refusal, as opposed to a failure that may have stored it."""
     if isinstance(exc, RailAuthError):
         return True
@@ -63,12 +63,12 @@ class RelayReplySink:
             try:
                 result = self._client.reply_to_thread(native, text, intent_id)
             except RailError as exc:
-                if _refused(exc) and failure is None:
+                if is_refusal(exc) and failure is None:
                     self._store.drop_refused_intent(intent_id)
                     self._publish(thread, "refused", str(exc))
                     raise SendRefused(str(exc)) from exc
                 failure = exc
-                if _refused(exc):
+                if is_refusal(exc):
                     # An earlier attempt may have stored it, so this is unknown, not refused.
                     break
                 log.info("relay reply failed (%s); retrying under the same id", exc)
