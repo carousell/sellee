@@ -180,6 +180,7 @@ def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, s
             in_msg_id=params.get("in_msg_id"),
             cfg=cfg,
             interactive=interactive,
+            pass_id=ctx.session.pass_id,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc

@@ -114,6 +114,7 @@ class SendMixin:
         cfg,
         now: float | None = None,
         interactive: bool = False,
+        pass_id: str | None = None,
     ) -> dict:
         """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
         one transaction; an unpaced market skips the reserve. A wait/quiet/unverified_open verdict
@@ -145,7 +146,7 @@ class SendMixin:
                     "verdict": "go",
                     "delay_sec": 0.0,
                     "intent_id": self._new_intent_in_txn(
-                        conn, thread_id, in_msg_id, text, kind, now
+                        conn, thread_id, in_msg_id, text, kind, now, pass_id
                     ),
                 }
             cutoff = now - pacing_engine.WINDOW_SECONDS
@@ -169,10 +170,17 @@ class SendMixin:
             return {
                 "verdict": "go",
                 "delay_sec": verdict["delay_sec"],
-                "intent_id": self._new_intent_in_txn(conn, thread_id, in_msg_id, text, kind, now),
+                "intent_id": self._new_intent_in_txn(
+                    conn, thread_id, in_msg_id, text, kind, now, pass_id
+                ),
             }
 
-    def _new_intent_in_txn(self, conn, thread_id, in_msg_id, text, kind, now) -> str:
+    def _new_intent_in_txn(self, conn, thread_id, in_msg_id, text, kind, now, pass_id) -> str:
+        if in_msg_id is None:
+            # Fix what this reply answers now, so a commit long after it never claims a message
+            # the buyer sent while it was being delivered.
+            target = self._cursor_target(conn, thread_id, None, pass_id)
+            in_msg_id = target[0] if target else None
         intent_id = _new_id("intent")
         conn.execute(
             "INSERT INTO send_intents "
