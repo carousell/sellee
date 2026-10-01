@@ -914,6 +914,24 @@ def test_a_listing_capped_mid_crash_is_still_retired(store, bus, monkeypatch, xd
     assert any(n["text"].startswith("Done with") for n in store.list_queued_notices())
 
 
+class _NoRoom:
+    def can_start(self, market, loads=1):
+        return False
+
+
+def test_adoption_with_no_page_loads_left_waits_and_spends_nothing(store, bus) -> None:
+    _accepted(store, bus)
+    client = StubClient(detail=_detail())
+    deps = _deps(store, bus, client)
+    deps.governor = _NoRoom()
+
+    adopt.adopt_phase(deps)
+
+    assert client.navigations == []
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["status"] == "accepted" and row["attempts"] == 0
+
+
 def test_adoption_waits_while_the_market_is_blocked(store, bus) -> None:
     """A market that told the account to stop is not driven by any lane, and reading a listing page
     is driving it. The row stays accepted with no attempt spent, for when the block lifts."""

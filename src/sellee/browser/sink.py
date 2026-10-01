@@ -46,6 +46,12 @@ _MESSAGE_BOX = market_adapters.MESSAGE_BOX
 _SEND_BUTTON = market_adapters.SEND_BUTTON
 
 _SEND_KEY = "Enter"
+_BOX_NAME = "the reply message box"
+# What the box held before typing: nothing, our own whole reply from an attempt that failed before
+# its commit, or something we could not read.
+_BOX_EMPTY = "empty"
+_BOX_OURS = "ours"
+_BOX_UNREAD = "unread"
 
 # How long the read-back keeps looking for its own bubble, and how often. The window is generous
 # against a slow chat round-trip and still short against the stale-intent grace, so a poll can never
@@ -119,8 +125,9 @@ class BrowserReplySink:
                     # agent's tab brought forward first.
                     self._client.ensure_frontmost(url)
                 box = self._locate(market, adapter, _MESSAGE_BOX)
-                self._refuse_over_a_draft(market, thread, box, text)
-                self._client.type_humanly(box.target, "the reply message box", text)
+                held = self._refuse_over_a_draft(market, thread, box, text)
+                if held != _BOX_OURS:
+                    self._type(market, thread, box, text, emptied_first=held == _BOX_EMPTY)
                 self._refuse_at_a_wall(adapter, market, thread)
                 if not self._commit(adapter, market, box):
                     # The page did not take it, so nothing was delivered and this is still safe to
@@ -176,15 +183,13 @@ class BrowserReplySink:
         """
         if adapter.composer_step(_SEND_BUTTON) is not None:
             button = self._locate(market, adapter, _SEND_BUTTON)
-            self._client.call_tool(
-                "browser_click", {"target": button.target, "element": "the send button"}
-            )
+            self._client.click(button.target, "the send button")
             return True
         if not adapter.chat_message_submit_js:
             self._client.call_tool("browser_press_key", {"key": _SEND_KEY})
             return True
         answer = self._client.evaluate(
-            adapter.chat_message_submit_js, target=box.target, element="the reply message box"
+            adapter.chat_message_submit_js, target=box.target, element=_BOX_NAME
         )
         return bool((answer or {}).get("sent"))
 
@@ -215,8 +220,54 @@ class BrowserReplySink:
         self._publish(market, thread, "refused", f"the marketplace is refusing us ({wall})")
         raise SendNotAttempted(f"{market!r} put up a {wall} wall before this could be sent")
 
-    def _refuse_over_a_draft(self, market: str, thread: dict, box, text: str) -> None:
-        """Fail closed on a composer that already holds something.
+    def _type(self, market: str, thread: dict, box, text: str, *, emptied_first: bool) -> None:
+        """Type the reply, then read the box back whole before anything commits it.
+
+        Typing takes as long as a person takes, and a pressed key lands wherever focus is, so a page
+        that moves the caret partway through leaves part of the reply in the box — and past the
+        commit, that part is what the buyer receives. So the box must hold the reply, all of it.
+
+        `emptied_first` says the box was read as empty before typing began, which makes whatever is
+        in it after a failed attempt ours: it is emptied, so the retry starts clean instead of
+        refusing over our own half-reply forever. A box that could not be read beforehand is never
+        emptied — it may have held the seller's words. And a box that cannot be read afterwards is
+        not a reason to strand the buyer: the read-back after the commit still decides.
+        """
+        try:
+            self._client.type_humanly(box.target, _BOX_NAME, text)
+        except BrowserError:
+            if emptied_first:
+                self._empty(market, box)
+            raise
+        if not reconcile.checkable(text):
+            # A thumbs-up leaves nothing in the box to check: the page may draw it as an element
+            # with no text. Refusing over that would mean it never went out, and an empty box sends
+            # nothing, so the read-back after the commit decides.
+            return
+        try:
+            held = self._client.composer_text(box.target, _BOX_NAME)
+        except BrowserError:
+            log.debug(
+                "could not read the composer back before committing on %s", market, exc_info=True
+            )
+            return
+        if reconcile.holds_whole(held, text):
+            return
+        if emptied_first:
+            self._empty(market, box)
+        self._publish(market, thread, "refused", "the box did not end up holding the reply")
+        raise SendNotAttempted("the reply box did not end up holding the reply that was typed")
+
+    def _empty(self, market: str, box) -> None:
+        try:
+            self._client.empty_box(box.target, _BOX_NAME)
+        except BrowserError:
+            # Left for the next attempt to find and refuse over, which fails closed.
+            log.debug("could not empty the reply box on %s", market, exc_info=True)
+
+    def _refuse_over_a_draft(self, market: str, thread: dict, box, text: str) -> str:
+        """Fail closed on a composer that already holds something. Answers what the box held:
+        `_BOX_EMPTY`, `_BOX_OURS`, or `_BOX_UNREAD` when it could not be asked.
 
         Typing appends, so a draft the seller was part-way through would be sent with our reply
         stuck on the end of it; clearing first would throw their words away instead. Neither is
@@ -228,15 +279,19 @@ class BrowserReplySink:
         is left where it is and the commit below picks it up.
         """
         try:
-            existing = self._client.composer_text(box.target, "the reply message box")
+            existing = self._client.composer_text(box.target, _BOX_NAME)
         except BrowserError:
             # A probe that would not run says nothing about what is in the box. Refusing here would
             # strand every reply on a market whose composer we cannot read, and the read-back after
             # the commit is what actually decides whether this landed.
             log.debug("could not read the composer before typing on %s", market, exc_info=True)
-            return
-        if not existing or reconcile.same_text(existing, text):
-            return
+            return _BOX_UNREAD
+        if not existing:
+            return _BOX_EMPTY
+        # Whole, not merely the same message: the first part of our own long reply is not the
+        # reply, and committing it would send half.
+        if reconcile.holds_whole(existing, text):
+            return _BOX_OURS
         self._publish(market, thread, "refused", "the composer already holds a draft")
         raise SendNotAttempted("the composer already holds something that is not this reply")
 

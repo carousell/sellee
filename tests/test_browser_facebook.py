@@ -107,6 +107,10 @@ class StubClient:
             raise self.navigate_error
         self.url = url
 
+    def click(self, target, element):
+        """The page receives a click on the control; how the cursor got there is the client's."""
+        return self.call_tool("browser_click", {"target": target, "element": element})
+
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments.get("target")))
         if name == "browser_click":
@@ -1581,4 +1585,46 @@ def test_a_pin_prompt_over_a_list_that_reads_does_not_block(store, bus, seeded) 
 
     inbox.inbox_lane(_deps(store, bus, client))
 
+    assert store.market_block("fb") is None
+
+
+# --- page loads, at a person's pace ---------------------------------------------------------------
+
+
+class _NoRoom:
+    def can_start(self, market, loads=1):
+        return False
+
+
+def test_facebook_with_no_page_loads_left_is_not_read_and_not_blind(store, bus, seeded) -> None:
+    client = StubClient(conversations=[_conv()], tails={"99": []})
+    deps = _deps(store, bus, client)
+    deps.governor = _NoRoom()
+
+    inbox.inbox_lane(deps)
+
+    assert client.navigations == []
+    assert _kinds(bus, "browser.blind") == []
+
+
+def test_running_out_of_page_loads_partway_is_not_blindness(store, bus, seeded) -> None:
+    """The list was read and stored; the conversation it would have opened next waits. Counting
+    that as a failed read would, three ticks on, block the market for being paced."""
+    from sellee.browser.governor import PagesSpent
+
+    class SpendsAfterTheInbox(StubClient):
+        def navigate(self, url):
+            if self.navigations:
+                self.navigations.append(url)
+                raise PagesSpent("spent")
+            super().navigate(url)
+
+    client = SpendsAfterTheInbox(conversations=[_conv(unread=1)], tails={"99": []}, list_width=1200)
+    deps = _deps(store, bus, client, browser_blind_after=1)
+
+    for _ in range(3):
+        inbox.inbox_lane(deps)
+
+    assert _kinds(bus, "browser.blind") == []
+    assert _kinds(bus, "browser.paced")
     assert store.market_block("fb") is None

@@ -8,6 +8,7 @@ never be re-driven — a buyer getting the same message twice is what this desig
 from __future__ import annotations
 
 import json
+import random
 import re
 import threading
 
@@ -60,15 +61,18 @@ class StubClient:
         self.url = ""
         # What the composer already holds when the sink looks. "" is an empty box.
         self.draft = draft
+        # A select-all waiting for the Backspace that empties the box.
+        self.selected = False
         # The real `type_humanly` is bound in below, so what a sink test asserts about the page is
         # what the page would really have received. These are what it reaches for.
         self._lock = threading.RLock()
         self._sleep = lambda _seconds: None
-        self._rng = _NoJitter()
+        self._rng = random.Random(0)
 
     # Client logic the sink depends on, used rather than imitated.
     composer_text = BrowserClient.composer_text
     type_humanly = BrowserClient.type_humanly
+    empty_box = BrowserClient.empty_box
     _click_into = BrowserClient._click_into
 
     def ensure_frontmost(self, url):
@@ -99,32 +103,49 @@ class StubClient:
             raise BrowserToolError("navigation refused")
         self.url = url
 
+    def click(self, target, element):
+        """The page receives a click on the control; how the cursor got there is the client's."""
+        return self.call_tool("browser_click", {"target": target, "element": element})
+
     def call_tool(self, name, arguments):
         self.calls.append((name, arguments))
         if self.detach_on == name:
             raise BrowserDetached("the browser server lost its connection to Chrome")
         if self.fail_on == name:
             raise BrowserToolError(f"{name} refused")
+        key = arguments.get("key", "")
         if name == "browser_type":
-            # Appended, not replaced: `type_humanly` sends one call per line.
+            # A whole character `type_humanly` could not press, appended where the caret is.
             self.typed = (self.typed or "") + arguments["text"]
-        if name == "browser_press_key" and arguments.get("key") == "Shift+Enter":
-            self.typed = (self.typed or "") + "\n"
-        # Both trusted commits — a real key press and a real click on a send control — make the
-        # page render the bubble.
-        if (
-            name in ("browser_press_key", "browser_click")
-            and arguments.get("key") != "Shift+Enter"
-            and arguments.get("element") != "the reply message box"
-            and self.echo_on_send
-            and self.typed is not None
-        ):
-            self.bubbles.append({"text": self.typed, "side": "out", "y": 99})
+        if name == "browser_press_key" and (len(key) == 1 or key == "Shift+Enter"):
+            # A printable key types, and Shift+Enter breaks the line; neither sends.
+            self.typed = (self.typed or "") + ("\n" if key == "Shift+Enter" else key)
+        if name == "browser_press_key" and key == "ControlOrMeta+a":
+            self.selected = True
+        if name == "browser_press_key" and key == "Backspace" and self.selected:
+            self.draft, self.typed, self.selected = "", "", False
+        # Both trusted commits — a real Enter and a real click on a send control — make the page
+        # render the bubble, from whatever the box holds.
+        committed = (name == "browser_press_key" and key == "Enter") or (
+            name == "browser_click" and arguments.get("element") != "the reply message box"
+        )
+        if committed and self.echo_on_send and self.composer():
+            self.bubbles.append({"text": self.composer(), "side": "out", "y": 99})
         return "ok"
 
+    def composer(self) -> str:
+        """What the box holds: whatever was there, and whatever has been typed into it since."""
+        return (self.draft or "") + (self.typed or "")
+
     def evaluate(self, function, **kwargs):
+        if function == client_mod.FOCUS_BOX_JS:
+            # Where the caret went: a pressed key carries no target, so this is the box it typed.
+            self.calls.append(("caret", kwargs.get("target")))
+            return True
+        if function == client_mod.HAS_CARET_JS:
+            return True
         if function == client_mod.COMPOSER_TEXT_JS:
-            return self.draft
+            return self.composer()
         if function == carousell_market.CONVERSATION_TAIL_JS:
             if self.detach_on == "tail":
                 raise BrowserDetached("the browser server lost its connection to Chrome")
@@ -133,8 +154,8 @@ class StubClient:
             self.calls.append(("submit", kwargs.get("target")))
             if self.fail_on == "submit":
                 raise BrowserToolError("evaluate refused")
-            if self.page_accepts and self.echo_on_send and self.typed is not None:
-                self.bubbles.append({"text": self.typed, "side": "out", "y": 99})
+            if self.page_accepts and self.echo_on_send and self.composer():
+                self.bubbles.append({"text": self.composer(), "side": "out", "y": 99})
             return {"sent": self.page_accepts, "cleared": self.page_accepts}
         # a locate probe: read the target back out of the probe's own source, so this stub answers
         # the selector the sink actually asked about
@@ -210,6 +231,20 @@ def _events(bus, kind):
     return bus.store.read(kinds=[kind])
 
 
+def _first_key(client) -> int:
+    """Where typing began: the first key that types rather than sends."""
+    return next(
+        index
+        for index, (name, args) in enumerate(client.calls)
+        if name == "browser_type" or (name == "browser_press_key" and args.get("key") != "Enter")
+    )
+
+
+def _caret(client) -> str:
+    """Which box the caret was put in before typing."""
+    return next(target for name, target in client.calls if name == "caret")
+
+
 # --- the send -----------------------------------------------------------------------------------
 
 
@@ -220,7 +255,7 @@ def test_a_send_types_commits_and_verifies_on_the_recorded_thread_url(store, bus
 
     names = [call[0] for call in client.calls]
     assert names[0] == "navigate" and client.calls[0][1] == _THREAD_URL
-    assert names.index("browser_type") < names.index("submit")
+    assert _first_key(client) < names.index("submit")
     assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
 
 
@@ -228,12 +263,13 @@ def test_a_market_with_its_own_commit_never_takes_the_sellers_foreground(
     store, bus, thread
 ) -> None:
     """Selecting the tab is the only thing that interrupts the seller, and it is only needed to
-    deliver a real key event. A market that commits from the page needs neither."""
+    deliver the Enter that sends. A market that commits from the page needs neither — the keys
+    that type the message land in a background tab like any other, as they always have."""
     client = StubClient()
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
     names = [call[0] for call in client.calls]
     assert "ensure_frontmost" not in names
-    assert "browser_press_key" not in names
+    assert {"key": "Enter"} not in [args for _, args in client.calls]
     assert "submit" in names
 
 
@@ -269,13 +305,13 @@ def test_the_commit_is_dispatched_onto_the_located_composer(store, bus, thread) 
     client = StubClient()
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
 
-    typed = next(args for name, args in client.calls if name == "browser_type")
-    assert typed["target"] == "textarea"
+    assert _caret(client) == "textarea"
     # Typed, not filled: a composer is instrumented at the key level, and a message that arrives
     # as one insertText carries no keystrokes and fires no typing indicator. A newline is safe
     # because `type_humanly` sends it as Shift+Enter rather than letting a bare Enter commit half
     # a message — see the newline tests in test_browser_client.py.
-    assert typed["slowly"] is True
+    assert client.typed == "yes, still available!"
+    assert all(args["slowly"] for name, args in client.calls if name == "browser_type")
     # the same element the composer resolved to, rather than a selector repeated inside the JS
     assert next(target for name, target in client.calls if name == "submit") == "textarea"
 
@@ -311,7 +347,7 @@ def test_several_matches_is_a_miss_not_a_pick(store, bus, thread) -> None:
 
 
 def test_a_browser_failure_while_typing_leaves_the_intent_pending(store, bus, thread) -> None:
-    client = StubClient(fail_on="browser_type")
+    client = StubClient(fail_on="browser_press_key")
     intent = _reserve(store)
     with pytest.raises(sink.SendNotAttempted):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
@@ -350,8 +386,8 @@ def test_the_default_commit_is_a_real_key_press_after_taking_the_tab(
     client = StubClient()
     _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
     names = [name for name, _ in client.calls]
-    assert names.index("ensure_frontmost") < names.index("browser_type")
-    assert names.index("browser_type") < names.index("browser_press_key")
+    enter = next(i for i, (n, a) in enumerate(client.calls) if a == {"key": "Enter"})
+    assert names.index("ensure_frontmost") < _first_key(client) < enter
     assert "submit" not in names
 
 
@@ -364,7 +400,7 @@ def test_a_tab_that_will_not_come_forward_stops_before_anything_is_typed(
     intent = _reserve(store)
     with pytest.raises(sink.SendNotAttempted):
         _sink(store, bus, client).send(thread, "hi", "reply", intent)
-    assert "browser_type" not in [name for name, _ in client.calls]
+    assert client.typed is None
     assert _intent_status(store, intent) == "pending"
 
 
@@ -403,8 +439,8 @@ def test_a_send_button_is_clicked_after_the_text_is_typed(store, bus, thread, bu
 
     # The composer is clicked into before typing, so the send button is the *last* click.
     names = [name for name, _ in client.calls]
-    assert names.index("browser_type") < _send_button_click_index(client)
-    assert "browser_press_key" not in names
+    assert _first_key(client) < _send_button_click_index(client)
+    assert {"key": "Enter"} not in [args for name, args in client.calls]
     assert "submit" not in names
 
 
@@ -479,8 +515,8 @@ def test_the_read_back_keeps_looking_until_the_bubble_renders(store, bus, thread
 
         def call_tool(self, name, arguments):
             result = super().call_tool(name, arguments)
-            if name == "browser_type":
-                self.pending = arguments["text"]
+            if self.typed:
+                self.pending = self.typed
             return result
 
         def evaluate(self, function, **kwargs):
@@ -789,8 +825,7 @@ def test_a_healed_selector_is_used_ahead_of_the_shipped_default(store, bus, thre
         }
     )
     _sink(store, bus, client).send(thread, "hi", "reply", _reserve(store))
-    typed = [args for name, args in client.calls if name == "browser_type"]
-    assert typed[0]["target"] == "div.new-composer"
+    assert _caret(client) == "div.new-composer"
 
 
 def test_a_stale_cache_row_is_skipped_for_the_shipped_default(store, bus, thread) -> None:
@@ -807,8 +842,7 @@ def test_a_stale_cache_row_is_skipped_for_the_shipped_default(store, bus, thread
         store.ui_cache_fail("carousell", "reply", "message_box")
     client = StubClient()  # only the shipped `textarea` resolves
     _sink(store, bus, client).send(thread, "hi", "reply", _reserve(store))
-    typed = [args for name, args in client.calls if name == "browser_type"]
-    assert typed[0]["target"] == "textarea"
+    assert _caret(client) == "textarea"
 
 
 def test_a_cache_row_that_no_longer_resolves_falls_back_and_is_counted(store, bus, thread) -> None:
@@ -824,8 +858,7 @@ def test_a_cache_row_that_no_longer_resolves_falls_back_and_is_counted(store, bu
     )
     client = StubClient()  # div.gone matches nothing; the shipped textarea does
     _sink(store, bus, client).send(thread, "hi", "reply", _reserve(store))
-    typed = [args for name, args in client.calls if name == "browser_type"]
-    assert typed[0]["target"] == "textarea"
+    assert _caret(client) == "textarea"
     assert store.ui_cache_get("carousell", "reply", "message_box")["selector"]["fail_count"] == 1
 
 
@@ -907,7 +940,7 @@ def test_a_detach_before_the_commit_leaves_the_intent_pending(store, bus, thread
     """`BrowserDetached` is a `BrowserError`, so the sink classifies it with no change at all — and
     that is the point of subclassing rather than inventing a new hierarchy. Nothing was typed and
     nothing was sent, so the intent stays retryable."""
-    client = StubClient(detach_on="browser_type")
+    client = StubClient(detach_on="browser_press_key")
     intent_id = _reserve(store)
     with pytest.raises(sink.SendNotAttempted):
         _sink(store, bus, client).send(thread, "hello", "reply", intent_id)
@@ -935,6 +968,39 @@ def test_a_detach_after_the_commit_is_unverified_and_never_resent(store, bus, th
 # choose, and both are worse than a send that did not happen.
 
 
+def test_a_sellers_draft_is_never_sent_in_place_of_a_reply_with_no_letters(
+    store, bus, thread
+) -> None:
+    """A thumbs-up has no letters to compare, and "nothing to compare" must never read as "this is
+    our own reply already in the box" — that would press Send on the seller's half-written words."""
+    client = StubClient(draft="hold on, let me check with my husband first")
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="already holds"):
+        _sink(store, bus, client).send(thread, "👍", "reply", intent)
+
+    assert client.bubbles == []
+    assert _intent_status(store, intent) == "pending"
+
+
+def test_a_reply_with_no_letters_is_left_to_the_read_back(store, bus, thread) -> None:
+    """Facebook draws an emoji as an element whose text is a line break, so a thumbs-up we just
+    typed reads back as an empty box. There is nothing in it to check, and refusing over that would
+    mean it never went out; the read-back after the commit decides."""
+
+    class DrawsEmojiAsNothing(StubClient):
+        def evaluate(self, function, **kwargs):
+            if function == client_mod.COMPOSER_TEXT_JS and self.typed:
+                return ""
+            return super().evaluate(function, **kwargs)
+
+    client = DrawsEmojiAsNothing()
+
+    _sink(store, bus, client).send(thread, "👍", "reply", _reserve(store))
+
+    assert "submit" in [n for n, _ in client.calls]
+
+
 def test_a_sellers_draft_is_never_typed_over(store, bus, thread) -> None:
     client = StubClient(draft="hold on, let me check the")
     intent = _reserve(store)
@@ -942,7 +1008,7 @@ def test_a_sellers_draft_is_never_typed_over(store, bus, thread) -> None:
     with pytest.raises(sink.SendNotAttempted, match="already holds"):
         _sink(store, bus, client).send(thread, "yes, still available!", "reply", intent)
 
-    assert "browser_type" not in [name for name, _ in client.calls]
+    assert client.typed is None
     assert _intent_status(store, intent) == "pending"
     assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["refused"]
 
@@ -955,7 +1021,119 @@ def test_our_own_half_sent_text_is_not_typed_twice(store, bus, thread) -> None:
 
     _sink(store, bus, client).send(thread, text, "reply", _reserve(store))
 
+    assert client.typed is None
+    assert [b["text"] for b in client.bubbles] == [text]
     assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["sent"]
+
+
+# --- the box holds the reply, all of it, before anything commits it -------------------------------
+#
+# Typing takes as long as a person takes, and a pressed key lands wherever focus is. A page that
+# moves the caret partway through leaves part of the reply in the box, and past the commit that part
+# is what the buyer receives.
+
+
+class _DropsKeys(StubClient):
+    """A page where some keys never reach the box."""
+
+    def __init__(self, *, drop_after: int = 2, **kw):
+        super().__init__(**kw)
+        self.drop_after = drop_after
+        self.presses = 0
+
+    def call_tool(self, name, arguments):
+        key = arguments.get("key", "")
+        if name == "browser_press_key" and len(key) == 1:
+            self.presses += 1
+            if self.presses > self.drop_after:
+                self.calls.append((name, arguments))
+                return "ok"
+        return super().call_tool(name, arguments)
+
+
+def _committed(client) -> bool:
+    return "submit" in [n for n, _ in client.calls] or {"key": "Enter"} in [
+        a for _, a in client.calls
+    ]
+
+
+def test_a_box_that_ends_up_holding_something_else_is_never_sent(store, bus, thread) -> None:
+    client = _DropsKeys(drop_after=2)
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted, match="did not end up holding"):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", intent)
+
+    assert not _committed(client)
+    assert _intent_status(store, intent) == "pending"
+    assert [e.payload["outcome"] for e in _events(bus, "browser.send")] == ["refused"]
+
+
+def test_part_of_a_long_reply_is_never_sent_as_if_it_were_all_of_it(store, bus, thread) -> None:
+    """A long message's read-back may be cut short, and matching it tolerates that. The box is
+    not a read-back: it is read whole, and a box holding the first 250 characters of a 300 one is
+    a reply that is not finished."""
+    reply = "Sure — " + "the desk is solid oak and in great shape. " * 8
+    client = _DropsKeys(drop_after=250)
+
+    with pytest.raises(sink.SendNotAttempted):
+        _sink(store, bus, client).send(thread, reply, "reply", _reserve(store))
+
+    assert not _committed(client)
+
+
+def test_a_half_typed_reply_is_emptied_so_the_retry_starts_clean(store, bus, thread) -> None:
+    """The box was empty before typing began, so what is in it now is ours. Left there, every
+    retry would refuse over our own half-reply, taking it for a draft of the seller's."""
+    client = _DropsKeys(drop_after=2)
+
+    with pytest.raises(sink.SendNotAttempted):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
+
+    assert client.composer() == ""
+
+
+def test_losing_the_caret_partway_empties_the_box_and_sends_nothing(store, bus, thread) -> None:
+    class LosesTheCaret(StubClient):
+        def evaluate(self, function, **kwargs):
+            if function == client_mod.HAS_CARET_JS:
+                return len(self.typed or "") < 5
+            return super().evaluate(function, **kwargs)
+
+    client = LosesTheCaret()
+    intent = _reserve(store)
+
+    with pytest.raises(sink.SendNotAttempted):
+        _sink(store, bus, client).send(thread, "yes, it is still available", "reply", intent)
+
+    assert not _committed(client)
+    assert client.composer() == ""
+    assert _intent_status(store, intent) == "pending"
+
+
+def test_a_box_that_could_not_be_read_before_typing_is_never_emptied(store, bus, thread) -> None:
+    """Emptying is only safe for a box known to have been empty: one we could not read may have
+    held the seller's own words."""
+
+    class UnreadableFirst(_DropsKeys):
+        def __init__(self, **kw):
+            super().__init__(draft="the seller's note", **kw)
+            self.reads = 0
+
+        def evaluate(self, function, **kwargs):
+            if function == client_mod.COMPOSER_TEXT_JS:
+                self.reads += 1
+                if self.reads == 1:
+                    raise BrowserToolError("could not read the box")
+            return super().evaluate(function, **kwargs)
+
+    client = UnreadableFirst(drop_after=2)
+
+    with pytest.raises(sink.SendNotAttempted):
+        _sink(store, bus, client).send(thread, "yes, still available!", "reply", _reserve(store))
+
+    assert {"key": "ControlOrMeta+a"} not in [a for _, a in client.calls]
+    assert client.draft == "the seller's note"
 
 
 def test_a_composer_we_cannot_read_is_not_a_reason_to_strand_the_buyer(store, bus, thread) -> None:
@@ -1006,7 +1184,7 @@ def test_a_wall_that_goes_up_while_typing_stops_before_the_commit(
 
         def call_tool(self, name, arguments):
             out = super().call_tool(name, arguments)
-            if name == "browser_type":
+            if self.typed:
                 self.typed_yet = True
             return out
 

@@ -13,6 +13,7 @@ from sellee.browser.markets.carousell import LISTING_ID_PATTERN as PATTERN
 from sellee.browser.reconcile import (
     classify_tail,
     contains_outbound,
+    holds_whole,
     listing_id,
     matching_items,
     message_id,
@@ -336,3 +337,54 @@ def test_an_answer_that_is_not_a_list_is_unreadable_not_empty() -> None:
     mistaken for a conversation nobody wrote in."""
     assert "not a list" in (unreadable_reason("[]") or "")
     assert "not a list" in (unreadable_reason(0) or "")
+
+
+# --- a composer holding the whole reply -----------------------------------------------------------
+
+
+def test_a_box_holding_the_reply_holds_it_whole() -> None:
+    assert holds_whole("Yes,  still available!", "yes, still available!")
+
+
+def test_a_box_holding_the_first_part_of_a_long_reply_does_not() -> None:
+    """`same_text` forgives a truncated read of a long message, which is right for a bubble read
+    back and exactly wrong here: the box is read in full, and a box holding the first part of a
+    reply is a reply that has not been typed. Sending it delivers half."""
+    reply = "Sure — " + "the desk is solid oak and in great shape. " * 8
+    assert len(reply) > 250
+    typed_part = reply[:230]
+
+    assert same_text(typed_part, reply)
+    assert not holds_whole(typed_part, reply)
+
+
+def test_a_box_missing_a_letter_does_not_hold_the_reply() -> None:
+    assert not holds_whole("yes, stil available!", "yes, still available!")
+
+
+def test_an_emoji_the_page_draws_differently_still_counts() -> None:
+    """Facebook draws an emoji as an element whose innerText is a line break."""
+    assert holds_whole("see you at 6\n", "see you at 6 ✅")
+
+
+def test_an_emoticon_the_composer_turned_into_an_emoji_still_counts() -> None:
+    """Chat composers redraw `:)` as an emoji as it is typed. The check is for keys that went
+    missing, not for what the page chose to draw — and a reply refused over a smiley would never go
+    out at all."""
+    assert holds_whole("see you at 6 🙂", "see you at 6 :)")
+
+
+def test_a_box_missing_its_last_word_does_not_hold_the_reply() -> None:
+    assert not holds_whole("see you at", "see you at 6")
+
+
+def test_a_box_holding_more_than_the_reply_does_not_hold_it() -> None:
+    assert not holds_whole("hold on let me check yes, still available!", "yes, still available!")
+
+
+def test_a_reply_with_no_letters_is_never_matched_by_something_else() -> None:
+    """Nothing to compare is not a match. The draft check asks this question about a box that may
+    hold the seller's own half-written words, and a yes would press Send on them."""
+    assert not holds_whole("hold on, let me check with my husband first", "👍")
+    assert not holds_whole("\n", "👍")
+    assert holds_whole("👍", "👍")

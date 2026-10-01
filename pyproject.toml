@@ -48,6 +48,9 @@ dev = [
     "mcp>=1.29,<2",
     # parallel test execution for `make test`
     "pytest-xdist",
+    # property tests for the pacing engines, whose promises are bounds over every input rather
+    # than a few examples (never shipped)
+    "hypothesis",
 ]
 
 [tool.uv]

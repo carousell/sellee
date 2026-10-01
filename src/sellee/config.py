@@ -46,6 +46,13 @@ _PLAINTEXT_HOSTS = frozenset({"127.0.0.1", "localhost", "::1"})
 HARD_CAP_CEILING = 60
 HARD_DELAY_CEILING_SEC = 45.0
 
+# The bounds on how fast the agent may move through a marketplace that polices automation
+# (browser/governor.py), tighten-only like the cap above: a shorter gap or a larger allowance is
+# looser, and is clamped to these rather than obeyed.
+POLICED_PAGE_GAP_FLOOR_SEC = 6.0
+POLICED_PAGES_PER_HOUR_CEILING = 60
+POLICED_PAGES_PER_DAY_CEILING = 400
+
 
 class ConfigError(Exception):
     """A config value is present but invalid. Raised at startup; never sanitized away."""
@@ -107,6 +114,12 @@ class Config:
     # Consecutive failed marketplace reads before one needs-me escalation. A market that cannot be
     # seen must never look like a market with no news.
     browser_blind_after: int = 3
+    # How fast the agent may move through a marketplace that polices automation: the median gap
+    # before each page load, and how many loads an hour and a day. Someone reading and answering
+    # their marketplace messages loads tens of pages a day, not hundreds.
+    policed_page_gap_sec: float = 15.0
+    policed_pages_per_hour: int = 30
+    policed_pages_per_day: int = 150
     # How long the send read-back keeps looking for its own bubble before giving up and calling the
     # send unverified. A chat that commits the message to its server and re-renders afterwards is
     # slower than it looks, and every send that runs out of window here becomes work for the settle
@@ -336,6 +349,25 @@ def _validate(raw: dict) -> Config:
         if not _is_real_int(blind) or blind < 1:
             raise ConfigError(f"browser_blind_after must be an integer >= 1, got {blind!r}")
         values["browser_blind_after"] = blind
+
+    if "policed_page_gap_sec" in raw:
+        gap = raw["policed_page_gap_sec"]
+        if not _is_real_number(gap) or gap <= 0:
+            raise ConfigError(f"policed_page_gap_sec must be a positive number, got {gap!r}")
+        values["policed_page_gap_sec"] = max(float(gap), POLICED_PAGE_GAP_FLOOR_SEC)
+
+    for key, ceiling in (
+        ("policed_pages_per_hour", POLICED_PAGES_PER_HOUR_CEILING),
+        ("policed_pages_per_day", POLICED_PAGES_PER_DAY_CEILING),
+    ):
+        if key in raw:
+            allowance = raw[key]
+            if not _is_real_int(allowance) or allowance < 1:
+                raise ConfigError(
+                    f"{key} must be an integer >= 1, got {allowance!r} "
+                    "(to stop the agent, pause it instead)"
+                )
+            values[key] = min(allowance, ceiling)
 
     # Pacing knobs: malformed → ConfigError like everything else; well-formed but looser than
     # the hard ceilings → clamped down (tighten-only — see the ceiling constants above).

@@ -32,17 +32,39 @@ from contextlib import contextmanager
 
 from sellee import paths, proc_tree
 from sellee.browser import chrome
+from sellee.engines import pointer, typist
 
 log = logging.getLogger(__name__)
 
 # What is already in a text box, whether it is an input or a contenteditable.
 COMPOSER_TEXT_JS = "(el) => (el.value !== undefined ? el.value : (el.innerText || '')).trim()"
 
-# The gap between the lines of a typed message, and the ceiling on all of them together. A person
-# pauses at a line break; the ceiling is what stops a message with many of them from holding the
-# browser — and every other lane waiting on it — longer than the read-back that follows.
-TYPE_LINE_PAUSE_SEC = (0.4, 1.2)
-TYPE_MAX_PAUSE_SEC = 6.0
+# Whether the box holds the caret. A key goes wherever focus is, so this is asked before the first
+# key — putting the caret there if it is not — and again, only asking, before every key after it: a
+# caret that moved away mid-message cannot be put back without guessing where in the text it
+# belongs.
+FOCUS_BOX_JS = (
+    "(el) => { const holds = () => el === document.activeElement || el.contains(document"
+    ".activeElement); if (!holds()) el.focus(); return holds(); }"
+)
+HAS_CARET_JS = "(el) => el === document.activeElement || el.contains(document.activeElement)"
+# Select everything in the focused box: Cmd on macOS, Ctrl elsewhere.
+SELECT_ALL_KEY = "ControlOrMeta+a"
+
+# Where a control is, in the page's CSS pixels, and how big the viewport is; null for a control the
+# page has not drawn. What a person's cursor aims at.
+BOX_JS = (
+    "(el) => { const r = el.getBoundingClientRect(); if (!r.width || !r.height) return null; "
+    "return {x: r.x, y: r.y, width: r.width, height: r.height, vw: window.innerWidth, "
+    "vh: window.innerHeight}; }"
+)
+# One notch of a mouse wheel, and how many a control may take to come into view before the click
+# is left to the locator, which scrolls for itself.
+WHEEL_NOTCH_PX = 100
+MAX_WHEEL_NOTCHES = 30
+WHEEL_GAP_SEC = (0.06, 0.16)
+# The server flag that gives it the mouse, and so what `click` needs from the command.
+MOUSE_CAPS = "--caps=vision"
 
 # The package spawned via npx when config.playwright_mcp_cmd is unset. The installer verifies the
 # spawn and warms the package, and the daemon re-warms it at startup, so this resolves from the npx
@@ -128,6 +150,12 @@ class BrowserToolError(BrowserError):
     """
 
 
+class ControlMoved(BrowserToolError):
+    """A control that moved between the cursor setting off and the press, so nothing was pressed.
+    Proof of that, unlike most tool failures, which a caller past an irreversible step cannot tell
+    from a click that landed."""
+
+
 class BrowserDetached(BrowserError):
     """The server is answering us and has lost Chrome.
 
@@ -161,6 +189,9 @@ def default_command(cdp_endpoint: str) -> list:
         str(paths.browser_output_dir()),
         "--output-max-size",
         str(OUTPUT_MAX_BYTES),
+        # The mouse tools, for `click`. They widen what the server offers to the daemon's own
+        # client and to nothing else: the server is its stdio subprocess.
+        MOUSE_CAPS,
     ]
 
 
@@ -286,8 +317,15 @@ class BrowserClient:
         startup_timeout_sec: float = STARTUP_TIMEOUT_SEC,
         sleep=time.sleep,
         rng=None,
+        governor=None,
     ):
         self._command = list(command)
+        # Asked before every page load, including the ones recovery makes: each is a load the
+        # marketplace sees. See browser/governor.py; None for a client nothing paces.
+        self._governor = governor
+        # Where the cursor was left, for the next path to start from; None until the first click.
+        self._cursor: tuple | None = None
+        self._has_mouse = MOUSE_CAPS in self._command
         self._timeout = timeout_sec
         self._startup_timeout = startup_timeout_sec
         # How typing paces itself. Injected so a test can prove the shape of a send without
@@ -603,7 +641,7 @@ class BrowserClient:
         try:
             self.ensure_tab()
             if self._last_url is not None:
-                self._call_once("browser_navigate", {"url": self._last_url})
+                self._load(self._last_url, once=True)
         finally:
             self._reopening = False
 
@@ -631,7 +669,7 @@ class BrowserClient:
     def navigate(self, url: str) -> None:
         with self._lock:
             self.ensure_tab()
-            self.call_tool("browser_navigate", {"url": url})
+            self._load(url)
             self._last_url = url
             if self._follow:
                 self._follow_page(url)
@@ -699,6 +737,15 @@ class BrowserClient:
         except BrowserError:
             log.debug("could not bring our tab forward for watch mode", exc_info=True)
             self.ensure_tab()
+            self._load(url)
+
+    def _load(self, url: str, *, once: bool = False) -> None:
+        """Load `url` in our tab, once the governor has let it through."""
+        if self._governor is not None:
+            self._governor.before_load(url)
+        if once:
+            self._call_once("browser_navigate", {"url": url})
+        else:
             self.call_tool("browser_navigate", {"url": url})
 
     def ensure_tab(self) -> None:
@@ -753,44 +800,146 @@ class BrowserClient:
         return str(answer or "")
 
     def type_humanly(self, target: str, element: str, text: str) -> None:
-        """Put `text` in a box the way a person would: clicked into, then typed.
+        """Put `text` in a box the way a person would: clicked into, then typed a key at a time.
 
-        Two things separate this from a fill, and both are what the marketplace is watching.
+        A chat composer is instrumented at the key level — it is how the page draws a draft and
+        emits the typing indicator its server relays to the buyer — and the gap between keydowns is
+        something it can measure. `engines/typist.py` decides the keys and a person's pauses; this
+        presses them. Each wait is measured from the previous key's dispatch, so the time a call
+        takes is taken off the wait rather than added to it.
 
-        A fill arrives as one `Input.insertText` — a single `beforeinput`/`input` pair carrying the
-        whole message and not one `keydown`. A chat composer is instrumented at the key level:
-        that is how it renders a draft and how it emits the typing indicator its server relays to
-        the buyer. A message that appears with no keystrokes and no typing indicator is a message
-        nobody typed.
-
-        And a person clicks into the box first. Typing into a composer that received no pointer
-        event, from a page that has seen none all session, is its own answer.
-
-        Typed one line at a time, `slowly` per line rather than in small chunks: `slowly` is a real
-        per-character key stream inside one tool call, so a line costs one locator resolution
-        instead of a dozen. Line breaks are sent as Shift+Enter, never a bare Enter — in most
-        composers a bare Enter *is* the send, which is what makes typing a multi-line reply a way
-        to deliver half of one. The pauses between lines are jittered and bounded: a reply must not
-        hold the browser open longer than the verify window it is followed by.
+        A pressed key carries no target: it lands wherever focus is. So the caret is put in the box
+        before the first key and checked again before every one after it, and a box that does not
+        hold it raises — before anything is typed, or before a single key goes somewhere nobody
+        meant it to. Every word would not do: a Space landing on a focused button presses it, and a
+        letter on the page itself can fire one of its own keyboard shortcuts. The check runs inside
+        the gap the schedule already waits, so it costs the typing no time. What a keyboard cannot
+        press is entered whole with `browser_type` and `slowly`, never without it: that is a fill,
+        and a fill replaces the box.
         """
+        keys = typist.plan(text, self._rng)
         with self._lock:
             self._click_into(target, element)
-            budget = TYPE_MAX_PAUSE_SEC
-            for index, line in enumerate(text.split("\n")):
-                if index:
-                    self.call_tool("browser_press_key", {"key": "Shift+Enter"})
-                    pause = min(self._rng.uniform(*TYPE_LINE_PAUSE_SEC), budget)
-                    budget -= pause
-                    if pause > 0:
-                        self._sleep(pause)
-                if not line:
-                    # A blank line is the Shift+Enter above and nothing else; typing "" would still
-                    # cost a locator resolution and tell the page nothing.
-                    continue
-                self.call_tool(
-                    "browser_type",
-                    {"target": target, "element": element, "text": line, "slowly": True},
-                )
+            if not self.evaluate(FOCUS_BOX_JS, target=target, element=element):
+                raise BrowserToolError(f"could not put the caret in {element}")
+            last = time.monotonic()
+            for index, key in enumerate(keys):
+                if index and not self.evaluate(HAS_CARET_JS, target=target, element=element):
+                    raise BrowserToolError(f"{element} lost the caret partway through typing")
+                wait = key.delay_sec - (time.monotonic() - last)
+                if wait > 0:
+                    self._sleep(wait)
+                last = time.monotonic()
+                if key.insert:
+                    self.call_tool(
+                        "browser_type",
+                        {"target": target, "element": element, "text": key.key, "slowly": True},
+                    )
+                else:
+                    self.call_tool("browser_press_key", {"key": key.key})
+
+    def click(self, target: str, element: str) -> None:
+        """Click a control the way a person does: the cursor travels to it and presses inside it.
+
+        A locator click lands at the exact centre with no movement before it, which a page recording
+        pointer events sees on every click. `engines/pointer.py` decides the aim and the path; this
+        moves the mouse along it, scrolling the control into view with the wheel first if it is
+        off-screen, and presses for a moment rather than for nothing.
+
+        The control is located again just before the press, and one that has moved is not clicked
+        at all: a press on whatever the page put there instead is a guess on someone's account.
+        Where the page cannot say where the control is (not drawn), or the server has no mouse, the
+        locator click is used as it always was.
+        """
+        with self._lock:
+            if not self._has_mouse:
+                self.call_tool("browser_click", {"target": target, "element": element})
+                return
+            placed = self._box_in_view(target, element)
+            if placed is None:
+                self.call_tool("browser_click", {"target": target, "element": element})
+                return
+            box, viewport = placed
+            aim = pointer.aim(box, self._rng)
+            self._travel(aim, viewport)
+            again = self._box(target, element)
+            if again is None or not again[0].contains(*aim):
+                raise ControlMoved(f"{element} moved before it could be clicked")
+            self.call_tool(
+                "browser_mouse_click_xy",
+                {"x": aim[0], "y": aim[1], "delay": pointer.press_ms(self._rng)},
+            )
+
+    def _box(self, target: str, element: str):
+        """`(box, (viewport width, height))` for the control now, or None when it is not drawn."""
+        answer = self.evaluate(BOX_JS, target=target, element=element)
+        if not isinstance(answer, dict):
+            return None
+        try:
+            box = pointer.Box(
+                x=float(answer["x"]),
+                y=float(answer["y"]),
+                width=float(answer["width"]),
+                height=float(answer["height"]),
+            )
+            return box, (float(answer["vw"]), float(answer["vh"]))
+        except (KeyError, TypeError, ValueError):
+            return None
+
+    def _box_in_view(self, target: str, element: str):
+        """The part of the control on screen, once it is there, wheeled there notch by notch; None
+        when it cannot be, which leaves the click to the locator.
+
+        What is aimed at is the part that shows, so a control wider than the window, or a box
+        taller than it, is pressed where it can be seen rather than wheeled at forever. One with
+        nothing on screen sideways is left to the locator, which scrolls for itself.
+        """
+        placed = self._box(target, element)
+        for _ in range(MAX_WHEEL_NOTCHES):
+            if placed is None:
+                return None
+            box, (width, height) = placed
+            left, right = max(box.x, 0.0), min(box.x + box.width, width)
+            top, bottom = max(box.y, 0.0), min(box.y + box.height, height)
+            if right - left < 1:
+                return None
+            whole = box.y >= 0 and box.y + box.height <= height
+            if (whole or box.height > height) and bottom - top >= 1:
+                shown = pointer.Box(x=left, y=top, width=right - left, height=bottom - top)
+                return shown, (width, height)
+            if self._cursor is None:
+                self._travel((width * self._rng.uniform(0.35, 0.65), height / 2), (width, height))
+            below = box.y + box.height > height
+            notch = WHEEL_NOTCH_PX * self._rng.uniform(0.8, 1.2)
+            self._sleep(self._rng.uniform(*WHEEL_GAP_SEC))
+            self.call_tool(
+                "browser_mouse_wheel", {"deltaX": 0, "deltaY": notch if below else -notch}
+            )
+            placed = self._box(target, element)
+        return None
+
+    def _travel(self, to: tuple, viewport: tuple) -> None:
+        width, height = viewport
+        start = self._cursor or (
+            width * self._rng.uniform(0.3, 0.7),
+            height * self._rng.uniform(0.3, 0.7),
+        )
+        for step in pointer.path(start, to, self._rng):
+            self._sleep(step.delay_sec)
+            self.call_tool("browser_mouse_move_xy", {"x": step.x, "y": step.y})
+        self._cursor = to
+
+    def empty_box(self, target: str, element: str) -> None:
+        """Empty a box with a real select-all and delete, the caret put in it first.
+
+        The select-all lands wherever focus is, so a box that will not take the caret raises before
+        anything is selected — never a select-all and delete aimed at some other part of the page.
+        """
+        with self._lock:
+            if not self.evaluate(FOCUS_BOX_JS, target=target, element=element):
+                raise BrowserToolError(f"could not put the caret in {element}")
+            self.call_tool("browser_press_key", {"key": SELECT_ALL_KEY})
+            self.call_tool("browser_press_key", {"key": "Backspace"})
 
     def _click_into(self, target: str, element: str) -> None:
         """Put a pointer event on the box before typing into it. Never fails the typing.
@@ -803,10 +952,10 @@ class BrowserClient:
         `COMPOSER_DEFAULTS` already records this about the send *button* and declines to use it for
         the same reason. The pointer event is worth having — a composer that has never seen one is
         its own answer — but it is a nicety, and a nicety must not be able to stop a buyer being
-        answered. `pressSequentially` focuses the locator itself, so typing works either way.
+        answered. The caret is put in the box without it, so typing works either way.
         """
         try:
-            self.call_tool("browser_click", {"target": target, "element": element})
+            self.click(target, element)
         except BrowserError:
             log.debug("could not click into %s before typing", element, exc_info=True)
 

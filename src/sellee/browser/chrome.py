@@ -426,6 +426,12 @@ def launch_command(port: int | None, *, chrome_bin: str | None = None) -> list:
     app from counting as hidden, which spares every send the work of raising a tab that was already
     active.
 
+    `--disable-blink-features=AutomationControlled` is what keeps `navigator.webdriver` false.
+    Measured on Chrome 154, `--remote-debugging-port` alone turns it true on every page, before
+    anything has attached — the cheapest automation check a site can make, answered yes on every
+    marketplace page the agent ever loaded. With it the flag reads false, with Playwright attached
+    too, and CDP works as before.
+
     The session is deliberately *not* restored. Sign-ins live in the profile, not in reopened tabs,
     so restoring bought nothing but a growing pile — and the pile is what costs the seller their
     focus: only one tab in a window is the active one, so every extra tab is another sweep that
@@ -438,6 +444,7 @@ def launch_command(port: int | None, *, chrome_bin: str | None = None) -> list:
         f"--remote-debugging-port={0 if port is None else port}",
         f"--user-data-dir={paths.browser_profile_dir()}",
         "--disable-backgrounding-occluded-windows",
+        "--disable-blink-features=AutomationControlled",
         "--no-first-run",
         "--no-default-browser-check",
         "--hide-crash-restore-bubble",

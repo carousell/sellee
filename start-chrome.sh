@@ -55,6 +55,7 @@ echo "Leave this window open while the agent is working."
 	--remote-debugging-port="$port" \
 	--user-data-dir="$profile" \
 	--disable-backgrounding-occluded-windows \
+	--disable-blink-features=AutomationControlled \
 	--no-first-run \
 	--no-default-browser-check \
 	--restore-last-session \

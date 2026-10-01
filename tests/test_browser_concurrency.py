@@ -66,8 +66,9 @@ class SlowClient:
         return "ok"
 
     def composer_text(self, target, element):
-        """An empty box: this file is about interleaving, not about drafts."""
-        return ""
+        """Whatever has been typed, and nothing before it: this file is about interleaving, not
+        about drafts."""
+        return self.typed or ""
 
     def type_humanly(self, target, element, text):
         self.call_tool("browser_type", {"target": target, "element": element, "text": text})

@@ -8,10 +8,12 @@ given.
 
 from __future__ import annotations
 
+import random
 import threading
 
 import pytest
 
+from sellee.browser import client as client_mod
 from sellee.browser import formfill, publisher
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserClient, BrowserToolError
@@ -58,7 +60,9 @@ class StubForm:
         self.wall = wall
         self._lock = threading.RLock()
         self._sleep = lambda _seconds: None
-        self._rng = _NoJitter()
+        self._rng = random.Random(0)
+        # Which field holds the caret: a pressed key carries no target and lands there.
+        self.focused = None
         self.marked = list(_ALL_FIELDS if marked is None else marked)
         self.after_next = list(self.marked + ["publish"] if after_next is None else after_next)
         self.readback = readback
@@ -97,12 +101,23 @@ class StubForm:
     type_humanly = BrowserClient.type_humanly
     _click_into = BrowserClient._click_into
 
+    def click(self, target, element):
+        """The page receives a click on the control; how the cursor got there is the client's."""
+        return self.call_tool("browser_click", {"target": target, "element": element})
+
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
         self.actions.append((name, step))
+        if name == "browser_click":
+            self.focused = step
+        if name == "browser_press_key" and self.focused:
+            key = arguments.get("key", "")
+            if len(key) == 1 or key == "Shift+Enter":
+                char = "\n" if key == "Shift+Enter" else key
+                self.typed[self.focused] = self.typed.get(self.focused, "") + char
         if name == "browser_type":
-            self.typed[step] = arguments.get("text")
+            self.typed[step] = self.typed.get(step, "") + arguments.get("text")
         if name in self.fail_on or step in self.fail_on:
             raise BrowserToolError(self.fail_on.get(name) or self.fail_on.get(step))
         if step == "next":
@@ -110,6 +125,12 @@ class StubForm:
         return ""
 
     def evaluate(self, function, **kwargs):
+        if function == client_mod.FOCUS_BOX_JS:
+            target = kwargs.get("target") or ""
+            self.focused = target.split("'")[1] if "'" in target else target
+            return True
+        if function == client_mod.HAS_CARET_JS:
+            return True
         if function == _ADAPTER.block_wall_js:
             return self.wall
         if function == _ADAPTER.publish_fields_js:
@@ -182,8 +203,7 @@ def test_the_title_and_price_are_typed_not_set() -> None:
 
     _publish(client)
 
-    typed = {step: name for name, step in client.actions if name == "browser_type"}
-    assert set(typed) == {"title", "price", "description"}
+    assert set(client.typed) == {"title", "price", "description"}
 
 
 def test_the_price_is_typed_without_separators() -> None:
@@ -206,7 +226,7 @@ def test_a_form_missing_its_fields_is_never_filled_in() -> None:
     with pytest.raises(publisher.PublishNotAttempted):
         _publish(client)
 
-    assert not [a for a in client.actions if a[0] == "browser_type"]
+    assert not client.typed
 
 
 def test_a_dropdown_with_no_matching_option_stops_before_the_commit() -> None:
@@ -468,7 +488,7 @@ def test_a_wall_stops_a_publish_before_anything_is_filled_in() -> None:
         _publish(client)
 
     assert caught.value.retryable is True
-    assert "browser_type" not in [name for name, _ in client.actions]
+    assert not client.typed
 
 
 def test_a_wall_that_goes_up_mid_form_stops_before_the_commit() -> None:
@@ -491,3 +511,64 @@ def test_a_wall_that_goes_up_mid_form_stops_before_the_commit() -> None:
 
     assert "next" not in _steps(client)
     assert "publish" not in _steps(client)
+
+
+# --- what a failure before the commit says --------------------------------------------------------
+
+
+def test_a_create_form_that_will_not_open_is_nothing_attempted() -> None:
+    """Nothing exists yet, so it is safe to try again — never the bare error the fan-out would
+    have had to treat as "a listing may exist"."""
+
+    class WillNotOpen(StubForm):
+        def navigate_visible(self, url):
+            raise BrowserToolError("net::ERR_TIMED_OUT")
+
+    with pytest.raises(publisher.PublishNotAttempted) as caught:
+        _publish(WillNotOpen())
+
+    assert caught.value.retryable is True
+
+
+def test_running_out_of_page_loads_is_passed_through_untouched() -> None:
+    """Being paced is not an attempt at all, and the fan-out spends nothing on it — so it is not
+    dressed up as one."""
+    from sellee.browser.governor import PagesSpent
+
+    class Paced(StubForm):
+        def navigate_visible(self, url):
+            raise PagesSpent("spent")
+
+    with pytest.raises(PagesSpent):
+        _publish(Paced())
+
+
+def test_a_next_button_that_moved_before_it_was_pressed_submitted_nothing() -> None:
+    """The click refuses to press a control that moved, which is proof nothing was submitted —
+    not the "may have gone through" every other failure past this point has to be."""
+    from sellee.browser.client import ControlMoved
+
+    class NextMoves(StubForm):
+        def click(self, target, element):
+            if element == "Next":
+                raise ControlMoved("Next moved before it could be clicked")
+            return super().click(target, element)
+
+    with pytest.raises(publisher.PublishNotAttempted) as caught:
+        _publish(NextMoves())
+
+    assert caught.value.retryable is True
+
+
+def test_a_publish_button_that_moved_is_still_treated_as_maybe_published() -> None:
+    """Past Next the form may already have made the listing, so the conservative answer stands."""
+    from sellee.browser.client import ControlMoved
+
+    class PublishMoves(StubForm):
+        def click(self, target, element):
+            if element == "Publish":
+                raise ControlMoved("Publish moved before it could be clicked")
+            return super().click(target, element)
+
+    with pytest.raises(publisher.PublishUnverified):
+        _publish(PublishMoves())

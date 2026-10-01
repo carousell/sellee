@@ -56,6 +56,7 @@ Start-Process -FilePath $chrome -ArgumentList @(
 	"--remote-debugging-port=$port",
 	"--user-data-dir=$profileDir",
 	'--disable-backgrounding-occluded-windows',
+	'--disable-blink-features=AutomationControlled',
 	'--no-first-run',
 	'--no-default-browser-check',
 	'--restore-last-session',

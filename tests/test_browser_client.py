@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import random
 import signal
 import sys
 import time
@@ -26,6 +27,7 @@ from sellee.browser.client import (
     same_page,
     sections,
 )
+from sellee.engines import pointer, typist
 
 # The real probe, bound at import so the conftest guard's stub cannot reach it. These are the
 # probe's own tests, so they are the ones that must call the real thing.
@@ -649,6 +651,13 @@ def test_the_launch_command_keeps_a_covered_window_out_of_the_hidden_state(xdg_t
     assert "--disable-backgrounding-occluded-windows" in chrome.launch_command(9222)
 
 
+def test_the_launch_command_does_not_announce_automation_to_every_page(xdg_tmp) -> None:
+    """Measured on Chrome 154: `--remote-debugging-port` on its own turns `navigator.webdriver`
+    true, on every page, before anything has attached — the cheapest automation check a site can
+    make, answered yes on every Facebook load. This keeps it false, and CDP keeps working."""
+    assert "--disable-blink-features=AutomationControlled" in chrome.launch_command(9222)
+
+
 def test_stale_singleton_locks_are_cleared(xdg_tmp) -> None:
     """A SIGKILLed Chrome leaves these behind and the next launch hangs on them."""
     from sellee import paths
@@ -1166,11 +1175,11 @@ def test_a_handshake_that_fails_leaves_nothing_behind_to_block_the_next_try(make
 
 # --- typing a message the way a person does -------------------------------------------------------
 #
-# A fill arrives at the page as one `Input.insertText`: a single input event carrying the whole
-# message and not one keydown. A chat composer is instrumented at the key level — that is how it
-# draws a draft and how it emits the typing indicator its server relays to the buyer — so a message
-# with no keystrokes behind it is a message nobody typed. These run over the real transport, so what
-# is asserted is what the server would actually have received.
+# A chat composer is instrumented at the key level — that is how it draws a draft and emits the
+# typing indicator its server relays to the buyer — and the gap between keydowns is something the
+# page can measure. So a message goes in one key at a time on a person's schedule
+# (`engines/typist.py`), and these hold what the client does with that schedule over the real
+# transport: which calls reach the server, and what the page would end up holding.
 
 
 class _Paced:
@@ -1183,35 +1192,70 @@ class _Paced:
         self.slept.append(seconds)
 
 
-class _MaxJitter:
-    def uniform(self, low: float, high: float) -> float:
-        return high
-
-
-def _typing_client(make_client, sleep=None, rng=None):
+def _typing_client(make_client, sleep=None, rng=None, focused=True):
     return make_client(
         {
             "tools": {
                 "browser_click": {"text": "ok"},
                 "browser_type": {"text": "ok"},
                 "browser_press_key": {"text": "ok"},
+                # The caret check: whether the box holds focus when asked.
+                "browser_evaluate": focused if isinstance(focused, list) else {"result": focused},
             }
         },
         sleep=sleep or (lambda _s: None),
-        rng=rng or _MaxJitter(),
+        rng=rng or random.Random(4),
     )
 
 
-def test_a_message_is_typed_not_filled(make_client) -> None:
+def _typed(calls) -> str:
+    """What the page would hold, from the calls that reached it."""
+    out = ""
+    for call in calls:
+        args = call["arguments"]
+        if call["tool"] == "browser_press_key":
+            out += "\n" if args["key"] == "Shift+Enter" else args["key"]
+        elif call["tool"] == "browser_type":
+            out += args["text"]
+    return out
+
+
+def test_a_message_is_typed_a_key_at_a_time(make_client) -> None:
     client = _typing_client(make_client)
 
     client.type_humanly("textarea", "the reply message box", "yes, still available!")
 
     calls = tool_calls(client)
-    assert [c["tool"] for c in calls] == ["browser_click", "browser_type"]
+    assert calls[0]["tool"] == "browser_click"
     assert calls[0]["arguments"]["element"] == "the reply message box"
-    assert calls[1]["arguments"]["text"] == "yes, still available!"
-    assert calls[1]["arguments"]["slowly"] is True
+    presses = [c for c in calls if c["tool"] == "browser_press_key"]
+    assert len(presses) == len("yes, still available!")
+    assert _typed(calls) == "yes, still available!"
+
+
+def test_nothing_is_ever_filled(make_client) -> None:
+    """`browser_type` without `slowly` is a fill, and a fill replaces the whole box: measured on
+    Chrome 154, sixty typed characters became one accented letter. It must never be sent while a
+    message is being typed."""
+    client = _typing_client(make_client)
+
+    client.type_humanly("textarea", "box", "déjà vu 👍🏽 — ok ✅")
+
+    for call in tool_calls(client):
+        if call["tool"] == "browser_type":
+            assert call["arguments"]["slowly"] is True
+
+
+def test_what_a_keyboard_cannot_press_is_entered_whole(make_client) -> None:
+    client = _typing_client(make_client)
+    text = "deal 👍🏽 — see you at 6 ✅"
+
+    client.type_humanly("textarea", "box", text)
+
+    calls = tool_calls(client)
+    entered = [c["arguments"]["text"] for c in calls if c["tool"] == "browser_type"]
+    assert entered == ["👍🏽", "—", "✅"]
+    assert _typed(calls) == text
 
 
 def test_a_line_break_is_shift_enter_never_a_bare_enter(make_client) -> None:
@@ -1221,20 +1265,10 @@ def test_a_line_break_is_shift_enter_never_a_bare_enter(make_client) -> None:
 
     client.type_humanly("textarea", "box", "first line\nsecond line")
 
-    calls = tool_calls(client)
-    assert [c["tool"] for c in calls] == [
-        "browser_click",
-        "browser_type",
-        "browser_press_key",
-        "browser_type",
-    ]
-    keys = [c["arguments"]["key"] for c in calls if c["tool"] == "browser_press_key"]
-    assert keys == ["Shift+Enter"]
-    assert "Enter" not in [k for k in keys if k == "Enter"]
-    assert [c["arguments"]["text"] for c in calls if c["tool"] == "browser_type"] == [
-        "first line",
-        "second line",
-    ]
+    keys = [c["arguments"]["key"] for c in tool_calls(client) if c["tool"] == "browser_press_key"]
+    assert "Enter" not in keys
+    assert keys.count("Shift+Enter") == 1
+    assert _typed(tool_calls(client)) == "first line\nsecond line"
 
 
 def test_leading_trailing_and_doubled_newlines_survive(make_client) -> None:
@@ -1242,41 +1276,96 @@ def test_leading_trailing_and_doubled_newlines_survive(make_client) -> None:
 
     client.type_humanly("textarea", "box", "\nmiddle\n\nend\n")
 
-    calls = tool_calls(client)
-    breaks = sum(1 for c in calls if c["tool"] == "browser_press_key")
-    typed = [c["arguments"]["text"] for c in calls if c["tool"] == "browser_type"]
-    # Four breaks for five segments, and no call that types nothing.
-    assert breaks == 4
-    assert typed == ["middle", "end"]
-    assert all(text for text in typed)
+    assert _typed(tool_calls(client)) == "\nmiddle\n\nend\n"
 
 
-def test_an_emoji_is_never_split(make_client) -> None:
-    """A line goes in one call, so nothing can land between the halves of a surrogate pair."""
-    client = _typing_client(make_client)
-    text = "deal 👍🏽 — see you at 6 ✅"
+def test_the_pauses_are_the_typists_and_never_longer(make_client) -> None:
+    """Each wait is measured from the previous key's dispatch, so the call's own time is taken off
+    it rather than added on top."""
+    paced = _Paced()
+    text = "hi, is 6pm ok?"
+    client = _typing_client(make_client, sleep=paced, rng=random.Random(9))
 
     client.type_humanly("textarea", "box", text)
 
-    typed = [c["arguments"]["text"] for c in tool_calls(client) if c["tool"] == "browser_type"]
-    assert typed == [text]
+    planned = [k.delay_sec for k in typist.plan(text, random.Random(9))]
+    assert len(paced.slept) <= len(planned)
+    assert all(s <= max(planned) for s in paced.slept)
+    assert sum(paced.slept) <= sum(planned)
+    assert sum(paced.slept) >= sum(planned) - 0.5 * len(planned)
 
 
-def test_the_pauses_between_lines_are_bounded(make_client) -> None:
-    """A reply must not hold the browser — and every lane waiting on it — longer than the read-back
-    that follows it."""
+def test_a_long_message_stays_under_the_typing_ceiling(make_client) -> None:
     paced = _Paced()
-    client = _typing_client(make_client, sleep=paced, rng=_MaxJitter())
+    client = _typing_client(make_client, sleep=paced)
 
-    client.type_humanly("textarea", "box", "\n".join(str(n) for n in range(40)))
+    client.type_humanly("textarea", "box", "word " * 400)
 
-    assert sum(paced.slept) <= client_typing_ceiling()
+    assert sum(paced.slept) <= typist.CEILING_SEC + 1e-6
 
 
-def client_typing_ceiling() -> float:
-    from sellee.browser.client import TYPE_MAX_PAUSE_SEC
+def test_no_key_is_pressed_until_the_caret_is_in_the_box(make_client) -> None:
+    """Keys go wherever focus is. A box that will not take it is found out before a single key
+    has gone astray, while nothing has been typed and a retry is still safe."""
+    client = _typing_client(make_client, focused=False)
 
-    return TYPE_MAX_PAUSE_SEC
+    with pytest.raises(BrowserToolError):
+        client.type_humanly("textarea", "box", "yes, still available!")
+
+    assert [c for c in tool_calls(client) if c["tool"] == "browser_press_key"] == []
+
+
+def test_typing_stops_when_the_box_loses_the_caret(make_client) -> None:
+    """The caret is checked again at every word. A reply typed into whatever took focus instead
+    would go somewhere nobody meant it to."""
+    client = _typing_client(
+        make_client, focused=[{"result": True}, {"result": True}, {"result": False}]
+    )
+
+    with pytest.raises(BrowserToolError):
+        client.type_humanly("textarea", "box", "one two three four five")
+
+    typed = _typed(tool_calls(client))
+    assert typed and "five" not in typed
+
+
+def test_no_key_follows_a_lost_caret(make_client) -> None:
+    """Checked before every key, not every word: a Space or a letter landing on whatever took focus
+    can press a button or fire one of the page's own keyboard shortcuts."""
+    client = _typing_client(
+        make_client, focused=[{"result": True}, {"result": True}, {"result": False}]
+    )
+
+    with pytest.raises(BrowserToolError):
+        client.type_humanly("textarea", "box", "abcdefgh")
+
+    assert _typed(tool_calls(client)) == "ab"
+
+
+def test_a_composer_that_will_not_hold_still_is_still_typed_into(make_client) -> None:
+    """The regression that broke ten sends in a row on a live account.
+
+    A click waits for its target to be actionable, and a chat composer is a node the page repaints
+    as it goes — so the click resolves the element and then times out waiting for it to hold still.
+    The pointer event is worth having and must never be able to stop a buyer being answered; the
+    caret is put in the box without it.
+    """
+    client = make_client(
+        {
+            "tools": {
+                "browser_click": {"error": "TimeoutError: Timeout 5000ms exceeded."},
+                "browser_type": {"text": "ok"},
+                "browser_press_key": {"text": "ok"},
+                "browser_evaluate": {"result": True},
+            }
+        },
+        sleep=lambda _s: None,
+        rng=random.Random(2),
+    )
+
+    client.type_humanly("textarea", "the reply message box", "yes, still available!")
+
+    assert _typed(tool_calls(client)) == "yes, still available!"
 
 
 def test_the_composer_can_be_read_before_typing(make_client) -> None:
@@ -1285,27 +1374,199 @@ def test_the_composer_can_be_read_before_typing(make_client) -> None:
     assert client.composer_text("textarea", "box") == "half a draft"
 
 
-def test_a_composer_that_will_not_hold_still_is_still_typed_into(make_client) -> None:
-    """The regression that broke ten sends in a row on a live account.
+# --- every page load is the governor's first ------------------------------------------------------
 
-    A click waits for its target to be actionable, and a chat composer is a node the page repaints
-    as it goes — so the click resolves the element and then times out waiting for it to hold still.
-    `COMPOSER_DEFAULTS` already records exactly this about the send button and declines to use it.
-    The pointer event is worth having and must never be able to stop a buyer being answered.
-    """
+
+class _Governor:
+    def __init__(self, refuse=False):
+        self.loads: list = []
+        self.refuse = refuse
+
+    def before_load(self, url):
+        if self.refuse:
+            from sellee.browser.governor import PagesSpent
+
+            raise PagesSpent("spent")
+        self.loads.append(url)
+
+
+def test_a_navigation_asks_the_governor_before_it_loads(make_client) -> None:
+    gov = _Governor()
     client = make_client(
-        {
-            "tools": {
-                "browser_click": {"error": "TimeoutError: Timeout 5000ms exceeded."},
-                "browser_type": {"text": "ok"},
-            }
-        },
-        sleep=lambda _s: None,
-        rng=_MaxJitter(),
+        {"tools": {"browser_tabs": {"text": "ok"}, "browser_navigate": {"text": "ok"}}},
+        governor=gov,
     )
 
-    client.type_humanly("textarea", "the reply message box", "yes, still available!")
+    client.navigate("https://www.facebook.com/messages/")
 
-    typed = [c for c in tool_calls(client) if c["tool"] == "browser_type"]
-    assert [c["arguments"]["text"] for c in typed] == ["yes, still available!"]
-    assert typed[0]["arguments"]["slowly"] is True
+    assert gov.loads == ["https://www.facebook.com/messages/"]
+    assert [c["tool"] for c in tool_calls(client)].count("browser_navigate") == 1
+
+
+def test_a_refused_load_never_reaches_the_page(make_client) -> None:
+    from sellee.browser.governor import PagesSpent
+
+    client = make_client(
+        {"tools": {"browser_tabs": {"text": "ok"}, "browser_navigate": {"text": "ok"}}},
+        governor=_Governor(refuse=True),
+    )
+
+    with pytest.raises(PagesSpent):
+        client.navigate("https://www.facebook.com/messages/")
+
+    assert "browser_navigate" not in [c["tool"] for c in tool_calls(client)]
+
+
+# --- clicking the way a person does ---------------------------------------------------------------
+#
+# A locator click lands at the exact centre of the control with no movement before it: the cursor
+# is simply there. `click` moves it along a person's path and presses inside the control instead.
+
+_IN_VIEW = {"x": 400.0, "y": 600.0, "width": 120.0, "height": 36.0, "vw": 1200, "vh": 900}
+
+
+def _pointing_client(tmp_path, tools: dict, *, caps=True, rng=None):
+    script = tmp_path / "pointing.json"
+    script.write_text(json.dumps({"tools": tools}))
+    command = [sys.executable, str(FAKE), str(script)]
+    if caps:
+        command.append("--caps=vision")
+    client = BrowserClient(
+        command=command, sleep=lambda _s: None, rng=rng or random.Random(6), timeout_sec=10.0
+    )
+    client.calls_log = tmp_path / "pointing.json.calls"
+    return client
+
+
+def _mouse_tools(box_answers):
+    return {
+        "browser_evaluate": box_answers,
+        "browser_mouse_move_xy": {"text": "ok"},
+        "browser_mouse_click_xy": {"text": "ok"},
+        "browser_mouse_wheel": {"text": "ok"},
+        "browser_click": {"text": "ok"},
+    }
+
+
+def test_the_default_server_has_the_mouse() -> None:
+    from sellee.browser.client import default_command
+
+    assert "--caps=vision" in default_command("http://127.0.0.1:9222")
+
+
+def test_a_click_travels_to_the_control_and_presses_inside_it(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}))
+    try:
+        client.click("button[name=next]", "Next")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    names = [c["tool"] for c in calls]
+    assert "browser_click" not in names
+    moves = [c for c in calls if c["tool"] == "browser_mouse_move_xy"]
+    presses = [c for c in calls if c["tool"] == "browser_mouse_click_xy"]
+    assert len(moves) >= pointer.MIN_STEPS
+    assert len(presses) == 1
+    press = presses[0]["arguments"]
+    assert 400.0 <= press["x"] <= 520.0 and 600.0 <= press["y"] <= 636.0
+    assert (moves[-1]["arguments"]["x"], moves[-1]["arguments"]["y"]) == (press["x"], press["y"])
+    assert press["delay"] >= pointer.PRESS_MS[0]
+
+
+def test_a_control_that_moved_before_the_press_is_not_clicked(tmp_path) -> None:
+    """Never a guess: a page that reflowed under the cursor would take the press on whatever is
+    there now."""
+    moved = {**_IN_VIEW, "y": 100.0}
+    client = _pointing_client(tmp_path, _mouse_tools([{"result": _IN_VIEW}, {"result": moved}]))
+    try:
+        with pytest.raises(BrowserToolError, match="moved"):
+            client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert "browser_mouse_click_xy" not in names
+    assert "browser_click" not in names
+
+
+def test_a_control_out_of_view_is_scrolled_to_with_the_wheel(tmp_path) -> None:
+    below = {**_IN_VIEW, "y": 1500.0}
+    client = _pointing_client(
+        tmp_path, _mouse_tools([{"result": below}, {"result": _IN_VIEW}, {"result": _IN_VIEW}])
+    )
+    try:
+        client.click("button[name=next]", "Next")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    wheels = [c["arguments"]["deltaY"] for c in calls if c["tool"] == "browser_mouse_wheel"]
+    assert wheels and all(delta > 0 for delta in wheels)
+    assert [c["tool"] for c in calls].count("browser_mouse_click_xy") == 1
+
+
+def test_a_server_without_the_mouse_clicks_the_old_way(tmp_path) -> None:
+    """A server an operator configured by hand may not have the mouse tools, and a click must
+    still happen."""
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}), caps=False)
+    try:
+        client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names == ["browser_click"]
+
+
+def test_a_control_the_page_has_not_drawn_is_left_to_the_locator(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": None}))
+    try:
+        client.click("input[type=file]", "Add photos")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names[-1] == "browser_click"
+    assert "browser_mouse_click_xy" not in names
+
+
+def test_a_control_wider_than_the_window_is_pressed_on_the_part_that_shows(tmp_path) -> None:
+    wide = {**_IN_VIEW, "x": 900.0, "width": 800.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": wide}))
+    try:
+        client.click("button[name=next]", "Next")
+        presses = [c for c in tool_calls(client) if c["tool"] == "browser_mouse_click_xy"]
+    finally:
+        client.close()
+
+    assert len(presses) == 1
+    assert 900.0 <= presses[0]["arguments"]["x"] <= 1200.0
+
+
+def test_a_box_taller_than_the_window_is_pressed_where_it_shows(tmp_path) -> None:
+    """A tall message box would otherwise never count as in view, and be wheeled at uselessly."""
+    tall = {**_IN_VIEW, "y": -200.0, "height": 1400.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": tall}))
+    try:
+        client.click("div[role=textbox]", "the reply message box")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    assert "browser_mouse_wheel" not in [c["tool"] for c in calls]
+    press = [c for c in calls if c["tool"] == "browser_mouse_click_xy"][0]["arguments"]
+    assert 0.0 <= press["y"] <= 900.0
+
+
+def test_a_control_entirely_off_to_the_side_is_left_to_the_locator(tmp_path) -> None:
+    aside = {**_IN_VIEW, "x": 1500.0}
+    client = _pointing_client(tmp_path, _mouse_tools({"result": aside}))
+    try:
+        client.click("button[name=next]", "Next")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names[-1] == "browser_click"
+    assert "browser_mouse_click_xy" not in names

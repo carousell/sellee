@@ -697,6 +697,41 @@ def _ledger(store):
     return [r for r in store.publish_pass_index() if r["origin"] == "crosslist"]
 
 
+class _NoRoom:
+    def can_start(self, market, loads=1):
+        return False
+
+
+def test_a_publish_with_no_page_loads_left_waits_and_spends_nothing(
+    store, bus, monkeypatch
+) -> None:
+    published: list = []
+    item = _driving(store, bus, monkeypatch, published=published)
+    deps = _deps(store, bus, browser_factory=lambda: _HeldClient())
+    deps.governor = _NoRoom()
+
+    crosslist._drive_publish(deps, store.get_item(item["id"]), "carousell")
+
+    assert published == []
+    assert _ledger(store) == []
+    assert deps.attempts == {}
+
+
+def test_a_publish_that_ran_out_of_page_loads_spends_nothing(store, bus, monkeypatch) -> None:
+    """Another lane can spend the hour's page loads between the check and the drive. Nothing was
+    attempted, so nothing is counted: three such collisions would otherwise retire the item from
+    the marketplace for good."""
+    from sellee.browser.governor import PagesSpent
+
+    item = _driving(store, bus, monkeypatch, raises=PagesSpent("spent"))
+    deps = _deps(store, bus, browser_factory=lambda: _HeldClient())
+
+    crosslist._drive_publish(deps, store.get_item(item["id"]), "carousell")
+
+    assert _ledger(store) == []
+    assert deps.attempts == {}
+
+
 def test_a_terminal_refusal_spends_the_shot_rather_than_looping(store, bus, monkeypatch) -> None:
     """The lane always takes the first eligible pair, so a refusal that can never succeed would
     re-drive the same item forever."""

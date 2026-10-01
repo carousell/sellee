@@ -24,8 +24,9 @@ from urllib.parse import urljoin
 
 from sellee import paths
 from sellee.browser import formfill, reconcile
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
-from sellee.browser.client import BrowserError
+from sellee.browser.client import BrowserError, ControlMoved
 from sellee.browser.formfill import COMMIT_SETTLE_SEC, STEP_SETTLE_SEC
 
 log = logging.getLogger(__name__)
@@ -75,6 +76,22 @@ def publish(
         raise PublishNotAttempted(f"{adapter.market} has no publish selectors")
     pause = sleep or formfill.sleep
 
+    try:
+        _fill_in(client, adapter, item, create_url, photos, pause)
+    except (PublishNotAttempted, page_governor.PagesSpent):
+        # Already the answer. Being paced is not an attempt at all, and the fan-out spends nothing
+        # on it, so it is passed through as it is rather than dressed up as one.
+        raise
+    except BrowserError as exc:
+        # Nothing has been submitted yet, so whatever failed, trying again is safe.
+        raise PublishNotAttempted(f"could not fill in the form: {exc}", retryable=True) from exc
+
+    # Everything past here may have created a listing.
+    return _commit(client, adapter, item, listings_url, pause)
+
+
+def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> None:
+    """Everything on the safe side of the commit: open the form, fill it, read it back."""
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
     _refuse_at_a_wall(client, adapter)
@@ -92,9 +109,6 @@ def publish(
     _refuse_paid_promotion(client, adapter)
     _verify_form(client, adapter, item)
 
-    # Everything past here may have created a listing.
-    return _commit(client, adapter, item, listings_url, pause)
-
 
 def _open_all_fields(client, adapter, pause) -> None:
     """Expand whatever the form keeps collapsed (Facebook hides the description behind "More
@@ -103,10 +117,7 @@ def _open_all_fields(client, adapter, pause) -> None:
     if "more" not in (found.get("marked") or []):
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("more"), "element": "the rest of the listing fields"},
-        )
+        client.click(adapter.publish_target("more"), "the rest of the listing fields")
         pause(STEP_SETTLE_SEC)
     except BrowserError:
         log.debug("could not expand the %s create form", adapter.market, exc_info=True)
@@ -130,10 +141,7 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
     """
     if "add_photos" in (found.get("marked") or []):
         try:
-            client.call_tool(
-                "browser_click",
-                {"target": adapter.publish_target("add_photos"), "element": "Add photos"},
-            )
+            client.click(adapter.publish_target("add_photos"), "Add photos")
             pause(STEP_SETTLE_SEC)
         except BrowserError as exc:
             raise PublishNotAttempted(
@@ -183,10 +191,7 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
     if step not in (found.get("marked") or []) or not wanted:
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target(step), "element": f"the {step} dropdown"},
-        )
+        client.click(adapter.publish_target(step), f"the {step} dropdown")
         pause(STEP_SETTLE_SEC)
         answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
         if not answer.get("chosen"):
@@ -194,10 +199,7 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
                 f"{adapter.market} offers no {step} called {wanted!r} "
                 f"(it offers {(answer.get('options') or [])[:8]})"
             )
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("option"), "element": f"the {step}"},
-        )
+        client.click(adapter.publish_target("option"), f"the {step}")
         pause(STEP_SETTLE_SEC)
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
@@ -213,10 +215,7 @@ def _refuse_paid_promotion(client, adapter) -> None:
     if not found.get("boost_on"):
         return
     try:
-        client.call_tool(
-            "browser_click",
-            {"target": adapter.publish_target("boost"), "element": "the paid boost switch"},
-        )
+        client.click(adapter.publish_target("boost"), "the paid boost switch")
     except BrowserError as exc:
         raise PublishNotAttempted(
             f"the paid boost was on and would not turn off: {exc}", retryable=True
@@ -262,16 +261,19 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
             "something, and nothing was submitted"
         )
     try:
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("next"), "element": "Next"}
-        )
+        client.click(adapter.publish_target("next"), "Next")
+    except ControlMoved as exc:
+        # Refused before the press, so nothing was submitted: the one failure here that is proof
+        # rather than doubt.
+        raise PublishNotAttempted(f"nothing was submitted: {exc}", retryable=True) from exc
+    except BrowserError as exc:
+        raise PublishUnverified(f"the publish may have gone through: {exc}") from exc
+    try:
         pause(COMMIT_SETTLE_SEC)
         after = client.evaluate(adapter.publish_fields_js) or {}
         if "publish" not in (after.get("marked") or []):
             raise PublishUnverified("the form moved on but offered no Publish button")
-        client.call_tool(
-            "browser_click", {"target": adapter.publish_target("publish"), "element": "Publish"}
-        )
+        client.click(adapter.publish_target("publish"), "Publish")
         pause(COMMIT_SETTLE_SEC)
 
         # Reading the result stays inside the bracket on purpose: it runs on a page that just
