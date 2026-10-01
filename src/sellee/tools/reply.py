@@ -156,6 +156,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             in_msg_id=params.get("in_msg_id"),
             cfg=cfg,
             interactive=interactive,
+            pass_id=ctx.session.pass_id,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc

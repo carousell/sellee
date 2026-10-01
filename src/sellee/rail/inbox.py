@@ -173,6 +173,8 @@ def _settle_our_send(deps: RelayDeps, message: dict) -> None:
 def _finish_our_sends(deps: RelayDeps, rail) -> None:
     """Retry our unsettled sends under their own id, which bazaar stores once. Its answer settles
     each: success commits it, and a refusal means it was never sent and never will be."""
+    if deps.store.is_paused():
+        return
     cutoff = deps.now() - RETRY_SEND_AFTER_SEC
     for intent in deps.store.unsettled_intents_on(MARKET, created_before=cutoff):
         if intent["intent_id"] in deps.held_sends:

@@ -245,3 +245,33 @@ def test_the_sweep_waits_a_day_before_asking_about_a_relay_send(make_ctx, store,
     assert len(folded) == 1
     question = store._db.query("SELECT open_question FROM escalations")[0]["open_question"]
     assert "email" in question and "app" not in question
+
+
+def test_a_paused_agent_sends_nothing_from_the_lane(make_ctx, store, bus, waiting):
+    _stuck(make_ctx, store, bus, waiting)
+    calls = len(waiting.reply_calls)
+    store.set_paused(True)
+
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert len(waiting.reply_calls) == calls
+    assert _intent_statuses(store) == ["sent_unverified"]
+
+    store.set_paused(False)
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert _intent_statuses(store) == ["committed"]
+
+
+def test_a_retried_send_answers_only_what_the_reply_was_written_against(
+    make_ctx, store, bus, waiting
+):
+    _stuck(make_ctx, store, bus, waiting)
+    waiting.add_message("t1", "m2", "buyer", "Also, do you deliver?")
+    relay.relay_lane(_deps(store, bus, waiting))
+
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert _intent_statuses(store) == ["committed"]
+    assert store.get_thread(_THREAD)["cursor_last_msg_id"] == "m1"
+    assert _waiting_threads(store) == {_THREAD}
