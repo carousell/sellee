@@ -3,6 +3,8 @@ reply_to_thread, against a fake of bazaar's seller MCP server."""
 
 from __future__ import annotations
 
+import time
+
 import pytest
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
@@ -174,3 +176,72 @@ def test_a_relay_reply_is_not_held_by_the_browser_pacing_cap(make_ctx, store, bu
     assert res["status"] == "sent"
     rows = store._db.query("SELECT 1 FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
     assert rows == []
+
+
+def _later(store, bus, fake, after_sec):
+    """A relay lane tick `after_sec` after now."""
+    deps = _deps(store, bus, fake)
+    deps.now = lambda: time.time() + after_sec
+    relay.relay_lane(deps)
+
+
+def _stuck(make_ctx, store, bus, fake):
+    """A send whose every attempt failed before bazaar stored anything."""
+    fake.reply_script = ["http503"] * 4
+    res = _send(make_ctx, store, bus, fake)
+    assert res["status"] == "send_unverified" and fake.messages["t1"][-1]["author"] == "buyer"
+    return res["intent_id"]
+
+
+def test_the_lane_finishes_a_send_no_attempt_got_through(make_ctx, store, bus, waiting):
+    intent = _stuck(make_ctx, store, bus, waiting)
+
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert waiting.reply_calls[-1]["client_message_id"] == intent
+    assert len([m for m in waiting.messages["t1"] if m["author"] == "agent"]) == 1
+    assert _intent_statuses(store) == ["committed"]
+    assert _outbound(store) == ["r1"]
+    assert _waiting_threads(store) == set()
+
+
+def test_the_lane_leaves_a_send_still_in_flight(make_ctx, store, bus, waiting):
+    _stuck(make_ctx, store, bus, waiting)
+    calls = len(waiting.reply_calls)
+
+    _later(store, bus, waiting, 1)
+
+    assert len(waiting.reply_calls) == calls
+    assert _intent_statuses(store) == ["sent_unverified"]
+
+
+def test_the_lane_leaves_a_send_bazaar_is_already_retrying(make_ctx, store, bus, waiting):
+    waiting.reply_script = ["busy"] * 4
+    _send(make_ctx, store, bus, waiting)
+    calls = len(waiting.reply_calls)
+
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert len(waiting.reply_calls) == calls
+    assert _intent_statuses(store) == ["sent_unverified"]
+
+
+def test_a_retry_bazaar_refuses_drops_the_send(make_ctx, store, bus, waiting):
+    _stuck(make_ctx, store, bus, waiting)
+    waiting.threads["t1"]["buyer_blocked"] = True
+
+    _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
+
+    assert _intent_statuses(store) == []
+
+
+def test_the_sweep_waits_a_day_before_asking_about_a_relay_send(make_ctx, store, bus, waiting):
+    _stuck(make_ctx, store, bus, waiting)
+    now = time.time()
+
+    assert store.stale_intent_sweep(grace_sec=600, now=now + 7200) == []
+    folded = store.stale_intent_sweep(grace_sec=600, now=now + 2 * 86400)
+
+    assert len(folded) == 1
+    question = store._db.query("SELECT open_question FROM escalations")[0]["open_question"]
+    assert "email" in question and "app" not in question

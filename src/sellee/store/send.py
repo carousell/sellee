@@ -53,6 +53,19 @@ UNCHECKED_SEND_CONTEXT = (
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
+# Markets whose read lane retries an unsettled send itself, under its own id. The sweep asks the
+# seller about one only once that has failed for a day, in words that fit an email thread.
+LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
+LANE_RETRIED_GRACE_SEC = 86400.0
+RELAY_SEND_ASK = (
+    "A reply I wrote to this buyer's email still hasn't gone out after a day of retrying. Could "
+    "you check whether they got it, and answer them from your inbox if not?"
+)
+RELAY_SEND_CONTEXT = (
+    "A reply to a carousell.ai email thread has been retried under the same id for a day without "
+    "bazaar confirming it sent. Nothing further goes to this buyer until this is settled."
+)
+
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
 # carousell.ai replies per buyer itself.
 UNPACED_MARKETS = frozenset({marketplaces.RAIL})
@@ -333,6 +346,17 @@ class SendMixin:
         )
         return [dict(row) for row in rows]
 
+    def unsettled_intents_on(self, market: str, created_before: float) -> list[dict]:
+        """A market's sends still unsettled, oldest first, made before `created_before`."""
+        rows = self._db.query(
+            "SELECT i.intent_id, i.thread_id, i.text FROM send_intents i "
+            "JOIN threads t ON t.thread_id = i.thread_id "
+            f"WHERE t.market = ? AND i.status IN ({_UNSETTLED_PLACEHOLDERS}) "
+            "AND i.created_ts < ? ORDER BY i.created_ts ASC",
+            (market, *UNSETTLED_STATUSES, created_before),
+        )
+        return [dict(row) for row in rows]
+
     def bump_verify_attempt(self, intent_id: str) -> int:
         """Record that a lane looked for this message and did not find it. Returns the new count.
 
@@ -472,14 +496,31 @@ class SendMixin:
         hard_cutoff = now - hard_grace_sec
         folded: list[dict] = []
         with self._db.transaction() as conn:
+            retried = ", ".join("?" for _ in LANE_RETRIED_MARKETS)
             stale = conn.execute(
-                "SELECT intent_id, thread_id, verify_attempts FROM send_intents "
-                "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ? "
-                "AND (verify_attempts >= ? OR created_ts < ?)",
-                (cutoff, min_verify_attempts, hard_cutoff),
+                "SELECT i.intent_id, i.thread_id, i.verify_attempts, "
+                f"t.market IN ({retried}) AS lane_retried FROM send_intents i "
+                "JOIN threads t ON t.thread_id = i.thread_id "
+                "WHERE i.status IN ('pending', 'sent_unverified') AND i.created_ts < ? "
+                f"AND CASE WHEN t.market IN ({retried}) THEN i.created_ts < ? "
+                "ELSE (i.verify_attempts >= ? OR i.created_ts < ?) END",
+                (
+                    *LANE_RETRIED_MARKETS,
+                    cutoff,
+                    *LANE_RETRIED_MARKETS,
+                    now - LANE_RETRIED_GRACE_SEC,
+                    min_verify_attempts,
+                    hard_cutoff,
+                ),
             ).fetchall()
             for row in stale:
                 looked = row["verify_attempts"] >= min_verify_attempts
+                if row["lane_retried"]:
+                    ask, context = RELAY_SEND_ASK, RELAY_SEND_CONTEXT
+                elif looked:
+                    ask, context = UNCONFIRMED_SEND_ASK, UNCONFIRMED_SEND_CONTEXT
+                else:
+                    ask, context = UNCHECKED_SEND_ASK, UNCHECKED_SEND_CONTEXT
                 conn.execute(
                     "UPDATE send_intents SET status = 'unconfirmed' WHERE intent_id = ?",
                     (row["intent_id"],),
@@ -487,11 +528,9 @@ class SendMixin:
                 esc_id, new = self._open_escalation_in_txn(
                     conn,
                     row["thread_id"],
-                    open_question=UNCONFIRMED_SEND_ASK if looked else UNCHECKED_SEND_ASK,
+                    open_question=ask,
                     kind="unconfirmed_send",
-                    context_summary=(
-                        UNCONFIRMED_SEND_CONTEXT if looked else UNCHECKED_SEND_CONTEXT
-                    ),
+                    context_summary=context,
                     options=list(UNCONFIRMED_SEND_OPTIONS),
                 )
                 folded.append(
