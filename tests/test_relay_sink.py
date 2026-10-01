@@ -82,7 +82,7 @@ def test_a_waiting_thread_is_answered_with_one_reply_to_thread_call(make_ctx, st
     assert _outbound(store) == ["r1"]
 
 
-@pytest.mark.parametrize("failure", ["http503", "http429", "internal", "busy"])
+@pytest.mark.parametrize("failure", ["http503", "http429", "internal"])
 def test_a_5xx_503_or_429_is_retried_with_the_same_id(make_ctx, store, bus, waiting, failure):
     waiting.reply_script = [failure]
 
@@ -106,7 +106,7 @@ def test_a_success_without_a_message_id_is_retried_not_refused(make_ctx, store, 
 
 def test_a_refusal_after_an_uncertain_attempt_keeps_the_intent(make_ctx, store, bus, waiting):
     """The first attempt may have stored the reply, so a later refusal proves nothing about it."""
-    waiting.reply_script = ["busy"]
+    waiting.reply_script = ["lost"]
     original = waiting.reply_to_thread
 
     def block_after_first(args):
@@ -147,23 +147,19 @@ def test_a_blocked_buyer_fails_the_send_without_a_retry(make_ctx, store, bus, wa
     assert store.stale_intent_sweep(grace_sec=0, now=4_000_000_000.0) == []
 
 
-def test_a_send_still_failing_after_retries_is_unverified_until_bazaar_shows_it(
+def test_a_send_whose_answers_were_lost_settles_once_bazaar_shows_the_reply(
     make_ctx, store, bus, waiting
 ):
-    waiting.reply_script = ["busy", "busy", "busy", "busy"]
+    waiting.reply_script = ["lost", "lost", "lost", "lost"]
 
     res = _send(make_ctx, store, bus, waiting)
 
     assert res["status"] == "send_unverified"
     assert _intent_statuses(store) == ["sent_unverified"]
-    # bazaar holds the reply but has not sent it yet, so the buyer is not answered.
-    relay.relay_lane(_deps(store, bus, waiting))
-    assert store.get_thread(_THREAD)["cursor_last_msg_id"] is None
-    assert _intent_statuses(store) == ["sent_unverified"]
-
-    waiting.finish_send("t1", "r1")
+    calls = len(waiting.reply_calls)
     relay.relay_lane(_deps(store, bus, waiting))
 
+    assert len(waiting.reply_calls) == calls, "bazaar showed it stored, so no retry"
     assert _intent_statuses(store) == ["committed"]
     assert store.get_thread(_THREAD)["cursor_last_msg_id"] == "m1"
     assert _waiting_threads(store) == set()
@@ -215,15 +211,16 @@ def test_the_lane_leaves_a_send_still_in_flight(make_ctx, store, bus, waiting):
     assert _intent_statuses(store) == ["sent_unverified"]
 
 
-def test_the_lane_leaves_a_send_bazaar_is_already_retrying(make_ctx, store, bus, waiting):
-    waiting.reply_script = ["busy"] * 4
-    _send(make_ctx, store, bus, waiting)
-    calls = len(waiting.reply_calls)
+# Once bazaar has stored the reply it owns the delivery, so the send is done.
+def test_a_reply_bazaar_stored_but_has_not_sent_yet_is_committed(make_ctx, store, bus, waiting):
+    waiting.reply_script = ["pending"]
 
+    res = _send(make_ctx, store, bus, waiting)
+
+    assert res["status"] == "sent"
+    assert _intent_statuses(store) == ["committed"]
     _later(store, bus, waiting, relay.RETRY_SEND_AFTER_SEC + 1)
-
-    assert len(waiting.reply_calls) == calls
-    assert _intent_statuses(store) == ["sent_unverified"]
+    assert len(waiting.reply_calls) == 1
 
 
 def test_a_retry_bazaar_refuses_drops_the_send(make_ctx, store, bus, waiting):
@@ -235,16 +232,11 @@ def test_a_retry_bazaar_refuses_drops_the_send(make_ctx, store, bus, waiting):
     assert _intent_statuses(store) == []
 
 
-def test_the_sweep_waits_a_day_before_asking_about_a_relay_send(make_ctx, store, bus, waiting):
+# The lane retries an unsettled relay send until bazaar answers, so there is nothing to ask.
+def test_the_sweep_never_asks_the_seller_about_a_relay_send(make_ctx, store, bus, waiting):
     _stuck(make_ctx, store, bus, waiting)
-    now = time.time()
 
-    assert store.stale_intent_sweep(grace_sec=600, now=now + 7200) == []
-    folded = store.stale_intent_sweep(grace_sec=600, now=now + 2 * 86400)
-
-    assert len(folded) == 1
-    question = store._db.query("SELECT open_question FROM escalations")[0]["open_question"]
-    assert "email" in question and "app" not in question
+    assert store.stale_intent_sweep(grace_sec=600, now=time.time() + 30 * 86400) == []
 
 
 def test_a_paused_agent_sends_nothing_from_the_lane(make_ctx, store, bus, waiting):
