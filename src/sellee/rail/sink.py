@@ -55,7 +55,7 @@ class RelayReplySink:
 
     def send(self, thread: dict, text: str, kind: str, intent_id: str) -> dict:
         native = thread["thread_id"].split(":", 1)[1]
-        # The call itself can deliver, so from here the intent is never re-driven by a new send.
+        # The call itself can deliver, so nothing new goes to this buyer until it settles.
         self._store.mark_intent_sent_unverified(intent_id)
         failure: RailError | None = None
         for delay in (0.0, *self._retry_delays_sec):
