@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
@@ -46,13 +46,10 @@ class RelayDeps:
     config: object
     rail_factory: Callable
     now: Callable[[], float] = time.time
-    # Our sends bazaar showed this tick as stored and still owed, which its own worker finishes.
-    held_sends: set = field(default_factory=set)
 
 
 def relay_lane(deps: RelayDeps) -> None:
     """One tick. An unreachable rail logs and waits for the next tick."""
-    deps.held_sends.clear()
     try:
         rail = deps.rail_factory()
         items = deps.store.list_items()
@@ -118,18 +115,18 @@ def _import_thread(deps: RelayDeps, summary: dict, messages: list, items) -> tup
         deps.bus.publish(
             "relay.thread_new", {"market": MARKET, "thread_id": thread_id, "item_id": item_id}
         )
-    owed = _record_messages(deps, thread_id, messages)
+    _record_messages(deps, thread_id, messages)
     if not summary.get("buyer_blocked"):
-        return True, not owed
+        return True, True
     return True, deps.store.close_blocked_relay_thread(thread_id)
 
 
-def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> bool:
-    """Write the messages not yet stored. True while an agent reply is still owed a send."""
+def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
+    """Write the messages not yet stored. An agent reply answers the buyer once bazaar holds it."""
     stored = deps.store.get_thread_messages(thread_id)
     known = {row["msg_id"] for row in stored}
     history = [row["text"] for row in stored if row["dir"] == "in"]
-    last_buyer, owed = None, False
+    last_buyer = None
     for message in messages:
         ts = _epoch(message["sent_at"])
         author = message["author"]
@@ -149,21 +146,15 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> bool:
             if inbound:
                 history.append(message["text"])
         if author == "agent":
-            pending = bool(message.get("pending_send"))
-            owed = owed or pending
-            if pending:
-                deps.held_sends.add(message.get("client_message_id") or "")
-            else:
-                _settle_our_send(deps, message)
-            # An agent reply answers the buyer only once bazaar has sent it everywhere it owes.
-            if last_buyer and not owed:
+            # Stored is enough: bazaar sends it, so waiting would invite a second reply.
+            _settle_our_send(deps, message)
+            if last_buyer:
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
-    return owed
 
 
 def _settle_our_send(deps: RelayDeps, message: dict) -> None:
-    """Commit our own send whose outcome was unknown, now that bazaar shows it sent. Its
+    """Commit our own send whose outcome was unknown, now that bazaar shows it stored. Its
     client_message_id is the intent id the sink sent it under."""
     intent_id = message.get("client_message_id") or ""
     if deps.store.intent_status(intent_id) in UNSETTLED_STATUSES:
@@ -177,8 +168,6 @@ def _finish_our_sends(deps: RelayDeps, rail) -> None:
         return
     cutoff = deps.now() - RETRY_SEND_AFTER_SEC
     for intent in deps.store.unsettled_intents_on(MARKET, created_before=cutoff):
-        if intent["intent_id"] in deps.held_sends:
-            continue
         native = intent["thread_id"].split(":", 1)[1]
         try:
             result = rail.reply_to_thread(native, intent["text"], intent["intent_id"])

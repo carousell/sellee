@@ -53,18 +53,9 @@ UNCHECKED_SEND_CONTEXT = (
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
-# Markets whose read lane retries an unsettled send itself, under its own id. The sweep asks the
-# seller about one only once that has failed for a day, in words that fit an email thread.
+# Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
+# answers; the sweep never asks the seller about one.
 LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
-LANE_RETRIED_GRACE_SEC = 86400.0
-RELAY_SEND_ASK = (
-    "A reply I wrote to this buyer's email still hasn't gone out after a day of retrying. Could "
-    "you check whether they got it, and answer them from your inbox if not?"
-)
-RELAY_SEND_CONTEXT = (
-    "A reply to a carousell.ai email thread has been retried under the same id for a day without "
-    "bazaar confirming it sent. Nothing further goes to this buyer until this is settled."
-)
 
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
 # carousell.ai replies per buyer itself.
@@ -506,26 +497,16 @@ class SendMixin:
         with self._db.transaction() as conn:
             retried = ", ".join("?" for _ in LANE_RETRIED_MARKETS)
             stale = conn.execute(
-                "SELECT i.intent_id, i.thread_id, i.verify_attempts, "
-                f"t.market IN ({retried}) AS lane_retried FROM send_intents i "
+                "SELECT i.intent_id, i.thread_id, i.verify_attempts FROM send_intents i "
                 "JOIN threads t ON t.thread_id = i.thread_id "
                 "WHERE i.status IN ('pending', 'sent_unverified') AND i.created_ts < ? "
-                f"AND CASE WHEN t.market IN ({retried}) THEN i.created_ts < ? "
-                "ELSE (i.verify_attempts >= ? OR i.created_ts < ?) END",
-                (
-                    *LANE_RETRIED_MARKETS,
-                    cutoff,
-                    *LANE_RETRIED_MARKETS,
-                    now - LANE_RETRIED_GRACE_SEC,
-                    min_verify_attempts,
-                    hard_cutoff,
-                ),
+                f"AND t.market NOT IN ({retried}) "
+                "AND (i.verify_attempts >= ? OR i.created_ts < ?)",
+                (cutoff, *LANE_RETRIED_MARKETS, min_verify_attempts, hard_cutoff),
             ).fetchall()
             for row in stale:
                 looked = row["verify_attempts"] >= min_verify_attempts
-                if row["lane_retried"]:
-                    ask, context = RELAY_SEND_ASK, RELAY_SEND_CONTEXT
-                elif looked:
+                if looked:
                     ask, context = UNCONFIRMED_SEND_ASK, UNCONFIRMED_SEND_CONTEXT
                 else:
                     ask, context = UNCHECKED_SEND_ASK, UNCHECKED_SEND_CONTEXT
