@@ -1102,12 +1102,19 @@ def in_no_send_cooldown(store, now) -> bool:
     """Whether the last reply pass sent nothing recently enough to hold this tick.
 
     Read off the ledger rather than kept in lane state: a daemon restart mid-loop must not clear the
-    brake, and the pass rows are already the durable record of what happened.
+    brake, and the pass rows are already the durable record of what happened. It holds only the
+    messages that pass was given: a buyer who wrote after its claim is a new wait.
     """
     last = store.last_finished_pass("reply")
     if last is None or last["class"] != "no_send":
         return False
-    return (now - last["finished_ts"]) < NO_SEND_COOLDOWN_SEC
+    if (now - last["finished_ts"]) >= NO_SEND_COOLDOWN_SEC:
+        return False
+    seen = last["payload"].get("claimed_through") or {}
+    return all(
+        (seen.get(row["thread_id"]) or [None])[0] == row["waiting_on_msg_id"]
+        for row in store.threads_with_unhandled_inbound()
+    )
 
 
 def reply_lane(*, store, bus, config, now=None) -> None:

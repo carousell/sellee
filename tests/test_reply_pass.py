@@ -445,6 +445,22 @@ def test_a_no_send_pass_holds_the_next_tick_then_lets_it_through(store, bus) -> 
     assert len(bus.store.read(kinds=["pass.queued"])) == before + 1
 
 
+def test_a_message_the_no_send_pass_never_saw_is_not_held(store, bus) -> None:
+    """The cooldown stops a pass respawning on what it already declined, not on what came after:
+    a buyer writing again after the claim is a new wait. Seen when a channel pass answered the
+    buyer a moment before a queued reply pass ran, found nothing, and held the next email 5 min."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="150?", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    store.record_inbound("carousell:1", msg_id="m2", text="OK, 180 works", ts=20.0)
+    store.finish_pass(
+        claimed.pass_id, status="error", rc=0, cls="no_send", summary="no_send (turns=3)"
+    )
+    before = len(bus.store.read(kinds=["pass.queued"]))
+    _lane(store, bus)
+    assert len(bus.store.read(kinds=["pass.queued"])) == before + 1
+
+
 def test_an_ok_pass_does_not_arm_the_cooldown(store, bus) -> None:
     _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
