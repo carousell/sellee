@@ -115,7 +115,7 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
 
     try:
         takes_photos = rail.offers_tool("create_photo_upload_url")
-    except Exception:  # an unread tool list is no reason to skip: the upload says for itself
+    except Exception:  # if the tool list cannot be read, try the upload anyway
         takes_photos = True
     if not takes_photos:
         return {"count": 0, "photos_skipped": True}

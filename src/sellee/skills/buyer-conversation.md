@@ -103,8 +103,7 @@ offer, it's a question, not an offer. The tool decides; you word the decision:
   it as a fresh round and never improve the number — the ledger deliberately spent nothing here.
 - `needs_floor` → the item has no floor yet, so nothing can be decided. Post the neutral holding
   line and `escalate` with the result's `floor_ask` as the question, word for word: it names the
-  offer and the list price, so the seller never answers blind. The offer is re-decided once the
-  floor lands.
+  offer and the list price. The offer is re-decided once the floor is set.
 
 Whenever an offer must wait on the seller, the holding line stays neutral ("let me check and get
 right back to you") — never "checking the floor / lowest price with the seller", which confirms a

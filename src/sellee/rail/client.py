@@ -121,8 +121,8 @@ class RailClient:
         )
 
     def offers_tool(self, name: str) -> bool:
-        """Whether the server lists this tool. bazaar registers some only when a feature is on,
-        such as photo upload while its media is."""
+        """Whether the server lists this tool. bazaar registers some tools only when a feature is
+        on, such as photo upload when media is enabled."""
         tools = self._rpc("tools/list").get("tools") or []
         return any(isinstance(t, dict) and t.get("name") == name for t in tools)
 

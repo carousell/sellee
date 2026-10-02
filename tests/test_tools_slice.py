@@ -120,8 +120,8 @@ def test_send_message_rejects_malformed_options(make_ctx, store) -> None:
 
 
 def test_an_item_with_no_currency_named_takes_the_sellers(make_ctx, store) -> None:
-    """A seller in Singapore asking "200 dollars" means S$200: a draft left without a currency gets
-    the one the seller sells in, rather than one the model guessed."""
+    """An item created with no currency gets the seller's, so "200 dollars" from a seller in
+    Singapore is 200 SGD."""
     store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
     item = dispatch("create_item", {"title": "Bike", "list_price": 200.0}, make_ctx(TIER_ATTENDED))
     assert item["currency"] == "SGD"

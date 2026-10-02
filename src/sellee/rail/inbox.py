@@ -159,15 +159,15 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
 
 
 def _nudge_if_escalated(deps: RelayDeps, thread_id: str, wrote: list) -> None:
-    """Tell the seller the buyer wrote again while the thread waits on them: the reply lane leaves
-    an escalated thread alone. One nudge per burst, held while the last one is still undelivered."""
+    """Tell the seller the buyer wrote again on an escalated thread, which the reply lane skips.
+    No new notice is queued while an earlier one for the escalation is undelivered."""
     esc = next((e for e in deps.store.list_open_escalations() if e["thread_id"] == thread_id), None)
     if esc is None:
         return
     prefix = f"buyer-wrote-again:{esc['id']}:"
     if any((n["ref"] or "").startswith(prefix) for n in deps.store.list_queued_notices()):
         return
-    # Buyer-written, so each kept to one line: a newline would stage a notice nobody raised.
+    # The buyer wrote this text, so newlines are removed before it goes into a notice.
     said = " / ".join(f'"{prompt_data.one_line(text)}"' for _, text in wrote)
     about = channel_refs.thread_reference(deps.store, thread_id)
     deps.store.queue_notice(

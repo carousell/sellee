@@ -893,8 +893,8 @@ def test_no_browser_degrades_with_one_notice_and_no_crash(store, bus, seeded) ->
 
 
 def test_a_seller_with_no_browser_market_hears_nothing_about_the_browser(store, bus, seeded):
-    """A seller who sells on carousell.ai alone has nothing for Chrome to read, so a missing
-    browser is no news to them; telling them their browser marketplaces are paused is noise."""
+    """A seller on carousell.ai alone has nothing for Chrome to read, so they are not told the
+    browser is missing."""
     seed_setting(store, "connected_markets", [])
     calls = []
 
