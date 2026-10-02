@@ -107,15 +107,26 @@ say "Handing over to the installer."
 say ""
 cd "$tree"
 
-# `curl … | sh` leaves stdin holding this script, so the wizard's prompts would read the rest of
-# it instead of reaching a person. Reattach the terminal when there is one; with no terminal,
-# setup's own non-interactive rules take over.
+# `curl … | sh` leaves stdin holding this script, so setup's prompts would read the rest of it
+# instead of the answers typed at the terminal. Reattach the terminal when there is one; with no
+# terminal, setup's own non-interactive rules apply.
 #
-# The test is whether /dev/tty can be *opened*, not whether it exists: it is present as a device
-# node even in contexts with no controlling terminal (CI, an agent session, a launchd job), where
-# opening it fails and would take the install down on its very last step.
-if (exec </dev/tty) 2>/dev/null; then
-	./setup "$@" </dev/tty
+# The terminal is attached by its own device path (/dev/ttys003, /dev/pts/2), read off stderr.
+# Not /dev/tty: on macOS, kqueue rejects a descriptor opened that way, and the claude CLI setup
+# runs watches its stdin with kqueue. Handed /dev/tty it exits with no output, which setup reads
+# as a signed-out machine. /dev/tty is the fallback for a stderr redirected away from the terminal.
+#
+# Each candidate is tested by whether it opens, not whether it exists: /dev/tty is present as a
+# device node even with no controlling terminal (CI, an agent session, a launchd job), where
+# opening it fails.
+terminal=""
+for candidate in "$(tty <&2 2>/dev/null)" /dev/tty; do
+	case "$candidate" in
+	/dev/*) (exec <"$candidate") 2>/dev/null && terminal="$candidate" && break ;;
+	esac
+done
+if [ -n "$terminal" ]; then
+	./setup "$@" <"$terminal"
 else
 	./setup "$@"
 fi
