@@ -327,3 +327,11 @@ def test_no_counter_ever_quotes_the_floor_while_the_list_price_is_above_it(
                 assert res.get("counter_price") != floor, (
                     f"offers {first} then {second} quoted the floor {floor}"
                 )
+
+
+def test_an_offer_at_or_above_the_floor_is_still_accepted_on_the_walk(store: Store) -> None:
+    """Keeping the counter off the floor must not turn away a buyer who has already met it."""
+    item = _item(store, list_price=200.0, floor=180.0)
+    _offer(store, item["id"], "ca:1", 150)
+    res = _offer(store, item["id"], "ca:1", 185)
+    assert res["decision"] == "accept_fcfs" and res["accept_price"] == 185

@@ -130,7 +130,7 @@ def decide_below_list(
     max_counters,
     min_offer_ratio,
     lowball_cap,
-    floor=None,
+    floor,
 ):
     """< list haggling: counter toward list, never below effective_min, capped + sticky. Whole
     dollars (int) — the marketplace convention here."""
@@ -147,7 +147,7 @@ def decide_below_list(
     target = list_price - step * (rounds + 1)
     ceiling = last if last is not None else list_price
     counter = max(effective_min, min(target, ceiling))
-    if counter == floor and ceiling > floor:
+    if counter == floor and ceiling > floor and offer < floor:
         # Landing on the floor would quote it; stay a step above, never past the last counter.
         counter = min(ceiling, floor + step)
     if counter <= offer:
