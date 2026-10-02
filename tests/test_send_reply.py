@@ -453,3 +453,100 @@ def test_a_merely_suspicious_message_is_not_refused(make_ctx, store) -> None:
     )
 
     assert out["status"] != "scam_held"
+
+
+# --- one send in flight per thread ------------------------------------------------------------
+#
+# A send paced like a person takes minutes: the page-load gap, the typing, the read-back. On
+# 2026-10-02 the reply pass's own tool call gave up at 60 seconds while the send carried on, took
+# the reply for failed, and called send_reply again. That retry was refused only because the thread
+# had just been escalated. Otherwise it would have reserved a second send, typed the same words once
+# the first had committed, and sent them twice.
+
+
+class _SlowSink(FakeSink):
+    """A send still being typed: it holds until the test lets it finish."""
+
+    def __init__(self):
+        super().__init__()
+        import threading
+
+        self.started = threading.Event()
+        self.release = threading.Event()
+
+    def send(self, thread, text, kind, intent_id):
+        self.started.set()
+        self.release.wait(timeout=10)
+        super().send(thread, text, kind, intent_id)
+
+
+def test_a_second_send_is_refused_while_the_first_is_still_going(make_ctx, store) -> None:
+    import threading
+
+    _sell_thread(store)
+    sink = _SlowSink()
+    ctx = make_ctx("attended", reply_sink=sink, config=_FAST)
+    first: dict = {}
+    worker = threading.Thread(
+        target=lambda: first.update(
+            dispatch("send_reply", {"thread_id": "fb:1", "text": "hi"}, ctx)
+        )
+    )
+    worker.start()
+    assert sink.started.wait(timeout=10)
+
+    second = dispatch("send_reply", {"thread_id": "fb:1", "text": "hi"}, ctx)
+    sink.release.set()
+    worker.join(timeout=10)
+
+    # Not "no": the first send may already have reached the buyer. And not something to retry.
+    assert (second["status"], second["delivered"]) == ("in_flight", "unknown")
+    assert first["status"] == "sent"
+    assert len(sink.sends) == 1
+    assert len(_intents(store)) == 1  # the refusal reserved nothing
+    assert len(_pacing_rows(store)) == 1
+
+
+def test_a_send_that_failed_can_be_retried_straight_away(make_ctx, store) -> None:
+    """A failed send left nothing on the page, and its intent stays pending so the retry is safe —
+    so "pending" cannot be what means a send is under way."""
+    _sell_thread(store)
+    failed = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "hi"},
+        make_ctx("attended", reply_sink=FakeSink(fail=True), config=_FAST),
+    )
+    assert failed["status"] == "send_failed"
+
+    retried = dispatch(
+        "send_reply",
+        {"thread_id": "fb:1", "text": "hi"},
+        make_ctx("attended", reply_sink=FakeSink(), config=_FAST),
+    )
+
+    assert retried["status"] == "sent"
+
+
+def test_a_send_on_another_thread_is_not_held_up(make_ctx, store) -> None:
+    import threading
+
+    _sell_thread(store)
+    _sell_thread(store, tid="fb:2")
+    sink = _SlowSink()
+    ctx = make_ctx("attended", reply_sink=sink, config=_FAST)
+    worker = threading.Thread(
+        target=lambda: dispatch("send_reply", {"thread_id": "fb:1", "text": "hi"}, ctx)
+    )
+    worker.start()
+    assert sink.started.wait(timeout=10)
+    other_sink = FakeSink()
+
+    other = dispatch(
+        "send_reply",
+        {"thread_id": "fb:2", "text": "hello"},
+        make_ctx("attended", reply_sink=other_sink, config=_FAST),
+    )
+    sink.release.set()
+    worker.join(timeout=10)
+
+    assert other["status"] == "sent"

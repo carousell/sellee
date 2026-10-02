@@ -23,6 +23,12 @@ from sellee.harness.model import PassSpec
 # workspace file sits in a 0700 directory. Resolved relative to the pass's cwd, which the runner
 # sets to the workspace (verified against CLI 2.1.222).
 MCP_CONFIG_FILE = ".mcp.json"
+# How long a pass waits on one of our tools. The daemon answers a tool call with one JSON body when
+# the tool is done, and the CLI gives up on an answer of that shape at sixty seconds unless told
+# otherwise. Measured with the installed CLI: a 75-second tool against a JSON-answering server
+# failed with "The operation timed out." and succeeded with this set. A reply sent at a person's
+# pace takes minutes, so this has to outlast it, and stays inside a pass's own deadline.
+TOOL_TIMEOUT_SEC = 600.0
 
 
 def mcp_config(spec: PassSpec) -> dict:
@@ -118,6 +124,11 @@ def render_workspace(spec: PassSpec) -> dict:
     }
     _validate_workspace_round_trip(spec, files)
     return files
+
+
+def pass_env(base) -> dict:
+    """The environment a pass's CLI runs in: the daemon's own, plus how long to wait on a tool."""
+    return {**base, "MCP_TOOL_TIMEOUT": str(int(TOOL_TIMEOUT_SEC * 1000))}
 
 
 def pass_argv(spec: PassSpec, claude_bin: str = "claude") -> list:
