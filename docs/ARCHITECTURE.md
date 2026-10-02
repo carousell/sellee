@@ -94,8 +94,9 @@ their tests:
   code constants). The store's `reserve_action` records at reserve in one
   transaction; the caller sleeps the go-jitter after, never under the lock. Quiet
   hours hold only what we *start* (`REACTIVE_KINDS` — a reply or holding line to a
-  waiting buyer is exempt); the hourly cap holds every kind. The reply lane asks
-  the same question read-only via `peek_action` **before** spawning a pass, so a
+  waiting buyer is exempt); the hourly cap holds every kind, except a carousell.ai
+  email reply (`UNPACED_MARKETS`), which is no browser send and is capped by
+  bazaar. The reply lane asks the same question read-only via `peek_action` **before** spawning a pass, so a
   send the engine would refuse never costs a model turn.
 - **`engines/shipping.py`** — the deterministic delivery-fee computation; the
   origin address is never an input.
@@ -154,7 +155,8 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   safety tools compose the engines with the store; `send_reply` runs the whole
   send bracket (pacing reserve + durable intent in one transaction, the sink send
   outside it, then fold + cursor advance + commit) behind a `ReplySink` seam, which
-  the browser layer fills. A killed send is folded by the `stale_intent_sweep`
+  the browser layer fills, and `rail/sink.py` fills for carousell.ai email threads
+  through bazaar's `reply_to_thread`. A killed send is folded by the `stale_intent_sweep`
   scheduler task as unconfirmed + an escalation, never re-sent.
 - **`mcp_proxy.py`** — a stdio↔HTTP shim so stdio-only harnesses reach the same
   server.

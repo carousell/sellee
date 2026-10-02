@@ -39,6 +39,7 @@ from sellee.engines import hosts
 from sellee.engines import pacing as pacing_engine
 from sellee.engines import scam as scam_engine
 from sellee.store import StoreError
+from sellee.store.send import UNPACED_MARKETS
 
 log = logging.getLogger(__name__)
 
@@ -1058,10 +1059,6 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
     )
 
 
-# Markets whose threads are read but that no reply sink can send to yet: the relay's threads are
-# imported, and a pass claiming them could only fail at the send.
-NO_REPLY_PATH_MARKETS = (marketplaces.RAIL,)
-
 # How long the lane waits after a reply pass that sent nothing. The pacing pre-gate predicts the
 # refusals we know about; this flat cooldown is the backstop for the rest — slow enough to break a
 # respawn loop, cheap enough to wait out.
@@ -1092,8 +1089,11 @@ def paced_out_markets(store, config, now=None) -> tuple:
             market
             for market in waiting
             if market in blocked
-            or store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
-            != "go"
+            or (
+                market not in UNPACED_MARKETS
+                and store.peek_action(marketplace=market, kind="reply", cfg=cfg, now=now)["verdict"]
+                != "go"
+            )
         )
     )
 
@@ -1130,8 +1130,7 @@ def reply_lane(*, store, bus, config, now=None) -> None:
     now = time.time() if now is None else now
     if in_no_send_cooldown(store, now):
         return
-    skip = set(paced_out_markets(store, config, now)) | set(NO_REPLY_PATH_MARKETS)
-    claimed = store.enqueue_reply_pass(skip_markets=tuple(sorted(skip)))
+    claimed = store.enqueue_reply_pass(skip_markets=paced_out_markets(store, config, now))
     if claimed is None:
         return
     bus.publish(

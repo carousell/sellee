@@ -5,12 +5,17 @@ from __future__ import annotations
 
 import json
 import threading
+import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
 def rfc3339(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+
+
+class ToolFailure(Exception):
+    """A tool error, carrying the text bazaar's MCP transport would return for it."""
 
 
 class FakeRelay:
@@ -25,6 +30,12 @@ class FakeRelay:
         # Resend the last thread already paged past, as bazaar's 30-second overlap does.
         self.repeat_tail = True
         self._clock = 1_800_000_000.0
+        # One reply_to_thread outcome per call ("ok" once empty): http503, internal store nothing;
+        # pending (not sent yet), lost (answer lost as a 5xx), slow and no_id store the reply first.
+        self.reply_script: list = []
+        self.reply_calls: list = []
+        self.slow_sec = 0.0
+        self._replies = 0
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -65,6 +76,44 @@ class FakeRelay:
     def block(self, thread_id):
         self.threads[thread_id]["buyer_blocked"] = True
         self.threads[thread_id]["updated"] = self.tick()
+
+    def reply_to_thread(self, args: dict) -> dict:
+        """Store an agent reply once per client_message_id, as bazaar does."""
+        self.reply_calls.append(dict(args))
+        step = self.reply_script.pop(0) if self.reply_script else "ok"
+        if step == "internal":
+            raise ToolFailure("internal server error")
+        thread_id = args["id"]
+        if self.threads[thread_id]["buyer_blocked"]:
+            raise ToolFailure("the buyer is blocked")
+        existing = next(
+            (
+                m
+                for m in self.messages[thread_id]
+                if m["client_message_id"] == args["client_message_id"]
+            ),
+            None,
+        )
+        if existing is None:
+            self._replies += 1
+            msg_id = f"r{self._replies}"
+            self.add_message(
+                thread_id,
+                msg_id,
+                "agent",
+                args["text"],
+                pending_send=step == "pending",
+                client_id=args["client_message_id"],
+            )
+        else:
+            msg_id = existing["id"]
+        if step == "lost":
+            raise ToolFailure("internal server error")
+        if step == "slow":
+            time.sleep(self.slow_sec)
+        if step == "no_id":
+            return {}
+        return {"message_id": msg_id}
 
     def _summary(self, thread_id) -> dict:
         t = self.threads[thread_id]
@@ -111,7 +160,16 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = body["params"]["name"]
         args = body["params"].get("arguments") or {}
-        handler = {"list_threads": relay.list_threads, "get_thread": relay.get_thread}.get(name)
+        if name == "reply_to_thread" and relay.reply_script[:1] in (["http503"], ["http429"]):
+            status = int(relay.reply_script.pop(0)[4:])
+            relay.reply_calls.append(dict(args))
+            self._send(status, {"error": "unavailable"})
+            return
+        handler = {
+            "list_threads": relay.list_threads,
+            "get_thread": relay.get_thread,
+            "reply_to_thread": relay.reply_to_thread,
+        }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}
         else:
@@ -119,6 +177,8 @@ class _Handler(BaseHTTPRequestHandler):
                 result = {"structuredContent": handler(args)}
             except LookupError:
                 result = {"isError": True, "content": [{"type": "text", "text": "not found"}]}
+            except ToolFailure as exc:
+                result = {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
         self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
 
     def _send(self, status, obj):
@@ -127,7 +187,11 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(payload)))
         self.end_headers()
-        self.wfile.write(payload)
+        try:
+            self.wfile.write(payload)
+        except OSError:
+            # A client that timed out has already hung up.
+            pass
 
 
 def serve(relay: FakeRelay):

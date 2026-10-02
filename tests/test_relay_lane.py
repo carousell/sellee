@@ -100,16 +100,6 @@ def test_a_thread_last_answered_by_our_side_imports_as_answered(store, bus, fake
     assert _waiting(store) == set()
 
 
-def test_an_agent_reply_still_owed_a_send_leaves_the_buyer_waiting(store, bus, fake, item):
-    fake.add_thread("t1", listing_id="L1")
-    fake.add_message("t1", "m1", "buyer", "Would you take 60?")
-    fake.add_message("t1", "m2", "agent", "70 is my lowest.", pending_send=True, client_id="c1")
-
-    relay.relay_lane(_deps(store, bus, fake))
-
-    assert _waiting(store) == {"carousell-ai:t1"}
-
-
 def test_a_buyer_writing_again_after_our_reply_is_waiting_again(store, bus, fake, item):
     fake.add_thread("t1", listing_id="L1")
     fake.add_message("t1", "m1", "buyer", "Would you take 60?")
@@ -243,20 +233,16 @@ def test_a_thread_whose_item_is_linked_later_is_imported_then(store, bus, fake):
     assert _waiting(store) == {"carousell-ai:t1"}
 
 
-def test_an_agent_reply_that_finishes_sending_later_answers_the_buyer(store, bus, fake, item):
+# bazaar owns a reply once stored, so it answers the buyer before it is sent.
+def test_an_agent_reply_bazaar_is_still_sending_answers_the_buyer(store, bus, fake, item):
     fake.add_thread("t1", listing_id="L1")
     fake.add_message("t1", "m1", "buyer", "Would you take 60?")
     fake.add_message("t1", "m2", "agent", "70 is my lowest.", pending_send=True, client_id="c1")
-    fake.repeat_tail = False  # polled past bazaar's 30-second overlap
-    deps = _deps(store, bus, fake)
-    relay.relay_lane(deps)
-    relay.relay_lane(deps)
-    assert _waiting(store) == {"carousell-ai:t1"}
 
-    fake.finish_send("t1", "m2")
-    relay.relay_lane(deps)
+    relay.relay_lane(_deps(store, bus, fake))
 
     assert _waiting(store) == set()
+    assert store.relay_rereads() == []
 
 
 def test_a_block_on_a_held_thread_closes_it_once_released(store, bus, fake, item):
@@ -295,9 +281,7 @@ def test_a_thread_that_fails_to_read_holds_back_no_other_thread(store, bus, fake
     assert [m["msg_id"] for m in store.get_thread("carousell-ai:t1")["messages"]] == ["m1"]
 
 
-def test_the_reply_lane_holds_relay_threads_until_they_have_a_send_path(
-    store, bus, fake, item, monkeypatch
-):
+def test_the_reply_lane_claims_relay_threads(store, bus, fake, item, monkeypatch):
     from sellee.browser import inbox as browser_inbox
 
     fake.add_thread("t1", listing_id="L1")
@@ -312,8 +296,7 @@ def test_the_reply_lane_holds_relay_threads_until_they_have_a_send_path(
     monkeypatch.setattr(store, "enqueue_reply_pass", enqueue)
     browser_inbox.reply_lane(store=store, bus=bus, config=Config())
 
-    assert "carousell-ai" in skipped
-    assert "carousell" not in skipped
+    assert "carousell-ai" not in skipped
 
 
 def _set_status(store, thread_id, status):
