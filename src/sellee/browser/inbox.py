@@ -227,6 +227,9 @@ def inbox_lane(deps: InboxDeps, *, trigger: str = "timer") -> None:
         return
     due = _due_markets(deps, trigger)
     if not due:
+        # With nothing connected, Chrome's absence is no news, so a stale unavailable notice clears.
+        if not settings.connected_markets(deps.store):
+            _clear_notice(deps, "unavailable")
         return
     try:
         client = deps.browser_factory()
@@ -1098,12 +1101,13 @@ def paced_out_markets(store, config, now=None) -> tuple:
     )
 
 
-def in_no_send_cooldown(store, now) -> bool:
+def in_no_send_cooldown(store, now, skip_markets=()) -> bool:
     """Whether the last reply pass sent nothing recently enough to hold this tick.
 
     Read off the ledger rather than kept in lane state: a daemon restart mid-loop must not clear the
     brake, and the pass rows are already the durable record of what happened. It holds only the
-    messages that pass was given: a buyer who wrote after its claim is a new wait.
+    messages that pass was given: a buyer who wrote after its claim is a new wait. A thread in a
+    market the claim skips was never given to it, so it lifts nothing.
     """
     last = store.last_finished_pass("reply")
     if last is None or last["class"] != "no_send":
@@ -1114,6 +1118,7 @@ def in_no_send_cooldown(store, now) -> bool:
     return all(
         (seen.get(row["thread_id"]) or [None])[0] == row["waiting_on_msg_id"]
         for row in store.threads_with_unhandled_inbound()
+        if row["market"] not in skip_markets
     )
 
 
@@ -1135,9 +1140,10 @@ def reply_lane(*, store, bus, config, now=None) -> None:
     if store.is_paused():
         return
     now = time.time() if now is None else now
-    if in_no_send_cooldown(store, now):
+    skip = paced_out_markets(store, config, now)
+    if in_no_send_cooldown(store, now, skip):
         return
-    claimed = store.enqueue_reply_pass(skip_markets=paced_out_markets(store, config, now))
+    claimed = store.enqueue_reply_pass(skip_markets=skip)
     if claimed is None:
         return
     bus.publish(

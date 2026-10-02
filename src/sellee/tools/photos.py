@@ -115,15 +115,10 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
 
     try:
         takes_photos = rail.offers_tool("create_photo_upload_url")
-    except Exception as exc:  # RailError messages are caller-safe and secret-free
-        raise ToolError(f"photo upload failed: {exc}") from exc
+    except Exception:  # an unread tool list is no reason to skip: the upload says for itself
+        takes_photos = True
     if not takes_photos:
-        return {
-            "count": 0,
-            "photos_skipped": True,
-            "note": "carousell.ai is not taking photos right now. Publish without them, and tell "
-            "the seller the listing went up with no photos.",
-        }
+        return {"count": 0, "photos_skipped": True}
 
     workdir = paths.media_dir() / f"prepared-{uuid.uuid4().hex[:12]}"
     uploaded = []
