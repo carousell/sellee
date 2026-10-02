@@ -155,6 +155,10 @@ class _Handler(BaseHTTPRequestHandler):
         if relay.down:
             self._send(503, {"error": "unavailable"})
             return
+        if body.get("method") == "tools/list":
+            tools = [{"name": n} for n in ("list_threads", "get_thread", "reply_to_thread")]
+            self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {"tools": tools}})
+            return
         if body.get("method") != "tools/call":
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {}})
             return
