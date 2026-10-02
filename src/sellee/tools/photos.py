@@ -113,6 +113,18 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
+    try:
+        takes_photos = rail.offers_tool("create_photo_upload_url")
+    except Exception as exc:  # RailError messages are caller-safe and secret-free
+        raise ToolError(f"photo upload failed: {exc}") from exc
+    if not takes_photos:
+        return {
+            "count": 0,
+            "photos_skipped": True,
+            "note": "carousell.ai is not taking photos right now. Publish without them, and tell "
+            "the seller the listing went up with no photos.",
+        }
+
     workdir = paths.media_dir() / f"prepared-{uuid.uuid4().hex[:12]}"
     uploaded = []
     try:
