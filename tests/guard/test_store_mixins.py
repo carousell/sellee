@@ -32,6 +32,7 @@ _EXPECTED = {
     "ChannelMixin",
     "SettingsMixin",
     "SurveyMixin",
+    "RelayMixin",
 }
 
 

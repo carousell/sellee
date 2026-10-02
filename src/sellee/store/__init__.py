@@ -56,6 +56,7 @@ from sellee.store.helpers import (
 from sellee.store.items import ItemsMixin
 from sellee.store.negotiation import NegotiationMixin
 from sellee.store.passes import PassesMixin
+from sellee.store.relay import RelayMixin
 from sellee.store.revisions import RevisionsMixin
 from sellee.store.scam import ScamMixin
 from sellee.store.send import SendMixin
@@ -104,6 +105,7 @@ class Store(
     ChannelMixin,
     SettingsMixin,
     SurveyMixin,
+    RelayMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
 
@@ -188,6 +190,8 @@ _SCOPE_GUARDED = {
     # adoption that mints its own item is never refused.
     "adopt_discovered_listing": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
+    "mark_relay_answered": (("thread_id", "thread"),),
+    "close_blocked_relay_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "record_inbound": (("thread_id", "thread"),),
@@ -236,6 +240,8 @@ _SCOPE_MISS_NOTFOUND = {
     "archive_listing_url": ("item", ItemNotFound),
     "adopt_discovered_listing": ("item", ItemNotFound),
     "append_thread_message": ("thread", ThreadNotFound),
+    "mark_relay_answered": ("thread", ThreadNotFound),
+    "close_blocked_relay_thread": ("thread", ThreadNotFound),
     "record_inbound": ("thread", ThreadNotFound),
     "qa_add": ("item", ItemNotFound),
     "update_thread": ("thread", ThreadNotFound),

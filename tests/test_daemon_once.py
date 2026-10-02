@@ -69,6 +69,7 @@ def test_run_once_migrates_heartbeats_and_ledgers(xdg_tmp) -> None:
         # rings, and neither acquires the browser to find that out.
         "doorbell",
         "ring_read",
+        "relay_read",
         "reply_lane",
         "crosslist_lane",
         "revise_lane",

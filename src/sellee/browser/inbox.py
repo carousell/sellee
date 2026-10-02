@@ -1058,6 +1058,10 @@ def _scan(deps: InboxDeps, thread: dict, text: str, stored) -> dict:
     )
 
 
+# Markets whose threads are read but that no reply sink can send to yet: the relay's threads are
+# imported, and a pass claiming them could only fail at the send.
+NO_REPLY_PATH_MARKETS = (marketplaces.RAIL,)
+
 # How long the lane waits after a reply pass that sent nothing. The pacing pre-gate predicts the
 # refusals we know about; this flat cooldown is the backstop for the rest — slow enough to break a
 # respawn loop, cheap enough to wait out.
@@ -1126,7 +1130,8 @@ def reply_lane(*, store, bus, config, now=None) -> None:
     now = time.time() if now is None else now
     if in_no_send_cooldown(store, now):
         return
-    claimed = store.enqueue_reply_pass(skip_markets=paced_out_markets(store, config, now))
+    skip = set(paced_out_markets(store, config, now)) | set(NO_REPLY_PATH_MARKETS)
+    claimed = store.enqueue_reply_pass(skip_markets=tuple(sorted(skip)))
     if claimed is None:
         return
     bus.publish(
