@@ -23,7 +23,8 @@ def _create_item(ctx: ToolContext, params: dict) -> dict:
         return ctx.store.create_item(
             title=params["title"],
             list_price=params["list_price"],
-            currency=params.get("currency"),
+            # Left out, it is the currency the seller sells in: "dollars" says no more than that.
+            currency=params.get("currency") or ctx.store.seller_currency(),
             description=params.get("description", ""),
             condition=params.get("condition"),
             photos=params.get("photos"),
@@ -64,7 +65,11 @@ register(
             "properties": {
                 "title": {"type": "string"},
                 "list_price": {"type": "number"},
-                "currency": {"type": "string"},
+                "currency": {
+                    "type": "string",
+                    "description": "ISO 4217 code. Leave it out unless the seller named a "
+                    "currency; it then defaults to the one the seller sells in.",
+                },
                 "description": {"type": "string"},
                 "condition": {"type": "string"},
                 "photos": {"type": "array", "items": {"type": "string"}},
