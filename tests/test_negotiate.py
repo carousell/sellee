@@ -163,6 +163,14 @@ def test_below_list_with_no_floor_holds_for_floor(store: Store) -> None:
     assert store.get_floor(item["id"]) is None
 
 
+def test_the_floor_ask_names_the_offer_and_the_list_price(store: Store) -> None:
+    """The pass escalates floor_ask as written, so it must tell the seller what the buyer offered
+    and what the item is listed at."""
+    item = _item(store, list_price=200.0)
+    res = _offer(store, item["id"], "ca:1", 150)
+    assert "150" in res["floor_ask"] and "200" in res["floor_ask"]
+
+
 def test_at_or_above_list_with_no_floor_writes_default_floor(store: Store) -> None:
     item = _item(store, list_price=100.0)  # no floor set
     res = _offer(store, item["id"], "fb:1", 100)
@@ -292,3 +300,38 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
         dispatch("negotiate_confirm_sold", {"item_id": fan["id"], "thread_id": "fb:1"}, ctx)
     assert store.negotiate_status(fan["id"])["item_state"] == "open"  # still for sale
     assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")
+
+
+# --- the floor is never quoted ----------------------------------------------------------------
+
+
+def test_a_walked_down_counter_stops_above_the_floor(store: Store) -> None:
+    # The break suite's case: 150 got a counter of 190, then 120 got the floor itself.
+    item = _item(store, list_price=200.0, floor=180.0)
+    first = _offer(store, item["id"], "ca:1", 150)
+    second = _offer(store, item["id"], "ca:1", 120)
+    assert first["counter_price"] == 190
+    assert second["counter_price"] is not None and second["counter_price"] > 180
+
+
+@pytest.mark.parametrize("floor", [55, 70, 85, 90, 95, 99])
+def test_no_counter_ever_quotes_the_floor_while_the_list_price_is_above_it(
+    store: Store, floor
+) -> None:
+    # Every pair of below-floor offers from one buyer, on a list price of 100.
+    for first in range(5, floor, 7):
+        for second in range(5, floor, 9):
+            item = _item(store, list_price=100.0, floor=float(floor))
+            for offer in (first, second):
+                res = _offer(store, item["id"], f"ca:{first}-{second}", offer)
+                assert res.get("counter_price") != floor, (
+                    f"offers {first} then {second} quoted the floor {floor}"
+                )
+
+
+def test_an_offer_at_or_above_the_floor_is_still_accepted_on_the_walk(store: Store) -> None:
+    """An offer at or above the floor is still accepted."""
+    item = _item(store, list_price=200.0, floor=180.0)
+    _offer(store, item["id"], "ca:1", 150)
+    res = _offer(store, item["id"], "ca:1", 185)
+    assert res["decision"] == "accept_fcfs" and res["accept_price"] == 185

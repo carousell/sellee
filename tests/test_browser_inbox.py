@@ -9,6 +9,7 @@ would obscure them. The transport itself is covered in test_browser_client.py.
 from __future__ import annotations
 
 import pytest
+from tests.conftest import seed_setting
 
 from sellee.browser import blindness, inbox, reconcile
 from sellee.browser.client import BrowserDetached, BrowserToolError, BrowserUnavailable
@@ -889,6 +890,26 @@ def test_no_browser_degrades_with_one_notice_and_no_crash(store, bus, seeded) ->
     inbox.inbox_lane(deps)
     assert store.count_queued_notices() == 1
     assert _kinds(bus, "browser.unavailable")
+
+
+def test_a_seller_with_no_browser_market_hears_nothing_about_the_browser(store, bus, seeded):
+    """A seller on carousell.ai alone has nothing for Chrome to read, so they are not told the
+    browser is missing."""
+    seed_setting(store, "connected_markets", [])
+    calls = []
+
+    def factory():
+        calls.append(1)
+        raise BrowserUnavailable("the agent's Chrome is not answering")
+
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=factory, sleep=lambda _s: None
+    )
+    deps.notified["unavailable"] = True  # told before the last market was removed
+    inbox.inbox_lane(deps)
+    assert store.count_queued_notices() == 0
+    assert calls == []
+    assert "unavailable" not in deps.notified  # so a market added later can be told again
 
 
 def test_a_server_dying_mid_read_is_unavailable_not_blind(store, bus, seeded) -> None:

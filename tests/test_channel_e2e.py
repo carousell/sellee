@@ -41,6 +41,9 @@ class FakeRail:
         self.listing_args: dict | None = None
         self.uploads: list = []
 
+    def offers_tool(self, name):
+        return True
+
     def upload_photo(self, data, content_type):
         self.uploads.append((data, content_type))
         return f"enc-{len(self.uploads)}"

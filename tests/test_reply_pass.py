@@ -445,6 +445,42 @@ def test_a_no_send_pass_holds_the_next_tick_then_lets_it_through(store, bus) -> 
     assert len(bus.store.read(kinds=["pass.queued"])) == before + 1
 
 
+def test_a_message_the_no_send_pass_never_saw_is_not_held(store, bus) -> None:
+    """A buyer message that arrives after the no_send pass claimed its threads is not held by the
+    cooldown."""
+    _thread(store, "carousell:1")
+    store.record_inbound("carousell:1", msg_id="m1", text="150?", ts=10.0)
+    claimed = _claimed_pass(store, bus)
+    store.record_inbound("carousell:1", msg_id="m2", text="OK, 180 works", ts=20.0)
+    store.finish_pass(
+        claimed.pass_id, status="error", rc=0, cls="no_send", summary="no_send (turns=3)"
+    )
+    before = len(bus.store.read(kinds=["pass.queued"]))
+    _lane(store, bus)
+    assert len(bus.store.read(kinds=["pass.queued"])) == before + 1
+
+
+def test_a_thread_the_pass_could_not_claim_does_not_lift_the_cooldown(store, bus) -> None:
+    """A thread in a market the claim skipped does not lift the cooldown, or the pass would
+    respawn every tick on the threads it had just declined."""
+    _thread(store, "carousell:1")
+    chair = store.create_item(title="Office chair", list_price=40.0, currency="SGD")
+    store.create_thread(
+        thread_id="fb:2", side="sell", market="fb", counterpart_handle="carol", item_id=chair["id"]
+    )
+    store.block_market("fb", "test", ttl_sec=None)
+    store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)
+    store.record_inbound("fb:2", msg_id="f1", text="hello", ts=11.0)
+    claimed = _claimed_pass(store, bus)
+    assert "fb:2" not in claimed.payload["thread_ids"]
+    store.finish_pass(
+        claimed.pass_id, status="error", rc=0, cls="no_send", summary="no_send (turns=3)"
+    )
+    before = len(bus.store.read(kinds=["pass.queued"]))
+    _lane(store, bus)
+    assert len(bus.store.read(kinds=["pass.queued"])) == before
+
+
 def test_an_ok_pass_does_not_arm_the_cooldown(store, bus) -> None:
     _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="hi", ts=10.0)

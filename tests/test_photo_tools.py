@@ -22,10 +22,16 @@ HEIC = b"\x00\x00\x00\x18ftypheic" + b"heicbytes"
 class FakeRail:
     """Records every upload; can be told to fail on the Nth one to exercise a partial failure."""
 
-    def __init__(self, *, fail_on: int | None = None):
+    def __init__(self, *, fail_on: int | None = None, takes_photos: bool | None = True):
         self.uploads: list = []
         self.listing_args: dict | None = None
         self.fail_on = fail_on
+        self.takes_photos = takes_photos
+
+    def offers_tool(self, name: str) -> bool:
+        if self.takes_photos is None:
+            raise RailToolError("tools/list failed")
+        return self.takes_photos or name != "create_photo_upload_url"
 
     def upload_photo(self, data: bytes, content_type: str) -> str:
         self.uploads.append((data, content_type))
@@ -157,6 +163,31 @@ def test_a_partial_upload_failure_stamps_nothing(make_ctx, store, xdg_tmp) -> No
             make_ctx(TIER_ATTENDED, rail_factory=lambda: rail),
         )
     assert all("uploaded_url" not in p for p in store.get_item(item["id"])["photos"])
+
+
+def test_a_rail_taking_no_photos_skips_the_upload_without_failing(make_ctx, store, xdg_tmp) -> None:
+    """With media off, bazaar has no photo upload. The upload reports the photos skipped instead of
+    failing, so the listing can still be published."""
+    rail = FakeRail(takes_photos=False)
+    item = _item_with_photos(store)
+    result = dispatch(
+        "carousell_ai_upload_photos",
+        {"item_id": item["id"]},
+        make_ctx(TIER_ATTENDED, rail_factory=lambda: rail),
+    )
+    assert result["count"] == 0 and result["photos_skipped"] is True
+    assert rail.uploads == []
+
+
+def test_an_unread_tool_list_still_uploads(make_ctx, store, xdg_tmp) -> None:
+    rail = FakeRail(takes_photos=None)
+    item = _item_with_photos(store)
+    result = dispatch(
+        "carousell_ai_upload_photos",
+        {"item_id": item["id"]},
+        make_ctx(TIER_ATTENDED, rail_factory=lambda: rail),
+    )
+    assert result == {"count": 2}
 
 
 def test_upload_is_idempotent(make_ctx, store, xdg_tmp) -> None:

@@ -120,6 +120,12 @@ class RailClient:
             },
         )
 
+    def offers_tool(self, name: str) -> bool:
+        """Whether the server lists this tool. bazaar registers some tools only when a feature is
+        on, such as photo upload when media is enabled."""
+        tools = self._rpc("tools/list").get("tools") or []
+        return any(isinstance(t, dict) and t.get("name") == name for t in tools)
+
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
