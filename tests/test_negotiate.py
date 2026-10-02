@@ -163,6 +163,14 @@ def test_below_list_with_no_floor_holds_for_floor(store: Store) -> None:
     assert store.get_floor(item["id"]) is None
 
 
+def test_the_floor_ask_names_the_offer_and_the_list_price(store: Store) -> None:
+    """The seller is asked for a floor because of an offer; an ask that leaves the offer out makes
+    them answer blind. The pass escalates this text as it is."""
+    item = _item(store, list_price=200.0)
+    res = _offer(store, item["id"], "ca:1", 150)
+    assert "150" in res["floor_ask"] and "200" in res["floor_ask"]
+
+
 def test_at_or_above_list_with_no_floor_writes_default_floor(store: Store) -> None:
     item = _item(store, list_price=100.0)  # no floor set
     res = _offer(store, item["id"], "fb:1", 100)
