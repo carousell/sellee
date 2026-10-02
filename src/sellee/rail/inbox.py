@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Callable
 
 from sellee import marketplaces, prompt_data
+from sellee.channel import refs as channel_refs
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.rail.client import (
@@ -127,7 +128,7 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
     known = {row["msg_id"] for row in stored}
     history = [row["text"] for row in stored if row["dir"] == "in"]
     last_buyer = None
-    wrote_again = None
+    wrote_again: list = []
     for message in messages:
         ts = _epoch(message["sent_at"])
         author = message["author"]
@@ -146,31 +147,32 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
             )
             if inbound:
                 history.append(message["text"])
-                wrote_again = message["text"]
+                wrote_again.append((message["id"], message["text"]))
         if author == "agent":
             # Stored is enough: bazaar sends it, so waiting would invite a second reply.
             _settle_our_send(deps, message)
             if last_buyer:
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
-    if wrote_again is not None:
+    if wrote_again:
         _nudge_if_escalated(deps, thread_id, wrote_again)
 
 
-def _nudge_if_escalated(deps: RelayDeps, thread_id: str, text: str) -> None:
-    """Tell the seller, once per escalation, that the buyer wrote again while it waits on them.
-    The reply lane leaves an escalated thread alone, so nobody else would answer the buyer."""
+def _nudge_if_escalated(deps: RelayDeps, thread_id: str, wrote: list) -> None:
+    """Tell the seller the buyer wrote again while the thread waits on them: the reply lane leaves
+    an escalated thread alone. One nudge per burst, held while the last one is still undelivered."""
     esc = next((e for e in deps.store.list_open_escalations() if e["thread_id"] == thread_id), None)
     if esc is None:
         return
-    ref = f"buyer-wrote-again:{esc['id']}"
-    if deps.store.has_notice_with_ref(ref):
+    prefix = f"buyer-wrote-again:{esc['id']}:"
+    if any((n["ref"] or "").startswith(prefix) for n in deps.store.list_queued_notices()):
         return
     # Buyer-written, so each kept to one line: a newline would stage a notice nobody raised.
-    question, said = prompt_data.one_line(esc["open_question"]), prompt_data.one_line(text)
+    said = " / ".join(f'"{prompt_data.one_line(text)}"' for _, text in wrote)
+    about = channel_refs.thread_reference(deps.store, thread_id)
     deps.store.queue_notice(
-        f'The buyer wrote again while this waits on you ({question}): "{said}"',
-        ref=ref,
+        f"The buyer wrote again while this waits on you{f' — {about}' if about else ''}: {said}",
+        ref=prefix + wrote[0][0],
     )
 
 

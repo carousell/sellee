@@ -905,9 +905,11 @@ def test_a_seller_with_no_browser_market_hears_nothing_about_the_browser(store, 
     deps = inbox.InboxDeps(
         store=store, bus=bus, config=Config(), browser_factory=factory, sleep=lambda _s: None
     )
+    deps.notified["unavailable"] = True  # told before the last market was removed
     inbox.inbox_lane(deps)
     assert store.count_queued_notices() == 0
     assert calls == []
+    assert "unavailable" not in deps.notified  # so a market added later can be told again
 
 
 def test_a_server_dying_mid_read_is_unavailable_not_blind(store, bus, seeded) -> None:
