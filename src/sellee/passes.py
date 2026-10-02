@@ -873,6 +873,7 @@ def run_pass(deps: PassDeps, claimed) -> str:
             proc = subprocess.Popen(  # noqa: S603 — argv is composed by our emitter, not a shell
                 argv,
                 cwd=str(workspace),
+                env=claude.pass_env(os.environ),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=errf,
