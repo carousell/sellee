@@ -430,6 +430,14 @@ class ChannelMixin:
         once-guard for proactive pushes (retention never prunes notices)."""
         return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
 
+    def notices_with_ref_prefix(self, prefix: str) -> list[dict]:
+        """Every notice whose ref starts with `prefix`, as {ref, status}, oldest first."""
+        rows = self._db.query(
+            "SELECT ref, status FROM notices WHERE substr(ref, 1, ?) = ? ORDER BY id ASC",
+            (len(prefix), prefix),
+        )
+        return [{"ref": r["ref"], "status": r["status"]} for r in rows]
+
     def has_notice_for_pass(self, pass_id: str) -> bool:
         """Whether a pass has said anything to the seller yet.
 
