@@ -17,8 +17,13 @@ Photos come from one of two places, and both give you paths that are already sto
 - **From a local file** (attended sessions). `import_photos` with the file paths; it returns the
   stored paths to use.
 
-Create the draft with `create_item` (title, list price, currency, and the photos). Anything you
-learn later — a better title, the condition, more photos — goes on with `update_item`.
+Photos make a better listing, so ask for one if the seller has none, but never wait on it: a seller
+with no photo still gets a draft, and the listing can go up without one.
+
+Create the draft with `create_item` (title, list price, and the photos). Leave out `currency`
+unless the seller named one: left out, it is the currency the seller sells in, so "200 dollars"
+from a seller in Singapore is S$200. Anything you learn later — a better title, the condition, more
+photos — goes on with `update_item`.
 
 ## 2. Research the price
 
@@ -65,8 +70,10 @@ list price, work the same here as anywhere — seller-comms owns both, under "No
 
 ## 4. Publish
 
-`carousell_ai_upload_photos` first, then `carousell_ai_publish_listing`. Report the live URL the
-tool returns — never a URL you composed.
+`carousell_ai_upload_photos` first when the item has photos, then `carousell_ai_publish_listing`.
+Report the live URL the tool returns — never a URL you composed. If the upload comes back with
+`photos_skipped`, carousell.ai is not taking photos right now: publish anyway, and tell the seller the
+listing is up without its photos.
 
 If either step fails, say what failed and what survived: the draft and its photos are still there,
 so a retry is one "try again" away. Don't retry silently in a loop, and don't report a listing as
