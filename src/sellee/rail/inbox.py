@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from sellee import marketplaces
+from sellee import marketplaces, prompt_data
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.rail.client import (
@@ -127,6 +127,7 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
     known = {row["msg_id"] for row in stored}
     history = [row["text"] for row in stored if row["dir"] == "in"]
     last_buyer = None
+    wrote_again = None
     for message in messages:
         ts = _epoch(message["sent_at"])
         author = message["author"]
@@ -145,12 +146,32 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
             )
             if inbound:
                 history.append(message["text"])
+                wrote_again = message["text"]
         if author == "agent":
             # Stored is enough: bazaar sends it, so waiting would invite a second reply.
             _settle_our_send(deps, message)
             if last_buyer:
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
+    if wrote_again is not None:
+        _nudge_if_escalated(deps, thread_id, wrote_again)
+
+
+def _nudge_if_escalated(deps: RelayDeps, thread_id: str, text: str) -> None:
+    """Tell the seller, once per escalation, that the buyer wrote again while it waits on them.
+    The reply lane leaves an escalated thread alone, so nobody else would answer the buyer."""
+    esc = next((e for e in deps.store.list_open_escalations() if e["thread_id"] == thread_id), None)
+    if esc is None:
+        return
+    ref = f"buyer-wrote-again:{esc['id']}"
+    if deps.store.has_notice_with_ref(ref):
+        return
+    # Buyer-written, so each kept to one line: a newline would stage a notice nobody raised.
+    question, said = prompt_data.one_line(esc["open_question"]), prompt_data.one_line(text)
+    deps.store.queue_notice(
+        f'The buyer wrote again while this waits on you ({question}): "{said}"',
+        ref=ref,
+    )
 
 
 def _settle_our_send(deps: RelayDeps, message: dict) -> None:
