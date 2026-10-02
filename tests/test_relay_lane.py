@@ -359,3 +359,36 @@ def test_a_hold_landing_mid_read_keeps_the_block_pending(store, bus, fake, item,
     relay.relay_lane(deps)
 
     assert store.get_thread("carousell-ai:t1")["status"] == "closed"
+
+
+def test_a_buyer_writing_while_the_seller_decides_nudges_the_seller_once(store, bus, fake, item):
+    """An escalated thread waits on the seller, so the reply lane leaves it alone. The buyer who
+    writes again meanwhile would otherwise hear nothing, and the seller would not know."""
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Can I see it this weekend?")
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    store.escalate("carousell-ai:t1", open_question="How do you want to close?")
+
+    fake.add_message("t1", "m2", "buyer", "Hello?")
+    relay.relay_lane(deps)
+    fake.add_message("t1", "m3", "buyer", "Does it come with lights?")
+    relay.relay_lane(deps)
+
+    nudges = [
+        n for n in store.list_queued_notices() if (n["ref"] or "").startswith("buyer-wrote-again:")
+    ]
+    assert len(nudges) == 1
+    assert "Hello?" in nudges[0]["text"]
+
+
+def test_a_buyer_writing_on_a_thread_nobody_escalated_nudges_no_one(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Still available?")
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    fake.add_message("t1", "m2", "buyer", "Hello?")
+    relay.relay_lane(deps)
+    assert not [
+        n for n in store.list_queued_notices() if (n["ref"] or "").startswith("buyer-wrote-again:")
+    ]
