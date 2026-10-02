@@ -17,8 +17,9 @@ Photos come from one of two places, and both give you paths that are already sto
 - **From a local file** (attended sessions). `import_photos` with the file paths; it returns the
   stored paths to use.
 
-Create the draft with `create_item` (title, list price, currency, and the photos). Anything you
-learn later — a better title, the condition, more photos — goes on with `update_item`.
+Create the draft with `create_item` (title, list price, currency, the photos, and the box size
+for shipping — see §3). Anything you learn later — a better title, the condition, more photos —
+goes on with `update_item`.
 
 ## 2. Research the price
 
@@ -40,6 +41,20 @@ explicit go-ahead. No listing goes live on an assumption.
 setting names other marketplaces, name them here as well — they were maybe set weeks ago, and
 "listing this" should never turn out to mean more places than they had in mind. If the setting is
 empty, say nothing about it.
+
+**Give it a box size for shipping.** carousell.ai prices shipping from a size class, so every
+listing needs one — publishing refuses an item without one. Pick it from the photos, the title and
+whatever the seller said — judge the box it would pack into, not the weight:
+
+- **S** — fits a padded envelope or a small box
+- **M** — about a shoebox
+- **L** — you can carry it under one arm
+- **XL** — bigger than that, or heavier than 20 lb
+
+When two classes both look possible, pick the larger. Your pick goes on the draft as
+`create_item`'s `size_bucket` (one of `s`, `m`, `l`, `xl`), and into the confirmation message as
+one line — "Box size for shipping: about a shoebox (M)". The seller's answer wins over yours: if
+they name a different one, write it with `update_item` before publishing.
 
 **Ask for their floor in the same message.** The floor is the lowest they would accept, and it is
 what lets you negotiate a later offer on your own instead of going back to them for every one. Ask

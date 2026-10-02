@@ -126,7 +126,7 @@ def _post(server, path, body, token):
 
 def test_fake_harness_publishes_end_to_end(wired, tmp_path) -> None:
     server, bus, store = wired
-    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
+    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD", size_bucket="m")
     store.set_floor(item["id"], 60.0, "seller")
 
     script = tmp_path / "e2e_harness.py"
@@ -179,7 +179,12 @@ def test_attended_session_shape(wired) -> None:
         "tools/call",
         {
             "name": "create_item",
-            "arguments": {"title": "Chair", "list_price": 50.0, "currency": "SGD"},
+            "arguments": {
+                "title": "Chair",
+                "list_price": 50.0,
+                "currency": "SGD",
+                "size_bucket": "m",
+            },
         },
         _ATTENDED,
     )

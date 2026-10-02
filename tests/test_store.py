@@ -186,11 +186,41 @@ def test_concurrent_seller_vs_default_never_loses_seller_floor(store: Store) -> 
 # --- items: size_bucket -----------------------------------------------------------------------
 
 
+@pytest.mark.parametrize("bucket", ["s", "m", "l", "xl"])
+def test_item_size_bucket_can_be_set_at_create(store: Store, bucket: str) -> None:
+    """A draft is publishable as it leaves create: the class is usually judged from the same
+    photos and title the draft is made from."""
+    assert _item(store, size_bucket=bucket)["size_bucket"] == bucket
+
+
+def test_item_size_bucket_is_optional_at_create(store: Store) -> None:
+    assert _item(store)["size_bucket"] is None
+
+
+def test_item_size_bucket_at_create_refuses_a_class_the_rail_does_not_have(store: Store) -> None:
+    with pytest.raises(StoreError, match="s, m, l, xl"):
+        _item(store, size_bucket="large")
+    assert store.list_items() == []
+
+
 def test_item_size_bucket_is_writable_and_returned(store: Store) -> None:
     item = _item(store)
     assert item["size_bucket"] is None
-    updated = store.update_item(item["id"], {"size_bucket": "large"})
-    assert updated["size_bucket"] == "large"
+    updated = store.update_item(item["id"], {"size_bucket": "l"})
+    assert updated["size_bucket"] == "l"
+
+
+def test_item_size_bucket_is_stored_lowercase_however_it_was_written(store: Store) -> None:
+    """The seller is shown "M", so a caller may well write it that way; it is the same class."""
+    item = _item(store)
+    assert store.update_item(item["id"], {"size_bucket": " XL "})["size_bucket"] == "xl"
+
+
+def test_item_size_bucket_refuses_a_class_the_rail_does_not_have(store: Store) -> None:
+    item = _item(store)
+    with pytest.raises(StoreError, match="s, m, l, xl"):
+        store.update_item(item["id"], {"size_bucket": "large"})
+    assert store.get_item(item["id"])["size_bucket"] is None
 
 
 # --- floors: step/rounds knobs ----------------------------------------------------------------

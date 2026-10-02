@@ -29,6 +29,7 @@ from sellee.store.helpers import (
     _ui_cache_from_row,
     validate_photos,
     validated_item_fields,
+    validated_size_bucket,
 )
 
 
@@ -62,10 +63,14 @@ class ItemsMixin:
         description: str = "",
         condition: str | None = None,
         photos: list | None = None,
+        size_bucket: str | None = None,
     ) -> ItemRecord:
         if not title or not title.strip():
             raise StoreError("title must be non-empty")
         stored_photos = validate_photos(photos or [])
+        # Optional: a draft may be created before anyone has judged the parcel, and publish is
+        # where the class becomes required.
+        bucket = None if size_bucket is None else validated_size_bucket(size_bucket)
         ts = _now()
         with self._db.transaction() as conn:
             item_id = _insert_item_in_txn(
@@ -76,6 +81,7 @@ class ItemsMixin:
                 description=description,
                 condition=condition,
                 photos=stored_photos,
+                size_bucket=bucket,
                 now=ts,
             )
         return self.get_item(item_id)  # type: ignore[return-value]
