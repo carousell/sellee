@@ -292,3 +292,30 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
         dispatch("negotiate_confirm_sold", {"item_id": fan["id"], "thread_id": "fb:1"}, ctx)
     assert store.negotiate_status(fan["id"])["item_state"] == "open"  # still for sale
     assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")
+
+
+# --- the floor is never quoted ----------------------------------------------------------------
+
+
+def test_a_walked_down_counter_stops_above_the_floor(store: Store) -> None:
+    # The break suite's case: 150 drew 190, and 120 then drew exactly the seller's floor.
+    item = _item(store, list_price=200.0, floor=180.0)
+    first = _offer(store, item["id"], "ca:1", 150)
+    second = _offer(store, item["id"], "ca:1", 120)
+    assert first["counter_price"] == 190
+    assert second["counter_price"] is not None and second["counter_price"] > 180
+
+
+@pytest.mark.parametrize("floor", [55, 70, 85, 90, 95, 99])
+def test_no_counter_ever_quotes_the_floor_while_the_list_price_is_above_it(
+    store: Store, floor
+) -> None:
+    # Every pair of below-floor offers from one buyer, on a list price of 100.
+    for first in range(5, floor, 7):
+        for second in range(5, floor, 9):
+            item = _item(store, list_price=100.0, floor=float(floor))
+            for offer in (first, second):
+                res = _offer(store, item["id"], f"ca:{first}-{second}", offer)
+                assert res.get("counter_price") != floor, (
+                    f"offers {first} then {second} quoted the floor {floor}"
+                )

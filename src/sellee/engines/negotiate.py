@@ -122,7 +122,15 @@ def other_best(buyers: dict, thread_id: str) -> int:
 
 
 def decide_below_list(
-    offer, buyer, effective_min, list_price, step, max_counters, min_offer_ratio, lowball_cap
+    offer,
+    buyer,
+    effective_min,
+    list_price,
+    step,
+    max_counters,
+    min_offer_ratio,
+    lowball_cap,
+    floor=None,
 ):
     """< list haggling: counter toward list, never below effective_min, capped + sticky. Whole
     dollars (int) — the marketplace convention here."""
@@ -139,6 +147,9 @@ def decide_below_list(
     target = list_price - step * (rounds + 1)
     ceiling = last if last is not None else list_price
     counter = max(effective_min, min(target, ceiling))
+    if counter == floor and ceiling > floor:
+        # Landing on the floor would quote it; stay a step above, never past the last counter.
+        counter = min(ceiling, floor + step)
     if counter <= offer:
         return "accept_fcfs", int(offer), False, f"accept:{int(offer)}"
     return "counter", int(counter), False, f"counter:{int(counter)}"
@@ -218,6 +229,7 @@ def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
         knobs["max_counters"],
         knobs["min_offer_ratio"],
         knobs["lowball_cap"],
+        floor=floor,
     )
     if counter is not None and counter < floor:
         raise BelowFloorError("price below floor — refusing to emit")
