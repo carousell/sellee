@@ -18,11 +18,22 @@ from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from tests.test_supervisor import FakePlatform
 
-from sellee import healthcheck, heartbeat, paths, supervisor
+from sellee import __version__, healthcheck, heartbeat, paths, supervisor
 from sellee.config import Config
 from sellee.installer import checks, materialize
 from sellee.installer import update as update_mod
 from sellee.installer.update import Release, UpdateError
+
+# The version a release is offered as whenever a test needs the offer to be an upgrade. An offer
+# is ranked against this package's own __version__ — not against whatever version the fixture
+# installed — so a literal written here stops being an upgrade the moment the repo's version
+# reaches it, and every test that relies on the swap happening starts failing or, worse, passing
+# without the swap.
+NEWER = f"{int(__version__.split('.')[0]) + 1}.0.0"
+
+# What the `installed` fixture puts on the machine: the version a successful update moves off and
+# a rollback returns to. Nothing ranks it, so it stays a fixed, obviously-old number.
+INSTALLED = "0.1.0"
 
 
 def build_release(into, version: str, *, marker: str = "") -> str:
@@ -159,15 +170,13 @@ def test_an_archive_that_would_escape_its_destination_is_refused(xdg_tmp, tmp_pa
 
 def test_check_exits_ten_when_there_is_something_to_install(xdg_tmp, served) -> None:
     root, base = served
-    build_release(root, "9.9.9")
+    build_release(root, NEWER)
     lines = []
     assert update_mod.check(Args(url=base), Config(), lines.append) == 10
-    assert any("9.9.9" in line for line in lines)
+    assert any(NEWER in line for line in lines)
 
 
 def test_check_exits_zero_when_current(xdg_tmp, served) -> None:
-    from sellee import __version__
-
     root, base = served
     build_release(root, __version__)
     lines = []
@@ -185,8 +194,8 @@ def installed(xdg_tmp, tmp_path, monkeypatch):
     (tree / "bin").mkdir(parents=True)
     (tree / "bin" / "sellee").write_text("#!/usr/bin/env python3\n")
     (tree / "src" / "sellee").mkdir(parents=True)
-    (tree / "src" / "sellee" / "__init__.py").write_text("__version__ = '0.1.0'\n")
-    materialize.install_version(tree, "0.1.0")
+    (tree / "src" / "sellee" / "__init__.py").write_text(f"__version__ = {INSTALLED!r}\n")
+    materialize.install_version(tree, INSTALLED)
 
     platform = FakePlatform()
     supervisor.install(mode="login-start", platform=platform)
@@ -199,20 +208,20 @@ def installed(xdg_tmp, tmp_path, monkeypatch):
 
 def test_a_successful_update_swaps_current_and_keeps_the_old_version(installed, served) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     lines = []
 
     assert update_mod.perform(Args(url=base), Config(), lines.append, platform=installed) == 0
 
-    assert materialize.current_version() == "0.2.0"
-    assert (paths.versions_dir() / "0.1.0").is_dir()  # rollback has somewhere to go
+    assert materialize.current_version() == NEWER
+    assert (paths.versions_dir() / INSTALLED).is_dir()  # rollback has somewhere to go
     assert any("SHA256 verified" in line for line in lines)
     assert any("--rollback to revert" in line for line in lines)
 
 
 def test_the_plist_is_re_rendered_so_it_names_the_new_version(installed, served) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
 
     plist = (paths.launch_agents_dir(platform=installed) / "com.sellee.agent.plist").read_text()
@@ -221,8 +230,6 @@ def test_the_plist_is_re_rendered_so_it_names_the_new_version(installed, served)
 
 
 def test_updating_to_the_version_already_installed_does_nothing(installed, served) -> None:
-    from sellee import __version__
-
     root, base = served
     build_release(root, __version__)
     lines = []
@@ -256,7 +263,7 @@ def test_the_release_notice_names_the_command_this_deployment_updates_with(
     container, installed, served, store, bus
 ) -> None:
     root, base = served
-    build_release(root, "9.9.9")
+    build_release(root, NEWER)
     update_mod.update_probe(
         store=store, bus=bus, config_obj=Config(update_base_url=base), seen=set()
     )
@@ -271,19 +278,19 @@ def test_a_manual_daemon_that_was_not_running_is_not_started_by_an_update(
     tree = tmp_path / "installed"
     (tree / "bin").mkdir(parents=True)
     (tree / "src" / "sellee").mkdir(parents=True)
-    materialize.install_version(tree, "0.1.0")
+    materialize.install_version(tree, INSTALLED)
     platform = FakePlatform()
     supervisor.install(mode="manual", platform=platform)  # manual: installed, not registered
 
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     lines = []
     rc = update_mod.perform(
         Args(url=base), Config(daemon_mode="manual"), lines.append, platform=platform
     )
 
     assert rc == 0
-    assert materialize.current_version() == "0.2.0"
+    assert materialize.current_version() == NEWER
     assert not platform.is_registered("com.sellee.agent")  # still off, as it was
     assert any("Start it to finish" in line for line in lines)
 
@@ -299,7 +306,7 @@ def _health(*rounds):
 
 def test_a_version_that_breaks_something_is_rolled_back(installed, served, monkeypatch) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     monkeypatch.setattr(
         healthcheck,
         "run_checks",
@@ -310,9 +317,9 @@ def test_a_version_that_breaks_something_is_rolled_back(installed, served, monke
     rc = update_mod.perform(Args(url=base), Config(), lines.append, platform=installed)
 
     assert rc == 1
-    assert materialize.current_version() == "0.1.0"
+    assert materialize.current_version() == INSTALLED
     # The failed version stays on disk: it is the evidence for why it failed.
-    assert (paths.versions_dir() / "0.2.0").is_dir()
+    assert (paths.versions_dir() / NEWER).is_dir()
     assert any("broke daemon" in line for line in lines)
 
 
@@ -323,21 +330,21 @@ def test_a_problem_that_predates_the_update_does_not_undo_it(
     # checks before and after. Rolling back for that would make every future update fail the
     # same way forever, for a reason the update neither caused nor can fix.
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     already_broken = [checks.ok("daemon", "up"), checks.fail("carousell.ai key", "missing")]
     monkeypatch.setattr(healthcheck, "run_checks", _health(already_broken, already_broken))
 
     rc = update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
 
     assert rc == 0
-    assert materialize.current_version() == "0.2.0"
+    assert materialize.current_version() == NEWER
 
 
 def test_a_rollback_restores_the_database_only_when_the_new_version_migrated_it(
     installed, served, monkeypatch
 ) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     paths.ensure_state_dirs()
     write_db(paths.sellee_db(), "after the migration")
 
@@ -365,7 +372,7 @@ def test_a_rollback_without_a_migration_leaves_the_database_alone(
     installed, served, monkeypatch
 ) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     paths.ensure_state_dirs()
     write_db(paths.sellee_db(), "untouched")
     write_db(paths.backups_dir() / "sellee-1000-pre-0008.db", "an older snapshot")
@@ -384,13 +391,13 @@ def test_a_rollback_without_a_migration_leaves_the_database_alone(
 
 def test_rollback_by_hand_goes_back_one_version(installed, served) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
-    assert materialize.current_version() == "0.2.0"
+    assert materialize.current_version() == NEWER
 
     lines = []
     assert update_mod.rollback(Args(rollback=True), Config(), lines.append, platform=installed) == 0
-    assert materialize.current_version() == "0.1.0"
+    assert materialize.current_version() == INSTALLED
 
 
 def test_rollback_refuses_when_there_is_nowhere_to_go(installed) -> None:
@@ -416,7 +423,7 @@ class _Recorder:
 
 def test_the_probe_notices_a_new_release_once(installed, served) -> None:
     root, base = served
-    build_release(root, "9.9.9")
+    build_release(root, NEWER)
     recorder = _Recorder()
     seen = set()
     cfg = Config(update_base_url=base)
@@ -425,14 +432,14 @@ def test_the_probe_notices_a_new_release_once(installed, served) -> None:
     update_mod.update_probe(store=recorder, bus=recorder, config_obj=cfg, seen=seen)
 
     assert len(recorder.notices) == 1
-    assert "9.9.9" in recorder.notices[0]
+    assert NEWER in recorder.notices[0]
     assert recorder.events[0][0] == "update.available"
 
 
 def test_the_probe_says_nothing_on_a_dev_install(xdg_tmp, tmp_path, served) -> None:
     # Every real release outranks a .dev version, so a developer would be nagged forever.
     root, base = served
-    build_release(root, "9.9.9")
+    build_release(root, NEWER)
     tree = tmp_path / "checkout"
     (tree / "bin").mkdir(parents=True)
     (tree / "src").mkdir(parents=True)
@@ -478,7 +485,7 @@ def test_a_failure_mid_swap_puts_the_running_version_back(installed, served, mon
     # Between stopping the daemon and starting it again there is a window where a failure would
     # otherwise leave the machine with no agent running at all.
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     monkeypatch.setattr(
         materialize,
         "install_version",
@@ -503,44 +510,44 @@ def test_a_manual_rollback_restores_a_database_the_old_code_can_read(
     # The failure mode this exists for: update succeeds and migrates, and the rollback a day
     # later flips the symlink but leaves the database on the newer schema.
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     paths.ensure_state_dirs()
-    write_db(paths.sellee_db(), "migrated by 0.2.0")
+    write_db(paths.sellee_db(), "migrated by the new version")
 
     def start_and_migrate(mode, *, platform=None):
-        write_db(paths.backups_dir() / "sellee-3000-pre-0009.db", "as 0.1.0 left it")
+        write_db(paths.backups_dir() / "sellee-3000-pre-0009.db", "as the old version left it")
         return True
 
     monkeypatch.setattr(update_mod, "_start_daemon", start_and_migrate)
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
-    assert materialize.current_version() == "0.2.0"
+    assert materialize.current_version() == NEWER
 
     lines = []
     update_mod.rollback(Args(rollback=True), Config(), lines.append, platform=installed)
 
-    assert materialize.current_version() == "0.1.0"
-    assert read_db(paths.sellee_db()) == "as 0.1.0 left it"
+    assert materialize.current_version() == INSTALLED
+    assert read_db(paths.sellee_db()) == "as the old version left it"
     assert any("Restored the database" in line for line in lines)
 
 
 def test_a_manual_rollback_with_no_migration_since_leaves_the_database_alone(
     installed, served, monkeypatch
 ) -> None:
-    # The snapshot here is the one 0.1.0's own first start took: written moments after 0.1.0
-    # was installed, holding almost nothing. 0.2.0 migrated nothing, so rolling back to 0.1.0
-    # must not "restore" that near-empty day-one file over everything written since — which is
-    # exactly what measuring from the *target's* install time would do.
+    # The snapshot here is the one the old version's own first start took: written moments
+    # after it was installed, holding almost nothing. The new version migrated nothing, so
+    # rolling back must not "restore" that near-empty day-one file over everything written
+    # since — which is exactly what measuring from the *target's* install time would do.
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     paths.ensure_state_dirs()
-    write_db(paths.backups_dir() / "sellee-1000-pre-0001.db", "as 0.1.0 first found it")
+    write_db(paths.backups_dir() / "sellee-1000-pre-0001.db", "as the old version first found it")
     write_db(paths.sellee_db(), "weeks of listings and threads")
 
     update_mod.perform(Args(url=base), Config(), lambda line: None, platform=installed)
     lines = []
     update_mod.rollback(Args(rollback=True), Config(), lines.append, platform=installed)
 
-    assert materialize.current_version() == "0.1.0"
+    assert materialize.current_version() == INSTALLED
     assert read_db(paths.sellee_db()) == "weeks of listings and threads"
     assert not any("Restored the database" in line for line in lines)
 
@@ -571,7 +578,7 @@ def test_updating_with_nothing_installed_says_so_instead_of_crashing(xdg_tmp, se
 
 def test_a_successful_update_clears_the_download_cache(installed, served) -> None:
     root, base = served
-    build_release(root, "0.2.0")
+    build_release(root, NEWER)
     stale = paths.cache_dir()
     stale.mkdir(parents=True, exist_ok=True)
     (stale / "sellee-0.0.9.tar.gz").write_text("an old download")
@@ -580,4 +587,4 @@ def test_a_successful_update_clears_the_download_cache(installed, served) -> Non
 
     assert not (stale / "sellee-0.0.9.tar.gz").exists()
     assert not (stale / "unpacked").exists()
-    assert (stale / "sellee-0.2.0.tar.gz").exists()
+    assert (stale / f"sellee-{NEWER}.tar.gz").exists()
