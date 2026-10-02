@@ -31,10 +31,15 @@ _ITEM_WRITABLE = (
     "photos",
 )
 _ITEM_STATUSES = ("draft", "ready")
+# The parcel size classes carousell.ai ships by, in its own spelling. A listing is created with
+# one and its shipping is priced from it, so this is a closed set rather than a free-form note.
+SIZE_BUCKETS = ("s", "m", "l", "xl")
 # What a live listing actually shows a buyer, and so what may be changed on one that is already
 # up. Narrower than _ITEM_WRITABLE on purpose, and each absence has a reason:
 #
-#   * status / size_bucket — bookkeeping; no marketplace renders either.
+#   * status — bookkeeping; no marketplace renders it.
+#   * size_bucket — the class the listing was published with. Changing it here would change the
+#     record and not the listing.
 #   * currency — carousell.ai's update verb has no currency argument at all (it is fixed at
 #     create), so the change could not be pushed anywhere it matters. It would also strand the
 #     stored floor, which snapshots its currency and is compared unit-blind: re-reading that
@@ -46,7 +51,7 @@ _LIVE_EDITABLE = ("title", "description", "list_price", "photos")
 # What a buyer sees on a listing. Once an item is listed anywhere, the general writer refuses these:
 # changing one there would change the record and no listing, which is how the seller was once told
 # a price was updated that no buyer could see. Live changes go through `revise_item`; `status` and
-# `size_bucket` stay writable because no marketplace renders them.
+# `size_bucket` stay writable because neither is shown on a listing page.
 _BUYER_VISIBLE = ("title", "description", "condition", "list_price", "currency", "photos")
 # Photos are capped per item — the marketplace shows a handful, and an unbounded list would make
 # the upload bracket (mint URL, POST, repeat) run for minutes.
@@ -562,6 +567,21 @@ def validate_photos(value: object) -> list:
     return out
 
 
+def validated_size_bucket(value: object) -> str:
+    """The stored spelling of a parcel size class, for both item writers.
+
+    Case and surrounding space are forgiven: the stored spelling is lowercase, and a caller
+    writing the "M" the seller was shown means the same class. Any other value is refused.
+    """
+    bucket = value.strip().lower() if isinstance(value, str) else value
+    if bucket not in SIZE_BUCKETS:
+        raise StoreError(
+            f"size_bucket must be one of {', '.join(SIZE_BUCKETS)} — the parcel size class "
+            "carousell.ai prices shipping from"
+        )
+    return bucket  # type: ignore[return-value]
+
+
 def validated_item_fields(fields: dict, writable=_ITEM_WRITABLE) -> dict:
     """The item-write rules, in one place both item writers share.
 
@@ -584,6 +604,8 @@ def validated_item_fields(fields: dict, writable=_ITEM_WRITABLE) -> dict:
             f"status may only move between {_ITEM_STATUSES}; sale-state transitions are "
             "owned by their own flow"
         )
+    if "size_bucket" in fields:
+        fields = dict(fields, size_bucket=validated_size_bucket(fields["size_bucket"]))
     if not fields:
         raise StoreError("no fields to update")
     if "list_price" in fields:
@@ -934,6 +956,7 @@ def _insert_item_in_txn(
     condition: str | None,
     photos: list,
     now: float,
+    size_bucket: str | None = None,
     status: str = "draft",
     listing_urls: dict | None = None,
 ) -> str:
@@ -950,9 +973,9 @@ def _insert_item_in_txn(
     item_id = _new_id("item")
     conn.execute(
         "INSERT INTO items "
-        "(id, title, description, condition, list_price, currency, status, "
+        "(id, title, description, condition, list_price, currency, status, size_bucket, "
         " listing_urls, photos, created_ts, updated_ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             item_id,
             title.strip(),
@@ -961,6 +984,7 @@ def _insert_item_in_txn(
             list_price,
             currency,
             status,
+            size_bucket,
             json.dumps(listing_urls or {}, sort_keys=True),
             json.dumps(photos),
             now,

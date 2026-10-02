@@ -27,6 +27,7 @@ def _create_item(ctx: ToolContext, params: dict) -> dict:
             description=params.get("description", ""),
             condition=params.get("condition"),
             photos=params.get("photos"),
+            size_bucket=params.get("size_bucket"),
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
@@ -55,7 +56,9 @@ register(
     ToolSpec(
         name="create_item",
         description="Create a draft item; the server assigns its id. Photos are paths already "
-        "inside the media store — from a channel photo message, or from import_photos.",
+        "inside the media store — from a channel photo message, or from import_photos. "
+        "size_bucket is the parcel size class carousell.ai ships by — one of s, m, l, xl — and a "
+        "listing cannot be published without it, so set it here when you can judge it.",
         input_schema={
             "type": "object",
             "properties": {
@@ -65,6 +68,7 @@ register(
                 "description": {"type": "string"},
                 "condition": {"type": "string"},
                 "photos": {"type": "array", "items": {"type": "string"}},
+                "size_bucket": {"type": "string"},
             },
             "required": ["title", "list_price"],
             "additionalProperties": False,
@@ -77,8 +81,10 @@ register(
     ToolSpec(
         name="update_item",
         description="Update a draft item's fields (title, description, condition, list_price, "
-        "currency, photos, and draft<->ready status). Photos are paths already inside the media "
-        "store. Changes the record only, never a listing: on an item that is already listed it "
+        "currency, photos, size_bucket, and draft<->ready status). Photos are paths already "
+        "inside the media store. size_bucket is the parcel size class carousell.ai ships by — "
+        "one of s, m, l, xl — and a listing cannot be published without it. "
+        "Changes the record only, never a listing: on an item that is already listed it "
         "refuses anything a buyer sees — use update_live_listing for that. Listing URLs and sale "
         "states are not writable here.",
         input_schema={

@@ -176,7 +176,9 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
     # The channel flow lists the item on the rail, in conversation.
     ctx = make_ctx(TIER_PASS_CHANNEL, pass_id="p_chan", rail_factory=FakeRail)
     item = dispatch(
-        "create_item", {"title": "Teak lamp", "list_price": 80.0, "currency": "SGD"}, ctx
+        "create_item",
+        {"title": "Teak lamp", "list_price": 80.0, "currency": "SGD", "size_bucket": "m"},
+        ctx,
     )
     dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == _RAIL_URL

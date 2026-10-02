@@ -29,8 +29,9 @@ class FakeRail:
             raise RailToolError("listing page returned HTTP 404")
 
 
-def _item(store, **kw):
-    base = {"title": "Lamp", "list_price": 80.0}
+def _item(store, *, size_bucket="m", **kw):
+    """A publishable item: a draft carrying the parcel size class publish requires."""
+    base = {"title": "Lamp", "list_price": 80.0, "size_bucket": size_bucket}
     base.update(kw)
     return store.create_item(**base)
 
@@ -90,7 +91,7 @@ def test_publish_unprovisioned_names_the_fix(make_ctx, store) -> None:
 
 def test_publish_requires_a_price(make_ctx, store) -> None:
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
-    no_price = store.create_item(title="Lamp", list_price=None)
+    no_price = _item(store, title="Lamp", list_price=None)
     with pytest.raises(ToolError, match="list price"):
         dispatch("carousell_ai_publish_listing", {"item_id": no_price["id"]}, ctx)
 
@@ -101,7 +102,7 @@ def test_publish_asserts_the_currency_registration_recorded(make_ctx, store) -> 
     _sells_in(store, "VN", "VND")
     rail = FakeRail()
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
-    item = store.create_item(title="Bicycle", list_price=500.0)
+    item = _item(store, title="Bicycle", list_price=500.0)
 
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
@@ -115,7 +116,7 @@ def test_publish_asserts_nothing_when_no_currency_was_recorded(make_ctx, store) 
     _sells_in(store, "VN")
     rail = FakeRail()
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
-    item = store.create_item(title="Bicycle", list_price=500.0)
+    item = _item(store, title="Bicycle", list_price=500.0)
 
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
@@ -128,7 +129,7 @@ def test_publish_never_relabels_the_item(make_ctx, store) -> None:
     seller approved it in."""
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
-    item = store.create_item(title="Bicycle", list_price=500.0, currency="VND")
+    item = _item(store, title="Bicycle", list_price=500.0, currency="VND")
 
     dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
@@ -145,7 +146,7 @@ def test_a_backend_refusal_reaches_the_caller_in_its_own_words(make_ctx, store) 
 
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: RefusingRail())
-    item = store.create_item(title="Bicycle", list_price=500.0, currency="VND")
+    item = _item(store, title="Bicycle", list_price=500.0, currency="VND")
 
     with pytest.raises(ToolError) as caught:
         dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
@@ -165,7 +166,7 @@ def test_publish_refuses_a_price_in_a_currency_the_seller_does_not_price_in(
     _sells_in(store, "VN", "VND")
     rail = FakeRail()
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
-    item = store.create_item(title="Bicycle", list_price=500.0, currency="USD")
+    item = _item(store, title="Bicycle", list_price=500.0, currency="USD")
 
     with pytest.raises(ToolError) as caught:
         dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
@@ -181,7 +182,7 @@ def test_the_gate_runs_before_anything_is_reserved(make_ctx, store) -> None:
     # A refusal must not consume an hourly pacing slot on a publish the backend would refuse too.
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
-    item = store.create_item(title="Bicycle", list_price=500.0, currency="USD")
+    item = _item(store, title="Bicycle", list_price=500.0, currency="USD")
 
     with pytest.raises(ToolError):
         dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
@@ -194,7 +195,7 @@ def test_publish_allows_a_price_in_the_currency_the_seller_prices_in(make_ctx, s
     _sells_in(store, "VN", "VND")
     rail = FakeRail()
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
-    item = store.create_item(title="Bicycle", list_price=500.0, currency="vnd")
+    item = _item(store, title="Bicycle", list_price=500.0, currency="vnd")
 
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
@@ -206,7 +207,7 @@ def test_a_seller_with_no_currency_recorded_is_not_gated(make_ctx, store) -> Non
     would be the false refusal this gate exists to avoid."""
     _sells_in(store, "SG")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
-    item = store.create_item(title="Lamp", list_price=80.0, currency="MYR")
+    item = _item(store, title="Lamp", list_price=80.0, currency="MYR")
 
     assert dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)["url"]
 
@@ -215,7 +216,7 @@ def test_an_item_with_no_currency_is_not_gated(make_ctx, store) -> None:
     # Nothing to contradict: this is the ordinary path.
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
-    item = store.create_item(title="Bicycle", list_price=500.0)
+    item = _item(store, title="Bicycle", list_price=500.0)
 
     assert dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)["url"]
 
@@ -224,3 +225,54 @@ def test_publish_missing_item_errors(make_ctx) -> None:
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: FakeRail())
     with pytest.raises(ToolError, match="no item"):
         dispatch("carousell_ai_publish_listing", {"item_id": "item_nope"}, ctx)
+
+
+# --- the parcel size class ----------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("stored", "sent"),
+    [
+        ("s", "PARCEL_BUCKET_S"),
+        ("m", "PARCEL_BUCKET_M"),
+        ("l", "PARCEL_BUCKET_L"),
+        ("xl", "PARCEL_BUCKET_XL"),
+    ],
+)
+def test_publish_sends_the_stored_class_as_the_rail_enum(make_ctx, store, stored, sent) -> None:
+    rail = FakeRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, size_bucket=stored)
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert rail.args["parcel_bucket"] == sent
+
+
+def test_publish_sends_a_class_the_seller_corrected_later(make_ctx, store) -> None:
+    """The draft carries the agent's pick; the seller's answer replaces it, and that is what the
+    listing is created with."""
+    rail = FakeRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, size_bucket="m")
+    store.update_item(item["id"], {"size_bucket": "l"})
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert rail.args["parcel_bucket"] == "PARCEL_BUCKET_L"
+
+
+def test_publish_refuses_an_item_with_no_class_before_reserving(make_ctx, store) -> None:
+    """The listing could not be created without one, so the refusal comes early — it names the
+    tool that sets the class, and costs no hourly pacing slot."""
+    rail = FakeRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, size_bucket=None)
+
+    with pytest.raises(ToolError) as caught:
+        dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert "size_bucket" in str(caught.value) and "update_item" in str(caught.value)
+    assert rail.calls == []
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
+    assert rows == []

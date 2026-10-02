@@ -19,7 +19,7 @@ from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail.client import RailUnprovisioned
-from sellee.store import StoreError
+from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -74,6 +74,13 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
+    if item.get("size_bucket") not in SIZE_BUCKETS:
+        # carousell.ai prices shipping from the class and refuses a listing without one. Refused
+        # here so the message names the tool that sets it, and before any pacing slot is spent.
+        raise ToolError(
+            "item has no valid parcel size class; set size_bucket "
+            f"({', '.join(SIZE_BUCKETS)}) with update_item first"
+        )
     currency = ctx.store.seller_currency() or ""
     _require_a_currency_the_seller_prices_in(currency, item)
     try:
@@ -106,6 +113,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         "title": item["title"],
         "description": item["description"] or "",
         "price_cents": price_cents,
+        "parcel_bucket": f"PARCEL_BUCKET_{item['size_bucket'].upper()}",
     }
     if currency:
         args["currency"] = currency

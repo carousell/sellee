@@ -13,7 +13,7 @@ _ZONES = [
     {"zone": "far", "match": {"max_km": 30}, "fee": 12},
     {"zone": "nationwide", "match": {"areas": ["__else__"]}, "fee": 8},
 ]
-_SURCHARGE = {"large": 10}
+_SURCHARGE = {"l": 10}
 
 
 # --- engine ------------------------------------------------------------------------------------
@@ -25,7 +25,7 @@ def test_first_matching_zone_wins_in_seller_order() -> None:
 
 
 def test_buyer_total_invariant() -> None:
-    r = shipping.compute(_ZONES, _SURCHARGE, 80, "large", "SGD", "tampines", None)
+    r = shipping.compute(_ZONES, _SURCHARGE, 80, "l", "SGD", "tampines", None)
     # buyer_total = price + delivery_fee + size_surcharge
     assert r["size_surcharge"] == 10
     assert r["total_fee"] == 15
@@ -86,8 +86,7 @@ def test_update_seller_config_requires_a_section(make_ctx) -> None:
 
 def test_quote_shipping_composes_engine_and_never_emits_address(make_ctx, store) -> None:
     ctx = make_ctx("attended")
-    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
-    store.update_item(item["id"], {"size_bucket": "large"})
+    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD", size_bucket="l")
     dispatch(
         "update_seller_config",
         {

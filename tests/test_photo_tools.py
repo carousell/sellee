@@ -124,11 +124,14 @@ def test_import_caps_the_batch(make_ctx, xdg_tmp, tmp_path) -> None:
 
 
 def _item_with_photos(store, names=("a.jpg", "b.jpg"), data=JPEG):
+    # A class on every draft: publishing refuses an item without one, and several of these
+    # tests publish.
     return store.create_item(
         title="Lamp",
         list_price=80.0,
         currency="SGD",
         photos=[_stored(n, data) for n in names],
+        size_bucket="m",
     )
 
 
@@ -285,7 +288,7 @@ def test_publish_attaches_uploaded_media_in_display_order(make_ctx, store, xdg_t
 
 def test_publish_without_photos_sends_no_media_key(make_ctx, store, xdg_tmp) -> None:
     rail = FakeRail()
-    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
+    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD", size_bucket="m")
     dispatch(
         "carousell_ai_publish_listing",
         {"item_id": item["id"]},

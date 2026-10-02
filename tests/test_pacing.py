@@ -193,8 +193,8 @@ class _FakeRail:
 def test_publish_reserves_and_caps(make_ctx, store) -> None:
     cfg_obj = Config(max_actions_per_hour=1)
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: _FakeRail(), config=cfg_obj)
-    first = store.create_item(title="A", list_price=80.0, currency="SGD")
-    second = store.create_item(title="B", list_price=90.0, currency="SGD")
+    first = store.create_item(title="A", list_price=80.0, currency="SGD", size_bucket="m")
+    second = store.create_item(title="B", list_price=90.0, currency="SGD", size_bucket="m")
     dispatch("carousell_ai_publish_listing", {"item_id": first["id"]}, ctx)
     with pytest.raises(ToolError, match="paced"):
         dispatch("carousell_ai_publish_listing", {"item_id": second["id"]}, ctx)

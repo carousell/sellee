@@ -104,7 +104,8 @@ rpc("initialize", {}, 1)
 photos = re.findall(r"^\\s+(/\\S+\\.jpg)$", prompt, re.M)
 assert photos, prompt
 item = call("create_item",
-    {"title":"Desk lamp","list_price":80.0,"currency":"SGD","photos":photos}, 2)
+    {"title":"Desk lamp","list_price":80.0,"currency":"SGD","photos":photos,
+     "size_bucket":"m"}, 2)
 call("carousell_ai_upload_photos", {"item_id": item["id"]}, 3)
 published = call("carousell_ai_publish_listing", {"item_id": item["id"]}, 4)
 call("send_message", {"text": "Live: " + published["url"]}, 5)
@@ -325,6 +326,8 @@ def test_a_photo_sent_on_the_channel_becomes_a_listing_with_that_photo(
 
             # the photo reached the rail as media on the listing, not just as an upload
             assert rail.listing_args["media"] == {"urls": [{"url": "enc-1", "type": 1}]}
+            # and the class the flow recorded reached it as the enum carousell.ai names
+            assert rail.listing_args["parcel_bucket"] == "PARCEL_BUCKET_M"
             assert rail.uploads[0][1] == "image/jpeg"
             assert any(_LISTING_URL in m["text"] for m in api.outbox)
 
