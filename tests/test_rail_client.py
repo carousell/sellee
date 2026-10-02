@@ -381,3 +381,16 @@ def test_every_rpc_accepts_both_json_and_event_stream(fake_rail) -> None:
     _client(base).create_listing({"title": "x"})
     assert "application/json" in seen["accept"]
     assert "text/event-stream" in seen["accept"]
+
+
+def test_offers_tool_reads_the_servers_tool_list():
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    relay_state = FakeRelay()
+    base, shutdown = serve(relay_state)
+    try:
+        client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
+        assert client.offers_tool("list_threads")
+        assert not client.offers_tool("create_photo_upload_url")
+    finally:
+        shutdown()
