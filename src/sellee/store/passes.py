@@ -260,11 +260,8 @@ class PassesMixin:
         return {"pass_id": pass_id, **payload}
 
     def last_finished_pass(self, pass_type: str) -> dict | None:
-        """The most recently finished pass of a type, as {class, finished_ts, payload} — or None.
-
-        The reply lane's cooldown read: a pass that ended `no_send` is the one signal that
-        respawning right now would only repeat it, for the messages it was given.
-        """
+        """The most recently finished pass of a type, as {class, finished_ts, payload}, or None.
+        The reply lane's cooldown reads it."""
         rows = self._db.query(
             "SELECT class, finished_ts, payload FROM passes WHERE type = ? "
             "AND finished_ts IS NOT NULL ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",

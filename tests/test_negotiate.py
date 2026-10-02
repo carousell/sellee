@@ -164,8 +164,8 @@ def test_below_list_with_no_floor_holds_for_floor(store: Store) -> None:
 
 
 def test_the_floor_ask_names_the_offer_and_the_list_price(store: Store) -> None:
-    """The seller is asked for a floor because of an offer; an ask that leaves the offer out makes
-    them answer blind. The pass escalates this text as it is."""
+    """The pass escalates floor_ask as written, so it must tell the seller what the buyer offered
+    and what the item is listed at."""
     item = _item(store, list_price=200.0)
     res = _offer(store, item["id"], "ca:1", 150)
     assert "150" in res["floor_ask"] and "200" in res["floor_ask"]
@@ -306,7 +306,7 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
 
 
 def test_a_walked_down_counter_stops_above_the_floor(store: Store) -> None:
-    # The break suite's case: 150 drew 190, and 120 then drew exactly the seller's floor.
+    # The break suite's case: 150 got a counter of 190, then 120 got the floor itself.
     item = _item(store, list_price=200.0, floor=180.0)
     first = _offer(store, item["id"], "ca:1", 150)
     second = _offer(store, item["id"], "ca:1", 120)
@@ -330,7 +330,7 @@ def test_no_counter_ever_quotes_the_floor_while_the_list_price_is_above_it(
 
 
 def test_an_offer_at_or_above_the_floor_is_still_accepted_on_the_walk(store: Store) -> None:
-    """Keeping the counter off the floor must not turn away a buyer who has already met it."""
+    """An offer at or above the floor is still accepted."""
     item = _item(store, list_price=200.0, floor=180.0)
     _offer(store, item["id"], "ca:1", 150)
     res = _offer(store, item["id"], "ca:1", 185)

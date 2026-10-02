@@ -368,8 +368,8 @@ def _nudges(store) -> list:
 
 
 def test_a_buyer_writing_while_the_seller_decides_nudges_the_seller(store, bus, fake, item):
-    """An escalated thread waits on the seller, so the reply lane leaves it alone. The buyer who
-    writes again meanwhile would otherwise hear nothing, and the seller would not know."""
+    """The reply lane skips an escalated thread, so the seller is told when its buyer writes
+    again."""
     fake.add_thread("t1", listing_id="L1")
     fake.add_message("t1", "m1", "buyer", "Can I see it this weekend?")
     deps = _deps(store, bus, fake)
@@ -389,7 +389,7 @@ def test_a_buyer_writing_while_the_seller_decides_nudges_the_seller(store, bus, 
     relay.relay_lane(deps)
     assert len(_nudges(store)) == 1
 
-    # Once the seller has it, the buyer's next burst is news again.
+    # Once that nudge is delivered, the buyer's next message queues a new one.
     store.mark_notice_delivered(nudge["id"], via="channel")
     fake.add_message("t1", "m5", "buyer", "Still there?")
     relay.relay_lane(deps)
