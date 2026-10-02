@@ -446,9 +446,8 @@ def test_a_no_send_pass_holds_the_next_tick_then_lets_it_through(store, bus) -> 
 
 
 def test_a_message_the_no_send_pass_never_saw_is_not_held(store, bus) -> None:
-    """The cooldown stops a pass respawning on what it already declined, not on what came after:
-    a buyer writing again after the claim is a new wait. Seen when a channel pass answered the
-    buyer a moment before a queued reply pass ran, found nothing, and held the next email 5 min."""
+    """A buyer message that arrives after the no_send pass claimed its threads is not held by the
+    cooldown."""
     _thread(store, "carousell:1")
     store.record_inbound("carousell:1", msg_id="m1", text="150?", ts=10.0)
     claimed = _claimed_pass(store, bus)
@@ -462,8 +461,8 @@ def test_a_message_the_no_send_pass_never_saw_is_not_held(store, bus) -> None:
 
 
 def test_a_thread_the_pass_could_not_claim_does_not_lift_the_cooldown(store, bus) -> None:
-    """A market held back from the claim was never in the pass, so its waiting thread is not a
-    new wait; counting it would respawn the pass on the buyer it just declined, every tick."""
+    """A thread in a market the claim skipped does not lift the cooldown, or the pass would
+    respawn every tick on the threads it had just declined."""
     _thread(store, "carousell:1")
     chair = store.create_item(title="Office chair", list_price=40.0, currency="SGD")
     store.create_thread(

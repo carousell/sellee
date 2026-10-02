@@ -166,8 +166,8 @@ def test_a_partial_upload_failure_stamps_nothing(make_ctx, store, xdg_tmp) -> No
 
 
 def test_a_rail_taking_no_photos_skips_the_upload_without_failing(make_ctx, store, xdg_tmp) -> None:
-    """bazaar offers no photo upload while its media is off. The listing can still go up, without
-    the photos, so the upload reports them skipped instead of failing the whole publish."""
+    """With media off, bazaar has no photo upload. The upload reports the photos skipped instead of
+    failing, so the listing can still be published."""
     rail = FakeRail(takes_photos=False)
     item = _item_with_photos(store)
     result = dispatch(

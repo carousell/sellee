@@ -148,7 +148,8 @@ def decide_below_list(
     ceiling = last if last is not None else list_price
     counter = max(effective_min, min(target, ceiling))
     if counter == floor and ceiling > floor and offer < floor:
-        # Landing on the floor would quote it; stay a step above, never past the last counter.
+        # A counter equal to the floor tells the buyer the floor. Counter one step above it, at
+        # most the last counter.
         counter = min(ceiling, floor + step)
     if counter <= offer:
         return "accept_fcfs", int(offer), False, f"accept:{int(offer)}"

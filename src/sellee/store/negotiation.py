@@ -215,7 +215,7 @@ class NegotiationMixin:
             "message_intent": "hold_for_floor",
             "item_state": led["state"],
             "currency": currency,
-            # The escalation's question, so the seller always sees the offer they are deciding.
+            # Used as the escalation question, so the seller sees the offer they are deciding on.
             "floor_ask": f"A buyer offered {_money(offer, currency)}; your list price is "
             f"{_money(list_price, currency)}. What's the lowest you'd take? It stays private.",
         }
@@ -629,6 +629,6 @@ class NegotiationMixin:
 
 
 def _money(amount, currency) -> str:
-    """150.0 SGD as "150 SGD": the seller reads a price, not a float."""
+    """Format 150.0 with SGD as "150 SGD"."""
     number = f"{amount:g}" if isinstance(amount, (int, float)) else str(amount)
     return f"{number} {currency}" if currency else number

@@ -1102,13 +1102,8 @@ def paced_out_markets(store, config, now=None) -> tuple:
 
 
 def in_no_send_cooldown(store, now, skip_markets=()) -> bool:
-    """Whether the last reply pass sent nothing recently enough to hold this tick.
-
-    Read off the ledger rather than kept in lane state: a daemon restart mid-loop must not clear the
-    brake, and the pass rows are already the durable record of what happened. It holds only the
-    messages that pass was given: a buyer who wrote after its claim is a new wait. A thread in a
-    market the claim skips was never given to it, so it lifts nothing.
-    """
+    """Whether a recent no_send pass holds this tick: only while every claimable waiting thread is
+    still waiting on the message that pass claimed. Read from pass rows, so a restart keeps it."""
     last = store.last_finished_pass("reply")
     if last is None or last["class"] != "no_send":
         return False

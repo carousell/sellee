@@ -23,7 +23,7 @@ def _create_item(ctx: ToolContext, params: dict) -> dict:
         return ctx.store.create_item(
             title=params["title"],
             list_price=params["list_price"],
-            # Left out, it is the currency the seller sells in: "dollars" says no more than that.
+            # With no currency given, use the seller's: "dollars" alone does not say which.
             currency=params.get("currency") or ctx.store.seller_currency(),
             description=params.get("description", ""),
             condition=params.get("condition"),
