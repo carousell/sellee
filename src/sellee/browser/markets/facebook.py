@@ -398,6 +398,10 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       const r = el.getBoundingClientRect();
       return r.width > 200 && r.height > 100;
     });
+  // How near its own edge a bubble starts, and how much more room it must leave on the far side,
+  // for the edge to say whose it is when the ratio cannot.
+  const EDGE_PX = 96;
+  const SLACK_PX = 24;
   const read = () => {
     const log = logs()[0];
     if (!log) return null;
@@ -430,6 +434,14 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       let side = 'center';
       if (fromRight < fromLeft * 0.6) side = 'out';
       else if (fromLeft < fromRight * 0.6) side = 'in';
+      // A long message in a narrow log spans most of it, and the ratio above calls it centred:
+      // captured 2026-10-02, a buyer's first message 64px from the left and 103px from the right
+      // of a log the details pane had narrowed to 492px. The edge it starts from still says whose
+      // it is — an inbound bubble starts at the avatar gutter, an outbound one ends at the right
+      // margin — so long as the other side has clearly more room. A line with about as much room
+      // on both sides is a system line, and stays centred.
+      else if (fromLeft <= EDGE_PX && fromRight - fromLeft >= SLACK_PX) side = 'in';
+      else if (fromRight <= EDGE_PX && fromLeft - fromRight >= SLACK_PX) side = 'out';
       out.push({ text: text.slice(0, 300), side: side, y: Math.round(r.top) });
     });
     out.sort((a, b) => a.y - b.y);
