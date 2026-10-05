@@ -604,6 +604,23 @@ def test_connecting_craigslist_signed_out_asks_for_an_account_not_a_sign_in(
     assert us_craigslist.pending_market_connects() == []
 
 
+def test_connecting_a_signed_out_craigslist_account_signs_back_in_not_by_hand(
+    us_craigslist, bus
+) -> None:
+    us_craigslist.request_craigslist_signup()
+    us_craigslist.set_craigslist_awaiting_activation()
+    us_craigslist.activate_craigslist_account("ready")
+    for notice in us_craigslist.claim_queued_notices(10):
+        us_craigslist.mark_notice_delivered(notice["id"], "channel")
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+
+    connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_out")))
+
+    assert _texts(us_craigslist) == [craigslist_account.SIGNING_BACK_IN_NOTICE]
+    assert us_craigslist.craigslist_account()["state"] == craigslist_account.AWAITING_LOGIN_LINK
+    assert us_craigslist.pending_market_connects() == []
+
+
 def test_connecting_craigslist_twice_asks_for_one_account(us_craigslist, bus) -> None:
     for _ in range(2):
         us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)

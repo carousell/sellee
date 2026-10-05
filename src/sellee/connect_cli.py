@@ -29,7 +29,7 @@ import sys
 import time
 
 from sellee import channel, config, control, deployment, qr
-from sellee.browser import chrome, foreground
+from sellee.browser import chrome, craigslist_account, foreground
 from sellee.store import BIND_NONCE_TTL_SEC, HOLD_SIGNIN
 
 _POLL_INTERVAL_SEC = 1.0
@@ -96,6 +96,8 @@ _MARKET_STATE_MESSAGES = {
     "list something there.",
     "signing_up": "I'm creating your {name} account with your sellee email address — I'll tell "
     "you in chat when it's ready. There's no password to set.",
+    "signing_back_in": "{name} signed me out — I'm signing back in by email. "
+    "Nothing for you to do.",
     "logged_out": "I still see a login screen on {name}. Sign in on that tab and re-run this "
     "when you're done — I'll keep checking in the background too.",
 }
@@ -134,9 +136,9 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     if state == "logged_in":
         print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
         return 0
-    if state == "signing_up":
-        # Nothing for the seller to type: the daemon signs up and reports in chat.
-        print(_MARKET_STATE_MESSAGES["signing_up"].format(name=name))
+    if state in craigslist_account.AUTOMATIC:
+        # Nothing for the seller to type: the daemon signs up or back in by itself.
+        print(_MARKET_STATE_MESSAGES[state].format(name=name))
         return 1
 
     # From here a person is typing into a login screen the connect route claimed a hold for; every

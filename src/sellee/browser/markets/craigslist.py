@@ -7,6 +7,9 @@ from __future__ import annotations
 ACCOUNT_URL = "https://accounts.craigslist.org/login/home"
 LOGIN_URL = "https://accounts.craigslist.org/login"
 SIGN_UP_EMAIL = "#emailAddress"
+LOGIN_EMAIL = "#inputEmailHandle"
+# "E-mail a login link": the login form, sent with no password.
+LOGIN_LINK_BUTTON = "#onetime"
 SIGN_UP_BUTTON = "#create"
 # The activation page offers two forms; the one without a password field is "Go Passwordless".
 GO_PASSWORDLESS = "form:not(:has(#inputNewPassword)) [type=submit]"
@@ -22,7 +25,8 @@ LOGIN_JS = """() => {
   }
 }"""
 
-# Which account page this is: login, signup_sent, password_options, terms, account_home, unknown.
+# Which account page this is: login, signup_sent, login_link_sent, password_options, terms,
+# account_home or unknown.
 PAGE_JS = f"""() => {{
   try {{
     const path = location.pathname;
@@ -31,6 +35,7 @@ PAGE_JS = f"""() => {{
     if (path === '/pass' && document.querySelector({GO_PASSWORDLESS!r})) {{
       return {{ kind: 'password_options' }};
     }}
+    if (/login link sent/i.test(text)) return {{ kind: 'login_link_sent' }};
     const sent = /link to activate your account has been emailed/i.test(text);
     if (path.startsWith('/signup') && sent) return {{ kind: 'signup_sent' }};
     if (document.querySelector('a[href*="/logout"]')) return {{ kind: 'account_home' }};
