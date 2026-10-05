@@ -31,7 +31,7 @@ _ITEM = {"id": "i1", "title": "Samsung Buds3", "list_price": 80.0, "description"
 
 
 class FakeForm:
-    """Craigslist's posting form as the spike recorded it, one `?s=` step per page."""
+    """Craigslist's posting form as recorded from the live site, one `?s=` step per page."""
 
     def __init__(
         self,

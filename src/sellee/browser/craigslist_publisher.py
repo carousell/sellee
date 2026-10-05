@@ -1,8 +1,5 @@
-"""Posting an item to Craigslist by driving its posting form, a page per `?s=` step.
-
-`publisher.publish`'s contract: `PublishNotAttempted` before the publish click, where nothing
-exists yet; `PublishUnverified` from the click on, where a post may exist and is never re-driven.
-"""
+"""Posts an item to Craigslist by driving its posting form one `?s=` step at a time, under
+`publisher.publish`'s contract: not attempted before the publish click, unverified after it."""
 
 from __future__ import annotations
 
@@ -209,7 +206,7 @@ _STEPS = {
 
 
 def _check_preview(client, item: dict) -> None:
-    """The last moment a mistake is free: the preview must show the item's title and price."""
+    """Refuse unless the preview shows the item's title and price; nothing is published yet."""
     text = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
     title = (item.get("title") or "").strip()
     shown = re.search(re.escape(title) + r" - \$([\d,.]+)", text) if title else None
