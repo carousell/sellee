@@ -247,6 +247,9 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     if state == craigslist_account.SIGNING_UP:
         deps.store.queue_notice(craigslist_account.SIGNING_UP_NOTICE)
         return
+    if state == craigslist_account.SIGNING_BACK_IN:
+        deps.store.queue_notice(craigslist_account.SIGNING_BACK_IN_NOTICE)
+        return
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
         deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))

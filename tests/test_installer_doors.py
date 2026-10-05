@@ -320,6 +320,23 @@ def test_connect_craigslist_signed_out_answers_signing_up_and_holds_no_tab(
     assert store.craigslist_account()["state"] == "signup_requested"
 
 
+def test_connect_a_signed_out_craigslist_account_answers_signing_back_in_and_holds_no_tab(
+    server, store, browser
+) -> None:
+    store.set_seller_config_section("basics", {"region": "US"})
+    store.request_craigslist_signup()
+    store.set_craigslist_awaiting_activation()
+    store.activate_craigslist_account("ready")
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200
+    assert body["state"] == "signing_back_in"
+    assert store.browser_hold_reason() == ""
+    assert store.craigslist_account()["state"] == "awaiting_login_link"
+
+
 def test_connect_market_reports_the_sellers_window_preference(server, store) -> None:
     """The CLI does the OS-level raise, but the setting lives in the daemon's store — so the
     answer rides in the response for the CLI to obey."""

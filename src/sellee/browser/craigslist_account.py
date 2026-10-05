@@ -19,6 +19,8 @@ log = logging.getLogger(__name__)
 
 # Past this, a missing activation mail is worth telling the seller about.
 ACTIVATION_WAIT_SEC = 1800.0
+# A login link lasts this long, and a newer request voids it, so one is asked for at a time.
+LOGIN_WAIT_SEC = 1800.0
 # How long a submitted form gets to show its next page; clicks return before it loads.
 TRANSITION_WAIT_SEC = 20.0
 _POLL_SEC = 0.5
@@ -26,11 +28,15 @@ _POLL_SEC = 0.5
 SIGNUP_REQUESTED = "signup_requested"
 AWAITING_ACTIVATION = "awaiting_activation"
 ACTIVE = "active"
-# What connecting answers while sellee creates the account.
+AWAITING_LOGIN_LINK = "awaiting_login_link"
+# What connecting answers while sellee creates the account, or signs it back in.
 SIGNING_UP = "signing_up"
+SIGNING_BACK_IN = "signing_back_in"
+AUTOMATIC = (SIGNING_UP, SIGNING_BACK_IN)
 
 # Anchored on host and path, so a link that merely mentions Craigslist is never recorded.
 _ACTIVATION_LINK = re.compile(r"https://accounts\.craigslist\.org/pass\?[^\s<>\"'()]+")
+_LOGIN_LINK = re.compile(r"https://accounts\.craigslist\.org/login/onetime\?[^\s<>\"'()]+")
 
 SIGNING_UP_NOTICE = (
     "I'm creating your Craigslist account with your sellee email address — "
@@ -45,6 +51,13 @@ ACTIVATION_FAILED_NOTICE = (
     "Craigslist's activation link didn't leave me signed in. "
     "Run `sellee connect craigslist` to start the account again."
 )
+SIGNING_BACK_IN_NOTICE = (
+    "Craigslist signed me out, so I'm signing back in by email. Nothing for you to do."
+)
+LOGIN_LATE_NOTICE = (
+    "Craigslist hasn't sent the login email I asked for, so I've asked again. "
+    "Craigslist posts wait until I'm back in."
+)
 ACTIVATION_LATE_NOTICE = (
     "Craigslist hasn't sent the activation email for your new account yet. "
     "I'll finish setting it up as soon as it arrives."
@@ -52,13 +65,26 @@ ACTIVATION_LATE_NOTICE = (
 
 
 def connect_state(store, market: str, state: str) -> str:
-    """What connecting answers: signed out of Craigslist with no account to sign back in to means
-    sellee is creating one, since nobody can sign in to it by hand."""
+    """What connecting answers when signed out of Craigslist: sellee signs back in to an account
+    it made, or creates one, since nobody can sign in to it by hand."""
     if market != marketplaces.CRAIGSLIST or state == "logged_in":
         return state
+    if signed_out(store, market):
+        return SIGNING_BACK_IN
     store.request_craigslist_signup()
+    return SIGNING_UP
+
+
+def signed_out(store, market: str) -> bool:
+    """A Craigslist page showed sellee's account signed out: start a login. False when there is
+    no account to sign back in to."""
+    if market != marketplaces.CRAIGSLIST:
+        return False
     row = store.craigslist_account()
-    return SIGNING_UP if row is not None and row["state"] != ACTIVE else state
+    if row is None or row["state"] not in (ACTIVE, AWAITING_LOGIN_LINK):
+        return False
+    store.request_craigslist_login()
+    return True
 
 
 ZIP_NOTICE = (
@@ -83,10 +109,14 @@ def hold_post(store, market: str) -> str | None:
 
 
 def record_service_mail(store, mail: dict) -> None:
-    """The registration lane's hook for Craigslist's own mail: keep an activation link."""
-    found = _ACTIVATION_LINK.search(mail.get("text") or "")
+    """The registration lane's hook for Craigslist's own mail: keep an activation or login link."""
+    text = mail.get("text") or ""
+    found = _ACTIVATION_LINK.search(text)
     if found:
         store.record_craigslist_link(found.group(0), states=(SIGNUP_REQUESTED, AWAITING_ACTIVATION))
+    found = _LOGIN_LINK.search(text)
+    if found:
+        store.record_craigslist_link(found.group(0), states=(AWAITING_LOGIN_LINK,))
 
 
 def service_hooks(store) -> dict:
@@ -108,6 +138,9 @@ def account_lane(deps: AccountDeps) -> None:
     activation a previous tick started and did not finish."""
     row = deps.store.craigslist_account()
     if row is None or row["state"] == ACTIVE:
+        return
+    if row["state"] == AWAITING_LOGIN_LINK:
+        _login_tick(deps, row)
         return
     if row["state"] == AWAITING_ACTIVATION and not row["link"]:
         if deps.now() - row["requested_ts"] > ACTIVATION_WAIT_SEC:
@@ -191,3 +224,67 @@ def _settle(deps: AccountDeps, client) -> None:
 def _activated(deps: AccountDeps) -> None:
     if deps.store.activate_craigslist_account(ACTIVATED_NOTICE):
         deps.bus.publish("craigslist.activated", {})
+
+
+def _login_tick(deps: AccountDeps, row: dict) -> None:
+    """Sign a signed-out account back in: ask for a login link unless one is on its way, open it
+    once it arrives, and settle by reading the account page."""
+    sent = row["requested_ts"]
+    if not row["link"] and sent and deps.now() - sent < LOGIN_WAIT_SEC:
+        return
+    if inbox.browser_busy(deps.store):
+        return
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            if not row["link"]:
+                if sent:
+                    deps.store.report_craigslist_late_once(LOGIN_LATE_NOTICE)
+                _ask_for_login_link(deps, client)
+            elif row["link_opened"]:
+                _settle_login(deps, client)
+            else:
+                _open_login_link(deps, client, row["link"])
+    except (BrowserError, RailError) as exc:
+        log.warning("Craigslist login step skipped this tick: %s", exc)
+
+
+def _ask_for_login_link(deps: AccountDeps, client) -> None:
+    address = deps.rail_factory().get_registration_address()
+    client.navigate(craigslist.LOGIN_URL)
+    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+        _restored(deps)
+        return
+    if _page(client) == "login":
+        client.type_humanly(craigslist.LOGIN_EMAIL, "the login email box", address)
+        client.click(craigslist.LOGIN_LINK_BUTTON, "E-mail a login link")
+        if _next_page(deps, client, "login") != "login_link_sent":
+            log.warning("Craigslist did not confirm the login link was sent")
+    # Counted as sent either way, so a page that did not confirm is retried after the wait.
+    deps.store.mark_craigslist_login_requested(deps.now())
+    deps.bus.publish("craigslist.login_requested", {})
+
+
+def _open_login_link(deps: AccountDeps, client, link: str) -> None:
+    client.navigate(link)
+    deps.store.mark_craigslist_link_opened(link)
+    if _page(client) == "terms":
+        client.click(craigslist.ACCEPT_TERMS, "I ACCEPT")
+        _next_page(deps, client, "terms")
+    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+        _restored(deps)
+
+
+def _settle_login(deps: AccountDeps, client) -> None:
+    """An opened login link that left the account signed out is spent; ask for another."""
+    client.navigate(craigslist.ACCOUNT_URL)
+    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+        _restored(deps)
+        return
+    log.warning("Craigslist login link did not end signed in")
+    deps.store.reset_craigslist_login()
+
+
+def _restored(deps: AccountDeps) -> None:
+    if deps.store.restore_craigslist_session():
+        deps.bus.publish("craigslist.signed_back_in", {})

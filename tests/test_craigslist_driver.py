@@ -409,21 +409,40 @@ def test_a_missing_area_asks_once_and_waits_for_the_answer(store, bus, crosslist
     assert store.get_item(crosslisting["id"])["listing_urls"]["craigslist"] == _POST
 
 
-def test_a_signed_out_account_spends_nothing_says_so_once_and_retries_later(
+def test_a_signed_out_post_starts_a_login_and_waits_for_it_spending_nothing(
     store, bus, crosslisting
 ) -> None:
     form = FakeForm(signed_out_at="type")
-    clock = [1_000_000.0]
     deps = _deps(store, bus, form)
-    deps.now = lambda: clock[0]
 
     for _ in range(5):
         crosslist.enqueue_next(deps)
 
     assert form.navigated == [craigslist.POST_URL]
     assert deps.attempts == {}
-    assert len(_notices(store)) == 1
-    assert store.publish_pass_index() == []
+    assert store.craigslist_account()["state"] == "awaiting_login_link"
+    assert _notices(store) == []
+
+    form.signed_out_at = None
+    store.restore_craigslist_session()
+    crosslist.enqueue_next(deps)
+
+    assert store.get_item(crosslisting["id"])["listing_urls"]["craigslist"] == _POST
+
+
+def test_a_signed_out_market_with_no_login_of_its_own_waits_an_hour(
+    store, bus, crosslisting, monkeypatch
+) -> None:
+    monkeypatch.setattr(crosslist.craigslist_account, "signed_out", lambda store, market: False)
+    form = FakeForm(signed_out_at="type")
+    clock = [1_000_000.0]
+    deps = _deps(store, bus, form)
+    deps.now = lambda: clock[0]
+
+    for _ in range(3):
+        crosslist.enqueue_next(deps)
+
+    assert deps.attempts == {} and len(_notices(store)) == 1
 
     form.signed_out_at = None
     clock[0] += crosslist.SIGNED_OUT_HOLD_SEC + 1

@@ -396,6 +396,45 @@ class BrowserMixin:
                 (_now(), link),
             )
 
+    def request_craigslist_login(self) -> bool:
+        """An active account found signed out: wait for a login link, none sent yet."""
+        now = _now()
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'awaiting_login_link', link = NULL, "
+                "link_opened = 0, requested_ts = 0, late_reported = 0, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active'",
+                (now,),
+            )
+            return bool(cur.rowcount)
+
+    def mark_craigslist_login_requested(self, asked_ts: float) -> None:
+        """A login link was asked for at `asked_ts` (the lane's clock); it voids any earlier one."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE craigslist_account SET link = NULL, link_opened = 0, requested_ts = ?, "
+                "updated_ts = ? WHERE id = 1 AND state = 'awaiting_login_link'",
+                (asked_ts, _now()),
+            )
+
+    def reset_craigslist_login(self) -> None:
+        """A login link that did not sign in is spent: ask for a new one."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE craigslist_account SET link = NULL, link_opened = 0, requested_ts = 0, "
+                "updated_ts = ? WHERE id = 1 AND state = 'awaiting_login_link'",
+                (_now(),),
+            )
+
+    def restore_craigslist_session(self) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'active', updated_ts = ? "
+                "WHERE id = 1 AND state = 'awaiting_login_link'",
+                (_now(),),
+            )
+            return bool(cur.rowcount)
+
     def activate_craigslist_account(self, notice: str) -> bool:
         with self._db.transaction() as conn:
             cur = conn.execute(
@@ -410,7 +449,10 @@ class BrowserMixin:
     def abandon_craigslist_account(self, notice: str) -> bool:
         """Drop an account Craigslist never finished, so connecting again starts over."""
         with self._db.transaction() as conn:
-            cur = conn.execute("DELETE FROM craigslist_account WHERE id = 1 AND state != 'active'")
+            cur = conn.execute(
+                "DELETE FROM craigslist_account "
+                "WHERE id = 1 AND state IN ('signup_requested', 'awaiting_activation')"
+            )
             if cur.rowcount:
                 _insert_notice(conn, notice)
             return bool(cur.rowcount)
@@ -419,7 +461,8 @@ class BrowserMixin:
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE craigslist_account SET late_reported = 1, updated_ts = ? "
-                "WHERE id = 1 AND state = 'awaiting_activation' AND late_reported = 0",
+                "WHERE id = 1 AND state IN ('awaiting_activation', 'awaiting_login_link') "
+                "AND late_reported = 0",
                 (_now(),),
             )
             if cur.rowcount:
