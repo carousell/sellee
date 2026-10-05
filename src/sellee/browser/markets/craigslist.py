@@ -166,8 +166,8 @@ EDIT_IMAGES = "form.manage.editimage [name=go]"
 # What the driver can change; category, type and site are fixed once posted.
 EDITABLE_FIELDS = frozenset({"title", "list_price", "description", "photos"})
 # A text and a photo edit together: each opens the manage page, submits its steps and publishes,
-# then reads the manage page again.
-EDIT_LOADS = 12
+# then reads the manage page again, the photo edit reopening its images to count them.
+EDIT_LOADS = 14
 DELETE_IMAGE = f"[{CHOICE_ATTR}=delete]"
 # Marks the first image's own remove button on the images step: an in-page form, never the
 # manage page's "Delete this Posting".

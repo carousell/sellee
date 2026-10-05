@@ -294,7 +294,9 @@ def revise(client, item: dict, *, listing_url: str, changed, sleep=None):
     outcomes = []
     try:
         for entry, text, photos in halves:
-            outcomes.append(_revise_once(client, item, manage, entry, pause, text, photos))
+            outcomes.append(
+                _revise_once(client, item, listing_url, manage, entry, pause, text, photos)
+            )
             saved = True
     except editor.ReviseNotAttempted as exc:
         if saved:
@@ -304,8 +306,8 @@ def revise(client, item: dict, *, listing_url: str, changed, sleep=None):
     return _merged(outcomes)
 
 
-def _revise_once(client, item, manage: str, entry: str, pause, text, photos):
-    staged = publisher.stage_photos(item["id"], photos) if photos is not None else None
+def _revise_once(client, item, listing_url: str, manage: str, entry: str, pause, text, photos):
+    staged = _stage_all(item, photos) if photos is not None else None
     try:
         client.navigate_visible(manage)
         if not _read(client).get("logged_in"):
@@ -325,7 +327,20 @@ def _revise_once(client, item, manage: str, entry: str, pause, text, photos):
     finally:
         if staged is not None:
             publisher.clear_staged(item["id"])
-    return _confirm_revision(client, item, manage, text)
+    expected = len(staged) if staged is not None else None
+    return _confirm_revision(client, item, listing_url, manage, text, expected, pause)
+
+
+def _stage_all(item: dict, photos) -> list:
+    """Every one of the item's photographs, or none: removing the post's images for a partial set
+    would publish a post missing some of them."""
+    staged = publisher.stage_photos(item["id"], photos)
+    if len(staged) != len(photos):
+        publisher.clear_staged(item["id"])
+        raise editor.ReviseNotAttempted(
+            f"only {len(staged)} of {len(photos)} photographs could be read", retryable=True
+        )
+    return staged
 
 
 def _walk_edit(client, item: dict, text, photos, pause) -> None:
@@ -432,11 +447,22 @@ def _replace_photos(client, photos, pause) -> None:
         raise
 
 
-def _confirm_revision(client, item: dict, manage: str, text) -> editor.ReviseOutcome:
-    """Read the manage page, which shows the post as it now stands, for each changed field."""
+def _confirm_revision(
+    client, item: dict, listing_url: str, manage: str, text, photos: int | None, pause
+) -> editor.ReviseOutcome:
+    """Read the manage page, which shows the post as it now stands, for each changed field; for
+    photographs, the image count a fresh "Edit Images" starts from, left without saving."""
     try:
         client.navigate(manage)
-        shown = str((client.evaluate(craigslist.MANAGED_POST_JS) or {}).get("text") or "")
+        found = client.evaluate(craigslist.MANAGED_POST_JS) or {}
+        if found.get("url") != listing_url:
+            raise editor.ReviseUnverified(
+                f"the manage page names another post: {found.get('url')!r}"
+            )
+        shown = str(found.get("text") or "")
+        images = _saved_images(client, pause) if photos is not None else None
+    except editor.ReviseUnverified:
+        raise
     except BrowserError as exc:
         raise editor.ReviseUnverified(f"saved, but the post could not be read back: {exc}") from exc
     header = _HEADER.search(shown)
@@ -444,9 +470,21 @@ def _confirm_revision(client, item: dict, manage: str, text) -> editor.ReviseOut
     mismatched = _still_old(item, text, shown)
     if "description" in text and "description" not in mismatched:
         accepted["description"] = item.get("description")
+    if photos is not None and images != photos:
+        mismatched.append("photos")
     return editor.ReviseOutcome(
         verified=not mismatched, accepted=accepted, mismatched=tuple(mismatched)
     )
+
+
+def _saved_images(client, pause) -> int | None:
+    _submit(client, craigslist.EDIT_IMAGES, "Edit Images")
+    try:
+        _wait_past(client, "", pause)
+    except PublishNotAttempted:
+        return None
+    page = _read(client)
+    return page.get("images") if page.get("step") == "editimage" else None
 
 
 def _merged(outcomes: list) -> editor.ReviseOutcome:

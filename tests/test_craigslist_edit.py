@@ -25,7 +25,7 @@ _BOXES = {craigslist.TITLE: "title", craigslist.PRICE: "price", craigslist.BODY:
 class FakePost:
     """One live post: its manage page, and an edit that changes a draft until publish."""
 
-    def __init__(self, *, images=3, sticky_box=None, publishes=True, uploads=True):
+    def __init__(self, *, images=3, sticky_box=None, publishes=True, uploads=True, post_url=_POST):
         self.post = {"title": "Samsung Buds3", "price": "80", "description": "Barely used."}
         self.post_images = images
         self.draft: dict = {}
@@ -34,6 +34,7 @@ class FakePost:
         self.sticky_box = sticky_box
         self.publishes = publishes
         self.uploads = uploads
+        self.post_url = post_url
         self.focus: str | None = None
         self.selected = False
         self.navigated: list = []
@@ -72,7 +73,7 @@ class FakePost:
         if function == craigslist.MANAGED_POST_JS:
             p = self.post
             text = f"{p['title']} - ${p['price']} (Downtown)\n{p['description']}\npost id: 1"
-            return {"url": _POST, "post_id": "1", "text": text}
+            return {"url": self.post_url, "post_id": "1", "text": text}
         raise AssertionError(f"unexpected script: {function[:60]}")
 
     def click(self, target: str, element: str) -> None:
@@ -162,7 +163,7 @@ _URLS = st.one_of(
 @settings(max_examples=150, deadline=None)
 @given(listing_url=_URLS)
 def test_an_edit_opens_only_the_manage_page_of_the_recorded_post(listing_url) -> None:
-    post = FakePost()
+    post = FakePost(post_url=listing_url)
 
     token = listing_url.rsplit("/", 1)[-1]
 
@@ -272,6 +273,34 @@ def test_a_photo_swap_cut_off_after_removing_images_is_unverified(tmp_path, monk
         _revise(post, _item(photos=_photos(tmp_path, monkeypatch)), ["photos"])
 
     assert post.published == 0
+
+
+def test_a_photo_edit_that_did_not_land_is_reported(tmp_path, monkeypatch) -> None:
+    post = FakePost(images=3, publishes=False)
+
+    outcome = _revise(post, _item(photos=_photos(tmp_path, monkeypatch)), ["photos"])
+
+    assert not outcome.verified and outcome.mismatched == ("photos",)
+
+
+def test_a_photo_that_cannot_be_read_stops_the_swap_before_anything_is_removed(
+    tmp_path, monkeypatch
+) -> None:
+    photos = _photos(tmp_path, monkeypatch) + [{"path": str(tmp_path / "missing.jpg")}]
+    post = FakePost(images=3)
+
+    with pytest.raises(editor.ReviseNotAttempted) as raised:
+        _revise(post, _item(photos=photos), ["photos"])
+
+    assert raised.value.retryable
+    assert post.navigated == [] and post.post_images == 3
+
+
+def test_a_manage_page_naming_another_post_is_unverified() -> None:
+    other = "https://www.craigslist.org/view/d/other-thing/AAAAbbbbCCCC"
+
+    with pytest.raises(editor.ReviseUnverified):
+        _revise(FakePost(post_url=other), _item(), ["title"])
 
 
 def test_an_empty_change_is_not_attempted() -> None:
