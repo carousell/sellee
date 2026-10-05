@@ -7,7 +7,7 @@ import logging
 import re
 
 from sellee import marketplaces
-from sellee.browser import craigslist_account, formfill
+from sellee.browser import craigslist_account, editor, formfill, publisher
 from sellee.browser import governor as page_governor
 from sellee.browser.client import BrowserError, ControlMoved
 from sellee.browser.markets import craigslist
@@ -215,7 +215,8 @@ def _check_preview(client, item: dict) -> None:
         raise PublishNotAttempted(f"the preview does not show {title!r} at its price")
 
 
-def _commit(client, pause) -> PublishOutcome:
+def _press_publish(client) -> None:
+    """Press the preview's publish: not attempted before the press, unverified from it on."""
     try:
         marked = (client.evaluate(craigslist.PUBLISH_MARK_JS) or {}).get("marked")
         client.pace(craigslist.POST_URL)
@@ -231,6 +232,10 @@ def _commit(client, pause) -> PublishOutcome:
         raise PublishNotAttempted(f"nothing was published: {exc}", retryable=True) from exc
     except BrowserError as exc:
         raise PublishUnverified(f"the post may have gone up: {exc}") from exc
+
+
+def _commit(client, pause) -> PublishOutcome:
+    _press_publish(client)
     try:
         try:
             _wait_past(client, "preview", pause)
@@ -253,3 +258,161 @@ def _commit(client, pause) -> PublishOutcome:
 
 def _unverified(reason: str) -> PublishOutcome:
     return PublishOutcome(listing_id=None, url="", verified=False, reason=reason)
+
+
+# --- editing a live post -------------------------------------------------------------------------
+
+# The edit form arrives filled, so a changed box is emptied before it is typed into.
+_EDIT_BOXES = {
+    "title": craigslist.TITLE,
+    "price": craigslist.PRICE,
+    "description": craigslist.BODY,
+}
+
+
+def revise(client, item: dict, *, listing_url: str, changed, sleep=None):
+    """Change a live post to what the item says, from its manage page. Under `editor.revise`'s
+    contract: not attempted before the publish click, unverified after it."""
+    pause = sleep or formfill.sleep
+    if not marketplaces.is_canonical_listing_url(marketplaces.CRAIGSLIST, listing_url):
+        raise editor.ReviseNotAttempted(f"{listing_url!r} is not a Craigslist post address")
+    manage = craigslist.manage_url(listing_url)
+    wanted = set(changed)
+    text = wanted - {"photos"}
+    outcome = None
+    if text:
+        outcome = _revise_once(client, item, manage, craigslist.EDIT_TEXT, pause, text=text)
+    if "photos" in wanted:
+        photos = publisher.stage_photos(item["id"], item.get("photos") or [])
+        try:
+            outcome = _revise_once(
+                client, item, manage, craigslist.EDIT_IMAGES, pause, photos=photos
+            )
+        finally:
+            publisher.clear_staged(item["id"])
+    return outcome
+
+
+def _revise_once(client, item, manage: str, entry: str, pause, *, text=(), photos=None):
+    try:
+        client.navigate_visible(manage)
+        if not _read(client).get("logged_in"):
+            raise PublishNotAttempted("Craigslist shows the account signed out", retryable=True)
+        _submit(client, entry, "the manage page's edit control")
+        _wait_past(client, "", pause)
+        _walk_edit(client, item, text, photos, pause)
+        _press_publish(client)
+    except PublishNotAttempted as exc:
+        raise editor.ReviseNotAttempted(str(exc), retryable=exc.retryable) from exc
+    except PublishUnverified as exc:
+        raise editor.ReviseUnverified(str(exc)) from exc
+    except page_governor.PagesSpent:
+        raise
+    except BrowserError as exc:
+        raise editor.ReviseNotAttempted(f"could not edit the post: {exc}", retryable=True) from exc
+    return _confirm_revision(client, item, manage, text)
+
+
+def _walk_edit(client, item: dict, text, photos, pause) -> None:
+    for _ in range(MAX_STEPS):
+        step = _read(client).get("step") or ""
+        if step == "preview":
+            _check_edit_preview(client, item, text)
+            return
+        if step == "edit":
+            _replace_text(client, item, text, pause)
+        elif step == "editimage":
+            _replace_photos(client, photos, pause)
+        elif step == "geoverify":
+            _geoverify(client, {}, item, (), {}, pause)
+        else:
+            raise PublishNotAttempted(
+                f"Craigslist showed an edit page sellee does not know: {step!r}"
+            )
+        _wait_past(client, step, pause)
+    raise PublishNotAttempted("the edit never reached its preview", retryable=True)
+
+
+def _check_edit_preview(client, item: dict, text) -> None:
+    """Refuse unless the preview shows each changed field; the rest is the post as it stood."""
+    if set(text) & {"title", "list_price"}:
+        _check_preview(client, item)
+    if "description" in text:
+        shown = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
+        if _norm(item.get("description")) not in _norm(shown):
+            raise PublishNotAttempted("the preview does not show the new description")
+
+
+def _replace_text(client, item: dict, text, pause) -> None:
+    fields = [
+        (step, value)
+        for step, name, value in (
+            ("title", "title", item.get("title") or ""),
+            ("price", "list_price", formfill.bare_price(item.get("list_price"))),
+            ("description", "description", item.get("description") or ""),
+        )
+        if name in text
+    ]
+    formfill.type_fields(
+        client,
+        _EDIT_BOXES.__getitem__,
+        fields,
+        list(_EDIT_BOXES),
+        lambda message: PublishNotAttempted(message, retryable=True),
+        pause,
+        replace=True,
+    )
+    seen = client.evaluate(craigslist.EDIT_READBACK_JS) or {}
+    if "title" in text and _norm(seen.get("title")) != _norm(item.get("title")):
+        raise PublishNotAttempted(f"the edit form shows the title as {seen.get('title')!r}")
+    if "list_price" in text and not formfill.price_matches(
+        seen.get("price"), item.get("list_price")
+    ):
+        raise PublishNotAttempted(f"the edit form shows the price as {seen.get('price')!r}")
+    if "description" in text and _norm(seen.get("description")) != _norm(item.get("description")):
+        raise PublishNotAttempted("the edit form's description is not what was asked for")
+    _submit(client, craigslist.CONTINUE, "continue")
+
+
+def _replace_photos(client, photos, pause) -> None:
+    """Remove every image the post has, then add the item's; the step keeps count."""
+    if photos is not None:
+        for _ in range(int(IMAGE_WAIT_SEC / _POLL_SEC)):
+            if not (_read(client).get("images") or 0):
+                break
+            if (client.evaluate(craigslist.DELETE_IMAGE_MARK_JS) or {}).get("marked"):
+                client.click(craigslist.DELETE_IMAGE, "remove image")
+            pause(_POLL_SEC)
+        else:
+            raise PublishNotAttempted("the old photographs would not all come off", retryable=True)
+    _editimage(client, {}, {}, photos or (), {}, pause)
+
+
+def _confirm_revision(client, item: dict, manage: str, text):
+    """Read the manage page, which shows the post as it now stands, for each changed field."""
+    try:
+        client.navigate(manage)
+        shown = str((client.evaluate(craigslist.MANAGED_POST_JS) or {}).get("text") or "")
+    except BrowserError as exc:
+        raise editor.ReviseUnverified(f"saved, but the post could not be read back: {exc}") from exc
+    title = (item.get("title") or "").strip()
+    found = re.search(re.escape(title) + r" - \$([\d,.]+)", shown) if title else None
+    mismatched = []
+    if "title" in text and found is None:
+        mismatched.append("title")
+    if "list_price" in text and (
+        found is None or not formfill.price_matches(found.group(1), item.get("list_price"))
+    ):
+        mismatched.append("list_price")
+    if "description" in text and _norm(item.get("description")) not in _norm(shown):
+        mismatched.append("description")
+    return editor.ReviseOutcome(
+        verified=not mismatched,
+        accepted={"title": title} if found else {},
+        mismatched=tuple(mismatched),
+        reason=f"it still shows the old {', '.join(mismatched)}" if mismatched else "",
+    )
+
+
+def _norm(text) -> str:
+    return " ".join(str(text or "").split())

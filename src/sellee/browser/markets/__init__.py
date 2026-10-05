@@ -144,6 +144,9 @@ class MarketAdapter:
     publish_url: str = ""
     # The page loads one publish may cost, asked of the governor before it starts.
     publish_loads: int = 3
+    # Editing through a market's own driver, under `editor.revise`'s contract, and its page cost.
+    edit_driver: Callable | None = None
+    edit_loads: int = 2
     # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
     # recorded only. The default treats every ring as a message; a market narrows it only from
     # notifications it has actually been seen to send.
@@ -218,6 +221,12 @@ def _drive_craigslist(*args, **kwargs):
     return craigslist_publisher.publish(*args, **kwargs)
 
 
+def _edit_craigslist(*args, **kwargs):
+    from sellee.browser import craigslist_publisher
+
+    return craigslist_publisher.revise(*args, **kwargs)
+
+
 # No inbox page: buyers mail the registration address, which the registration lane reads.
 # `read_trigger` matches neither browser read lane.
 CRAIGSLIST = MarketAdapter(
@@ -229,6 +238,9 @@ CRAIGSLIST = MarketAdapter(
     publish_driver=_drive_craigslist,
     publish_url=craigslist.POST_URL,
     publish_loads=craigslist.PUBLISH_LOADS,
+    edit_driver=_edit_craigslist,
+    edit_loads=craigslist.EDIT_LOADS,
+    editable_fields=craigslist.EDITABLE_FIELDS,
     polices_automation=True,
     read_trigger="mail",
 )

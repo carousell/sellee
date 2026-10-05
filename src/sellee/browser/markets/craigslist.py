@@ -135,6 +135,7 @@ EDIT_READBACK_JS = f"""() => {{
     title: value({TITLE!r}),
     price: value({PRICE!r}),
     zip: value({ZIP!r}),
+    description: value({BODY!r}),
     chat_on: !!(chat && chat.checked),
   }};
 }}"""
@@ -154,8 +155,34 @@ MANAGED_POST_JS = """() => {
   const a = document.querySelector('a[href^="https://www.craigslist.org/view/d/"]');
   const text = (document.body && document.body.innerText) || '';
   const id = text.match(/post id:\\s*(\\d+)/i);
-  return { url: a ? a.href : null, post_id: id ? id[1] : null };
+  return { url: a ? a.href : null, post_id: id ? id[1] : null, text: text.slice(0, 8000) };
 }"""
+
+# --- editing ------------------------------------------------------------------------------------
+
+MANAGE_URL = "https://post.craigslist.org/manage/{token}"
+EDIT_TEXT = "form.manage.edittext [name=go]"
+EDIT_IMAGES = "form.manage.editimage [name=go]"
+# What the driver can change; category, type and site are fixed once posted.
+EDITABLE_FIELDS = frozenset({"title", "list_price", "description", "photos"})
+# The manage page, the edit or images steps, publish, and the manage page again; both at most.
+EDIT_LOADS = 12
+DELETE_IMAGE = f"[{CHOICE_ATTR}=delete]"
+# Marks the first image's own remove button on the images step.
+DELETE_IMAGE_MARK_JS = f"""() => {{
+  for (const el of document.querySelectorAll('[{CHOICE_ATTR}=delete]')) {{
+    el.removeAttribute('{CHOICE_ATTR}');
+  }}
+  const button = document.querySelector('form.delete button[name=go], form.ajax button[name=go]');
+  if (button) button.setAttribute('{CHOICE_ATTR}', 'delete');
+  return {{ marked: !!button }};
+}}"""
+
+
+def manage_url(listing_url: str) -> str:
+    """The manage page of the post at this canonical address: both carry the post's token."""
+    return MANAGE_URL.format(token=listing_url.rstrip("/").rsplit("/", 1)[-1])
+
 
 _CONDITIONS = ("new", "like new", "excellent", "good", "fair", "salvage")
 

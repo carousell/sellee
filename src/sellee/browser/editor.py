@@ -59,7 +59,7 @@ class ReviseOutcome:
 def can_edit(market: str) -> bool:
     """Whether this marketplace can be edited by driving its form at all."""
     adapter = market_adapters.get_adapter(market)
-    return bool(adapter and adapter.edit_fields_js)
+    return bool(adapter and (adapter.edit_fields_js or adapter.edit_driver))
 
 
 def can_edit_fields(market: str, changed) -> bool:
@@ -67,13 +67,20 @@ def can_edit_fields(market: str, changed) -> bool:
     can only half-make is not attempted — a listing showing a new price and an old photo set is
     worse than one the seller is told to fix by hand."""
     adapter = market_adapters.get_adapter(market)
-    return bool(adapter and adapter.edit_fields_js and set(changed) <= _drivable(adapter))
+    return bool(
+        adapter
+        and (adapter.edit_fields_js or adapter.edit_driver)
+        and set(changed) <= _drivable(adapter)
+    )
 
 
 def _drivable(adapter) -> set:
     """What this driver can actually change on this market: fields the adapter says its form holds
     AND fields this module knows how to type. An adapter naming a field with no step here would
-    otherwise reach `revise` and fail on a lookup instead of being told it is not attempted."""
+    otherwise reach `revise` and fail on a lookup instead of being told it is not attempted. A
+    market with its own driver answers for every field it names."""
+    if adapter.edit_driver:
+        return set(adapter.editable_fields)
     return set(adapter.editable_fields) & set(_STEPS)
 
 
@@ -87,11 +94,15 @@ def revise(client, adapter, item: dict, *, listing_url: str, changed, sleep=None
     Answers a `ReviseOutcome`, or raises `ReviseNotAttempted` / `ReviseUnverified` — never a bare
     `BrowserError`, because the caller's decision turns entirely on which side of the save it was.
     """
-    if not adapter.edit_fields_js:
-        raise ReviseNotAttempted(f"{adapter.market} has no edit selectors")
     outside = sorted(set(changed) - _drivable(adapter))
     if outside:
         raise ReviseNotAttempted(f"{', '.join(outside)} cannot be changed on {adapter.market} here")
+    if adapter.edit_driver:
+        return adapter.edit_driver(
+            client, item, listing_url=listing_url, changed=changed, sleep=sleep
+        )
+    if not adapter.edit_fields_js:
+        raise ReviseNotAttempted(f"{adapter.market} has no edit selectors")
     pause = sleep or formfill.sleep
 
     try:

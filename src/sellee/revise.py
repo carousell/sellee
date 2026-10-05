@@ -77,6 +77,11 @@ class ReviseDeps:
 EDIT_LOADS = 2
 
 
+def _edit_loads(market: str) -> int:
+    adapter = market_adapters.get_adapter(market)
+    return adapter.edit_loads if adapter else EDIT_LOADS
+
+
 def revise_lane(deps: ReviseDeps) -> None:
     """One tick: report the edits that have settled, then drive at most one more."""
     report_settled(deps)
@@ -99,7 +104,7 @@ def run_next(deps: ReviseDeps) -> str | None:
     market = upcoming["market"]
     if page_governor.unprompted_held(
         deps.store, deps.config, market, deps.now()
-    ) or not page_governor.has_room(deps.governor, market, EDIT_LOADS):
+    ) or not page_governor.has_room(deps.governor, market, _edit_loads(market)):
         # Not claimed, so it spends nothing: a retry waits for the morning or the page loads. The
         # seller's own first ask is held the same way — it is theirs to have made at 3am, but the
         # account starting an edit then is the same thing to Facebook.
