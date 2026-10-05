@@ -1,5 +1,5 @@
 """The seller's Craigslist account, which sellee creates itself: its email is the registration
-address, whose mail the seller never sees. The lane drives the browser off the account row."""
+address, whose mail the seller never sees. The lane works from the one account row."""
 
 from __future__ import annotations
 

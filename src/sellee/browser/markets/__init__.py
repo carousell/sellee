@@ -199,8 +199,8 @@ FACEBOOK = MarketAdapter(
     read_trigger="notification",
 )
 
-# No inbox to read: buyers arrive as mail to the registration address, which the registration
-# lane reads, so `read_trigger` names neither of the browser read lanes.
+# No inbox page: buyers mail the registration address, which the registration lane reads.
+# `read_trigger` matches neither browser read lane.
 CRAIGSLIST = MarketAdapter(
     market="craigslist",
     conversations_list_js="",

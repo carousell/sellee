@@ -821,7 +821,7 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: registration.registration_lane(registration_deps),
         )
     )
-    # Create the seller's Craigslist account and open its activation link, off the account row.
+    # Create the seller's Craigslist account and open its activation link.
     craigslist_deps = craigslist_account.AccountDeps(
         store=store,
         bus=bus,
