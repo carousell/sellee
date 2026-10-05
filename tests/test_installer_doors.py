@@ -303,6 +303,23 @@ def test_connect_market_opens_the_regional_site_and_reports_the_probe(
     assert browser.visited == ["https://www.carousell.sg/"]
 
 
+def test_connect_craigslist_signed_out_answers_signing_up_and_holds_no_tab(
+    server, store, browser
+) -> None:
+    from sellee.browser.markets import craigslist
+
+    store.set_seller_config_section("basics", {"region": "US"})
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200
+    assert body["state"] == "signing_up"
+    assert browser.visited == [craigslist.ACCOUNT_URL]
+    assert store.browser_hold_reason() == ""
+    assert store.craigslist_account()["state"] == "signup_requested"
+
+
 def test_connect_market_reports_the_sellers_window_preference(server, store) -> None:
     """The CLI does the OS-level raise, but the setting lives in the daemon's store — so the
     answer rides in the response for the CLI to obey."""

@@ -707,6 +707,7 @@ class _Handler(BaseHTTPRequestHandler):
         # never sign in for them, and nothing about their session is recorded: the cookies in
         # that profile are the truth, and the probe re-derives the answer whenever it is asked.
         from sellee import settings
+        from sellee.browser import craigslist_account
 
         body = self._attended_body()
         if body is None:
@@ -731,7 +732,10 @@ class _Handler(BaseHTTPRequestHandler):
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
-        if state != "logged_in":
+        if state != "logged_in" and adapter.market == craigslist_account.CRAIGSLIST:
+            if craigslist_account.ask_for_account(self._app.store):
+                state = craigslist_account.SIGNING_UP
+        if state not in ("logged_in", craigslist_account.SIGNING_UP):
             # Claimed here, not by the caller: this navigation put the login screen up, and a CLI
             # that forgot to ask would leave the lanes free to navigate away.
             self._app.store.hold_browser(

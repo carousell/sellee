@@ -290,6 +290,13 @@ class RailClient:
             raise RailToolError("list_registration_mail returned no mail list")
         return {"mail": result.get("mail") or [], "next_cursor": result.get("next_cursor", "")}
 
+    def get_registration_address(self) -> str:
+        """The seller's registration address, minted by bazaar on the first call."""
+        address = self.call_tool("get_registration_address", {}).get("registration_email")
+        if not address:
+            raise RailToolError("get_registration_address returned no address")
+        return str(address)
+
     def send_registration_reply(
         self, to: str, subject: str, text: str, client_message_id: str
     ) -> dict:

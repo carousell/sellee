@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell, facebook
+from sellee.browser.markets import carousell, craigslist, facebook
 
 
 @dataclass(frozen=True)
@@ -136,6 +136,8 @@ class MarketAdapter:
     # displayed (browser/doorbell.py) — and a person's reaction time afterwards, which is how
     # someone checks marketplace messages rather than how a poller does.
     read_trigger: str = "timer"
+    # Where connecting opens and the login probe reads, when it is not the market's front page.
+    home_url: str = ""
     # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
     # recorded only. The default treats every ring as a message; a market narrows it only from
     # notifications it has actually been seen to send.
@@ -197,7 +199,19 @@ FACEBOOK = MarketAdapter(
     read_trigger="notification",
 )
 
-_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
+# No inbox to read: buyers arrive as mail to the registration address, which the registration
+# lane reads, so `read_trigger` names neither of the browser read lanes.
+CRAIGSLIST = MarketAdapter(
+    market="craigslist",
+    conversations_list_js="",
+    conversation_tail_js="",
+    login_js=craigslist.LOGIN_JS,
+    home_url=craigslist.ACCOUNT_URL,
+    polices_automation=True,
+    read_trigger="mail",
+)
+
+_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK, CRAIGSLIST.market: CRAIGSLIST}
 
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"

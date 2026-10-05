@@ -11,9 +11,10 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee import marketplaces
-from sellee.browser import blindness, connect
+from sellee import marketplaces, settings
+from sellee.browser import blindness, connect, craigslist_account
 from sellee.browser import markets as market_adapters
+from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.store import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -577,3 +578,50 @@ def test_the_sign_in_page_is_left_open_for_the_seller(store, bus) -> None:
     connect.connect_lane(_deps(store, bus, client))
 
     assert doorbell.AWAY_URL not in client.navigations
+
+
+# --- Craigslist: nobody can sign in by hand, so connecting creates the account -----------------
+
+
+@pytest.fixture
+def us_craigslist(store):
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    return store
+
+
+def test_connecting_craigslist_signed_out_asks_for_an_account_not_a_sign_in(
+    us_craigslist, bus
+) -> None:
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+    client = StubClient(login="logged_out")
+
+    connect.connect_lane(_deps(us_craigslist, bus, client))
+
+    assert client.navigations == [craigslist.ACCOUNT_URL]
+    assert _texts(us_craigslist) == [craigslist_account.SIGNING_UP_NOTICE]
+    assert us_craigslist.craigslist_account()["state"] == craigslist_account.SIGNUP_REQUESTED
+    assert us_craigslist.pending_market_connects() == []
+
+
+def test_connecting_craigslist_twice_asks_for_one_account(us_craigslist, bus) -> None:
+    for _ in range(2):
+        us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+        connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_out")))
+
+    assert len(us_craigslist._db.query("SELECT 1 FROM craigslist_account")) == 1
+
+
+def test_a_signed_in_craigslist_account_is_confirmed_like_any_market(us_craigslist, bus) -> None:
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_PROBE)
+
+    connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_in")))
+
+    assert "Signed in to Craigslist" in _texts(us_craigslist)[0]
+    assert us_craigslist.craigslist_account() is None
+
+
+def test_craigslist_is_refused_for_a_seller_outside_the_us(store, bus) -> None:
+    with pytest.raises(settings.SettingError) as excinfo:
+        settings.set_now(store, bus, key="connected_markets", raw_value=["craigslist"])
+    assert "Craigslist isn't available for SG accounts" in str(excinfo.value)

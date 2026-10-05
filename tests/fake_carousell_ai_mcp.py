@@ -45,6 +45,8 @@ class FakeRelay:
         # One send_registration_reply outcome per call ("ok" once empty): unavailable and http503
         # send nothing; lost sends, then answers as a 5xx.
         self.registration_script: list = []
+        # The seller's registration address, as get_registration_address mints it.
+        self.registration_email = "seller-token@inbox.carousell.ai"
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -183,6 +185,9 @@ class FakeRelay:
         ]
         return {"mail": mail, "next_cursor": cursor}
 
+    def get_registration_address(self, args: dict) -> dict:
+        return {"registration_email": self.registration_email}
+
     def send_registration_reply(self, args: dict) -> dict:
         """Send once per client_message_id, only to a correspondent, as bazaar does."""
         self.registration_calls.append(dict(args))
@@ -223,6 +228,7 @@ _TOOLS = (
     "reply_to_thread",
     "list_registration_mail",
     "send_registration_reply",
+    "get_registration_address",
 )
 
 
@@ -261,6 +267,7 @@ class _Handler(BaseHTTPRequestHandler):
             "reply_to_thread": relay.reply_to_thread,
             "list_registration_mail": relay.list_registration_mail,
             "send_registration_reply": relay.send_registration_reply,
+            "get_registration_address": relay.get_registration_address,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}

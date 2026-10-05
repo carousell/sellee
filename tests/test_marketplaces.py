@@ -21,9 +21,16 @@ def test_resolve_falls_back_to_star_default() -> None:
     assert marketplaces.resolve_domain("fb", None) == "www.facebook.com"
 
 
-def test_resolve_falls_back_to_listing_url_host() -> None:
-    # craigslist has no domains map and a real host, so the listing_url host is the answer
-    assert marketplaces.resolve_domain("craigslist", "US") == "craigslist.org"
+def test_resolve_falls_back_to_listing_url_host(monkeypatch) -> None:
+    # No registry entry lacks a domains map any more, so this one is made up.
+    entry = {"id": "x", "listing_url": {"host": "example.org", "path": "/d/"}}
+    monkeypatch.setattr(marketplaces, "get_marketplace", lambda market: entry)
+    assert marketplaces.resolve_domain("x", "US") == "example.org"
+
+
+def test_craigslist_has_a_site_for_us_sellers_only() -> None:
+    assert marketplaces.resolve_domain("craigslist", "US") == "www.craigslist.org"
+    assert marketplaces.resolve_domain("craigslist", "SG") is None
 
 
 def test_resolve_unknown_market_is_none() -> None:

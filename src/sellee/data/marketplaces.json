@@ -146,6 +146,9 @@
     {
       "id": "craigslist",
       "display_name": "Craigslist",
+      "domains": {
+        "US": "www.craigslist.org"
+      },
       "listing_url": {
         "host": "craigslist.org",
         "path": "/d/"

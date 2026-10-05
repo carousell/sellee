@@ -496,6 +496,20 @@ def test_an_already_signed_in_market_exits_0_without_asking(
     assert "Signed in to Carousell" in capsys.readouterr().out
 
 
+def test_a_craigslist_account_being_created_asks_nothing_and_holds_nothing(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["state"] = "signing_up"
+    monkeypatch.setattr("builtins.input", lambda prompt="": pytest.fail("asked the seller"))
+
+    rc = connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    assert rc == 1
+    assert stub_market_daemon["probes"] == []
+    assert stub_market_daemon["holds"] == []
+    assert "creating your Craigslist account" in capsys.readouterr().out
+
+
 def test_a_signed_out_market_waits_then_re_probes(monkeypatch, stub_market_daemon, capsys) -> None:
     stub_market_daemon["state"] = "logged_out"
     prompts = []

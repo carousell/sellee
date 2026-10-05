@@ -346,3 +346,89 @@ class BrowserMixin:
             (now,),
         )
         return str(rows[0]["reason"]) if rows else ""
+
+    # --- the seller's Craigslist account -------------------------------------------------------
+    #
+    # Each write names the state it moves from, so a stale caller changes nothing; and a notice is
+    # queued in the same transaction as the move it reports.
+
+    def craigslist_account(self) -> dict | None:
+        rows = self._db.query("SELECT * FROM craigslist_account WHERE id = 1")
+        return dict(rows[0]) if rows else None
+
+    def request_craigslist_signup(self) -> bool:
+        """Ask for a Craigslist account; False when there already is one, or one on its way."""
+        now = _now()
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "INSERT INTO craigslist_account (id, state, requested_ts, updated_ts) "
+                "VALUES (1, 'signup_requested', ?, ?) ON CONFLICT (id) DO NOTHING",
+                (now, now),
+            )
+            return bool(cur.rowcount)
+
+    def set_craigslist_awaiting_activation(self) -> bool:
+        now = _now()
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'awaiting_activation', link = NULL, "
+                "requested_ts = ?, late_reported = 0, updated_ts = ? "
+                "WHERE id = 1 AND state = 'signup_requested'",
+                (now, now),
+            )
+            return bool(cur.rowcount)
+
+    def record_craigslist_link(self, link: str, *, state: str) -> bool:
+        """Keep an emailed link for the lane to open, if the account is waiting in `state`."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link = ?, updated_ts = ? "
+                "WHERE id = 1 AND state = ? AND link IS NOT ?",
+                (link, _now(), state, link),
+            )
+            return bool(cur.rowcount)
+
+    def take_craigslist_link(self, *, state: str) -> str | None:
+        """Hand over the waiting link and forget it, so no link is ever opened twice."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT link FROM craigslist_account WHERE id = 1 AND state = ?", (state,)
+            ).fetchone()
+            if row is None or not row["link"]:
+                return None
+            conn.execute(
+                "UPDATE craigslist_account SET link = NULL, updated_ts = ? WHERE id = 1", (_now(),)
+            )
+            return str(row["link"])
+
+    def activate_craigslist_account(self, notice: str | None = None) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'active', link = NULL, updated_ts = ? "
+                "WHERE id = 1 AND state = 'awaiting_activation'",
+                (_now(),),
+            )
+            if cur.rowcount and notice:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)
+
+    def forget_craigslist_signup(self, notice: str) -> bool:
+        """Drop a sign-up Craigslist did not confirm, so connecting again asks for a new one."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "DELETE FROM craigslist_account WHERE id = 1 AND state = 'signup_requested'"
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)
+
+    def report_craigslist_late_once(self, notice: str) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET late_reported = 1, updated_ts = ? "
+                "WHERE id = 1 AND state = 'awaiting_activation' AND late_reported = 0",
+                (_now(),),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)
