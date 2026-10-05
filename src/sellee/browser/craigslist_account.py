@@ -61,6 +61,27 @@ def connect_state(store, market: str, state: str) -> str:
     return SIGNING_UP if row is not None and row["state"] != ACTIVE else state
 
 
+ZIP_NOTICE = (
+    "Craigslist posts need your ZIP code — it's shown on every post as the item's area. "
+    "Tell me yours and I'll start posting there."
+)
+
+
+def hold_post(store, market: str) -> str | None:
+    """Why a Craigslist post must wait, or None when it can go ahead: "account" while sellee is
+    creating one, asked for here if missing; "zip" while the seller has no ZIP code on record."""
+    if market != marketplaces.CRAIGSLIST:
+        return None
+    row = store.craigslist_account()
+    if row is None or row["state"] != ACTIVE:
+        if store.request_craigslist_signup():
+            store.queue_notice(SIGNING_UP_NOTICE)
+        return "account"
+    if not (store.get_seller_config_section("basics") or {}).get("zip"):
+        return "zip"
+    return None
+
+
 def record_service_mail(store, mail: dict) -> None:
     """The registration lane's hook for Craigslist's own mail: keep an activation link."""
     found = _ACTIVATION_LINK.search(mail.get("text") or "")

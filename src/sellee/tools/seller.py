@@ -20,7 +20,7 @@ from sellee.tools.registry import (
     register,
 )
 
-_BASICS_KEYS = {"region", "currency", "timezone"}
+_BASICS_KEYS = {"region", "currency", "timezone", "zip"}
 _SHIPPING_KEYS = {"zones", "size_surcharge"}
 
 
@@ -62,6 +62,13 @@ def validate_basics(basics: dict) -> dict:
             raise BasicsError("timezone must be a zone name (e.g. Asia/Singapore)")
         _require_known_timezone(timezone)
         out["timezone"] = timezone
+
+    zip_code = str(basics.get("zip", "")).strip()
+    if "zip" in basics:
+        # A US ZIP code, which Craigslist posts show publicly; the street address stays in origin.
+        if len(zip_code) != 5 or not zip_code.isdigit():
+            raise BasicsError(f"zip must be a five-digit US ZIP code, got {zip_code!r}")
+        out["zip"] = zip_code
     return out
 
 

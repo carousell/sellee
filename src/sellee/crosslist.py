@@ -41,7 +41,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
-from sellee.browser import doorbell, publisher, reconcile
+from sellee.browser import craigslist_account, doorbell, publisher, reconcile
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
@@ -405,6 +405,11 @@ def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
     itself.
     """
     if deps.store.market_block(market):
+        return False
+    held = craigslist_account.hold_post(deps.store, market)
+    if held == "zip":
+        _notify_once(deps, "craigslist_zip", craigslist_account.ZIP_NOTICE)
+    if held:
         return False
     try:
         deps.browser_factory()

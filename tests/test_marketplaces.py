@@ -74,7 +74,7 @@ def test_allowlist_covers_markets_without_adapters() -> None:
 def test_supported_markets_is_the_adapter_registry() -> None:
     """The markets something knows how to publish to — every other browser entry is a host the
     scanner needs, not a market anything can drive."""
-    assert market_adapters.supported_markets() == ["fb", "carousell"]
+    assert market_adapters.supported_markets() == ["fb", "carousell", "craigslist"]
 
 
 def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
@@ -99,10 +99,9 @@ def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypa
 
 
 def test_publishable_markets_follow_the_seller_region() -> None:
-    """Carousell runs no US site, but Facebook serves everywhere, so a US seller still has one
-    marketplace."""
+    """Carousell runs no US site and Craigslist only a US one; Facebook serves everywhere."""
     assert market_adapters.publishable_markets("SG") == ["fb", "carousell"]
-    assert market_adapters.publishable_markets("US") == ["fb"]
+    assert market_adapters.publishable_markets("US") == ["fb", "craigslist"]
     assert market_adapters.publishable_markets(None) == ["fb"]
 
 

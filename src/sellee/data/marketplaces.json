@@ -151,8 +151,10 @@
       },
       "listing_url": {
         "host": "craigslist.org",
-        "path": "/d/"
+        "path": "/view/d/",
+        "pattern": "https://www\\.craigslist\\.org/view/d/[a-z0-9-]+/[A-Za-z0-9]+"
       },
+      "listing_flow": "listing-flow-craigslist",
       "connector": {
         "type": "browser"
       },
