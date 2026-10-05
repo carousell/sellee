@@ -105,6 +105,14 @@ ZIP_NOTICE = (
 )
 
 
+def signing_in(store, market: str) -> bool:
+    """Whether a Craigslist edit must wait for sellee to create or sign back in to the account."""
+    if market != marketplaces.CRAIGSLIST:
+        return False
+    row = store.craigslist_account()
+    return row is None or row["state"] != ACTIVE
+
+
 def hold_post(store, market: str) -> str | None:
     """Why a Craigslist post must wait, or None when it can go ahead: "account" while sellee
     creates or signs back in to one; "zip" while the seller has no ZIP code on record."""

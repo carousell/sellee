@@ -311,7 +311,7 @@ def _revise_once(client, item, listing_url: str, manage: str, entry: str, pause,
     try:
         client.navigate_visible(manage)
         if not _read(client).get("logged_in"):
-            raise PublishNotAttempted("Craigslist shows the account signed out", retryable=True)
+            raise editor.ReviseSignedOut("Craigslist shows the account signed out")
         _submit(client, entry, "the manage page's edit control")
         _wait_past(client, "", pause)
         _walk_edit(client, item, text, staged, pause)
@@ -322,6 +322,8 @@ def _revise_once(client, item, listing_url: str, manage: str, entry: str, pause,
         raise editor.ReviseNotAttempted(str(exc), retryable=exc.retryable) from exc
     except PublishUnverified as exc:
         raise editor.ReviseUnverified(str(exc)) from exc
+    except (editor.ReviseNotAttempted, editor.ReviseUnverified):
+        raise
     except BrowserError as exc:
         raise editor.ReviseNotAttempted(f"could not edit the post: {exc}", retryable=True) from exc
     finally:

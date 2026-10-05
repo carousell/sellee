@@ -42,6 +42,7 @@ class FakePost:
         self.clicks = 0
         self.marked_delete = False
         self.published = 0
+        self.signed_in = True
 
     @contextlib.contextmanager
     def exclusive(self):
@@ -59,7 +60,7 @@ class FakePost:
 
     def evaluate(self, function: str, **_):
         if function == craigslist.STEP_JS:
-            return {"step": self.step, "logged_in": True, "images": self.images}
+            return {"step": self.step, "logged_in": self.signed_in, "images": self.images}
         if function == craigslist.EDIT_READBACK_JS:
             return {**self.draft, "zip": "94103", "chat_on": False}
         if function == craigslist.PREVIEW_TEXT_JS:
@@ -321,6 +322,9 @@ def listed(store, monkeypatch):
     seed_setting(store, "connected_markets", ["craigslist"])
     made = store.create_item(title="Samsung Buds3 Pro", list_price=65.0, currency="USD")
     store.record_listing_url(made["id"], "craigslist", _POST)
+    store.request_craigslist_signup()
+    store.set_craigslist_awaiting_activation()
+    store.activate_craigslist_account("ready")
     return made
 
 
@@ -338,13 +342,12 @@ def test_an_edit_to_a_live_craigslist_post_is_driven_to_done(store, bus, listed)
     assert post.post["price"] == "65"
 
 
-def test_an_item_with_no_craigslist_post_settles_failed_and_drives_nothing(store, bus) -> None:
-    seed_setting(store, "connected_markets", ["craigslist"])
-    made = store.create_item(title="Samsung Buds3 Pro", list_price=65.0, currency="USD")
-    store.record_listing_url(made["id"], "craigslist", _POST)
-    rev = store.queue_listing_revision(made["id"], "craigslist", ["title"])
+def test_an_item_with_no_craigslist_post_settles_failed_and_drives_nothing(
+    store, bus, listed
+) -> None:
+    rev = store.queue_listing_revision(listed["id"], "craigslist", ["title"])
     with store._db.transaction() as conn:
-        conn.execute("UPDATE items SET listing_urls = '{}' WHERE id = ?", (made["id"],))
+        conn.execute("UPDATE items SET listing_urls = '{}' WHERE id = ?", (listed["id"],))
     post = FakePost()
 
     revise.run_next(_deps(store, bus, post))
@@ -357,3 +360,21 @@ def test_an_item_with_no_craigslist_post_settles_failed_and_drives_nothing(store
 def test_a_craigslist_edit_reserves_its_own_page_budget() -> None:
     assert revise._edit_loads("craigslist") == craigslist.EDIT_LOADS
     assert revise._edit_loads("fb") == revise.EDIT_LOADS
+
+
+def test_a_signed_out_edit_signs_back_in_and_waits_unclaimed(store, bus, listed) -> None:
+    post = FakePost()
+    post.signed_in = False
+    rev = store.queue_listing_revision(listed["id"], "craigslist", ["title"])
+
+    revise.run_next(_deps(store, bus, post))
+
+    assert store.craigslist_account()["state"] == "awaiting_login_link"
+    row = store.get_listing_revision(rev)
+    assert row["status"] == "pending" and post.published == 0
+    claimed = row["attempts"]
+
+    # Held while signing back in: the next tick claims nothing and opens nothing.
+    post.navigated.clear()
+    assert revise.run_next(_deps(store, bus, post)) is None
+    assert store.get_listing_revision(rev)["attempts"] == claimed and post.navigated == []
