@@ -21,9 +21,7 @@ _RING_KEPT_SEC = 30 * 86400.0
 # the login state without touching what is in front of them.
 CONNECT_MODE_OPEN = "open"
 CONNECT_MODE_PROBE = "probe"
-# `post` opens one page the seller asked for, such as a Craigslist post's manage page.
-CONNECT_MODE_POST = "post"
-CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE, CONNECT_MODE_POST)
+CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 
 # Who may claim the one shared tab, named here so the daemon and the CLIs that release a hold
 # spell the same string. Two holds, released independently: a single sign-in, and an installer's
@@ -39,7 +37,6 @@ BROWSER_HOLD_TTL_SEC = 900.0
 class MarketConnectRequest(TypedDict):
     market: str
     mode: str
-    url: str | None
     requested_ts: float
 
 
@@ -47,9 +44,7 @@ class BrowserMixin:
     # Bound by Store.__init__; declared so a checker resolves it inside each mixin.
     _db: Database
 
-    def request_market_connect(
-        self, market: str, mode: str = CONNECT_MODE_OPEN, url: str | None = None
-    ) -> None:
+    def request_market_connect(self, market: str, mode: str = CONNECT_MODE_OPEN) -> None:
         """Ask the connect lane to sign the seller in to `market`.
 
         Idempotent per market by the row's primary key: a seller who taps the button twice (or
@@ -61,24 +56,44 @@ class BrowserMixin:
             raise ValueError(f"unknown market connect mode: {mode!r}")
         with self._db.transaction() as conn:
             conn.execute(
-                "INSERT INTO market_connect_requests (market, mode, url, requested_ts) "
-                "VALUES (?, ?, ?, ?) ON CONFLICT (market) DO UPDATE SET "
-                "mode = excluded.mode, url = excluded.url, requested_ts = excluded.requested_ts",
-                (market, mode, url, _now()),
+                "INSERT INTO market_connect_requests (market, mode, requested_ts) "
+                "VALUES (?, ?, ?) ON CONFLICT (market) DO UPDATE SET "
+                "mode = excluded.mode, requested_ts = excluded.requested_ts",
+                (market, mode, _now()),
             )
 
     def pending_market_connects(self) -> list[MarketConnectRequest]:
         """Every outstanding request, oldest first — the order the lane serves them in."""
         rows = self._db.query(
-            "SELECT market, mode, url, requested_ts FROM market_connect_requests "
+            "SELECT market, mode, requested_ts FROM market_connect_requests "
             "ORDER BY requested_ts ASC, market ASC"
         )
         return [
-            MarketConnectRequest(
-                market=r["market"], mode=r["mode"], url=r["url"], requested_ts=r["requested_ts"]
-            )
+            MarketConnectRequest(market=r["market"], mode=r["mode"], requested_ts=r["requested_ts"])
             for r in rows
         ]
+
+    def request_post_open(self, item_id: str, market: str, url: str) -> None:
+        """Ask the connect lane to open this sold item's post at `url` for the seller."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO post_open_requests (item_id, market, url, requested_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (item_id) DO UPDATE SET "
+                "market = excluded.market, url = excluded.url, "
+                "requested_ts = excluded.requested_ts",
+                (item_id, market, url, _now()),
+            )
+
+    def pending_post_opens(self) -> list[dict]:
+        rows = self._db.query(
+            "SELECT item_id, market, url, requested_ts FROM post_open_requests "
+            "ORDER BY requested_ts ASC, item_id ASC"
+        )
+        return [dict(r) for r in rows]
+
+    def clear_post_open(self, item_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM post_open_requests WHERE item_id = ?", (item_id,))
 
     def clear_market_connect_request(self, market: str) -> None:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""

@@ -93,17 +93,14 @@ def _manual_take_downs(ctx: ToolContext, item_id: str) -> list:
     for market, url in sorted((item or {}).get("listing_urls", {}).items()):
         if not url or marketplaces.connector_type(market) != "browser":
             continue
-        if market == marketplaces.CRAIGSLIST:
-            ctx.store.queue_notice(
-                CRAIGSLIST_TAKE_DOWN_NOTICE.format(url=url),
-                ref=item_id,
-                controls=fastpaths.open_post_controls(item_id),
-            )
-        else:
-            ctx.store.queue_notice(
-                MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url),
-                ref=item_id,
-            )
+        craigslist = market == marketplaces.CRAIGSLIST
+        text = (
+            CRAIGSLIST_TAKE_DOWN_NOTICE.format(url=url)
+            if craigslist
+            else MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url)
+        )
+        controls = fastpaths.open_post_controls(item_id) if craigslist else None
+        ctx.store.queue_notice(text, ref=item_id, controls=controls)
         remaining.append({"market": market, "url": url})
     return remaining
 

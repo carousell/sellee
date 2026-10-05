@@ -34,7 +34,7 @@ from sellee.browser import blindness, craigslist_account, doorbell, inbox, windo
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_POST
+from sellee.store.browser import BROWSER_HOLD_TTL_SEC, CONNECT_MODE_OPEN, HOLD_SIGNIN
 
 log = logging.getLogger(__name__)
 
@@ -205,10 +205,62 @@ def connect_lane(deps: ConnectDeps) -> None:
                     controls=fastpaths.signin_controls(market),
                 )
             continue
-        if request["mode"] == CONNECT_MODE_POST:
-            _open_post(deps, market, request["url"] or "")
-            continue
         _serve(deps, market, adapter, request["mode"])
+    for request in deps.store.pending_post_opens():
+        _serve_post_open(deps, request, connected)
+
+
+# The seller asked for these, so quiet hours do not hold them; the governor still paces the load.
+POST_OPEN_NOTICE = (
+    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
+    "there to take it down."
+)
+POST_SIGNED_OUT_NOTICE = (
+    "Craigslist shows me signed out, so the post didn't open. Run `sellee connect craigslist`, "
+    "then tap Open on desktop again."
+)
+POST_BLOCKED_NOTICE = "Craigslist has asked me to stop for now, so I didn't open the post."
+POST_OFF_NOTICE = "Craigslist was switched off before I could open that post."
+POST_CANT_OPEN_NOTICE = "I couldn't open that Craigslist post in my Chrome ({reason})."
+POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
+
+
+def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
+    """Put one sold item's post in front of the seller, signed in, for them to close."""
+    item_id, market, url = request["item_id"], request["market"], request["url"]
+    adapter = market_adapters.get_adapter(market)
+    if market not in connected or adapter is None:
+        _post_done(deps, item_id, POST_OFF_NOTICE)
+        return
+    if deps.store.market_block(market):
+        _post_done(deps, item_id, POST_BLOCKED_NOTICE)
+        return
+    if inbox.browser_busy(deps.store):
+        if deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
+            _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            client.navigate_visible(url)
+            signed_in = (client.evaluate(adapter.login_js) or {}).get("state") == "logged_in"
+    except BrowserDetached:
+        return
+    except BrowserError as exc:
+        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE.format(reason=exc))
+        return
+    if not signed_in:
+        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE)
+        return
+    # Held like a sign-in, so no lane moves the tab while the seller is deleting.
+    deps.store.hold_browser(HOLD_SIGNIN, f"closing a {market} post", BROWSER_HOLD_TTL_SEC)
+    _raise_window(deps)
+    _post_done(deps, item_id, POST_OPEN_NOTICE.format(where=window.where()))
+
+
+def _post_done(deps: ConnectDeps, item_id: str, notice: str, controls=None) -> None:
+    deps.store.clear_post_open(item_id)
+    deps.store.queue_notice(notice, controls=controls)
 
 
 def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
@@ -330,30 +382,6 @@ def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:
         return
     if deps.store.request_market_survey(market):
         deps.bus.publish("survey.requested", {"market": market, "via": "connect"})
-
-
-POST_OPEN_NOTICE = (
-    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
-    "there to take it down."
-)
-POST_CANT_OPEN_NOTICE = "I couldn't open that Craigslist post in my Chrome ({reason})."
-
-
-def _open_post(deps: ConnectDeps, market: str, url: str) -> None:
-    """Put one post's own page in front of the seller, for them to act on themselves."""
-    try:
-        client = deps.browser_factory()
-        with client.exclusive():
-            client.navigate_visible(url)
-    except BrowserDetached:
-        return
-    except BrowserError as exc:
-        deps.store.clear_market_connect_request(market)
-        deps.store.queue_notice(POST_CANT_OPEN_NOTICE.format(reason=exc))
-        return
-    deps.store.clear_market_connect_request(market)
-    _raise_window(deps)
-    deps.store.queue_notice(POST_OPEN_NOTICE.format(where=window.where()))
 
 
 def _raise_window(deps: ConnectDeps) -> None:

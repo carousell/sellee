@@ -16,7 +16,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.browser.markets import craigslist
 from sellee.channel import refs
-from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_POST, CONNECT_MODE_PROBE
+from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
@@ -165,6 +165,8 @@ CONNECT_ACK = (
 CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell you what I find."
 OPEN_POST_ACK = "Opening that Craigslist post in my Chrome now — I'll tell you when it's up."
 OPEN_POST_GONE = "I don't have that Craigslist post on record any more, so there's nothing to open."
+OPEN_POST_NOT_SOLD = "That item isn't marked sold any more, so I've left its Craigslist post alone."
+OPEN_POST_OFF = "Craigslist is switched off, so I can't open that post — /sellee to turn it on."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
@@ -363,14 +365,18 @@ def _connect_button(store, market, mode: str) -> tuple:
 
 
 def _open_post_button(store, item_id) -> tuple:
-    """A tap on Open on desktop: the item's recorded Craigslist post, opened at its manage page."""
+    """A tap on Open on desktop: the sold item's recorded Craigslist post, at its manage page.
+    Checked at tap time, since the button may be tapped long after the sale."""
+    market = marketplaces.CRAIGSLIST
     item = store.get_item(item_id) if item_id else None
-    url = ((item or {}).get("listing_urls") or {}).get(marketplaces.CRAIGSLIST)
-    if not url or not marketplaces.is_canonical_listing_url(marketplaces.CRAIGSLIST, url):
+    url = ((item or {}).get("listing_urls") or {}).get(market)
+    if not url or not marketplaces.is_canonical_listing_url(market, url):
         return OPEN_POST_GONE, None
-    store.request_market_connect(
-        marketplaces.CRAIGSLIST, CONNECT_MODE_POST, url=craigslist.manage_url(url)
-    )
+    if item_id not in store.sold_item_ids():
+        return OPEN_POST_NOT_SOLD, None
+    if market not in settings.connected_markets(store):
+        return OPEN_POST_OFF, None
+    store.request_post_open(item_id, market, craigslist.manage_url(url))
     return OPEN_POST_ACK, None
 
 
