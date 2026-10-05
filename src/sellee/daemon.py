@@ -825,7 +825,6 @@ def run_daemon(*, once: bool) -> int:
     craigslist_deps = craigslist_account.AccountDeps(
         store=store,
         bus=bus,
-        config=cfg,
         browser_factory=browser_factory,
         rail_factory=rail_factory,
     )

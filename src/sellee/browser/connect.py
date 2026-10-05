@@ -68,13 +68,13 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     """
     region = store.seller_region()
     url = marketplaces.market_home(adapter.market, region)
-    if url is not None and adapter.home_url:
-        url = adapter.home_url
     if url is None:
         raise BrowserDown(
             f"{marketplaces.display_name(adapter.market)} has no site for "
             f"{region or 'an unset region'}"
         )
+    # The market has a site here; some sign in on a page other than its front one.
+    url = adapter.home_url or url
     try:
         client = browser_factory()
         with client.exclusive():
@@ -243,10 +243,10 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     deps.bus.publish("browser.login", {"market": market, "state": state})
     if not _settle_block(deps, market, name, state, wall):
         return
-    if state != "logged_in" and market == craigslist_account.CRAIGSLIST:
-        if craigslist_account.ask_for_account(deps.store):
-            deps.store.queue_notice(craigslist_account.SIGNING_UP_NOTICE)
-            return
+    state = craigslist_account.connect_state(deps.store, market, state)
+    if state == craigslist_account.SIGNING_UP:
+        deps.store.queue_notice(craigslist_account.SIGNING_UP_NOTICE)
+        return
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
         deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))

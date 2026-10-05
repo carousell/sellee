@@ -23,8 +23,8 @@ from sellee.browser import markets as market_adapters
 # A gap someone has looked at and decided to ship without, with the reason. Delete the entry when
 # the gap closes — this test fails while a waiver describes a surface that now works.
 WAIVERS: dict = {
-    ("craigslist", "publish"): "the publish recipe is the connector effort's ticket 03",
-    ("craigslist", "edit"): "the edit recipe is the connector effort's ticket 06",
+    ("craigslist", "publish"): "no publish recipe yet",
+    ("craigslist", "edit"): "no edit recipe yet",
     ("craigslist", "adopt"): "posts sellee did not make are never adopted on Craigslist",
     ("craigslist", "inbox"): (
         "Craigslist has no chat: buyers mail the registration address, which the registration "

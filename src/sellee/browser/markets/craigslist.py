@@ -1,14 +1,11 @@
-"""Craigslist's account pages, as recorded by the 2026-10-05 spike.
-
-Craigslist has no chat to read: its buyers arrive as mail to the registration address. What is
-driven here is the account itself, on accounts.craigslist.org, where every control has a stable id
-or a form field to locate it by.
-"""
+"""Craigslist's account pages. There is no chat: buyers mail the registration address, so what
+is driven here is the account itself, located by stable ids and form fields."""
 
 from __future__ import annotations
 
 # Logged out it redirects to the login page, which also carries the sign-up form.
 ACCOUNT_URL = "https://accounts.craigslist.org/login/home"
+LOGIN_URL = "https://accounts.craigslist.org/login"
 SIGN_UP_EMAIL = "#emailAddress"
 SIGN_UP_BUTTON = "#create"
 # The activation page offers two forms; the one without a password field is "Go Passwordless".

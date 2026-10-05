@@ -57,6 +57,14 @@ def test_facebook_is_governed_and_carousell_is_not() -> None:
     assert gov.market_for("about:blank") is None
 
 
+def test_craigslists_account_pages_are_governed_as_well_as_its_site() -> None:
+    gov, _ = _governor()
+
+    assert gov.market_for("https://accounts.craigslist.org/login") == "craigslist"
+    assert gov.market_for("https://accounts.craigslist.org/pass?key=1") == "craigslist"
+    assert gov.market_for("https://www.craigslist.org/") == "craigslist"
+
+
 def test_a_market_that_does_not_police_automation_is_never_slowed() -> None:
     gov, clock = _governor(policed_pages_per_hour=1)
 

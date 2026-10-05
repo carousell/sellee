@@ -93,7 +93,7 @@ class FakeCraigslist:
         self.opened.append(url)
         if url.startswith("https://accounts.craigslist.org/pass?"):
             self.kind = "password_options"
-        elif url == account.LOGIN_URL:
+        elif url == craigslist.LOGIN_URL:
             self.kind = "login"
         else:
             self.kind = "account_home" if self.kind in ("account_home",) else "unknown"
@@ -124,7 +124,6 @@ def _deps(store, bus, page, fake, now=time.time):
     return account.AccountDeps(
         store=store,
         bus=bus,
-        config=Config(),
         browser_factory=lambda: page,
         rail_factory=lambda: _rail(fake),
         now=now,
@@ -197,7 +196,7 @@ def test_an_activation_mail_with_no_sign_up_of_ours_is_ignored(store) -> None:
 def test_an_activation_mail_for_an_active_account_changes_nothing(store) -> None:
     store.request_craigslist_signup()
     store.set_craigslist_awaiting_activation()
-    store.activate_craigslist_account()
+    store.activate_craigslist_account("ready")
 
     account.record_service_mail(store, _activation_mail())
 
@@ -249,7 +248,7 @@ def test_the_account_only_moves_forward_through_its_states(store, steps) -> None
         elif step == "link":
             account.record_service_mail(store, _activation_mail())
         else:
-            store.activate_craigslist_account()
+            store.activate_craigslist_account("ready")
         after = _state(store)
         assert before == after or (before, after) in _EDGES
 
@@ -263,7 +262,7 @@ def test_a_requested_sign_up_submits_the_registration_address(us_seller, bus, fa
 
     account.account_lane(_deps(us_seller, bus, page, fake))
 
-    assert page.opened == [account.LOGIN_URL]
+    assert page.opened == [craigslist.LOGIN_URL]
     assert page.typed == [(craigslist.SIGN_UP_EMAIL, _ADDRESS)]
     assert page.clicked == [craigslist.SIGN_UP_BUTTON]
     assert _state(us_seller) == account.AWAITING_ACTIVATION
@@ -324,12 +323,61 @@ def test_activation_that_never_arrives_is_reported_once(us_seller, bus, fake) ->
     assert [n["text"] for n in us_seller.list_queued_notices()] == [account.ACTIVATION_LATE_NOTICE]
 
 
-def test_nothing_happens_for_a_seller_who_has_not_connected_craigslist(store, bus, fake) -> None:
+def test_with_no_account_asked_for_the_lane_touches_nothing(us_seller, bus, fake) -> None:
     page = FakeCraigslist()
-    store.set_seller_config_section("basics", {"region": "US"})
-    store.request_craigslist_signup()
 
-    account.account_lane(_deps(store, bus, page, fake))
+    account.account_lane(_deps(us_seller, bus, page, fake))
 
     assert page.opened == []
-    assert _state(store) == account.SIGNUP_REQUESTED
+
+
+def test_a_mail_read_again_after_its_link_was_opened_does_not_reopen_it(
+    us_seller, bus, fake
+) -> None:
+    page = FakeCraigslist()
+    us_seller.request_craigslist_signup()
+    us_seller.set_craigslist_awaiting_activation()
+    account.record_service_mail(us_seller, _activation_mail())
+    us_seller.mark_craigslist_link_opened(_LINK)
+
+    account.record_service_mail(us_seller, _activation_mail())
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert page.opened == []
+
+
+def test_an_activation_that_does_not_end_signed_in_starts_over_with_a_notice(
+    us_seller, bus, fake
+) -> None:
+    page = FakeCraigslist()
+    page.navigate = lambda url: (page.opened.append(url), setattr(page, "kind", "unknown"))
+    us_seller.request_craigslist_signup()
+    us_seller.set_craigslist_awaiting_activation()
+    account.record_service_mail(us_seller, _activation_mail())
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert us_seller.craigslist_account() is None
+    assert [n["text"] for n in us_seller.list_queued_notices()] == [
+        account.ACTIVATION_FAILED_NOTICE
+    ]
+
+
+def test_a_link_chrome_could_not_open_is_tried_again_next_tick(us_seller, bus, fake) -> None:
+    page = FakeCraigslist()
+    real_navigate = page.navigate
+
+    def refuse_once(url):
+        page.navigate = real_navigate
+        raise BrowserToolError("chrome went away")
+
+    page.navigate = refuse_once
+    us_seller.request_craigslist_signup()
+    us_seller.set_craigslist_awaiting_activation()
+    account.record_service_mail(us_seller, _activation_mail())
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert page.opened == [_LINK]
+    assert _state(us_seller) == account.ACTIVE

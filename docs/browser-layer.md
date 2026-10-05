@@ -552,7 +552,8 @@ A person does not reload Messenger every five minutes to see whether a buyer wro
 the browser pings, and a minute or two later they open the conversation. Facebook was shown the
 other thing — its inbox loaded eleven to thirteen times an hour around the clock, with every
 conversation opened every half hour — and flagged the account for automation twice. So a market
-whose adapter has `read_trigger = "notification"` is read only when it rings.
+whose adapter has `read_trigger = "notification"` is read only when it rings. Craigslist's is
+`"mail"`: it has no inbox page, and its buyers arrive through the registration lane instead.
 
 **What rings is a notification the agent's Chrome displayed**, and it is heard without going near
 the page. DevTools keeps a background-services log of every notification a site shows — its title,
@@ -1040,7 +1041,9 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
    listing-page read, and permission to fetch its photos.
 5. **Inbox and replies** — a conversation list, a message read, a composer, and a
    way to name the listing a conversation is about.
-6. **Signing back in** — a login probe. Every adapter must have one.
+6. **Signing back in** — a login probe. Every adapter must have one. It reads the market's
+   front page, or the adapter's `home_url` when signing in happens elsewhere, as on Craigslist,
+   whose account sellee creates itself because its email is the registration address.
 7. **Changing a live listing** — an `edit_flow` recipe (a skill an `edit` pass
    follows), or the edit selectors `browser/editor.py` drives.
 
