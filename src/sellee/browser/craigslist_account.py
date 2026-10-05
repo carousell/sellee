@@ -322,8 +322,8 @@ def _restored(deps: AccountDeps) -> None:
 
 
 def _held(deps: AccountDeps) -> bool:
-    """Signing back in is work nobody asked for this minute: it waits out quiet hours, and starts
-    only with room for its page loads."""
+    """Signing back in is unprompted work: it waits out quiet hours, and starts only with room
+    for its page loads."""
     market = marketplaces.CRAIGSLIST
     if deps.config is not None and page_governor.unprompted_held(
         deps.store, deps.config, market, deps.now()
