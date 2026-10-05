@@ -22,6 +22,9 @@ _ANY = "*"
 # The rail: the marketplace every listing goes on, whatever else the seller enables.
 RAIL = "carousell-ai"
 
+# Every Craigslist conversation is email, read and answered through the registration address.
+CRAIGSLIST = "craigslist"
+
 
 @lru_cache(maxsize=1)
 def _registry() -> dict:
@@ -96,6 +99,24 @@ def edit_flow(market: str) -> str:
     edit what it published.
     """
     return str((get_marketplace(market) or {}).get("edit_flow") or "")
+
+
+def market_for_domain(domain: str) -> str | None:
+    """The marketplace whose hosts sit under this registered domain, as bazaar gives a mail's
+    `from_domain`, or None. A bare suffix such as "org" names no marketplace."""
+    domain = (domain or "").strip().lower()
+    if "." not in domain:
+        return None
+    for entry in all_marketplaces():
+        hosts = [
+            *(entry.get("domains") or {}).values(),
+            (entry.get("listing_url") or {}).get("host"),
+        ]
+        for host in hosts:
+            host = str(host or "").lower()
+            if host and not host.endswith(".") and (host == domain or host.endswith("." + domain)):
+                return entry["id"]
+    return None
 
 
 def browser_markets() -> list[str]:

@@ -55,11 +55,11 @@ UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
 # Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
 # answers; the sweep never asks the seller about one.
-LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
+LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
-# carousell.ai replies per buyer itself.
-UNPACED_MARKETS = frozenset({marketplaces.RAIL})
+# carousell.ai and registration replies itself.
+UNPACED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
 # the composer, `sent_unverified` was taken by the page and could not be read back, and

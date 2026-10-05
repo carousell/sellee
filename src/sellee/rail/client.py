@@ -279,6 +279,30 @@ class RailClient:
             raise RailToolError("reply_to_thread returned no message id")
         return {"message_id": result["message_id"]}
 
+    def list_registration_mail(self, cursor: str, limit: int) -> dict:
+        """Mail to the seller's registration address since `cursor`, as {mail, next_cursor}. At
+        least once: a mail can come back on a later page, so the caller drops repeats."""
+        args: dict = {"limit": limit}
+        if cursor:
+            args["cursor"] = cursor
+        result = self.call_tool("list_registration_mail", args)
+        if not isinstance(result.get("mail", []), list):
+            raise RailToolError("list_registration_mail returned no mail list")
+        return {"mail": result.get("mail") or [], "next_cursor": result.get("next_cursor", "")}
+
+    def send_registration_reply(
+        self, to: str, subject: str, text: str, client_message_id: str
+    ) -> dict:
+        """Email a correspondent from the registration address. bazaar sends once per
+        client_message_id, so a retry under the same id returns the first {sent_at}."""
+        result = self.call_tool(
+            "send_registration_reply",
+            {"to": to, "subject": subject, "text": text, "client_message_id": client_message_id},
+        )
+        if not result.get("sent_at"):
+            raise RailToolError("send_registration_reply returned no sent_at")
+        return {"sent_at": result["sent_at"]}
+
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
         200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""
