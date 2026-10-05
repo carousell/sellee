@@ -210,6 +210,8 @@ def _check_preview(client, item: dict) -> None:
 
 
 def _commit(client, pause) -> PublishOutcome:
+    if not (client.evaluate(craigslist.PUBLISH_MARK_JS) or {}).get("marked"):
+        raise PublishNotAttempted("the preview offered no publish button", retryable=True)
     try:
         client.click(craigslist.PUBLISH, "publish")
     except ControlMoved as exc:

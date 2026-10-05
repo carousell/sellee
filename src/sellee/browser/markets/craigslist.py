@@ -64,9 +64,15 @@ ZIP = "form input[name=postal]"
 BODY = "#PostingBody"
 CONDITION = "form select[name=condition]"
 CHAT = "form input[name=contact_chat_ok]"
-ADD_IMAGES = "text=Add Images"
+ADD_IMAGES = "#plupload"
 DONE_WITH_IMAGES = "#doneWithImages"
-PUBLISH = "form:has(input[name=continue][value=y]) button[name=go]"
+# The preview has two identical publish forms; the first is marked so a click has one target.
+PUBLISH = f"[{CHOICE_ATTR}=publish]"
+PUBLISH_MARK_JS = f"""() => {{
+  const button = document.querySelector('form:has(input[name=continue][value=y]) button[name=go]');
+  if (button) button.setAttribute('{CHOICE_ATTR}', 'publish');
+  return {{ marked: !!button }};
+}}"""
 
 STEP_JS = """() => {
   try {

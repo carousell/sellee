@@ -121,6 +121,8 @@ class FakeForm:
             self.read_back_before_publish = True
             title = self.mangle.get("title", self.fields.get(craigslist.TITLE))
             return {"text": f"{title} - ${self.fields.get(craigslist.PRICE)} (Downtown)"}
+        if function == craigslist.PUBLISH_MARK_JS:
+            return {"marked": self.step == "preview"}
         if function == craigslist.MANAGE_LINK_JS:
             return {"url": _MANAGE}
         if function == craigslist.MANAGED_POST_JS:
