@@ -142,10 +142,17 @@ class MarketAdapter:
     # `publisher.publish`'s contract, starting at `publish_url` when the registry cannot compose it.
     publish_driver: Callable | None = None
     publish_url: str = ""
+    # The page loads one publish may cost, asked of the governor before it starts.
+    publish_loads: int = 3
     # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
     # recorded only. The default treats every ring as a message; a market narrows it only from
     # notifications it has actually been seen to send.
     ring_kind: Callable[[str, str], str] = lambda title, body: "message"
+
+    @property
+    def drives_publish(self) -> bool:
+        """Whether code, not a recipe, can publish here."""
+        return bool(self.publish_fields_js or self.publish_driver)
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -221,6 +228,7 @@ CRAIGSLIST = MarketAdapter(
     home_url=craigslist.ACCOUNT_URL,
     publish_driver=_drive_craigslist,
     publish_url=craigslist.POST_URL,
+    publish_loads=craigslist.PUBLISH_LOADS,
     polices_automation=True,
     read_trigger="mail",
 )
@@ -266,10 +274,7 @@ def _has_a_publish_path(market: str) -> bool:
     drives — asked of the code, never of a registry flag.
     """
     adapter = _ADAPTERS.get(market)
-    return bool(
-        marketplaces.listing_flow(market)
-        or (adapter and (adapter.publish_fields_js or adapter.publish_driver))
-    )
+    return bool(marketplaces.listing_flow(market) or (adapter and adapter.drives_publish))
 
 
 def surveyable_markets(region: str | None = None) -> list:

@@ -739,6 +739,12 @@ class BrowserClient:
             self.ensure_tab()
             self._load(url)
 
+    def pace(self, url: str) -> None:
+        """Ask the governor before a click that loads a page of `url`'s market, as a form submit
+        does: the market sees a page load either way."""
+        if self._governor is not None:
+            self._governor.before_load(url)
+
     def _load(self, url: str, *, once: bool = False) -> None:
         """Load `url` in our tab, once the governor has let it through."""
         if self._governor is not None:

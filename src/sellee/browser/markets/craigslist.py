@@ -53,6 +53,9 @@ BYPASS_HOOD = "bypass this step"
 # Only cars, motorcycles and RVs carry a fee in the US, and it shows in the label.
 FEE_LABEL = r"\(\$\d"
 
+# The posting URL, up to eight step submits and the manage page.
+PUBLISH_LOADS = 10
+
 CHOICE_ATTR = "data-sellee-cl"
 CHOICE = f"[{CHOICE_ATTR}=choice]"
 CONTINUE = "form button[type=submit][name=go]"
@@ -125,16 +128,16 @@ HOOD_BYPASS_JS = f"""() => {{
   return {{ chosen: false }};
 }}"""
 
-EDIT_READBACK_JS = """() => {
-  const value = (sel) => { const el = document.querySelector(sel); return el ? el.value : null; };
-  const chat = document.querySelector('form input[name=contact_chat_ok]');
-  return {
-    title: value('#PostingTitle'),
-    price: value('form input[name=price]'),
-    zip: value('form input[name=postal]'),
+EDIT_READBACK_JS = f"""() => {{
+  const value = (sel) => {{ const el = document.querySelector(sel); return el ? el.value : null; }};
+  const chat = document.querySelector({CHAT!r});
+  return {{
+    title: value({TITLE!r}),
+    price: value({PRICE!r}),
+    zip: value({ZIP!r}),
     chat_on: !!(chat && chat.checked),
-  };
-}"""
+  }};
+}}"""
 
 # The preview renders the post as a buyer sees it: "<title> - $<price> (<area>)".
 PREVIEW_TEXT_JS = """() => ({

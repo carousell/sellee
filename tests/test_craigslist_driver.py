@@ -14,6 +14,7 @@ from tests.conftest import seed_setting
 from sellee import crosslist, marketplaces
 from sellee.browser import markets as market_adapters
 from sellee.browser import publisher
+from sellee.browser.client import BrowserError
 from sellee.browser.markets import craigslist
 from sellee.config import Config
 from sellee.rail import registration
@@ -43,6 +44,8 @@ class FakeForm:
         confirms=True,
         post_url=_POST,
         site="bozeman",
+        grouped=False,
+        mark_fails=False,
     ):
         self.steps = list(steps) + ["confirmed"]
         self.at = 0
@@ -63,6 +66,12 @@ class FakeForm:
         self.published_with: dict = {}
         self.read_back_before_publish = False
         self.navigated: list = []
+        self.grouped = grouped
+        self.mark_fails = mark_fails
+        self.paced: list = []
+
+    def pace(self, url: str) -> None:
+        self.paced.append(self.step)
 
     @property
     def step(self) -> str:
@@ -120,8 +129,12 @@ class FakeForm:
         if function == craigslist.PREVIEW_TEXT_JS:
             self.read_back_before_publish = True
             title = self.mangle.get("title", self.fields.get(craigslist.TITLE))
-            return {"text": f"{title} - ${self.fields.get(craigslist.PRICE)} (Downtown)"}
+            price = int(self.fields.get(craigslist.PRICE) or 0)
+            shown = f"{price:,}" if self.grouped else str(price)
+            return {"text": f"{title} - ${shown} (Downtown)"}
         if function == craigslist.PUBLISH_MARK_JS:
+            if self.mark_fails:
+                raise BrowserError("the page went away")
             return {"marked": self.step == "preview"}
         if function == craigslist.MANAGE_LINK_JS:
             return {"url": _MANAGE}
@@ -210,6 +223,37 @@ def test_an_area_craigslist_does_not_offer_asks_the_seller_with_its_choices(area
     assert "SF bay area" in raised.value.question
     assert all(label in raised.value.question for label in _AREAS)
     assert not form.published
+
+
+def test_every_step_submit_is_paced_and_fits_the_publish_budget() -> None:
+    form = FakeForm(_SF, site="SF bay area")
+
+    _drive(form, seller=_seller(craigslist_area="east bay area"))
+
+    assert form.paced == _SF
+    assert len(form.paced) + len(form.navigated) <= craigslist.PUBLISH_LOADS
+
+
+def test_a_price_the_preview_shows_with_a_thousands_comma_still_matches() -> None:
+    item = {**_ITEM, "list_price": 1200.0}
+
+    assert _drive(FakeForm(grouped=True), item).verified
+
+
+def test_a_failure_before_the_publish_click_publishes_nothing_and_is_not_attempted() -> None:
+    form = FakeForm(mark_fails=True)
+
+    with pytest.raises(publisher.PublishNotAttempted):
+        _drive(form)
+
+    assert not form.published
+
+
+def test_an_area_answer_that_matches_nothing_is_named_when_asking_again() -> None:
+    with pytest.raises(publisher.PublishNeedsSeller) as raised:
+        _drive(FakeForm(_SF), seller=_seller(craigslist_area="brooklyn"))
+
+    assert "brooklyn" in raised.value.question
 
 
 def test_pages_that_load_after_the_click_returns_are_waited_for() -> None:
@@ -320,7 +364,10 @@ def _deps(store, bus, form):
 
 
 def _notices(store) -> list:
-    return [n["text"] for n in store.claim_queued_notices(10)]
+    claimed = store.claim_queued_notices(10)
+    for notice in claimed:
+        store.mark_notice_delivered(notice["id"], "channel")
+    return [n["text"] for n in claimed]
 
 
 def test_a_ready_post_is_driven_and_its_url_recorded(store, bus, crosslisting) -> None:
@@ -346,6 +393,13 @@ def test_a_missing_area_asks_once_and_waits_for_the_answer(store, bus, crosslist
     assert len(asked) == 1 and "east bay area" in asked[0]
     assert form.navigated == [craigslist.POST_URL]
     assert "craigslist" not in store.get_item(crosslisting["id"])["listing_urls"]
+
+    store.set_seller_config_section(
+        "basics", {"region": "US", "zip": "94103", "craigslist_area": "brooklyn"}
+    )
+    crosslist.enqueue_next(deps)
+
+    assert len(_notices(store)) == 1
 
     store.set_seller_config_section(
         "basics", {"region": "US", "zip": "94103", "craigslist_area": "east bay area"}

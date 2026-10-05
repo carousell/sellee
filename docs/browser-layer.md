@@ -282,6 +282,7 @@ process per recycle, in no holder and reaped by nobody.
 | `listing_id_pattern` | where a listing's id sits in a permalink, one regex group |
 | `composer` | shipped selector defaults, by step |
 | `publish_skill` | the skill holding this market's publish recipe |
+| `publish_driver`, `publish_url`, `publish_loads` | **publishing through a market's own driver** when its form spans pages — the function, where it starts, and the page loads one publish may cost; every step submit asks the governor through `BrowserClient.pace` |
 | `edit_entry_js`, `edit_fields_js`, `edit_readback_js`, `edit_target` | **editing a live listing by driving its form** — the listing page's own Edit control, the form's marked controls, and what the form holds before saving |
 | `editable_fields` | which item fields the edit driver can change; a change outside it is the seller's to make by hand, and they are told so |
 | `system_handles` | rows an inbox read must never treat as a buyer |

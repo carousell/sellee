@@ -294,11 +294,6 @@ def enqueue_next(deps: CrosslistDeps) -> str | None:
     return pass_id
 
 
-# The pages one driven publish costs: the create form, then the selling page and the profile it
-# confirms the new listing on.
-PUBLISH_LOADS = 3
-
-
 def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     """Put one item on a marketplace by driving its form, and record what happened.
 
@@ -316,7 +311,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     if page_governor.unprompted_held(
         deps.store, deps.config, market, deps.now()
-    ) or not page_governor.has_room(deps.governor, market, PUBLISH_LOADS):
+    ) or not page_governor.has_room(deps.governor, market, adapter.publish_loads):
         # Left eligible with no attempt spent: the morning, or the next hour's page loads, will do.
         return
     # Staged where the browser server may read from: the media store is outside its roots.
@@ -341,7 +336,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     except publisher.PublishNeedsSeller as exc:
         # Only the seller can answer it; nothing is spent while the post waits for them.
         deps.waiting_on[market] = (exc.key, _basics(deps).get(exc.key))
-        _notify_once(deps, f"{market}:{exc.key}:{exc.question}", exc.question)
+        _notify_once(deps, f"{market}:{exc.key}:{deps.waiting_on[market][1]}", exc.question)
         deps.bus.publish(
             "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": exc.key}
         )

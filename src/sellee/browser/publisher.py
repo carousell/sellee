@@ -412,4 +412,4 @@ def clear_staged(item_id: str) -> None:
 def can_drive(market: str) -> bool:
     """Whether this marketplace can be published to by driving its form."""
     adapter = market_adapters.get_adapter(market)
-    return bool(adapter and (adapter.publish_fields_js or adapter.publish_driver))
+    return bool(adapter and adapter.drives_publish)

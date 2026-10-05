@@ -34,9 +34,10 @@ AREA_KEY = "craigslist_area"
 ZIP_KEY = "zip"
 
 
-def area_question(site: str, options: list) -> str:
+def area_question(site: str, options: list, missed: str = "") -> str:
+    lead = f"“{missed}” isn't one of Craigslist's areas. " if missed else ""
     return (
-        f"Craigslist put you on its {site or 'local'} site. Which area are you in? "
+        f"{lead}Craigslist put you on its {site or 'local'} site. Which area are you in? "
         f"Reply with one of: {', '.join(options)}."
     )
 
@@ -85,6 +86,12 @@ def _wait_past(client, step: str, pause, wait_sec: float = TRANSITION_WAIT_SEC) 
     raise PublishNotAttempted(f"Craigslist did not move past {step!r}", retryable=True)
 
 
+def _submit(client, target: str, element: str) -> None:
+    """Click a control that loads the next step: a page load the governor must allow."""
+    client.pace(craigslist.POST_URL)
+    client.click(target, element)
+
+
 def _choose(client, label: str) -> dict:
     """Mark and click the step's radio called `label`, if it has one."""
     answer = client.evaluate(craigslist.choice_js(label)) or {}
@@ -101,16 +108,16 @@ def _subarea(client, page, item, photos, seller, pause) -> None:
         raise PublishNeedsSeller(
             f"no Craigslist area called {area!r}",
             key=AREA_KEY,
-            question=area_question(str(page.get("site") or ""), options),
+            question=area_question(str(page.get("site") or ""), options, missed=area),
         )
-    client.click(craigslist.CONTINUE, "continue")
+    _submit(client, craigslist.CONTINUE, "continue")
 
 
 def _hood(client, page, item, photos, seller, pause) -> None:
     if not (client.evaluate(craigslist.HOOD_BYPASS_JS) or {}).get("chosen"):
         raise PublishNotAttempted("the neighborhood step offered no way past it")
     client.click(craigslist.CHOICE, "bypass this step")
-    client.click(craigslist.CONTINUE, "continue")
+    _submit(client, craigslist.CONTINUE, "continue")
 
 
 def _type(client, page, item, photos, seller, pause) -> None:
@@ -126,7 +133,7 @@ def _pick(client, label: str) -> None:
         raise PublishNotAttempted(f"{label!r} costs money to post in")
     if not _choose(client, label).get("chosen"):
         raise PublishNotAttempted(f"Craigslist offers no {label!r}")
-    client.click(craigslist.CONTINUE, "continue")
+    _submit(client, craigslist.CONTINUE, "continue")
 
 
 def _edit(client, page, item, photos, seller, pause) -> None:
@@ -155,7 +162,7 @@ def _edit(client, page, item, photos, seller, pause) -> None:
         raise PublishNotAttempted(f"the form shows the price as {seen.get('price')!r}")
     if (seen.get("zip") or "").strip() != zip_code:
         raise PublishNotAttempted(f"the form shows the ZIP code as {seen.get('zip')!r}")
-    client.click(craigslist.CONTINUE, "continue")
+    _submit(client, craigslist.CONTINUE, "continue")
 
 
 def _set_condition(client, item: dict) -> None:
@@ -174,7 +181,7 @@ def _set_condition(client, item: dict) -> None:
 
 def _geoverify(client, page, item, photos, seller, pause) -> None:
     # The map is already placed from the ZIP code.
-    client.click(craigslist.MAP_CONTINUE, "continue")
+    _submit(client, craigslist.MAP_CONTINUE, "continue")
 
 
 def _editimage(client, page, item, photos, seller, pause) -> None:
@@ -187,7 +194,7 @@ def _editimage(client, page, item, photos, seller, pause) -> None:
             pause(_POLL_SEC)
         else:
             raise PublishNotAttempted("the photographs did not finish uploading", retryable=True)
-    client.click(craigslist.DONE_WITH_IMAGES, "done with images")
+    _submit(client, craigslist.DONE_WITH_IMAGES, "done with images")
 
 
 _STEPS = {
@@ -204,13 +211,21 @@ _STEPS = {
 def _check_preview(client, item: dict) -> None:
     """The last moment a mistake is free: the preview must show the item's title and price."""
     text = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
-    shown = f"{(item.get('title') or '').strip()} - ${formfill.bare_price(item.get('list_price'))}"
-    if shown not in text:
-        raise PublishNotAttempted(f"the preview does not show {shown!r}")
+    title = (item.get("title") or "").strip()
+    shown = re.search(re.escape(title) + r" - \$([\d,.]+)", text) if title else None
+    if shown is None or not formfill.price_matches(shown.group(1), item.get("list_price")):
+        raise PublishNotAttempted(f"the preview does not show {title!r} at its price")
 
 
 def _commit(client, pause) -> PublishOutcome:
-    if not (client.evaluate(craigslist.PUBLISH_MARK_JS) or {}).get("marked"):
+    try:
+        marked = (client.evaluate(craigslist.PUBLISH_MARK_JS) or {}).get("marked")
+        client.pace(craigslist.POST_URL)
+    except page_governor.PagesSpent:
+        raise
+    except BrowserError as exc:
+        raise PublishNotAttempted(f"nothing was published: {exc}", retryable=True) from exc
+    if not marked:
         raise PublishNotAttempted("the preview offered no publish button", retryable=True)
     try:
         client.click(craigslist.PUBLISH, "publish")
