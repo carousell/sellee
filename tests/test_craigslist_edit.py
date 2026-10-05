@@ -25,7 +25,7 @@ _BOXES = {craigslist.TITLE: "title", craigslist.PRICE: "price", craigslist.BODY:
 class FakePost:
     """One live post: its manage page, and an edit that changes a draft until publish."""
 
-    def __init__(self, *, images=3, sticky_box=None, publishes=True):
+    def __init__(self, *, images=3, sticky_box=None, publishes=True, uploads=True):
         self.post = {"title": "Samsung Buds3", "price": "80", "description": "Barely used."}
         self.post_images = images
         self.draft: dict = {}
@@ -33,6 +33,7 @@ class FakePost:
         self.step = ""
         self.sticky_box = sticky_box
         self.publishes = publishes
+        self.uploads = uploads
         self.focus: str | None = None
         self.selected = False
         self.navigated: list = []
@@ -107,7 +108,7 @@ class FakePost:
             if arguments["key"] == "Backspace" and self.selected and self.focus:
                 self.draft[_BOXES[self.focus]] = ""
             self.selected = arguments["key"] != "Backspace"
-        elif name == "browser_file_upload":
+        elif name == "browser_file_upload" and self.uploads:
             self.images += len(arguments["paths"])
         return ""
 
@@ -234,6 +235,52 @@ def test_a_publish_that_did_not_land_reports_the_fields_still_old() -> None:
 
 def test_craigslist_can_edit_title_price_description_and_photos() -> None:
     assert editor.can_edit_fields("craigslist", ["title", "list_price", "description", "photos"])
+
+
+def _photos(tmp_path, monkeypatch, count=2) -> list:
+    monkeypatch.setattr("sellee.paths.publish_staging_dir", lambda: tmp_path / "staged")
+    photos = []
+    for index in range(count):
+        path = tmp_path / f"{index}.jpg"
+        path.write_bytes(b"jpg")
+        photos.append({"path": str(path)})
+    return photos
+
+
+def test_a_combined_edit_reports_a_text_change_that_did_not_land(tmp_path, monkeypatch) -> None:
+    item = _item(photos=_photos(tmp_path, monkeypatch))
+
+    outcome = _revise(FakePost(publishes=False), item, ["title", "photos"])
+
+    assert not outcome.verified and "title" in outcome.mismatched
+
+
+def test_a_photo_half_that_fails_after_the_text_published_is_unverified() -> None:
+    post = FakePost()
+
+    with pytest.raises(editor.ReviseUnverified):
+        _revise(post, _item(photos=[]), ["title", "photos"])
+
+    assert post.published == 1
+
+
+def test_a_photo_swap_cut_off_after_removing_images_is_unverified(tmp_path, monkeypatch):
+    monkeypatch.setattr("sellee.browser.craigslist_publisher.IMAGE_WAIT_SEC", 1.0)
+    post = FakePost(images=3, uploads=False)
+
+    with pytest.raises(editor.ReviseUnverified):
+        _revise(post, _item(photos=_photos(tmp_path, monkeypatch)), ["photos"])
+
+    assert post.published == 0
+
+
+def test_an_empty_change_is_not_attempted() -> None:
+    post = FakePost()
+
+    with pytest.raises(editor.ReviseNotAttempted):
+        _revise(post, _item(), [])
+
+    assert post.navigated == []
 
 
 # --- through the revise lane ---------------------------------------------------------------------

@@ -270,46 +270,61 @@ _EDIT_BOXES = {
 }
 
 
+class _Touched(Exception):
+    """Raised from a step that may already have changed the live post, such as an image removed."""
+
+
 def revise(client, item: dict, *, listing_url: str, changed, sleep=None):
     """Change a live post to what the item says, from its manage page. Under `editor.revise`'s
-    contract: not attempted before the publish click, unverified after it."""
+    contract: not attempted until something may have changed the post, unverified from then on."""
     pause = sleep or formfill.sleep
     if not marketplaces.is_canonical_listing_url(marketplaces.CRAIGSLIST, listing_url):
         raise editor.ReviseNotAttempted(f"{listing_url!r} is not a Craigslist post address")
-    manage = craigslist.manage_url(listing_url)
     wanted = set(changed)
-    text = wanted - {"photos"}
-    outcome = None
-    if text:
-        outcome = _revise_once(client, item, manage, craigslist.EDIT_TEXT, pause, text=text)
+    if not wanted:
+        raise editor.ReviseNotAttempted("nothing to change")
+    manage = craigslist.manage_url(listing_url)
+    fields = wanted - {"photos"}
+    halves = []
+    if fields:
+        halves.append((craigslist.EDIT_TEXT, fields, None))
     if "photos" in wanted:
-        photos = publisher.stage_photos(item["id"], item.get("photos") or [])
-        try:
-            outcome = _revise_once(
-                client, item, manage, craigslist.EDIT_IMAGES, pause, photos=photos
-            )
-        finally:
-            publisher.clear_staged(item["id"])
-    return outcome
+        halves.append((craigslist.EDIT_IMAGES, set(), item.get("photos") or []))
+    saved = False
+    outcomes = []
+    try:
+        for entry, text, photos in halves:
+            outcomes.append(_revise_once(client, item, manage, entry, pause, text, photos))
+            saved = True
+    except editor.ReviseNotAttempted as exc:
+        if saved:
+            # An earlier half is live, so "nothing was saved" is false; a retry repeats both.
+            raise editor.ReviseUnverified(f"only part of the edit was made: {exc}") from exc
+        raise
+    return _merged(outcomes)
 
 
-def _revise_once(client, item, manage: str, entry: str, pause, *, text=(), photos=None):
+def _revise_once(client, item, manage: str, entry: str, pause, text, photos):
+    staged = publisher.stage_photos(item["id"], photos) if photos is not None else None
     try:
         client.navigate_visible(manage)
         if not _read(client).get("logged_in"):
             raise PublishNotAttempted("Craigslist shows the account signed out", retryable=True)
         _submit(client, entry, "the manage page's edit control")
         _wait_past(client, "", pause)
-        _walk_edit(client, item, text, photos, pause)
+        _walk_edit(client, item, text, staged, pause)
         _press_publish(client)
+    except _Touched as exc:
+        raise editor.ReviseUnverified(f"the post may have changed: {exc}") from exc
     except PublishNotAttempted as exc:
         raise editor.ReviseNotAttempted(str(exc), retryable=exc.retryable) from exc
     except PublishUnverified as exc:
         raise editor.ReviseUnverified(str(exc)) from exc
-    except page_governor.PagesSpent:
-        raise
     except BrowserError as exc:
         raise editor.ReviseNotAttempted(f"could not edit the post: {exc}", retryable=True) from exc
+    finally:
+        if staged is not None:
+            publisher.clear_staged(item["id"])
     return _confirm_revision(client, item, manage, text)
 
 
@@ -324,7 +339,7 @@ def _walk_edit(client, item: dict, text, photos, pause) -> None:
         elif step == "editimage":
             _replace_photos(client, photos, pause)
         elif step == "geoverify":
-            _geoverify(client, {}, item, (), {}, pause)
+            _submit(client, craigslist.MAP_CONTINUE, "continue")
         else:
             raise PublishNotAttempted(
                 f"Craigslist showed an edit page sellee does not know: {step!r}"
@@ -335,12 +350,29 @@ def _walk_edit(client, item: dict, text, photos, pause) -> None:
 
 def _check_edit_preview(client, item: dict, text) -> None:
     """Refuse unless the preview shows each changed field; the rest is the post as it stood."""
-    if set(text) & {"title", "list_price"}:
-        _check_preview(client, item)
-    if "description" in text:
-        shown = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
-        if _norm(item.get("description")) not in _norm(shown):
-            raise PublishNotAttempted("the preview does not show the new description")
+    shown = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
+    wrong = _still_old(item, text, shown)
+    if wrong:
+        raise PublishNotAttempted(f"the preview does not show the new {', '.join(wrong)}")
+
+
+# A post shows itself as "<title> - $<price> (<area>)".
+_HEADER = re.compile(r"^(.*?) - \$([\d,.]+)", re.M)
+
+
+def _still_old(item: dict, text, shown: str) -> list:
+    """Which changed fields `shown`, a post's page text, does not carry."""
+    header = _HEADER.search(shown)
+    wrong = []
+    if "title" in text and (header is None or _norm(header.group(1)) != _norm(item.get("title"))):
+        wrong.append("title")
+    if "list_price" in text and (
+        header is None or not formfill.price_matches(header.group(2), item.get("list_price"))
+    ):
+        wrong.append("list_price")
+    if "description" in text and _norm(item.get("description")) not in _norm(shown):
+        wrong.append("description")
+    return wrong
 
 
 def _replace_text(client, item: dict, text, pause) -> None:
@@ -375,41 +407,57 @@ def _replace_text(client, item: dict, text, pause) -> None:
 
 
 def _replace_photos(client, photos, pause) -> None:
-    """Remove every image the post has, then add the item's; the step keeps count."""
-    if photos is not None:
-        for _ in range(int(IMAGE_WAIT_SEC / _POLL_SEC)):
-            if not (_read(client).get("images") or 0):
-                break
-            if (client.evaluate(craigslist.DELETE_IMAGE_MARK_JS) or {}).get("marked"):
-                client.click(craigslist.DELETE_IMAGE, "remove image")
-            pause(_POLL_SEC)
-        else:
-            raise PublishNotAttempted("the old photographs would not all come off", retryable=True)
-    _editimage(client, {}, {}, photos or (), {}, pause)
+    """Remove every image the post has, then add the item's, and see the count is exactly theirs.
+    Once one image is gone the live post may have lost it, so failures from there are `_Touched`."""
+    if not photos:
+        raise PublishNotAttempted("the item has no photographs to put on the post")
+    removed = 0
+    for _ in range(int(IMAGE_WAIT_SEC / _POLL_SEC)):
+        if not (_read(client).get("images") or 0):
+            break
+        if (client.evaluate(craigslist.DELETE_IMAGE_MARK_JS) or {}).get("marked"):
+            client.click(craigslist.DELETE_IMAGE, "remove image")
+            removed += 1
+        pause(_POLL_SEC)
+    else:
+        failure = "the old photographs would not all come off"
+        if removed:
+            raise _Touched(failure)
+        raise PublishNotAttempted(failure, retryable=True)
+    try:
+        _editimage(client, {}, {}, photos, {}, pause)
+    except (PublishNotAttempted, BrowserError) as exc:
+        if removed:
+            raise _Touched(str(exc)) from exc
+        raise
 
 
-def _confirm_revision(client, item: dict, manage: str, text):
+def _confirm_revision(client, item: dict, manage: str, text) -> editor.ReviseOutcome:
     """Read the manage page, which shows the post as it now stands, for each changed field."""
     try:
         client.navigate(manage)
         shown = str((client.evaluate(craigslist.MANAGED_POST_JS) or {}).get("text") or "")
     except BrowserError as exc:
         raise editor.ReviseUnverified(f"saved, but the post could not be read back: {exc}") from exc
-    title = (item.get("title") or "").strip()
-    found = re.search(re.escape(title) + r" - \$([\d,.]+)", shown) if title else None
-    mismatched = []
-    if "title" in text and found is None:
-        mismatched.append("title")
-    if "list_price" in text and (
-        found is None or not formfill.price_matches(found.group(1), item.get("list_price"))
-    ):
-        mismatched.append("list_price")
-    if "description" in text and _norm(item.get("description")) not in _norm(shown):
-        mismatched.append("description")
+    header = _HEADER.search(shown)
+    accepted = {"title": header.group(1).strip(), "price": header.group(2)} if header else {}
+    mismatched = _still_old(item, text, shown)
+    if "description" in text and "description" not in mismatched:
+        accepted["description"] = item.get("description")
+    return editor.ReviseOutcome(
+        verified=not mismatched, accepted=accepted, mismatched=tuple(mismatched)
+    )
+
+
+def _merged(outcomes: list) -> editor.ReviseOutcome:
+    mismatched = tuple(name for outcome in outcomes for name in outcome.mismatched)
+    accepted: dict = {}
+    for outcome in outcomes:
+        accepted.update(outcome.accepted)
     return editor.ReviseOutcome(
         verified=not mismatched,
-        accepted={"title": title} if found else {},
-        mismatched=tuple(mismatched),
+        accepted=accepted,
+        mismatched=mismatched,
         reason=f"it still shows the old {', '.join(mismatched)}" if mismatched else "",
     )
 

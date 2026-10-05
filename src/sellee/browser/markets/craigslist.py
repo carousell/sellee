@@ -155,7 +155,7 @@ MANAGED_POST_JS = """() => {
   const a = document.querySelector('a[href^="https://www.craigslist.org/view/d/"]');
   const text = (document.body && document.body.innerText) || '';
   const id = text.match(/post id:\\s*(\\d+)/i);
-  return { url: a ? a.href : null, post_id: id ? id[1] : null, text: text.slice(0, 8000) };
+  return { url: a ? a.href : null, post_id: id ? id[1] : null, text };
 }"""
 
 # --- editing ------------------------------------------------------------------------------------
@@ -168,12 +168,13 @@ EDITABLE_FIELDS = frozenset({"title", "list_price", "description", "photos"})
 # The manage page, the edit or images steps, publish, and the manage page again; both at most.
 EDIT_LOADS = 12
 DELETE_IMAGE = f"[{CHOICE_ATTR}=delete]"
-# Marks the first image's own remove button on the images step.
+# Marks the first image's own remove button on the images step: an in-page form, never the
+# manage page's "Delete this Posting".
 DELETE_IMAGE_MARK_JS = f"""() => {{
   for (const el of document.querySelectorAll('[{CHOICE_ATTR}=delete]')) {{
     el.removeAttribute('{CHOICE_ATTR}');
   }}
-  const button = document.querySelector('form.delete button[name=go], form.ajax button[name=go]');
+  const button = document.querySelector('form.delete.ajax button[name=go]');
   if (button) button.setAttribute('{CHOICE_ATTR}', 'delete');
   return {{ marked: !!button }};
 }}"""

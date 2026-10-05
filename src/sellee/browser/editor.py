@@ -75,10 +75,8 @@ def can_edit_fields(market: str, changed) -> bool:
 
 
 def _drivable(adapter) -> set:
-    """What this driver can actually change on this market: fields the adapter says its form holds
-    AND fields this module knows how to type. An adapter naming a field with no step here would
-    otherwise reach `revise` and fail on a lookup instead of being told it is not attempted. A
-    market with its own driver answers for every field it names."""
+    """What this market can have changed: the adapter's fields this module can type, or every one
+    it names when it has its own driver."""
     if adapter.edit_driver:
         return set(adapter.editable_fields)
     return set(adapter.editable_fields) & set(_STEPS)
