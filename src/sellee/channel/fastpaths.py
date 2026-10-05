@@ -14,8 +14,9 @@ import time
 from sellee import channel, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
+from sellee.browser.markets import craigslist
 from sellee.channel import refs
-from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
+from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_POST, CONNECT_MODE_PROBE
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
@@ -36,6 +37,8 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# Opens a sold item's Craigslist post in sellee's Chrome; the item id rides in the ref.
+CB_OPEN_POST = "openpost"
 # The two answers to the take-these-over ask. The ref carries the market, so a tap months later
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
@@ -63,6 +66,7 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_SKIP_CTA,
         CB_CONNECT_MARKET,
         CB_CONNECT_PROBE,
+        CB_OPEN_POST,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
         CB_WATCH_ON,
@@ -98,6 +102,7 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # is the same door. "on desktop" is the load-bearing half: this is tapped on a phone and acted on
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
+OPEN_POST_LABEL = "Open on desktop"
 CHECK_AGAIN_LABEL = "Check again"
 # The two answers to the ask. One yes: an agent that answers buyers on a listing it cannot relist
 # has to explain that split in every conversation. The tools carry the finer answers.
@@ -138,6 +143,11 @@ def look_again_controls(market: str) -> list:
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
+def open_post_controls(item_id: str) -> list:
+    """The one-button spec that opens this item's Craigslist post for the seller to close."""
+    return [(OPEN_POST_LABEL, f"{item_id}:{CB_OPEN_POST}")]
+
+
 def check_again_controls(market: str) -> list:
     """The one-button control spec that re-probes `market` without touching the window."""
     return [(CHECK_AGAIN_LABEL, f"{market}:{CB_CONNECT_PROBE}")]
@@ -153,6 +163,8 @@ CONNECT_ACK = (
 # promises a follow-up rather than a duration. "One moment while I look" was the phrasing
 # voice-and-style.md bans, sitting two lines under a comment explaining why not to write it.
 CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell you what I find."
+OPEN_POST_ACK = "Opening that Craigslist post in my Chrome now — I'll tell you when it's up."
+OPEN_POST_GONE = "I don't have that Craigslist post on record any more, so there's nothing to open."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
@@ -301,6 +313,8 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
         )
+    if token == CB_OPEN_POST:
+        return _open_post_button(store, event["payload"].get("ref"))
     if token == "/connect":
         return _connect_command(store, bus)
     if token in ("/pause", CB_PAUSE):
@@ -346,6 +360,18 @@ def _connect_button(store, market, mode: str) -> tuple:
     if market not in settings.connected_markets(store):
         return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
     return _request(store, market, mode)
+
+
+def _open_post_button(store, item_id) -> tuple:
+    """A tap on Open on desktop: the item's recorded Craigslist post, opened at its manage page."""
+    item = store.get_item(item_id) if item_id else None
+    url = ((item or {}).get("listing_urls") or {}).get(marketplaces.CRAIGSLIST)
+    if not url or not marketplaces.is_canonical_listing_url(marketplaces.CRAIGSLIST, url):
+        return OPEN_POST_GONE, None
+    store.request_market_connect(
+        marketplaces.CRAIGSLIST, CONNECT_MODE_POST, url=craigslist.manage_url(url)
+    )
+    return OPEN_POST_ACK, None
 
 
 def _market_button(store, bus, market, token: str) -> tuple:

@@ -34,7 +34,7 @@ from sellee.browser import blindness, craigslist_account, doorbell, inbox, windo
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import CONNECT_MODE_OPEN
+from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_POST
 
 log = logging.getLogger(__name__)
 
@@ -205,6 +205,9 @@ def connect_lane(deps: ConnectDeps) -> None:
                     controls=fastpaths.signin_controls(market),
                 )
             continue
+        if request["mode"] == CONNECT_MODE_POST:
+            _open_post(deps, market, request["url"] or "")
+            continue
         _serve(deps, market, adapter, request["mode"])
 
 
@@ -327,6 +330,30 @@ def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:
         return
     if deps.store.request_market_survey(market):
         deps.bus.publish("survey.requested", {"market": market, "via": "connect"})
+
+
+POST_OPEN_NOTICE = (
+    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
+    "there to take it down."
+)
+POST_CANT_OPEN_NOTICE = "I couldn't open that Craigslist post in my Chrome ({reason})."
+
+
+def _open_post(deps: ConnectDeps, market: str, url: str) -> None:
+    """Put one post's own page in front of the seller, for them to act on themselves."""
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            client.navigate_visible(url)
+    except BrowserDetached:
+        return
+    except BrowserError as exc:
+        deps.store.clear_market_connect_request(market)
+        deps.store.queue_notice(POST_CANT_OPEN_NOTICE.format(reason=exc))
+        return
+    deps.store.clear_market_connect_request(market)
+    _raise_window(deps)
+    deps.store.queue_notice(POST_OPEN_NOTICE.format(where=window.where()))
 
 
 def _raise_window(deps: ConnectDeps) -> None:

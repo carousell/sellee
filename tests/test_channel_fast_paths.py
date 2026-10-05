@@ -376,6 +376,7 @@ def test_a_retired_button_changes_nothing_and_hands_back_a_working_one(store, bu
 _NO_CONTROLS_ON_PURPOSE = {
     fastpaths.CB_CONNECT_MARKET: "the connect lane re-offers Sign in / Check again on its notice",
     fastpaths.CB_CONNECT_PROBE: "same lane, same notice",
+    fastpaths.CB_OPEN_POST: "the take-down notice keeps its button; the lane says what to press",
     fastpaths.CB_SURVEY_YES: "the adopt decision is made; a re-ask comes from the survey lane",
     fastpaths.CB_SURVEY_NO: "the adopt decision is made",
     fastpaths.CB_SKIP_CTA: "one-shot, and it is the seller declining to be asked again",

@@ -120,6 +120,7 @@ def test_the_signin_button_writes_a_request_and_touches_no_browser(store, bus) -
         {
             "market": "carousell",
             "mode": CONNECT_MODE_OPEN,
+            "url": None,
             "requested_ts": pytest.approx(store.pending_market_connects()[0]["requested_ts"]),
         }
     ]
