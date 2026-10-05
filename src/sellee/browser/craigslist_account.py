@@ -13,7 +13,7 @@ from typing import Callable
 from sellee import marketplaces
 from sellee.browser import governor as page_governor
 from sellee.browser import inbox
-from sellee.browser.client import BrowserError
+from sellee.browser.client import BrowserError, ControlMoved
 from sellee.browser.markets import craigslist
 from sellee.rail.client import RailError
 
@@ -285,11 +285,13 @@ def _ask_for_login_link(deps: AccountDeps, client) -> None:
         log.warning("Craigslist's login page did not show its login form")
         return
     client.type_humanly(craigslist.LOGIN_EMAIL, "the login email box", address)
+    client.pace(craigslist.ACCOUNT_URL)
     # Stamped before the click, so a mail that arrives at once is not cleared afterwards.
     deps.store.mark_craigslist_login_requested(deps.now())
     try:
-        _submit(client, craigslist.LOGIN_LINK_BUTTON, "E-mail a login link")
-    except BrowserError:
+        client.click(craigslist.LOGIN_LINK_BUTTON, "E-mail a login link")
+    except ControlMoved:
+        # Proof nothing was pressed. Any other failure may have sent the mail, so it stands.
         deps.store.reset_craigslist_login()
         raise
     if _next_page(deps, client, "login") != "login_link_sent":

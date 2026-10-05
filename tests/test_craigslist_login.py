@@ -23,7 +23,7 @@ from tests.test_craigslist_account import (
 )
 
 from sellee.browser import craigslist_account as account
-from sellee.browser.client import BrowserToolError
+from sellee.browser.client import BrowserToolError, BrowserTransportError, ControlMoved
 from sellee.browser.markets import craigslist
 
 _LOGIN_LINK = "https://accounts.craigslist.org/login/onetime?key=8a7c2f-91ab&userid=410294913"
@@ -336,16 +336,45 @@ def test_a_link_that_arrives_while_the_request_is_being_sent_is_kept(signed_out,
     assert signed_out.craigslist_account()["link"] == _LOGIN_LINK
 
 
-def test_a_failed_request_click_leaves_nothing_counted_as_sent(signed_out, bus, fake) -> None:
+def test_a_click_refused_before_pressing_leaves_nothing_counted_as_sent(
+    signed_out, bus, fake
+) -> None:
     page = FakeLogin()
 
     def refuse(target, element):
-        raise BrowserToolError("the button moved")
+        raise ControlMoved("the button moved")
 
     page.click = refuse
     account.account_lane(_deps(signed_out, bus, page, fake))
 
     assert signed_out.craigslist_account()["requested_ts"] == 0
+
+
+def test_a_request_whose_response_was_lost_still_stands_and_its_mail_is_kept(
+    signed_out, bus, fake
+) -> None:
+    clock = Clock()
+    page = FakeLogin()
+    real_click = page.click
+
+    def send_then_lose_the_response(target, element):
+        real_click(target, element)
+        raise BrowserTransportError("the browser stopped answering")
+
+    page.click = send_then_lose_the_response
+    deps = _deps(signed_out, bus, page, fake, clock=clock)
+    account.account_lane(deps)
+
+    assert signed_out.craigslist_account()["requested_ts"] > 0
+    account.record_service_mail(signed_out, _login_mail())
+    assert signed_out.craigslist_account()["link"] == _LOGIN_LINK
+
+    page.click = real_click
+    clock.t += 60
+    account.account_lane(deps)
+
+    assert page.link_requests == 1
+    assert _state(signed_out) == account.ACTIVE
 
 
 def test_every_form_the_login_submits_asks_the_governor_first(signed_out, bus, fake) -> None:
