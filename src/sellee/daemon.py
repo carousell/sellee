@@ -827,6 +827,8 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         browser_factory=browser_factory,
         rail_factory=rail_factory,
+        config=cfg,
+        governor=governor,
     )
     scheduler.register(
         Task(

@@ -733,7 +733,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
         state = craigslist_account.connect_state(self._app.store, adapter.market, state)
-        if state not in ("logged_in", craigslist_account.SIGNING_UP):
+        if state != "logged_in" and state not in craigslist_account.AUTOMATIC:
             # Claimed here, not by the caller: this navigation put the login screen up, and a CLI
             # that forgot to ask would leave the lanes free to navigate away.
             self._app.store.hold_browser(

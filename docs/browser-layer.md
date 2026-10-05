@@ -930,7 +930,7 @@ someone looks, so the hour it went up is not what a buyer sees. Quiet hours hold
 work; nothing running is interrupted.
 
 A Craigslist post also waits, spending nothing, for an active account (the account lane creates
-one), the seller's ZIP code, and on a site split into areas the seller's `craigslist_area`. The
+one, or signs it back in by an emailed login link when a page shows it signed out), the seller's ZIP code, and on a site split into areas the seller's `craigslist_area`. The
 area is only learned from the form: the driver stops there (`PublishNeedsSeller`), the seller is
 asked once with the labels it read, and the post waits until that basics setting changes.
 

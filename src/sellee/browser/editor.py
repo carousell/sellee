@@ -41,6 +41,13 @@ class ReviseNotAttempted(BrowserError):
         self.retryable = retryable
 
 
+class ReviseSignedOut(ReviseNotAttempted):
+    """The page showed the account signed out before anything was pressed; nothing was saved."""
+
+    def __init__(self, message: str):
+        super().__init__(message, retryable=True)
+
+
 class ReviseUnverified(BrowserError):
     """The save was pressed and what it did could not be read back. Safe to repeat: an edit
     applied twice is the same edit."""

@@ -32,7 +32,7 @@ from dataclasses import dataclass
 from typing import Callable
 
 from sellee import marketplaces, settings
-from sellee.browser import doorbell, editor
+from sellee.browser import craigslist_account, doorbell, editor
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
@@ -102,6 +102,9 @@ def run_next(deps: ReviseDeps) -> str | None:
     if upcoming is None:
         return None
     market = upcoming["market"]
+    if craigslist_account.signing_in(deps.store, market):
+        # Not claimed, so the wait spends nothing; the account lane signs back in.
+        return None
     if page_governor.unprompted_held(
         deps.store, deps.config, market, deps.now()
     ) or not page_governor.has_room(deps.governor, market, _edit_loads(market)):
@@ -162,6 +165,11 @@ def _drive(deps: ReviseDeps, revision: dict, item: dict) -> None:
             outcome = editor.revise(
                 client, adapter, item, listing_url=url, changed=revision["changed"]
             )
+    except editor.ReviseSignedOut as exc:
+        # Handed back, and held unclaimed until the account lane has signed back in.
+        craigslist_account.start_login(deps.store, market)
+        _settle_or_retry(deps, revision, str(exc), retryable=True)
+        return
     except editor.ReviseNotAttempted as exc:
         _settle_or_retry(deps, revision, str(exc), retryable=exc.retryable)
         return
