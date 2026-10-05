@@ -1,6 +1,5 @@
-"""The registration send: a reply to a Craigslist buyer, mailed from the seller's registration
-address through bazaar's send_registration_reply, retried under the send intent's id as the relay
-send is."""
+"""The registration send: a Craigslist reply through bazaar's send_registration_reply, retried
+under the send intent's id as the relay send is."""
 
 from __future__ import annotations
 

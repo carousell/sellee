@@ -1,10 +1,5 @@
-"""The registration lane: mail to the seller's registration address, read through the rail into
-sell threads on the marketplace that sent it.
-
-Each tick pages list_registration_mail from the stored cursor. A mail resolves to a marketplace by
-its sender's registered domain, and that marketplace's matcher decides what it is; only Craigslist
-has one. Handled mail ids are kept, so a mail read again acts on nothing twice.
-"""
+"""The registration lane: mail to the seller's registration address, routed by its sender's
+registered domain to that marketplace's matcher. Handled mail ids are kept, so none acts twice."""
 
 from __future__ import annotations
 

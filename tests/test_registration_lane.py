@@ -1,5 +1,4 @@
-"""The registration lane: Craigslist mail to the seller's registration address read through the
-rail's list_registration_mail into sell threads, and answered through send_registration_reply,
+"""The registration lane and its reply sink: Craigslist mail read into sell threads and answered,
 against a fake of bazaar's seller MCP server."""
 
 from __future__ import annotations
