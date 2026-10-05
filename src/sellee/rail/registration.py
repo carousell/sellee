@@ -133,16 +133,24 @@ def _append_buyer_mail(deps: RegistrationDeps, mail: dict, sender: str, item_id:
             "registration.thread_new",
             {"market": CRAIGSLIST, "thread_id": thread_id, "item_id": item_id},
         )
-    history = [r["text"] for r in deps.store.get_thread_messages(thread_id) if r["dir"] == "in"]
+    thread = deps.store.get_thread(thread_id, message_cap=0)
+    answered_ts = thread["cursor_last_ts"] if thread else None
+    stored = deps.store.get_thread_messages(thread_id)
+    inbound = [r for r in stored if r["dir"] == "in" and r["msg_id"] != mail["id"]]
+    ts = _epoch(mail["received_at"])
     deps.store.append_thread_message(
         thread_id,
         msg_id=mail["id"],
         direction="in",
         text=mail["text"],
-        ts=_epoch(mail["received_at"]),
+        ts=ts,
         source="marketplace",
-        scam_verdict=_scan(deps, mail["text"], history)["verdict"],
+        scam_verdict=_scan(deps, mail["text"], [r["text"] for r in inbound])["verdict"],
     )
+    owed = any(answered_ts is None or r["ts"] > answered_ts for r in inbound)
+    if mail.get("automatic") and not owed:
+        # An out-of-office is kept but never answered: the reply cursor moves over it.
+        deps.store.mark_relay_answered(thread_id, mail["id"], ts)
     return thread_id
 
 

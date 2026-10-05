@@ -190,6 +190,28 @@ def test_a_second_message_from_the_buyer_joins_the_same_thread(store, bus, fake,
     assert [m["msg_id"] for m in store.get_thread(_THREAD)["messages"]] == ["m1", "m2"]
 
 
+def test_an_out_of_office_is_stored_on_its_thread_but_never_answered(store, bus, fake, item):
+    mail = _eml("buyer.eml")
+    fake.add_mail(
+        "m1", **{**mail, "text": "I am away until Monday." + _footer(_POST)}, automatic=True
+    )
+
+    registration.registration_lane(_deps(store, bus, fake))
+
+    assert [m["msg_id"] for m in store.get_thread(_THREAD)["messages"]] == ["m1"]
+    assert _waiting(store) == set()
+
+
+def test_an_out_of_office_after_an_unanswered_question_leaves_it_waiting(store, bus, fake, item):
+    mail = _eml("buyer.eml")
+    fake.add_mail("m1", **mail)
+    fake.add_mail("m2", **{**mail, "text": "Away until Monday." + _footer(_POST)}, automatic=True)
+
+    registration.registration_lane(_deps(store, bus, fake))
+
+    assert _waiting(store) == {_THREAD}
+
+
 def test_the_cursor_pages_through_more_mail_than_one_page(store, bus, fake, item, monkeypatch):
     monkeypatch.setattr(registration, "PAGE_SIZE", 2)
     mail = _eml("buyer.eml")
@@ -451,6 +473,36 @@ def test_property_one_mail_appends_one_message_however_often_it_is_read(
 
     ids = [m["msg_id"] for m in store.get_thread(_THREAD)["messages"]]
     assert ids == [m["id"] for m in fake.mail]
+
+
+@_PROPERTY
+@given(st.lists(st.lists(st.booleans(), min_size=1, max_size=4), min_size=1, max_size=4))
+def test_property_only_a_mail_from_a_person_makes_a_thread_wait(
+    make_ctx, store, bus, fake, item, ticks
+):
+    """Property: after any run of buyer mail read over any ticks, the thread waits exactly when a
+    mail not marked automatic has arrived since the last reply."""
+    deps = _deps(store, bus, fake)
+    buyer = f"b{len(fake.mail)}@reply.craigslist.org"
+    thread_id = f"craigslist:{buyer}"
+    owed = False
+    for batch in ticks:
+        for automatic in batch:
+            mail_id = f"m{len(fake.mail)}"
+            fake.add_mail(
+                mail_id,
+                from_email=buyer,
+                from_domain="craigslist.org",
+                subject="Samsung Buds3",
+                text=mail_id + _footer(_POST),
+                automatic=automatic,
+            )
+            owed = owed or not automatic
+        registration.registration_lane(deps)
+        assert (thread_id in _waiting(store)) == owed
+        if owed:
+            assert _send(make_ctx, store, bus, fake, thread_id=thread_id)["status"] == "sent"
+            owed = False
 
 
 def _raise(_cursor):

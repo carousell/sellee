@@ -147,7 +147,9 @@ class FakeRelay:
         cursor = str(page[-1]["updated"]) if page else (args.get("cursor") or "")
         return {"threads": [self._summary(t["id"]) for t in page], "next_cursor": cursor}
 
-    def add_mail(self, mail_id, *, from_email, subject, text, from_domain=None, from_name=""):
+    def add_mail(
+        self, mail_id, *, from_email, subject, text, from_domain=None, from_name="", automatic=False
+    ):
         """Mail to the seller's registration address; its sender becomes a correspondent."""
         from_email = from_email.lower()
         self.mail.append(
@@ -158,6 +160,7 @@ class FakeRelay:
                 "from_domain": from_domain or from_email.rsplit("@", 1)[-1],
                 "subject": subject,
                 "text": text,
+                "automatic": automatic,
                 "received": self.tick(),
             }
         )
