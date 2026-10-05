@@ -75,12 +75,26 @@ def _activation_mail(text: str | None = None) -> dict:
 
 
 class FakeCraigslist:
-    """Craigslist's account pages as the lane sees them: what each click leads to."""
+    """Craigslist's account pages as the lane sees them. A click returns before its next page
+    loads: the old page answers `lag` more reads first, as a real form post does."""
 
-    def __init__(self, *, terms: bool = False, sign_up_page: str = "signup_sent"):
+    def __init__(
+        self,
+        *,
+        terms: bool = False,
+        sign_up_page: str = "signup_sent",
+        activation_signs_in: bool = True,
+        lag: int = 0,
+        on_sign_up=None,
+    ):
         self.kind = "blank"
         self.terms = terms
         self.sign_up_page = sign_up_page
+        self.activation_signs_in = activation_signs_in
+        self.lag = lag
+        self.on_sign_up = on_sign_up
+        self.signed_in = False
+        self.pending: tuple | None = None
         self.opened: list = []
         self.typed: list = []
         self.clicked: list = []
@@ -89,16 +103,28 @@ class FakeCraigslist:
     def exclusive(self):
         yield
 
+    def _arrive(self, kind: str) -> None:
+        self.kind = kind
+        self.signed_in = self.signed_in or kind == "account_home"
+
     def navigate(self, url: str) -> None:
         self.opened.append(url)
+        self.pending = None
         if url.startswith("https://accounts.craigslist.org/pass?"):
-            self.kind = "password_options"
+            self._arrive("password_options")
         elif url == craigslist.LOGIN_URL:
-            self.kind = "login"
+            self._arrive("login")
+        elif url == craigslist.ACCOUNT_URL:
+            self._arrive("account_home" if self.signed_in else "login")
         else:
-            self.kind = "account_home" if self.kind in ("account_home",) else "unknown"
+            self._arrive("unknown")
 
     def evaluate(self, function: str, **_):
+        if self.pending is not None:
+            reads, kind = self.pending
+            self.pending = (reads - 1, kind) if reads > 0 else None
+            if reads <= 0:
+                self._arrive(kind)
         if function == craigslist.PAGE_JS:
             return {"kind": self.kind}
         if function == craigslist.LOGIN_JS:
@@ -111,22 +137,42 @@ class FakeCraigslist:
     def click(self, target: str, element: str) -> None:
         self.clicked.append(target)
         if target == craigslist.SIGN_UP_BUTTON and self.kind == "login":
-            self.kind = self.sign_up_page
+            if self.on_sign_up:
+                self.on_sign_up()
+            after = self.sign_up_page
         elif target == craigslist.GO_PASSWORDLESS and self.kind == "password_options":
-            self.kind = "terms" if self.terms else "account_home"
+            after = "terms" if self.terms else "account_home"
+            after = after if self.activation_signs_in else "unknown"
         elif target == craigslist.ACCEPT_TERMS and self.kind == "terms":
-            self.kind = "account_home"
+            after = "account_home"
         else:
             raise BrowserToolError(f"nothing to click at {target} on {self.kind}")
+        self.pending = (self.lag, after)
+        if not self.lag:
+            self.pending = None
+            self._arrive(after)
 
 
-def _deps(store, bus, page, fake, now=time.time):
+class Clock:
+    def __init__(self):
+        self.t = time.time()
+
+    def now(self) -> float:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.t += seconds
+
+
+def _deps(store, bus, page, fake, now=None, clock=None):
+    clock = clock or Clock()
     return account.AccountDeps(
         store=store,
         bus=bus,
         browser_factory=lambda: page,
         rail_factory=lambda: _rail(fake),
-        now=now,
+        now=now or clock.now,
+        sleep=clock.sleep,
     )
 
 
@@ -343,24 +389,113 @@ def test_a_mail_read_again_after_its_link_was_opened_does_not_reopen_it(
     account.record_service_mail(us_seller, _activation_mail())
     account.account_lane(_deps(us_seller, bus, page, fake))
 
-    assert page.opened == []
+    assert _LINK not in page.opened
 
 
 def test_an_activation_that_does_not_end_signed_in_starts_over_with_a_notice(
     us_seller, bus, fake
 ) -> None:
-    page = FakeCraigslist()
-    page.navigate = lambda url: (page.opened.append(url), setattr(page, "kind", "unknown"))
+    page = FakeCraigslist(activation_signs_in=False)
     us_seller.request_craigslist_signup()
     us_seller.set_craigslist_awaiting_activation()
     account.record_service_mail(us_seller, _activation_mail())
 
     account.account_lane(_deps(us_seller, bus, page, fake))
+    assert _state(us_seller) == account.AWAITING_ACTIVATION  # decided by reading, next tick
+    account.account_lane(_deps(us_seller, bus, page, fake))
 
+    assert page.opened == [_LINK, craigslist.ACCOUNT_URL]
     assert us_seller.craigslist_account() is None
     assert [n["text"] for n in us_seller.list_queued_notices()] == [
         account.ACTIVATION_FAILED_NOTICE
     ]
+
+
+# --- the lane under real timing: mail racing the sign-up, crashes, slow pages -------------------
+
+
+def test_activation_mail_that_beats_the_sign_up_confirmation_is_kept_and_opened(
+    us_seller, bus, fake
+) -> None:
+    page = FakeCraigslist(
+        on_sign_up=lambda: account.record_service_mail(us_seller, _activation_mail())
+    )
+    us_seller.request_craigslist_signup()
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+    assert us_seller.craigslist_account()["link"] == _LINK
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert page.opened == [craigslist.LOGIN_URL, _LINK]
+    assert _state(us_seller) == account.ACTIVE
+
+
+def test_a_link_recorded_before_the_sign_up_was_confirmed_goes_straight_to_activation(
+    us_seller, bus, fake
+) -> None:
+    page = FakeCraigslist()
+    us_seller.request_craigslist_signup()
+    account.record_service_mail(us_seller, _activation_mail())
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert page.typed == []
+    assert page.opened == [_LINK]
+    assert _state(us_seller) == account.ACTIVE
+
+
+@pytest.mark.parametrize("signed_in", [True, False])
+def test_an_activation_cut_off_after_opening_its_link_is_settled_on_the_next_tick(
+    us_seller, bus, fake, signed_in
+) -> None:
+    page = FakeCraigslist()
+    page.signed_in = signed_in
+    us_seller.request_craigslist_signup()
+    us_seller.set_craigslist_awaiting_activation()
+    account.record_service_mail(us_seller, _activation_mail())
+    us_seller.mark_craigslist_link_opened(_LINK)  # the daemon died here
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    assert page.opened == [craigslist.ACCOUNT_URL]
+    if signed_in:
+        assert _state(us_seller) == account.ACTIVE
+    else:
+        assert us_seller.craigslist_account() is None
+        assert [n["text"] for n in us_seller.list_queued_notices()] == [
+            account.ACTIVATION_FAILED_NOTICE
+        ]
+
+
+@pytest.mark.parametrize("terms", [False, True])
+def test_pages_that_load_after_the_click_returns_are_waited_for(
+    us_seller, bus, fake, terms
+) -> None:
+    page = FakeCraigslist(terms=terms, lag=5)
+    us_seller.request_craigslist_signup()
+
+    account.account_lane(_deps(us_seller, bus, page, fake))
+    account.record_service_mail(us_seller, _activation_mail())
+    account.account_lane(_deps(us_seller, bus, page, fake))
+
+    expected = [craigslist.SIGN_UP_BUTTON, craigslist.GO_PASSWORDLESS]
+    assert page.clicked == expected + ([craigslist.ACCEPT_TERMS] if terms else [])
+    assert _state(us_seller) == account.ACTIVE
+
+
+def test_a_sign_up_page_that_never_moves_is_given_up_within_the_deadline(
+    us_seller, bus, fake
+) -> None:
+    page = FakeCraigslist(lag=10_000)
+    clock = Clock()
+    started = clock.now()
+    us_seller.request_craigslist_signup()
+
+    account.account_lane(_deps(us_seller, bus, page, fake, clock=clock))
+
+    assert clock.now() - started <= account.TRANSITION_WAIT_SEC + 1
+    assert us_seller.craigslist_account() is None
+    assert [n["text"] for n in us_seller.list_queued_notices()] == [account.SIGN_UP_FAILED_NOTICE]
 
 
 def test_a_link_chrome_could_not_open_is_tried_again_next_tick(us_seller, bus, fake) -> None:

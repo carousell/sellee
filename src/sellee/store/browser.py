@@ -366,23 +366,25 @@ class BrowserMixin:
             return bool(cur.rowcount)
 
     def set_craigslist_awaiting_activation(self) -> bool:
+        """Keeps any link already recorded: the activation mail can beat this write."""
         now = _now()
         with self._db.transaction() as conn:
             cur = conn.execute(
-                "UPDATE craigslist_account SET state = 'awaiting_activation', link = NULL, "
-                "link_opened = 0, requested_ts = ?, late_reported = 0, updated_ts = ? "
+                "UPDATE craigslist_account SET state = 'awaiting_activation', "
+                "requested_ts = ?, late_reported = 0, updated_ts = ? "
                 "WHERE id = 1 AND state = 'signup_requested'",
                 (now, now),
             )
             return bool(cur.rowcount)
 
-    def record_craigslist_link(self, link: str, *, state: str) -> bool:
-        """Keep an emailed link for the lane to open, if the account is waiting in `state`."""
+    def record_craigslist_link(self, link: str, *, states: tuple) -> bool:
+        """Keep an emailed link for the lane to open, if the account is in one of `states`."""
+        marks = ", ".join("?" for _ in states)
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE craigslist_account SET link = ?, link_opened = 0, updated_ts = ? "
-                "WHERE id = 1 AND state = ? AND link IS NOT ?",
-                (link, _now(), state, link),
+                f"WHERE id = 1 AND state IN ({marks}) AND link IS NOT ?",
+                (link, _now(), *states, link),
             )
             return bool(cur.rowcount)
 

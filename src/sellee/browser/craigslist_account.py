@@ -19,6 +19,9 @@ log = logging.getLogger(__name__)
 
 # Past this, a missing activation mail is worth telling the seller about.
 ACTIVATION_WAIT_SEC = 1800.0
+# How long a submitted form gets to show its next page; clicks return before it loads.
+TRANSITION_WAIT_SEC = 20.0
+_POLL_SEC = 0.5
 
 SIGNUP_REQUESTED = "signup_requested"
 AWAITING_ACTIVATION = "awaiting_activation"
@@ -62,7 +65,7 @@ def record_service_mail(store, mail: dict) -> None:
     """The registration lane's hook for Craigslist's own mail: keep an activation link."""
     found = _ACTIVATION_LINK.search(mail.get("text") or "")
     if found:
-        store.record_craigslist_link(found.group(0), state=AWAITING_ACTIVATION)
+        store.record_craigslist_link(found.group(0), states=(SIGNUP_REQUESTED, AWAITING_ACTIVATION))
 
 
 def service_hooks(store) -> dict:
@@ -76,15 +79,17 @@ class AccountDeps:
     browser_factory: Callable
     rail_factory: Callable
     now: Callable[[], float] = time.time
+    sleep: Callable[[float], None] = time.sleep
 
 
 def account_lane(deps: AccountDeps) -> None:
-    """One tick: sign up when asked, or open the activation link once it has arrived."""
+    """One tick: sign up when asked, open the activation link once it has arrived, or settle an
+    activation a previous tick started and did not finish."""
     row = deps.store.craigslist_account()
     if row is None or row["state"] == ACTIVE:
         return
-    if row["state"] == AWAITING_ACTIVATION and (not row["link"] or row["link_opened"]):
-        if not row["link"] and deps.now() - row["requested_ts"] > ACTIVATION_WAIT_SEC:
+    if row["state"] == AWAITING_ACTIVATION and not row["link"]:
+        if deps.now() - row["requested_ts"] > ACTIVATION_WAIT_SEC:
             deps.store.report_craigslist_late_once(ACTIVATION_LATE_NOTICE)
         return
     if inbox.browser_busy(deps.store):
@@ -92,9 +97,13 @@ def account_lane(deps: AccountDeps) -> None:
     try:
         client = deps.browser_factory()
         with client.exclusive():
-            if row["state"] == SIGNUP_REQUESTED:
+            if not row["link"]:
                 _sign_up(deps, client)
+            elif row["link_opened"]:
+                _settle(deps, client)
             else:
+                # A link on a signup_requested row means the sign-up went through.
+                deps.store.set_craigslist_awaiting_activation()
                 _activate(deps, client, row["link"])
     except (BrowserError, RailError) as exc:
         # Nothing was confirmed either way, so the next tick tries again.
@@ -105,13 +114,25 @@ def _page(client) -> str:
     return str((client.evaluate(craigslist.PAGE_JS) or {}).get("kind") or "unknown")
 
 
+def _next_page(deps: AccountDeps, client, before: str) -> str:
+    """The page a submitted form led to, or `before` if it never moved within the deadline."""
+    deadline = deps.now() + TRANSITION_WAIT_SEC
+    kind = _page(client)
+    while kind in (before, "unknown") and deps.now() < deadline:
+        deps.sleep(_POLL_SEC)
+        kind = _page(client)
+    return kind
+
+
 def _sign_up(deps: AccountDeps, client) -> None:
     address = deps.rail_factory().get_registration_address()
     client.navigate(craigslist.LOGIN_URL)
-    if _page(client) == "login":
+    kind = _page(client)
+    if kind == "login":
         client.type_humanly(craigslist.SIGN_UP_EMAIL, "the sign-up email box", address)
         client.click(craigslist.SIGN_UP_BUTTON, "Create account")
-    if _page(client) == "signup_sent":
+        kind = _next_page(deps, client, "login")
+    if kind == "signup_sent":
         deps.store.set_craigslist_awaiting_activation()
         deps.bus.publish("craigslist.signed_up", {})
         return
@@ -120,20 +141,32 @@ def _sign_up(deps: AccountDeps, client) -> None:
 
 
 def _activate(deps: AccountDeps, client, link: str) -> None:
+    """Open the link once. Whether it worked is decided by `_settle`, now or on a later tick."""
     client.navigate(link)
     deps.store.mark_craigslist_link_opened(link)
-    try:
-        if _page(client) == "password_options":
-            client.click(craigslist.GO_PASSWORDLESS, "Go Passwordless")
-        if _page(client) == "terms":
-            client.click(craigslist.ACCEPT_TERMS, "I ACCEPT")
-        state = (client.evaluate(craigslist.LOGIN_JS) or {}).get("state")
-    except BrowserError as exc:
-        state = f"error: {exc}"
-    if state == "logged_in" and deps.store.activate_craigslist_account(ACTIVATED_NOTICE):
-        deps.bus.publish("craigslist.activated", {})
+    kind = _page(client)
+    if kind == "password_options":
+        client.click(craigslist.GO_PASSWORDLESS, "Go Passwordless")
+        kind = _next_page(deps, client, "password_options")
+    if kind == "terms":
+        client.click(craigslist.ACCEPT_TERMS, "I ACCEPT")
+        _next_page(deps, client, "terms")
+    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+        _activated(deps)
+
+
+def _settle(deps: AccountDeps, client) -> None:
+    """An opened link that left no active account: read the account page and decide."""
+    client.navigate(craigslist.ACCOUNT_URL)
+    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+        _activated(deps)
         return
     # The link is spent, so only a fresh sign-up can finish the account.
-    log.warning("Craigslist activation did not end signed in (%s)", state)
+    log.warning("Craigslist activation did not end signed in")
     deps.store.abandon_craigslist_account(ACTIVATION_FAILED_NOTICE)
     deps.bus.publish("craigslist.activation_failed", {})
+
+
+def _activated(deps: AccountDeps) -> None:
+    if deps.store.activate_craigslist_account(ACTIVATED_NOTICE):
+        deps.bus.publish("craigslist.activated", {})
