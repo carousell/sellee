@@ -28,6 +28,8 @@ CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 # whole marketplace phase, which outlives every sign-in inside it.
 HOLD_SIGNIN = "signin"
 HOLD_SETUP = "setup"
+# One per opened post, `post:<item id>`, so its Done button frees only that post's hold.
+HOLD_POST_PREFIX = "post:"
 
 # How long a claim survives unrenewed — for a seller who wandered off or closed the terminal.
 # Long enough to find a password, short enough that a dead CLI is not a permanent outage.
@@ -122,6 +124,12 @@ class BrowserMixin:
         """Give the tab back. Safe for a holder that never held it, or whose hold has expired."""
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
+
+    def browser_holders(self, now: float | None = None) -> set[str]:
+        """Who holds the browser right now; expired holds are not counted."""
+        now = _now() if now is None else now
+        rows = self._db.query("SELECT holder FROM browser_holds WHERE expires_ts > ?", (now,))
+        return {str(r["holder"]) for r in rows}
 
     # --- a marketplace that has told us to stop ------------------------------------------------
 

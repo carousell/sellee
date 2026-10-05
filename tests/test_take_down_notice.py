@@ -4,6 +4,7 @@ them: the take-down notice carries a button that opens the post's manage page.""
 from __future__ import annotations
 
 import contextlib
+import time
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -146,13 +147,28 @@ class _Chrome:
         return {"state": "logged_in" if self.signed_in else "logged_out"}
 
 
-def _lane(store, bus, chrome, monkeypatch, raised=None) -> None:
+def _lane(store, bus, chrome, monkeypatch, raised=None, now=None) -> None:
     monkeypatch.setattr(
         connect, "_raise_window", lambda deps: (raised if raised is not None else []).append(True)
     )
     connect.connect_lane(
-        connect.ConnectDeps(store=store, bus=bus, config=Config(), browser_factory=lambda: chrome)
+        connect.ConnectDeps(
+            store=store,
+            bus=bus,
+            config=Config(),
+            browser_factory=lambda: chrome,
+            now=now or time.time,
+        )
     )
+
+
+def _done(store, bus, item_id: str) -> tuple:
+    event = {
+        "kind": "action",
+        "text": fastpaths.CB_POST_DONE,
+        "payload": {"ref": item_id, "choice": fastpaths.CB_POST_DONE},
+    }
+    return fastpaths.handle_fast_path(store, bus, event)
 
 
 def test_the_lane_opens_the_post_holds_the_tab_and_says_what_to_press(
@@ -168,6 +184,55 @@ def test_the_lane_opens_the_post_holds_the_tab_and_says_what_to_press(
     assert seller.pending_post_opens() == []
     assert seller.browser_hold_reason() == "closing a craigslist post"
     assert any("Delete this Posting" in text for text in _texts(seller))
+    opened = next(n for n in seller.list_queued_notices() if "Delete this Posting" in n["text"])
+    assert [tuple(c) for c in opened["controls"]] == fastpaths.post_done_controls(item["id"])
+
+
+def test_two_taps_open_one_post_then_the_next_after_done(seller, bus, monkeypatch) -> None:
+    first = _sold(seller, craigslist=_POST)
+    second = _sold(seller, craigslist=_POST.replace(_TOKEN, "SecondPostToken12345"))
+    _tap(seller, bus, first["id"])
+    _tap(seller, bus, second["id"])
+    chrome = _Chrome()
+
+    _lane(seller, bus, chrome, monkeypatch)
+    later = time.time() + connect.STALE_REQUEST_SEC + 60
+    _lane(seller, bus, chrome, monkeypatch, now=lambda: later)
+
+    # Waiting behind the first post's hold is not stale, however long it takes.
+    assert chrome.opened == [_MANAGE]
+    assert [r["item_id"] for r in seller.pending_post_opens()] == [second["id"]]
+    assert connect.POST_STALE_NOTICE not in _texts(seller)
+
+    assert _done(seller, bus, first["id"]) == (fastpaths.POST_DONE_ACK, None)
+    _lane(seller, bus, chrome, monkeypatch, now=lambda: later)
+
+    assert chrome.opened == [_MANAGE, "https://post.craigslist.org/manage/SecondPostToken12345"]
+    assert seller.pending_post_opens() == []
+
+
+def test_done_frees_only_its_own_post(seller, bus, monkeypatch) -> None:
+    item = _sold(seller, craigslist=_POST)
+    _tap(seller, bus, item["id"])
+    _lane(seller, bus, _Chrome(), monkeypatch)
+
+    _done(seller, bus, "some-other-item")
+
+    assert seller.browser_hold_reason() == "closing a craigslist post"
+    _done(seller, bus, item["id"])
+    assert seller.browser_hold_reason() == ""
+
+
+def test_a_request_behind_a_sign_in_still_goes_stale(seller, bus, monkeypatch) -> None:
+    item = _sold(seller, craigslist=_POST)
+    _tap(seller, bus, item["id"])
+    seller.hold_browser("signin", "signing in to fb", 3600)
+    later = time.time() + connect.STALE_REQUEST_SEC + 60
+
+    _lane(seller, bus, _Chrome(), monkeypatch, now=lambda: later)
+
+    assert connect.POST_STALE_NOTICE in _texts(seller)
+    assert seller.pending_post_opens() == []
 
 
 def test_a_signed_out_page_is_reported_not_called_open(seller, bus, monkeypatch) -> None:

@@ -16,7 +16,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.browser.markets import craigslist
 from sellee.channel import refs
-from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
+from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE, HOLD_POST_PREFIX
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
@@ -39,6 +39,8 @@ CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
 # Opens a sold item's Craigslist post in sellee's Chrome; the item id rides in the ref.
 CB_OPEN_POST = "openpost"
+# Frees the tab held for that post, so the next opened post can come up.
+CB_POST_DONE = "postdone"
 # The two answers to the take-these-over ask. The ref carries the market, so a tap months later
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
@@ -67,6 +69,7 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_CONNECT_MARKET,
         CB_CONNECT_PROBE,
         CB_OPEN_POST,
+        CB_POST_DONE,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
         CB_WATCH_ON,
@@ -103,6 +106,7 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
 OPEN_POST_LABEL = "Open on desktop"
+POST_DONE_LABEL = "Done"
 CHECK_AGAIN_LABEL = "Check again"
 # The two answers to the ask. One yes: an agent that answers buyers on a listing it cannot relist
 # has to explain that split in every conversation. The tools carry the finer answers.
@@ -143,6 +147,10 @@ def look_again_controls(market: str) -> list:
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
+def post_done_controls(item_id: str) -> list:
+    return [(POST_DONE_LABEL, f"{item_id}:{CB_POST_DONE}")]
+
+
 def open_post_controls(item_id: str) -> list:
     """The one-button spec that opens this item's Craigslist post for the seller to close."""
     return [(OPEN_POST_LABEL, f"{item_id}:{CB_OPEN_POST}")]
@@ -166,6 +174,7 @@ CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell y
 OPEN_POST_ACK = "Opening that Craigslist post in my Chrome now — I'll tell you when it's up."
 OPEN_POST_GONE = "I don't have that Craigslist post on record any more, so there's nothing to open."
 OPEN_POST_NOT_SOLD = "That item isn't marked sold any more, so I've left its Craigslist post alone."
+POST_DONE_ACK = "Thanks — I've taken the window back."
 OPEN_POST_OFF = "Craigslist is switched off, so I can't open that post — /sellee to turn it on."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
@@ -317,6 +326,10 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         )
     if token == CB_OPEN_POST:
         return _open_post_button(store, event["payload"].get("ref"))
+    if token == CB_POST_DONE:
+        # Idempotent: a hold already gone or expired is simply not there to release.
+        store.release_browser_hold(HOLD_POST_PREFIX + str(event["payload"].get("ref") or ""))
+        return POST_DONE_ACK, None
     if token == "/connect":
         return _connect_command(store, bus)
     if token in ("/pause", CB_PAUSE):

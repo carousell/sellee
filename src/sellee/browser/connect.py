@@ -34,7 +34,11 @@ from sellee.browser import blindness, craigslist_account, doorbell, inbox, windo
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import BROWSER_HOLD_TTL_SEC, CONNECT_MODE_OPEN, HOLD_SIGNIN
+from sellee.store.browser import (
+    BROWSER_HOLD_TTL_SEC,
+    CONNECT_MODE_OPEN,
+    HOLD_POST_PREFIX,
+)
 
 log = logging.getLogger(__name__)
 
@@ -213,7 +217,7 @@ def connect_lane(deps: ConnectDeps) -> None:
 # The seller asked for these, so quiet hours do not hold them; the governor still paces the load.
 POST_OPEN_NOTICE = (
     'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
-    "there to take it down."
+    "there to take it down, then tap Done."
 )
 POST_SIGNED_OUT_NOTICE = (
     "Craigslist shows me signed out, so the post didn't open. Run `sellee connect craigslist`, "
@@ -236,7 +240,8 @@ def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
         _post_done(deps, item_id, POST_BLOCKED_NOTICE)
         return
     if inbox.browser_busy(deps.store):
-        if deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
+        # Waiting behind another opened post is not stale: that hold ends at Done or its expiry.
+        if not _behind_a_post(deps) and deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
             _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
         return
     try:
@@ -253,9 +258,25 @@ def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
         _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE)
         return
     # Held like a sign-in, so no lane moves the tab while the seller is deleting.
-    deps.store.hold_browser(HOLD_SIGNIN, f"closing a {market} post", BROWSER_HOLD_TTL_SEC)
+    deps.store.hold_browser(
+        HOLD_POST_PREFIX + item_id, f"closing a {market} post", BROWSER_HOLD_TTL_SEC
+    )
     _raise_window(deps)
-    _post_done(deps, item_id, POST_OPEN_NOTICE.format(where=window.where()))
+    _post_done(
+        deps,
+        item_id,
+        POST_OPEN_NOTICE.format(where=window.where()),
+        fastpaths.post_done_controls(item_id),
+    )
+
+
+def _behind_a_post(deps: ConnectDeps) -> bool:
+    holders = deps.store.browser_holders()
+    return (
+        not inbox.browser_pass_running(deps.store)
+        and bool(holders)
+        and all(h.startswith(HOLD_POST_PREFIX) for h in holders)
+    )
 
 
 def _post_done(deps: ConnectDeps, item_id: str, notice: str, controls=None) -> None:
