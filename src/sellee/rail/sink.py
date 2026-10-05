@@ -47,34 +47,42 @@ class RelayReplySink:
     """A `ReplySink` for market carousell-ai: `send(thread, text, kind, intent_id)` returns the
     message id bazaar gave the reply, or raises."""
 
+    _EVENT = "relay.send"
+
     def __init__(self, *, client, store, bus, retry_delays_sec=_RETRY_DELAYS_SEC):
         self._client = client
         self._store = store
         self._bus = bus
         self._retry_delays_sec = tuple(retry_delays_sec)
 
-    def send(self, thread: dict, text: str, kind: str, intent_id: str) -> dict:
+    def _call(self, thread: dict, text: str, intent_id: str) -> dict:
         native = thread["thread_id"].split(":", 1)[1]
+        return {"msg_id": self._client.reply_to_thread(native, text, intent_id)["message_id"]}
+
+    def _is_refusal(self, exc: RailError) -> bool:
+        return is_refusal(exc)
+
+    def send(self, thread: dict, text: str, kind: str, intent_id: str) -> dict:
         # The call itself can deliver, so nothing new goes to this buyer until it settles.
         self._store.mark_intent_sent_unverified(intent_id)
         failure: RailError | None = None
         for delay in (0.0, *self._retry_delays_sec):
             time.sleep(delay)
             try:
-                result = self._client.reply_to_thread(native, text, intent_id)
+                result = self._call(thread, text, intent_id)
             except RailError as exc:
-                if is_refusal(exc) and failure is None:
+                if self._is_refusal(exc) and failure is None:
                     self._store.drop_refused_intent(intent_id)
                     self._publish(thread, "refused", str(exc))
                     raise SendRefused(str(exc)) from exc
                 failure = exc
-                if is_refusal(exc):
+                if self._is_refusal(exc):
                     # An earlier attempt may have stored it, so this is unknown, not refused.
                     break
-                log.info("relay reply failed (%s); retrying under the same id", exc)
+                log.info("%s failed (%s); retrying under the same id", self._EVENT, exc)
                 continue
             self._publish(thread, "sent", None)
-            return {"msg_id": result["message_id"]}
+            return result
         self._publish(thread, "unverified", str(failure))
         raise SendUnverified(str(failure)) from failure
 
@@ -82,4 +90,4 @@ class RelayReplySink:
         payload = {"market": thread["market"], "thread_id": thread["thread_id"], "outcome": outcome}
         if detail:
             payload["detail"] = detail[:200]
-        self._bus.publish("relay.send", payload)
+        self._bus.publish(self._EVENT, payload)
