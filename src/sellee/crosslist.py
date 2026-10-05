@@ -92,9 +92,16 @@ class CrosslistDeps:
     # Consecutive transient publish refusals per (item, market). In process, like the notice
     # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
+    # Per market, the basics setting a publish is waiting on and its value when it was asked for;
+    # held until the seller changes it. In process: a restart costs one more look at the form.
+    waiting_on: dict = field(default_factory=dict)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
+
+
+def _basics(deps: CrosslistDeps) -> dict:
+    return deps.store.get_seller_config_section("basics") or {}
 
 
 def _notify_once(deps: CrosslistDeps, key: str, text: str) -> None:
@@ -301,9 +308,11 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     URL, which retires the pair for good.
     """
     region = deps.store.seller_region()
-    create_url = marketplaces.market_url(market, "sell", region)
     adapter = market_adapters.get_adapter(market)
-    if create_url is None or adapter is None:
+    if adapter is None:
+        return
+    create_url = adapter.publish_url or marketplaces.market_url(market, "sell", region)
+    if create_url is None:
         return
     if page_governor.unprompted_held(
         deps.store, deps.config, market, deps.now()
@@ -322,11 +331,20 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 create_url=create_url,
                 photos=photos,
                 listings_url=marketplaces.market_url(market, "my_listings", region),
+                seller=_basics(deps),
             )
     except page_governor.PagesSpent:
         # Another lane spent the page loads between the check above and the drive. Nothing was
         # attempted, so nothing is counted; the pair is simply still eligible.
         deps.bus.publish("browser.paced", {"market": market, "item_id": item["id"]})
+        return
+    except publisher.PublishNeedsSeller as exc:
+        # Only the seller can answer it; nothing is spent while the post waits for them.
+        deps.waiting_on[market] = (exc.key, _basics(deps).get(exc.key))
+        _notify_once(deps, f"{market}:{exc.key}:{exc.question}", exc.question)
+        deps.bus.publish(
+            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": exc.key}
+        )
         return
     except publisher.PublishNotAttempted as exc:
         # A terminal refusal spends the pair's shot immediately; a transient one gets
@@ -406,6 +424,12 @@ def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
     """
     if deps.store.market_block(market):
         return False
+    waiting = deps.waiting_on.get(market)
+    if waiting is not None:
+        key, asked_at = waiting
+        if _basics(deps).get(key) == asked_at:
+            return False
+        del deps.waiting_on[market]
     held = craigslist_account.hold_post(deps.store, market)
     if held == "zip":
         _notify_once(deps, "craigslist_zip", craigslist_account.ZIP_NOTICE)

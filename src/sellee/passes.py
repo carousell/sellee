@@ -99,7 +99,6 @@ def publish_prompt(
     *,
     photos: tuple = (),
     composer_url: str | None = None,
-    zip_code: str | None = None,
 ) -> str:
     where = (
         "to carousell.ai, following the listing flow's publish step"
@@ -110,18 +109,12 @@ def publish_prompt(
     # names them; the recipe never types a marketplace URL, so the composer arrives here too.
     staged = f"Its photos are in your working directory: {', '.join(photos)}\n" if photos else ""
     composer = f"The composer is at {composer_url}\n" if composer_url else ""
-    where_seller = (
-        f"The seller's ZIP code is {zip_code}; use it wherever the listing asks for a location.\n"
-        if zip_code
-        else ""
-    )
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Publish item {item_id} {where}.\n"
         f"Read the item with get_item. It has already been confirmed with the seller, so do not "
         f"re-confirm and do not change its title, price, or description — publish what is there.\n"
         f"{composer}"
-        f"{where_seller}"
         f"{staged}"
         f"Report the live listing URL when it is up, or say what failed."
     )
@@ -241,7 +234,6 @@ def _publish_prompt(payload: dict, store, pass_id: str) -> str:
         market,
         photos=staged_photo_names(item_id, market, store),
         composer_url=marketplaces.market_url(market, "sell", store.seller_region()),
-        zip_code=(store.get_seller_config_section("basics") or {}).get("zip"),
     )
 
 

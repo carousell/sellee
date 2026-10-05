@@ -138,6 +138,10 @@ class MarketAdapter:
     read_trigger: str = "timer"
     # Where connecting opens and the login probe reads, when it is not the market's front page.
     home_url: str = ""
+    # A market whose create form is several pages drives it with its own function, under
+    # `publisher.publish`'s contract, starting at `publish_url` when the registry cannot compose it.
+    publish_driver: Callable | None = None
+    publish_url: str = ""
     # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
     # recorded only. The default treats every ring as a message; a market narrows it only from
     # notifications it has actually been seen to send.
@@ -199,6 +203,14 @@ FACEBOOK = MarketAdapter(
     read_trigger="notification",
 )
 
+
+def _drive_craigslist(*args, **kwargs):
+    # Imported here: the driver imports the publisher, which imports this package.
+    from sellee.browser import craigslist_publisher
+
+    return craigslist_publisher.publish(*args, **kwargs)
+
+
 # No inbox page: buyers mail the registration address, which the registration lane reads.
 # `read_trigger` matches neither browser read lane.
 CRAIGSLIST = MarketAdapter(
@@ -207,6 +219,8 @@ CRAIGSLIST = MarketAdapter(
     conversation_tail_js="",
     login_js=craigslist.LOGIN_JS,
     home_url=craigslist.ACCOUNT_URL,
+    publish_driver=_drive_craigslist,
+    publish_url=craigslist.POST_URL,
     polices_automation=True,
     read_trigger="mail",
 )
@@ -252,7 +266,10 @@ def _has_a_publish_path(market: str) -> bool:
     drives — asked of the code, never of a registry flag.
     """
     adapter = _ADAPTERS.get(market)
-    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish_fields_js))
+    return bool(
+        marketplaces.listing_flow(market)
+        or (adapter and (adapter.publish_fields_js or adapter.publish_driver))
+    )
 
 
 def surveyable_markets(region: str | None = None) -> list:

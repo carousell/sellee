@@ -20,7 +20,7 @@ from sellee.tools.registry import (
     register,
 )
 
-_BASICS_KEYS = {"region", "currency", "timezone", "zip"}
+_BASICS_KEYS = {"region", "currency", "timezone", "zip", "craigslist_area"}
 _SHIPPING_KEYS = {"zones", "size_surcharge"}
 
 
@@ -69,6 +69,13 @@ def validate_basics(basics: dict) -> dict:
         if len(zip_code) != 5 or not zip_code.isdigit():
             raise BasicsError(f"zip must be a five-digit US ZIP code, got {zip_code!r}")
         out["zip"] = zip_code
+
+    if "craigslist_area" in basics:
+        # One of the area labels Craigslist offered the seller, matched exactly when posting.
+        area = " ".join(str(basics.get("craigslist_area") or "").split())
+        if not area or len(area) > 80:
+            raise BasicsError("craigslist_area must be one of the area names Craigslist offered")
+        out["craigslist_area"] = area
     return out
 
 

@@ -10,6 +10,7 @@ marketplace ineligible for them. Pure and stdlib — reads the registry, mutates
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 
 from sellee.paths import PACKAGE_DATA_DIR
@@ -84,6 +85,12 @@ def media_host_suffixes(market: str) -> list:
     neither this nor `media_hosts` fetches nothing.
     """
     return list((get_marketplace(market) or {}).get("media_host_suffixes") or [])
+
+
+def is_canonical_listing_url(market: str, url: str) -> bool:
+    """Whether `url` is in the one shape the registry pins for this market, where it has one."""
+    exact = ((get_marketplace(market) or {}).get("listing_url") or {}).get("pattern")
+    return not exact or re.fullmatch(exact, url) is not None
 
 
 def listing_flow(market: str) -> str:

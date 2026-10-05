@@ -78,10 +78,10 @@ def test_supported_markets_is_the_adapter_registry() -> None:
 
 
 def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
-    """A recipe skill a pass reads, or the publish selectors the driver fills — both need an
-    adapter."""
+    """A recipe skill a pass reads, or a driver: the publish selectors Facebook's form fills, or a
+    market's own driver — all need an adapter."""
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
-    assert market_adapters.supported_markets() == ["fb"]
+    assert market_adapters.supported_markets() == ["fb", "craigslist"]
 
     monkeypatch.undo()
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})

@@ -927,6 +927,11 @@ the account starting things at 4am is what gets noticed; elsewhere a listing sit
 someone looks, so the hour it went up is not what a buyer sees. Quiet hours hold the *start* of
 work; nothing running is interrupted.
 
+A Craigslist post also waits, spending nothing, for an active account (the account lane creates
+one), the seller's ZIP code, and on a site split into areas the seller's `craigslist_area`. The
+area is only learned from the form: the driver stops there (`PublishNeedsSeller`), the seller is
+asked once with the labels it read, and the post waits until that basics setting changes.
+
 **The outcome is read off the rows, not off the pass.** A recorded URL becomes a success
 notice with the link. Anything else — including a pass that exited clean having recorded
 nothing, which leaves no listing anyone can find — becomes a failure notice naming the
@@ -1036,7 +1041,9 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
 1. **Offered at onboarding** — a registry entry plus an adapter.
 2. **Connect / disconnect** — free once 1 exists.
 3. **Listing to it** — a publish recipe, or the selectors the deterministic
-   driver needs.
+   driver needs. A form spread over several pages gets its own driver instead
+   (`publish_driver`, starting at `publish_url`), under the same contract: Craigslist's walks
+   its `?s=` steps. A market that polices automation must be driven, never given to a recipe.
 4. **Adopting existing listings** — a read of the seller's own listings, a
    listing-page read, and permission to fetch its photos.
 5. **Inbox and replies** — a conversation list, a message read, a composer, and a

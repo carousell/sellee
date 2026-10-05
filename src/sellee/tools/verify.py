@@ -10,8 +10,6 @@ seam; this tool exists for a pre-message check.
 
 from __future__ import annotations
 
-import re
-
 from sellee import marketplaces
 from sellee.engines import hosts
 from sellee.rail.client import RailError, RailUnprovisioned
@@ -49,8 +47,7 @@ def verify_market_url(ctx: ToolContext, market: str, url: str, region: str | Non
         }
     region_host = marketplaces.resolve_domain(market, region) if region else None
     ok, reason = hosts.verify_listing_pattern(url, host_pattern, path_pattern, region_host)
-    exact = pattern.get("pattern")
-    if ok and exact and not re.fullmatch(exact, url.strip()):
+    if ok and not marketplaces.is_canonical_listing_url(market, url.strip()):
         # Where a URL must match byte for byte elsewhere, only its one canonical shape will do.
         ok, reason = False, f"url is not in the form {market} uses for a listing"
     if ok:

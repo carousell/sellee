@@ -8,7 +8,7 @@ from hypothesis import HealthCheck, example, given, settings
 from hypothesis import strategies as st
 from tests.conftest import seed_setting
 
-from sellee import crosslist, passes
+from sellee import crosslist
 from sellee.browser import craigslist_account
 from sellee.config import Config
 from sellee.rail import registration
@@ -113,10 +113,10 @@ def test_a_zip_code_that_is_not_five_digits_is_refused(bad) -> None:
         validate_basics({"zip": bad})
 
 
-def test_the_publish_prompt_carries_the_sellers_zip_code(store, us_item) -> None:
-    prompt = passes._publish_prompt({"item_id": us_item["id"], "market": "craigslist"}, store, "p1")
-
-    assert "ZIP code is 94103" in prompt
+def test_a_craigslist_area_is_kept_as_offered() -> None:
+    assert validate_basics({"craigslist_area": "  city of  san francisco "}) == {
+        "craigslist_area": "city of san francisco"
+    }
 
 
 # --- the crosslist lane's account gate -----------------------------------------------------------
@@ -187,11 +187,3 @@ def test_without_a_zip_code_the_seller_is_asked_once(store, bus, crosslisting) -
 
     assert _queued_markets(store) == []
     assert _notices(store) == [craigslist_account.ZIP_NOTICE]
-
-
-def test_an_active_account_and_a_zip_code_queue_the_post(store, bus, crosslisting) -> None:
-    _active(store)
-
-    crosslist.enqueue_next(_deps(store, bus))
-
-    assert _queued_markets(store) == ["craigslist"]

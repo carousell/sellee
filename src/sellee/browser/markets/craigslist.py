@@ -40,3 +40,130 @@ PAGE_JS = f"""() => {{
     return {{ kind: 'unknown' }};
   }}
 }}"""
+
+# --- posting -------------------------------------------------------------------------------------
+
+# Craigslist picks the site from the IP and serves every step on one URL, named by its `?s=`.
+POST_URL = "https://post.craigslist.org/c/"
+FOR_SALE_BY_OWNER = "for sale by owner"
+# Its catch-all by-owner category, as Facebook's driver files under "Miscellaneous".
+DEFAULT_CATEGORY = "general for sale"
+# Only on a multi-area site's neighborhood step; the step offers it as its first choice.
+BYPASS_HOOD = "bypass this step"
+# Only cars, motorcycles and RVs carry a fee in the US, and it shows in the label.
+FEE_LABEL = r"\(\$\d"
+
+CHOICE_ATTR = "data-sellee-cl"
+CHOICE = f"[{CHOICE_ATTR}=choice]"
+CONTINUE = "form button[type=submit][name=go]"
+# The map step's continue has no name; its find button does.
+MAP_CONTINUE = "form:has(#search_button) button[type=submit]:not(#search_button)"
+TITLE = "#PostingTitle"
+PRICE = "form input[name=price]"
+ZIP = "form input[name=postal]"
+BODY = "#PostingBody"
+CONDITION = "form select[name=condition]"
+CHAT = "form input[name=contact_chat_ok]"
+ADD_IMAGES = "text=Add Images"
+DONE_WITH_IMAGES = "#doneWithImages"
+PUBLISH = "form:has(input[name=continue][value=y]) button[name=go]"
+
+STEP_JS = """() => {
+  try {
+    const step = new URLSearchParams(location.search).get('s') || '';
+    const confirmed = /posting confirmation/i.test(document.title);
+    const loggedIn = !!document.querySelector('a[href*="/logout"]');
+    const images = ((document.body && document.body.innerText) || '')
+      .match(/this posting has (\\d+) images?/i);
+    return {
+      step: confirmed ? 'confirmed' : step,
+      site: (document.title.split('|')[0] || '').trim(),
+      logged_in: loggedIn,
+      images: images ? Number(images[1]) : null,
+    };
+  } catch (e) {
+    return { step: '', logged_in: false, images: null };
+  }
+}"""
+
+
+def choice_js(wanted: str) -> str:
+    """Marks the step's radio whose label is `wanted`, ignoring case. Exact, because the first
+    label on the category step wraps the whole list."""
+    return f"""() => {{
+  const wanted = {wanted.strip().lower()!r};
+  document.querySelectorAll('[{CHOICE_ATTR}]').forEach((el) => el.removeAttribute('{CHOICE_ATTR}'));
+  const options = [];
+  let chosen = false;
+  for (const radio of document.querySelectorAll('form input[type=radio]')) {{
+    const label = ((radio.closest('label') || radio.parentElement || {{}}).innerText || '').trim();
+    options.push(label);
+    if (!chosen && label.toLowerCase() === wanted) {{
+      radio.setAttribute('{CHOICE_ATTR}', 'choice');
+      chosen = true;
+    }}
+  }}
+  return {{ chosen, options }};
+}}"""
+
+
+# Marks the neighborhood step's bypass radio, whose label opens with the step's own question.
+HOOD_BYPASS_JS = f"""() => {{
+  for (const radio of document.querySelectorAll('form input[type=radio]')) {{
+    const label = ((radio.closest('label') || radio.parentElement || {{}}).innerText || '');
+    if (/{BYPASS_HOOD}/i.test(label)) {{
+      radio.setAttribute('{CHOICE_ATTR}', 'choice');
+      return {{ chosen: true }};
+    }}
+  }}
+  return {{ chosen: false }};
+}}"""
+
+EDIT_READBACK_JS = """() => {
+  const value = (sel) => { const el = document.querySelector(sel); return el ? el.value : null; };
+  const chat = document.querySelector('form input[name=contact_chat_ok]');
+  return {
+    title: value('#PostingTitle'),
+    price: value('form input[name=price]'),
+    zip: value('form input[name=postal]'),
+    chat_on: !!(chat && chat.checked),
+  };
+}"""
+
+# The preview renders the post as a buyer sees it: "<title> - $<price> (<area>)".
+PREVIEW_TEXT_JS = """() => ({
+  text: ((document.body && document.body.innerText) || '').slice(0, 8000),
+})"""
+
+MANAGE_LINK_JS = """() => {
+  const a = document.querySelector('a[href^="https://post.craigslist.org/manage/"]');
+  return { url: a ? a.href : null };
+}"""
+
+# The manage page names the post's canonical address, the one buyer mail quotes.
+MANAGED_POST_JS = """() => {
+  const a = document.querySelector('a[href^="https://www.craigslist.org/view/d/"]');
+  const text = (document.body && document.body.innerText) || '';
+  const id = text.match(/post id:\\s*(\\d+)/i);
+  return { url: a ? a.href : null, post_id: id ? id[1] : null };
+}"""
+
+_CONDITIONS = ("new", "like new", "excellent", "good", "fair", "salvage")
+
+
+def condition_for(said: str) -> str:
+    """Craigslist's condition word for an item's free-text condition, or "" to leave it unset."""
+    said = (said or "").strip().lower()
+    if not said:
+        return ""
+    if said in _CONDITIONS:
+        return said
+    if said.startswith("new") or said == "brand new":
+        return "new"
+    if "like new" in said or "mint" in said:
+        return "like new"
+    if "fair" in said or "well used" in said or "heavily" in said:
+        return "fair"
+    if "poor" in said or "parts" in said:
+        return "salvage"
+    return "good"
