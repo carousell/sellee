@@ -426,7 +426,19 @@ class BrowserMixin:
                 (_now(),),
             )
 
+    def record_craigslist_login_link(self, link: str, *, received_ts: float) -> bool:
+        """Keep a login link sent no earlier than the request now awaited; an older one is void."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link = ?, link_opened = 0, updated_ts = ? "
+                "WHERE id = 1 AND state = 'awaiting_login_link' AND requested_ts > 0 "
+                "AND requested_ts <= ? AND link IS NOT ?",
+                (link, _now(), received_ts, link),
+            )
+            return bool(cur.rowcount)
+
     def restore_craigslist_session(self) -> bool:
+        """The account is signed in again."""
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE craigslist_account SET state = 'active', updated_ts = ? "

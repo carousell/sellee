@@ -351,7 +351,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     except publisher.PublishSignedOut as exc:
         # Not the pair's fault, so nothing is spent; signing back in is the account's business.
-        if craigslist_account.signed_out(deps.store, market):
+        if craigslist_account.start_login(deps.store, market):
             # The post waits on the account, as it does while one is created.
             deps.bus.publish("crosslist.signed_out", {"item_id": item["id"], "market": market})
             return

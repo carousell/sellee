@@ -433,7 +433,7 @@ def test_a_signed_out_post_starts_a_login_and_waits_for_it_spending_nothing(
 def test_a_signed_out_market_with_no_login_of_its_own_waits_an_hour(
     store, bus, crosslisting, monkeypatch
 ) -> None:
-    monkeypatch.setattr(crosslist.craigslist_account, "signed_out", lambda store, market: False)
+    monkeypatch.setattr(crosslist.craigslist_account, "start_login", lambda store, market: False)
     form = FakeForm(signed_out_at="type")
     clock = [1_000_000.0]
     deps = _deps(store, bus, form)

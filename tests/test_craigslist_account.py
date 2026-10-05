@@ -98,6 +98,7 @@ class FakeCraigslist:
         self.opened: list = []
         self.typed: list = []
         self.clicked: list = []
+        self.paced: list = []
 
     @contextmanager
     def exclusive(self):
@@ -130,6 +131,9 @@ class FakeCraigslist:
         if function == craigslist.LOGIN_JS:
             return {"state": "logged_in" if self.kind == "account_home" else "logged_out"}
         raise AssertionError("unexpected script")
+
+    def pace(self, url: str) -> None:
+        self.paced.append(url)
 
     def type_humanly(self, target: str, element: str, text: str) -> None:
         self.typed.append((target, text))

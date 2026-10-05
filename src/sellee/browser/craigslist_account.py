@@ -7,9 +7,11 @@ import logging
 import re
 import time
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Callable
 
 from sellee import marketplaces
+from sellee.browser import governor as page_governor
 from sellee.browser import inbox
 from sellee.browser.client import BrowserError
 from sellee.browser.markets import craigslist
@@ -21,6 +23,10 @@ log = logging.getLogger(__name__)
 ACTIVATION_WAIT_SEC = 1800.0
 # A login link lasts this long, and a newer request voids it, so one is asked for at a time.
 LOGIN_WAIT_SEC = 1800.0
+# How far the mail's received time may run behind the request's, between two clocks.
+CLOCK_SKEW_SEC = 10.0
+# A login cycle step: the page it loads and the form it submits.
+LOGIN_LOADS = 2
 # How long a submitted form gets to show its next page; clicks return before it loads.
 TRANSITION_WAIT_SEC = 20.0
 _POLL_SEC = 0.5
@@ -67,17 +73,23 @@ ACTIVATION_LATE_NOTICE = (
 def connect_state(store, market: str, state: str) -> str:
     """What connecting answers when signed out of Craigslist: sellee signs back in to an account
     it made, or creates one, since nobody can sign in to it by hand."""
-    if market != marketplaces.CRAIGSLIST or state == "logged_in":
+    if market != marketplaces.CRAIGSLIST:
         return state
-    if signed_out(store, market):
+    if state == "logged_in":
+        store.restore_craigslist_session()
+        return state
+    if state == "logged_out" and start_login(store, market):
         return SIGNING_BACK_IN
+    row = store.craigslist_account()
+    if row is not None and row["state"] in (ACTIVE, AWAITING_LOGIN_LINK):
+        return state
     store.request_craigslist_signup()
     return SIGNING_UP
 
 
-def signed_out(store, market: str) -> bool:
-    """A Craigslist page showed sellee's account signed out: start a login. False when there is
-    no account to sign back in to."""
+def start_login(store, market: str) -> bool:
+    """A Craigslist page showed sellee's account signed out: start signing it back in. False
+    when there is no account to sign back in to."""
     if market != marketplaces.CRAIGSLIST:
         return False
     row = store.craigslist_account()
@@ -94,8 +106,8 @@ ZIP_NOTICE = (
 
 
 def hold_post(store, market: str) -> str | None:
-    """Why a Craigslist post must wait, or None when it can go ahead: "account" while sellee is
-    creating one, asked for here if missing; "zip" while the seller has no ZIP code on record."""
+    """Why a Craigslist post must wait, or None when it can go ahead: "account" while sellee
+    creates or signs back in to one; "zip" while the seller has no ZIP code on record."""
     if market != marketplaces.CRAIGSLIST:
         return None
     row = store.craigslist_account()
@@ -116,7 +128,18 @@ def record_service_mail(store, mail: dict) -> None:
         store.record_craigslist_link(found.group(0), states=(SIGNUP_REQUESTED, AWAITING_ACTIVATION))
     found = _LOGIN_LINK.search(text)
     if found:
-        store.record_craigslist_link(found.group(0), states=(AWAITING_LOGIN_LINK,))
+        # Only a link sent after the current request: an older one has been voided.
+        store.record_craigslist_login_link(
+            found.group(0), received_ts=_received_ts(mail) + CLOCK_SKEW_SEC
+        )
+
+
+def _received_ts(mail: dict) -> float:
+    try:
+        stamp = str(mail.get("received_at") or "").replace("Z", "+00:00")
+        return datetime.fromisoformat(stamp).timestamp()
+    except ValueError:
+        return time.time()
 
 
 def service_hooks(store) -> dict:
@@ -129,13 +152,16 @@ class AccountDeps:
     bus: object
     browser_factory: Callable
     rail_factory: Callable
+    config: object = None
+    # The daemon's one page-load governor; None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
     sleep: Callable[[float], None] = time.sleep
 
 
 def account_lane(deps: AccountDeps) -> None:
-    """One tick: sign up when asked, open the activation link once it has arrived, or settle an
-    activation a previous tick started and did not finish."""
+    """One tick: sign up when asked, open an activation or login link once it has arrived, ask
+    for a login link for a signed-out account, or settle a step a previous tick did not finish."""
     row = deps.store.craigslist_account()
     if row is None or row["state"] == ACTIVE:
         return
@@ -184,7 +210,7 @@ def _sign_up(deps: AccountDeps, client) -> None:
     kind = _page(client)
     if kind == "login":
         client.type_humanly(craigslist.SIGN_UP_EMAIL, "the sign-up email box", address)
-        client.click(craigslist.SIGN_UP_BUTTON, "Create account")
+        _submit(client, craigslist.SIGN_UP_BUTTON, "Create account")
         kind = _next_page(deps, client, "login")
     if kind == "signup_sent":
         deps.store.set_craigslist_awaiting_activation()
@@ -200,19 +226,19 @@ def _activate(deps: AccountDeps, client, link: str) -> None:
     deps.store.mark_craigslist_link_opened(link)
     kind = _page(client)
     if kind == "password_options":
-        client.click(craigslist.GO_PASSWORDLESS, "Go Passwordless")
+        _submit(client, craigslist.GO_PASSWORDLESS, "Go Passwordless")
         kind = _next_page(deps, client, "password_options")
     if kind == "terms":
-        client.click(craigslist.ACCEPT_TERMS, "I ACCEPT")
+        _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
         _next_page(deps, client, "terms")
-    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+    if _logged_in(client):
         _activated(deps)
 
 
 def _settle(deps: AccountDeps, client) -> None:
     """An opened link that left no active account: read the account page and decide."""
     client.navigate(craigslist.ACCOUNT_URL)
-    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+    if _logged_in(client):
         _activated(deps)
         return
     # The link is spent, so only a fresh sign-up can finish the account.
@@ -232,7 +258,7 @@ def _login_tick(deps: AccountDeps, row: dict) -> None:
     sent = row["requested_ts"]
     if not row["link"] and sent and deps.now() - sent < LOGIN_WAIT_SEC:
         return
-    if inbox.browser_busy(deps.store):
+    if inbox.browser_busy(deps.store) or _held(deps):
         return
     try:
         client = deps.browser_factory()
@@ -252,33 +278,38 @@ def _login_tick(deps: AccountDeps, row: dict) -> None:
 def _ask_for_login_link(deps: AccountDeps, client) -> None:
     address = deps.rail_factory().get_registration_address()
     client.navigate(craigslist.LOGIN_URL)
-    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+    if _logged_in(client):
         _restored(deps)
         return
-    if _page(client) == "login":
-        client.type_humanly(craigslist.LOGIN_EMAIL, "the login email box", address)
-        client.click(craigslist.LOGIN_LINK_BUTTON, "E-mail a login link")
-        if _next_page(deps, client, "login") != "login_link_sent":
-            log.warning("Craigslist did not confirm the login link was sent")
-    # Counted as sent either way, so a page that did not confirm is retried after the wait.
+    if _page(client) != "login":
+        log.warning("Craigslist's login page did not show its login form")
+        return
+    client.type_humanly(craigslist.LOGIN_EMAIL, "the login email box", address)
+    # Stamped before the click, so a mail that arrives at once is not cleared afterwards.
     deps.store.mark_craigslist_login_requested(deps.now())
+    try:
+        _submit(client, craigslist.LOGIN_LINK_BUTTON, "E-mail a login link")
+    except BrowserError:
+        deps.store.reset_craigslist_login()
+        raise
+    if _next_page(deps, client, "login") != "login_link_sent":
+        log.warning("Craigslist did not confirm the login link was sent")
     deps.bus.publish("craigslist.login_requested", {})
 
 
 def _open_login_link(deps: AccountDeps, client, link: str) -> None:
     client.navigate(link)
     deps.store.mark_craigslist_link_opened(link)
-    if _page(client) == "terms":
-        client.click(craigslist.ACCEPT_TERMS, "I ACCEPT")
-        _next_page(deps, client, "terms")
-    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+    _through_terms(deps, client)
+    if _logged_in(client):
         _restored(deps)
 
 
 def _settle_login(deps: AccountDeps, client) -> None:
     """An opened login link that left the account signed out is spent; ask for another."""
     client.navigate(craigslist.ACCOUNT_URL)
-    if (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in":
+    _through_terms(deps, client)
+    if _logged_in(client):
         _restored(deps)
         return
     log.warning("Craigslist login link did not end signed in")
@@ -288,3 +319,30 @@ def _settle_login(deps: AccountDeps, client) -> None:
 def _restored(deps: AccountDeps) -> None:
     if deps.store.restore_craigslist_session():
         deps.bus.publish("craigslist.signed_back_in", {})
+
+
+def _held(deps: AccountDeps) -> bool:
+    """Signing back in is work nobody asked for this minute: it waits out quiet hours, and starts
+    only with room for its page loads."""
+    market = marketplaces.CRAIGSLIST
+    if deps.config is not None and page_governor.unprompted_held(
+        deps.store, deps.config, market, deps.now()
+    ):
+        return True
+    return not page_governor.has_room(deps.governor, market, LOGIN_LOADS)
+
+
+def _through_terms(deps: AccountDeps, client) -> None:
+    if _page(client) == "terms":
+        _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
+        _next_page(deps, client, "terms")
+
+
+def _submit(client, target: str, element: str) -> None:
+    """Click a control that submits a form: a page load the governor must allow."""
+    client.pace(craigslist.ACCOUNT_URL)
+    client.click(target, element)
+
+
+def _logged_in(client) -> bool:
+    return (client.evaluate(craigslist.LOGIN_JS) or {}).get("state") == "logged_in"

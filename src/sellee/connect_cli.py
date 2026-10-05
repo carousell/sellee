@@ -29,7 +29,7 @@ import sys
 import time
 
 from sellee import channel, config, control, deployment, qr
-from sellee.browser import chrome, foreground
+from sellee.browser import chrome, craigslist_account, foreground
 from sellee.store import BIND_NONCE_TTL_SEC, HOLD_SIGNIN
 
 _POLL_INTERVAL_SEC = 1.0
@@ -136,7 +136,7 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     if state == "logged_in":
         print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
         return 0
-    if state in ("signing_up", "signing_back_in"):
+    if state in craigslist_account.AUTOMATIC:
         # Nothing for the seller to type: the daemon signs up or back in by itself.
         print(_MARKET_STATE_MESSAGES[state].format(name=name))
         return 1

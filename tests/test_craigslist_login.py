@@ -4,6 +4,7 @@ registration lane records it, and the account lane opens it once. Nobody signs i
 from __future__ import annotations
 
 import re
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from hypothesis import given
@@ -83,13 +84,14 @@ def _active(store) -> None:
         store.mark_notice_delivered(notice["id"], "channel")
 
 
-def _login_mail(text: str | None = None) -> dict:
-    mail = _activation_mail()
+def _login_mail(text: str | None = None, *, minutes_ago: float = 0.0) -> dict:
+    received = datetime.now(UTC) - timedelta(minutes=minutes_ago)
     return {
-        **mail,
+        **_activation_mail(),
         "id": "m-login",
         "subject": "craigslist login link",
         "text": f"log in to craigslist\n\n{_LOGIN_LINK}\n" if text is None else text,
+        "received_at": received.isoformat().replace("+00:00", "Z"),
     }
 
 
@@ -103,7 +105,7 @@ def _notices(store) -> list:
 @pytest.fixture
 def signed_out(us_seller):
     _active(us_seller)
-    assert account.signed_out(us_seller, "craigslist")
+    assert account.start_login(us_seller, "craigslist")
     return us_seller
 
 
@@ -132,6 +134,7 @@ def test_only_craigslists_own_account_links_are_ever_recorded(store, text, waiti
     _active(store)
     if waiting == "awaiting_login_link":
         store.request_craigslist_login()
+        store.mark_craigslist_login_requested(datetime.now(UTC).timestamp())
     else:
         _reset(store)
         store.request_craigslist_signup()
@@ -149,7 +152,21 @@ def test_a_login_link_is_recorded_only_while_one_is_awaited(store) -> None:
 
     store.request_craigslist_login()
     account.record_service_mail(store, _login_mail())
+    assert store.craigslist_account()["link"] is None, "nothing has been asked for yet"
+
+    store.mark_craigslist_login_requested(datetime.now(UTC).timestamp())
+    account.record_service_mail(store, _login_mail())
     assert store.craigslist_account()["link"] == _LOGIN_LINK
+
+
+def test_a_link_sent_before_the_current_request_is_never_recorded(store) -> None:
+    _active(store)
+    store.request_craigslist_login()
+    store.mark_craigslist_login_requested(datetime.now(UTC).timestamp())
+
+    account.record_service_mail(store, _login_mail(minutes_ago=10))
+
+    assert store.craigslist_account()["link"] is None
 
 
 # --- the lane ------------------------------------------------------------------------------------
@@ -281,3 +298,99 @@ def test_connecting_a_signed_out_account_answers_signing_back_in(us_seller) -> N
 def test_connecting_with_no_account_still_signs_up(us_seller) -> None:
     assert account.connect_state(us_seller, "craigslist", "logged_out") == account.SIGNING_UP
     assert _state(us_seller) == account.SIGNUP_REQUESTED
+
+
+# --- review fixes ------------------------------------------------------------------------------
+
+
+def test_a_link_read_again_after_it_failed_is_not_opened_again(signed_out, bus, fake) -> None:
+    clock = Clock()
+    page = FakeLogin(link_signs_in=False)
+    deps = _deps(signed_out, bus, page, fake, clock=clock)
+    account.account_lane(deps)
+    mail = _login_mail()
+    account.record_service_mail(signed_out, mail)
+    account.account_lane(deps)  # opens it; still signed out
+    account.account_lane(deps)  # settles: spent, asks again later
+    clock.t += 120
+    account.account_lane(deps)  # asks for a new link
+
+    account.record_service_mail(signed_out, mail)  # the old mail, re-read
+    account.account_lane(deps)
+
+    assert page.opened.count(_LOGIN_LINK) == 1
+
+
+def test_a_link_that_arrives_while_the_request_is_being_sent_is_kept(signed_out, bus, fake):
+    page = FakeLogin()
+    real_click = page.click
+
+    def click_and_mail(target, element):
+        real_click(target, element)
+        if target == craigslist.LOGIN_LINK_BUTTON:
+            account.record_service_mail(signed_out, _login_mail())
+
+    page.click = click_and_mail
+    account.account_lane(_deps(signed_out, bus, page, fake))
+
+    assert signed_out.craigslist_account()["link"] == _LOGIN_LINK
+
+
+def test_a_failed_request_click_leaves_nothing_counted_as_sent(signed_out, bus, fake) -> None:
+    page = FakeLogin()
+
+    def refuse(target, element):
+        raise BrowserToolError("the button moved")
+
+    page.click = refuse
+    account.account_lane(_deps(signed_out, bus, page, fake))
+
+    assert signed_out.craigslist_account()["requested_ts"] == 0
+
+
+def test_every_form_the_login_submits_asks_the_governor_first(signed_out, bus, fake) -> None:
+    page = FakeLogin(terms=True)
+    deps = _deps(signed_out, bus, page, fake)
+
+    account.account_lane(deps)
+    account.record_service_mail(signed_out, _login_mail())
+    account.account_lane(deps)
+
+    assert len(page.paced) == len(page.clicked) == 2
+
+
+def test_quiet_hours_hold_the_login(signed_out, bus, fake, monkeypatch) -> None:
+    monkeypatch.setattr(account.page_governor, "unprompted_held", lambda *a: True)
+    page = FakeLogin()
+    deps = _deps(signed_out, bus, page, fake)
+    deps.config = object()
+
+    account.account_lane(deps)
+
+    assert page.opened == []
+
+
+def test_a_settle_that_meets_the_terms_page_accepts_it(signed_out, bus, fake) -> None:
+    page = FakeLogin()
+    deps = _deps(signed_out, bus, page, fake)
+    account.account_lane(deps)
+    account.record_service_mail(signed_out, _login_mail())
+    signed_out.mark_craigslist_link_opened(_LOGIN_LINK)
+    page.navigate = lambda url: (page.opened.append(url), page._arrive("terms"))
+
+    account.account_lane(deps)
+
+    assert craigslist.ACCEPT_TERMS in page.clicked
+    assert _state(signed_out) == account.ACTIVE
+
+
+def test_an_unknown_probe_starts_no_login(us_seller) -> None:
+    _active(us_seller)
+
+    assert account.connect_state(us_seller, "craigslist", "unknown") == "unknown"
+    assert _state(us_seller) == account.ACTIVE
+
+
+def test_a_signed_in_probe_ends_a_pending_login(signed_out) -> None:
+    assert account.connect_state(signed_out, "craigslist", "logged_in") == "logged_in"
+    assert _state(signed_out) == account.ACTIVE
