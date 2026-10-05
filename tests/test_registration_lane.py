@@ -153,15 +153,17 @@ def test_craigslists_own_mail_with_no_hook_is_dropped(store, bus, fake, item):
     assert _thread_rows(store) == []
 
 
-def test_a_gmail_sender_is_dropped(store, bus, fake, item):
+def test_a_gmail_sender_is_dropped(store, bus, fake, item, caplog):
     mail = _eml("buyer.eml")
     fake.add_mail("m1", **{**mail, "from_email": "someone@gmail.com", "from_domain": "gmail.com"})
     seen = []
 
-    registration.registration_lane(_deps(store, bus, fake, hooks={"craigslist": seen.append}))
+    with caplog.at_level("INFO", logger=registration.__name__):
+        registration.registration_lane(_deps(store, bus, fake, hooks={"craigslist": seen.append}))
 
     assert _thread_rows(store) == []
     assert seen == []
+    assert "registration mail m1 from 'gmail.com' is no marketplace's" in caplog.text
 
 
 def test_a_buyer_whose_post_is_no_item_of_ours_reaches_no_hook(store, bus, fake, item):

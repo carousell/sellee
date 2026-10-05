@@ -74,10 +74,11 @@ def registration_lane(deps: RegistrationDeps) -> None:
 
 def _route(deps: RegistrationDeps, mail: dict, items) -> str | None:
     """Act on one mail; returns the thread it joined, or None."""
-    market = marketplaces.market_for_domain(mail.get("from_domain") or "")
+    domain = mail.get("from_domain") or ""
+    market = marketplaces.market_for_domain(domain)
     matcher = _MATCHERS.get(market or "")
     if matcher is None:
-        log.info("registration mail %s from %r is no marketplace's", mail["id"], market)
+        log.info("registration mail %s from %r is no marketplace's", mail["id"], domain)
         return None
     return matcher(deps, mail, items)
 
