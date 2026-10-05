@@ -92,8 +92,8 @@ class CrosslistDeps:
     # Consecutive transient publish refusals per (item, market). In process, like the notice
     # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
-    # Per market, a check that is true while a publish must still wait: for a seller's answer, or
-    # out a sign-out. In process: a restart costs one more look at the form.
+    # Per market, a check that is true while a publish must wait for a seller's answer or a
+    # sign-out to pass. In process: a restart costs one more look at the form.
     waiting_on: dict = field(default_factory=dict)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
