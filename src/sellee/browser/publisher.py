@@ -59,6 +59,15 @@ class PublishNeedsSeller(PublishNotAttempted):
         self.question = question
 
 
+class PublishSignedOut(PublishNotAttempted):
+    """Nothing was created: the market showed the account signed out. `market` is its display
+    name, for the seller."""
+
+    def __init__(self, message: str, *, market: str):
+        super().__init__(message, retryable=True)
+        self.market = market
+
+
 class PublishUnverified(BrowserError):
     """A listing may exist. Never re-driven — the seller would end up with two."""
 

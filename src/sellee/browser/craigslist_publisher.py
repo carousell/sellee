@@ -15,6 +15,7 @@ from sellee.browser.publisher import (
     PublishNeedsSeller,
     PublishNotAttempted,
     PublishOutcome,
+    PublishSignedOut,
     PublishUnverified,
 )
 
@@ -56,7 +57,7 @@ def _to_preview(client, item: dict, create_url: str, photos, seller: dict, pause
     for _ in range(MAX_STEPS):
         page = _read(client)
         if not page.get("logged_in"):
-            raise PublishNotAttempted("Craigslist shows the account signed out", retryable=True)
+            raise PublishSignedOut("Craigslist shows the account signed out", market="Craigslist")
         step = page.get("step") or ""
         if step == "preview":
             _check_preview(client, item)

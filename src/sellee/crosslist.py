@@ -92,12 +92,19 @@ class CrosslistDeps:
     # Consecutive transient publish refusals per (item, market). In process, like the notice
     # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
-    # Per market, the basics setting a publish is waiting on and its value when it was asked for;
-    # held until the seller changes it. In process: a restart costs one more look at the form.
+    # Per market, a check that is true while a publish must still wait: for a seller's answer, or
+    # out a sign-out. In process: a restart costs one more look at the form.
     waiting_on: dict = field(default_factory=dict)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
+
+
+# How long a market that showed the account signed out is left before posting is tried again.
+SIGNED_OUT_HOLD_SEC = 3600.0
+SIGNED_OUT_NOTICE = (
+    "{market} shows me signed out, so posts there are on hold. I'll try again in an hour."
+)
 
 
 def _basics(deps: CrosslistDeps) -> dict:
@@ -335,11 +342,19 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     except publisher.PublishNeedsSeller as exc:
         # Only the seller can answer it; nothing is spent while the post waits for them.
-        deps.waiting_on[market] = (exc.key, _basics(deps).get(exc.key))
-        _notify_once(deps, f"{market}:{exc.key}:{deps.waiting_on[market][1]}", exc.question)
+        key, asked = exc.key, _basics(deps).get(exc.key)
+        deps.waiting_on[market] = lambda: _basics(deps).get(key) == asked
+        _notify_once(deps, f"{market}:{key}:{asked}", exc.question)
         deps.bus.publish(
-            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": exc.key}
+            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": key}
         )
+        return
+    except publisher.PublishSignedOut as exc:
+        # Not the pair's fault, so nothing is spent; signing back in is the account's business.
+        until = deps.now() + SIGNED_OUT_HOLD_SEC
+        deps.waiting_on[market] = lambda: deps.now() < until
+        _notify_once(deps, f"{market}:signed_out", SIGNED_OUT_NOTICE.format(market=exc.market))
+        deps.bus.publish("crosslist.signed_out", {"item_id": item["id"], "market": market})
         return
     except publisher.PublishNotAttempted as exc:
         # A terminal refusal spends the pair's shot immediately; a transient one gets
@@ -419,10 +434,9 @@ def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
     """
     if deps.store.market_block(market):
         return False
-    waiting = deps.waiting_on.get(market)
-    if waiting is not None:
-        key, asked_at = waiting
-        if _basics(deps).get(key) == asked_at:
+    still_waiting = deps.waiting_on.get(market)
+    if still_waiting is not None:
+        if still_waiting():
             return False
         del deps.waiting_on[market]
     held = craigslist_account.hold_post(deps.store, market)

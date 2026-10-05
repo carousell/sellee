@@ -407,3 +407,26 @@ def test_a_missing_area_asks_once_and_waits_for_the_answer(store, bus, crosslist
     crosslist.enqueue_next(deps)
 
     assert store.get_item(crosslisting["id"])["listing_urls"]["craigslist"] == _POST
+
+
+def test_a_signed_out_account_spends_nothing_says_so_once_and_retries_later(
+    store, bus, crosslisting
+) -> None:
+    form = FakeForm(signed_out_at="type")
+    clock = [1_000_000.0]
+    deps = _deps(store, bus, form)
+    deps.now = lambda: clock[0]
+
+    for _ in range(5):
+        crosslist.enqueue_next(deps)
+
+    assert form.navigated == [craigslist.POST_URL]
+    assert deps.attempts == {}
+    assert len(_notices(store)) == 1
+    assert store.publish_pass_index() == []
+
+    form.signed_out_at = None
+    clock[0] += crosslist.SIGNED_OUT_HOLD_SEC + 1
+    crosslist.enqueue_next(deps)
+
+    assert store.get_item(crosslisting["id"])["listing_urls"]["craigslist"] == _POST
