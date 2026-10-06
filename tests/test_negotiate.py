@@ -330,6 +330,53 @@ def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, ma
     assert [tuple(c) for c in notice["controls"]] == fastpaths.open_post_controls(item["id"])
 
 
+class _Rail:
+    def __init__(self, refuse: bool = False):
+        self.archived: list = []
+        self.refuse = refuse
+
+    def update_listing(self, listing_id, *, status):
+        from sellee.rail.client import RailError
+
+        if self.refuse:
+            raise RailError("carousell.ai is down")
+        self.archived.append((listing_id, status))
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_confirming_a_sale_archives_the_carousell_ai_listing(
+    store: Store, make_ctx, refuse
+) -> None:
+    # Live: the agent was handed the take-down list, never archived it, and the listing stayed up.
+    from sellee.tools import dispatch
+    from sellee.tools.registry import TIER_ATTENDED
+
+    item = _item(store, list_price=60.0, floor=40.0)
+    store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/listing/abc-123")
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 60)
+    rail = _Rail(refuse=refuse)
+    ctx = make_ctx(TIER_ATTENDED, rail_factory=lambda: rail)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+
+    assert store.negotiate_status(item["id"])["item_state"] == "sold"
+    if refuse:
+        assert result["carousell_ai_take_down"].startswith("failed:")
+        assert "carousell_ai_update_listing" in result["carousell_ai_take_down"]
+    else:
+        assert rail.archived == [("abc-123", "archived")]
+        assert result["carousell_ai_take_down"] == "taken_down"
+
+
 # --- the floor is never quoted ----------------------------------------------------------------
 
 

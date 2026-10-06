@@ -82,6 +82,16 @@ def _update_listing(ctx: ToolContext, params: dict) -> dict:
     return {"status": "taken_down", "item_id": item_id, "manual_take_downs": manual}
 
 
+def take_down_on_sale(ctx: ToolContext, item_id: str, take_down: list) -> str | None:
+    """Archive the carousell.ai listing a sale left live; None when the sale named none."""
+    if not any(entry.get("platform") == _MARKET for entry in take_down):
+        return None
+    try:
+        return _update_listing(ctx, {"item_id": item_id})["status"]
+    except ToolError as exc:
+        return f"failed: {exc} — retry with carousell_ai_update_listing"
+
+
 def manual_take_downs(store, item_id: str) -> list:
     """Queue a needs-me item per browser-market listing still up, and report them.
 
