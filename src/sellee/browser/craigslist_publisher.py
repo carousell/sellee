@@ -381,6 +381,7 @@ def _stage_all(item: dict, photos) -> list:
 def _walk_edit(client, item: dict, text, photos, pause) -> None:
     for _ in range(MAX_STEPS):
         step = _read(client).get("step") or ""
+        log.info("Craigslist edit step %r", step)
         if step == "preview":
             _check_edit_preview(client, item, text)
             return
@@ -453,6 +454,8 @@ def _replace_text(client, item: dict, text, pause) -> None:
         pause,
         replace=True,
     )
+    # Live, the scroll to "continue" stepped a still-focused number box from 18 down to 12.
+    client.call_tool("browser_press_key", {"key": "Tab"})
     seen = client.evaluate(craigslist.EDIT_READBACK_JS) or {}
     if "title" in text and _norm(seen.get("title")) != _norm(item.get("title")):
         raise PublishNotAttempted(f"the edit form shows the title as {seen.get('title')!r}")

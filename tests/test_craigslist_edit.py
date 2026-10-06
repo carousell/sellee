@@ -95,6 +95,9 @@ class FakePost:
         elif target in _BOXES:
             self.focus, self.selected, self.caret_at_end = target, False, False
         elif target == craigslist.CONTINUE and self.step == "edit":
+            if self.focus == craigslist.PRICE and self.number_box:
+                # Live, scrolling to the button stepped the focused number box down by six.
+                self.draft["price"] = str(int(self.draft["price"]) - 6)
             self.step = "preview"
         elif target == craigslist.DONE_WITH_IMAGES:
             self.step = "preview"
@@ -122,6 +125,8 @@ class FakePost:
                 self.selected = field != "price" or not self.number_box
             elif key == "End":
                 self.caret_at_end = True
+            elif key == "Tab":
+                self.focus = None
             elif key == "Backspace" and self.selected:
                 # Live, one clear left a character behind.
                 self.draft[field] = held[:1] if self.leaves_a_char else ""
