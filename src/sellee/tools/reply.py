@@ -133,6 +133,12 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             "(terminal/held/escalated threads are never re-engaged)"
         )
 
+    return _send_through_sink(ctx, params, thread, kind)
+
+
+def _send_through_sink(
+    ctx: ToolContext, params: dict, thread: dict, kind: str, source: str = "agent"
+) -> dict:
     # Acquire the send path before any reserve or intent, so "no browser" is refused with nothing
     # recorded: no pacing slot spent, and no pending intent for the sweep to escalate as a send
     # nobody can verify — this send provably never happened.
@@ -161,13 +167,15 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             return {"status": "in_flight", "delivered": _UNKNOWN, "thread_id": thread_id}
         _SENDING.add(thread_id)
     try:
-        return _reserve_and_send(ctx, params, thread, kind, sink)
+        return _reserve_and_send(ctx, params, thread, kind, sink, source)
     finally:
         with _SENDING_LOCK:
             _SENDING.discard(thread_id)
 
 
-def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, sink) -> dict:
+def _reserve_and_send(
+    ctx: ToolContext, params: dict, thread: dict, kind: str, sink, source: str = "agent"
+) -> dict:
     cfg = pacing_engine.resolve(
         ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
     )
@@ -221,6 +229,7 @@ def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, s
         kind=kind,
         pass_id=ctx.session.pass_id,
         msg_id=sent.get("msg_id"),
+        source=source,
     )
     return {
         "status": "sent",
@@ -228,6 +237,29 @@ def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, s
         "intent_id": intent_id,
         "msg_id": commit["msg_id"],
     }
+
+
+def _relay_to_buyer(ctx: ToolContext, params: dict) -> dict:
+    if ctx.store.is_paused():
+        return {"status": "paused", "delivered": _NOT, "thread_id": params["thread_id"]}
+    thread = ctx.store.get_thread(params["thread_id"])
+    if thread is None:
+        raise ToolError(f"no thread with id {params['thread_id']!r}")
+    if thread["market"] != marketplaces.CRAIGSLIST:
+        # Elsewhere the seller can reply in the marketplace's own app, which sellee then reads.
+        raise ToolError("relay_to_buyer is for Craigslist threads only")
+    if thread["market"] not in settings.connected_markets(ctx.store):
+        return {
+            "status": "not_connected",
+            "delivered": _NOT,
+            "thread_id": params["thread_id"],
+            "market": thread["market"],
+        }
+    # Recorded as the seller's own words, and the thread marked theirs, so the reply lane stays out.
+    result = _send_through_sink(ctx, params, thread, "reply", source="manual")
+    if result.get("delivered") != _NOT:
+        ctx.store.update_thread(params["thread_id"], {"close_method": "manual"})
+    return result
 
 
 def _record_manual_reply(ctx: ToolContext, params: dict) -> dict:
@@ -280,6 +312,27 @@ register(
         # The channel pass sends too: when the seller answers a question or picks how to close, the
         # answer has to reach the buyer, and it is the flow holding the seller's words.
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_REPLY, TIER_PASS_CHANNEL}),
+    )
+)
+register(
+    ToolSpec(
+        name="relay_to_buyer",
+        description="Pass the seller's own words to a Craigslist buyer exactly as they wrote them. "
+        "A Craigslist buyer can only be reached through sellee: their address takes mail only from "
+        "the account's own address and Craigslist chat is off. Send the seller's text unchanged — "
+        "never reword, add to or sign it. Marks the thread as the seller's, so sellee stops "
+        "answering that buyer itself. Same statuses and `delivered` field as send_reply.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "text": {"type": "string"},
+            },
+            "required": ["thread_id", "text"],
+            "additionalProperties": False,
+        },
+        handler=_relay_to_buyer,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )
 register(

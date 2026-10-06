@@ -606,3 +606,92 @@ def test_property_a_craigslist_thread_is_always_answered_by_the_registration_sin
     sent = fake.registration_sent[-1]
     assert (sent["to"], sent["client_message_id"]) == (buyer, res["intent_id"])
     assert "\n" not in sent["subject"] and sent["subject"].startswith("Re: ")
+
+
+# --- the seller taking a buyer over -------------------------------------------------------------
+
+
+def _relay(make_ctx, store, bus, fake, text, thread_id=_THREAD):
+    ctx = make_ctx("pass:channel", config=_FAST)
+    ctx.reply_sink = _factory(store, bus, fake)
+    return dispatch("relay_to_buyer", {"thread_id": thread_id, "text": text}, ctx)
+
+
+def _buyer_again(store, bus, fake, mail_id, words):
+    mail = _eml("buyer.eml")
+    quoted = "\n\nOn Tue, Oct 6, 2026 at 7:50 PM <x@y> wrote:\n> earlier"
+    mail["text"] = words + quoted + _footer(_POST)
+    fake.add_mail(mail_id, **mail)
+    registration.registration_lane(_deps(store, bus, fake))
+
+
+def test_the_sellers_words_reach_the_buyer_unchanged_and_the_thread_becomes_theirs(
+    make_ctx, store, bus, waiting
+):
+    words = "hey, I can do Saturday 2pm at 16th St BART — cash please"
+
+    res = _relay(make_ctx, store, bus, waiting, words)
+
+    assert res["status"] == "sent"
+    [sent] = waiting.registration_sent
+    assert (sent["to"], sent["text"]) == (_BUYER, words)
+    out = [m for m in store.get_thread(_THREAD)["messages"] if m["dir"] == "out"]
+    assert [(m["text"], m["source"]) for m in out] == [(words, "manual")]
+    assert store.get_thread(_THREAD)["close_method"] == "manual"
+
+
+def test_relay_to_buyer_is_refused_off_craigslist(make_ctx, store, bus, fake, item):
+    store.create_thread(
+        thread_id="fb:buyer",
+        side="sell",
+        market="fb",
+        counterpart_handle="b",
+        item_id=item["id"],
+        source="test",
+    )
+
+    with pytest.raises(Exception, match="Craigslist threads only"):
+        _relay(make_ctx, store, bus, fake, "hi", thread_id="fb:buyer")
+
+
+def test_a_taken_over_buyer_writing_again_goes_to_the_seller_not_the_reply_lane(
+    make_ctx, store, bus, waiting
+):
+    _relay(make_ctx, store, bus, waiting, "Saturday works?")
+
+    _buyer_again(store, bus, waiting, "m2", "Saturday is great, see you then")
+    registration.registration_lane(_deps(store, bus, waiting))
+
+    assert _waiting(store) == set()
+    notices = [n["text"] for n in store.list_queued_notices() if "took over" in n["text"]]
+    assert len(notices) == 1
+    assert '"Saturday is great, see you then"' in notices[0]
+    assert "Original craigslist post" not in notices[0]
+    assert "earlier" not in notices[0]
+
+
+def test_a_buyer_not_taken_over_is_still_answered_by_sellee(store, bus, waiting):
+    _buyer_again(store, bus, waiting, "m2", "still there?")
+
+    assert _waiting(store) == {_THREAD}
+    assert not [n for n in store.list_queued_notices() if "took over" in n["text"]]
+
+
+def test_close_method_only_takes_a_hand_over(store, waiting):
+    with pytest.raises(Exception, match="manual"):
+        store.update_thread(_THREAD, {"close_method": "checkout"})
+
+
+_GMAIL_QUOTE = "\n\nOn Tue, Oct 6, 2026 at 7:50 PM Someone <\nx@reply.craigslist.org> wrote:\n> old"
+
+
+@pytest.mark.parametrize(
+    "text, words",
+    [
+        ("Is it here?" + _footer(_POST), "Is it here?"),
+        ("Yes!" + _GMAIL_QUOTE, "Yes!"),
+        ("  plain  ", "plain"),
+    ],
+)
+def test_buyer_words_leave_out_the_footer_and_quoted_mail(text, words):
+    assert registration.buyer_words(text) == words

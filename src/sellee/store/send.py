@@ -192,6 +192,7 @@ class SendMixin:
         pass_id: str | None = None,
         now: float | None = None,
         msg_id: str | None = None,
+        source: str = "agent",
     ) -> dict:
         """Transaction B: fold the outbound row (a deterministic msg_id from the intent id makes a
         retried commit a UNIQUE no-op), advance the cursor over the handled inbound, mark the intent
@@ -213,10 +214,22 @@ class SendMixin:
                 pass_id=pass_id,
                 now=now,
                 msg_id=msg_id,
+                source=source,
             )
 
     def _commit_reply_in_txn(
-        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now, msg_id=None
+        self,
+        conn,
+        *,
+        intent_id,
+        thread_id,
+        in_msg_id,
+        text,
+        kind,
+        pass_id,
+        now,
+        msg_id=None,
+        source="agent",
     ) -> dict:
         """Transaction B's body, callable from inside a larger transaction — shared with the settle
         path, so "a reply is committed" has exactly one definition wherever the confirmation came
@@ -226,8 +239,8 @@ class SendMixin:
         out_msg_id = msg_id or f"out|{intent_id}"
         conn.execute(
             "INSERT OR IGNORE INTO thread_messages "
-            "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
-            (thread_id, out_msg_id, text, now),
+            "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, ?)",
+            (thread_id, out_msg_id, text, now, source),
         )
         conn.execute(
             "UPDATE send_intents SET status = 'committed', sent_ts = COALESCE(sent_ts, ?), "
