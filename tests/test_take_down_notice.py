@@ -12,6 +12,7 @@ from hypothesis import strategies as st
 from tests.conftest import seed_setting
 
 from sellee.browser import connect
+from sellee.browser.client import BrowserError
 from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
 from sellee.config import Config
@@ -106,7 +107,7 @@ def test_an_open_post_tap_leaves_a_pending_sign_in_alone(seller, bus) -> None:
 def test_a_sold_craigslist_post_gets_a_notice_with_open_on_desktop(seller, make_ctx) -> None:
     item = _sold(seller, craigslist=_POST)
 
-    listing._manual_take_downs(make_ctx("attended"), item["id"])
+    listing.manual_take_downs(make_ctx("attended").store, item["id"])
 
     [notice] = seller.list_queued_notices()
     assert "Delete this Posting" in notice["text"] and _POST in notice["text"]
@@ -118,7 +119,7 @@ def test_a_sold_craigslist_post_gets_a_notice_with_open_on_desktop(seller, make_
 def test_notices_for_other_browser_markets_are_unchanged(seller, make_ctx) -> None:
     item = _sold(seller, fb=_FB)
 
-    listing._manual_take_downs(make_ctx("attended"), item["id"])
+    listing.manual_take_downs(make_ctx("attended").store, item["id"])
 
     [notice] = seller.list_queued_notices()
     assert notice["text"] == listing.MANUAL_TAKE_DOWN_NOTICE.format(
@@ -243,6 +244,40 @@ def test_a_signed_out_page_is_reported_not_called_open(seller, bus, monkeypatch)
 
     assert connect.POST_SIGNED_OUT_NOTICE in _texts(seller)
     assert not any("Delete this Posting" in text for text in _texts(seller))
+
+
+class _UnreachableChrome(_Chrome):
+    def navigate_visible(self, url: str) -> None:
+        raise BrowserError("browser_navigate failed: net::ERR_NAME_NOT_RESOLVED\nCall log: ...")
+
+
+def test_a_failed_open_is_said_plainly_with_the_button_back(seller, bus, monkeypatch) -> None:
+    # Live: the seller got the browser's raw error and no way to try again.
+    item = _sold(seller, craigslist=_POST)
+    _tap(seller, bus, item["id"])
+
+    _lane(seller, bus, _UnreachableChrome(), monkeypatch)
+
+    notices = seller.list_queued_notices()
+    [failed] = [n for n in notices if n["text"] == connect.POST_CANT_OPEN_NOTICE]
+    assert "ERR_" not in failed["text"]
+    assert [tuple(c) for c in failed["controls"]] == fastpaths.open_post_controls(item["id"])
+
+
+def test_a_signed_out_open_starts_signing_back_in(seller, bus, monkeypatch) -> None:
+    item = _sold(seller, craigslist=_POST)
+    _tap(seller, bus, item["id"])
+    started: list = []
+    monkeypatch.setattr(
+        connect.craigslist_account, "start_login", lambda store, market: started.append(market)
+    )
+
+    _lane(seller, bus, _Chrome(signed_in=False), monkeypatch)
+
+    assert started == ["craigslist"]
+    notices = seller.list_queued_notices()
+    [notice] = [n for n in notices if n["text"] == connect.POST_SIGNED_OUT_NOTICE]
+    assert [tuple(c) for c in notice["controls"]] == fastpaths.open_post_controls(item["id"])
 
 
 def test_a_market_that_asked_us_to_stop_opens_nothing(seller, bus, monkeypatch) -> None:

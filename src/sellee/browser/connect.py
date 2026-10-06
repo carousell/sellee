@@ -220,12 +220,15 @@ POST_OPEN_NOTICE = (
     "there to take it down, then tap Done."
 )
 POST_SIGNED_OUT_NOTICE = (
-    "Craigslist shows me signed out, so the post didn't open. Run `sellee connect craigslist`, "
-    "then tap Open on desktop again."
+    "Craigslist shows me signed out, so the post didn't open. I'm signing back in by myself; "
+    "tap Open on desktop again in a few minutes."
 )
 POST_BLOCKED_NOTICE = "Craigslist has asked me to stop for now, so I didn't open the post."
 POST_OFF_NOTICE = "Craigslist was switched off before I could open that post."
-POST_CANT_OPEN_NOTICE = "I couldn't open that Craigslist post in my Chrome ({reason})."
+POST_CANT_OPEN_NOTICE = (
+    "I couldn't reach Craigslist just now, so the post didn't open. Tap Open on desktop to try "
+    "again."
+)
 POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
 
 
@@ -252,10 +255,13 @@ def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
     except BrowserDetached:
         return
     except BrowserError as exc:
-        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE.format(reason=exc))
+        # The browser's own error is for the log; the seller gets a plain line and the button back.
+        log.warning("opening a %s post failed: %s", market, exc)
+        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE, fastpaths.open_post_controls(item_id))
         return
     if not signed_in:
-        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE)
+        craigslist_account.start_login(deps.store, market)
+        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE, fastpaths.open_post_controls(item_id))
         return
     # Held like a sign-in, so no lane moves the tab while the seller is deleting.
     deps.store.hold_browser(

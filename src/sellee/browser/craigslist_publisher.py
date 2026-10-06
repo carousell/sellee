@@ -122,6 +122,7 @@ def _subarea(client, page, item, photos, seller, pause) -> None:
             f"no Craigslist area called {area!r}",
             key=AREA_KEY,
             question=area_question(str(page.get("site") or ""), options, missed=area),
+            options=tuple(options),
         )
     _submit(client, craigslist.CONTINUE, "continue")
 

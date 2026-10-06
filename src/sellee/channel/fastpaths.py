@@ -41,6 +41,8 @@ CB_CONNECT_PROBE = "connectchk"
 CB_OPEN_POST = "openpost"
 # Frees the tab held for that post, so the next opened post can come up.
 CB_POST_DONE = "postdone"
+# Answers Craigslist's area question; the area label rides in the ref and is stored as is.
+CB_CL_AREA = "clarea"
 # The two answers to the take-these-over ask. The ref carries the market, so a tap months later
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
@@ -70,6 +72,7 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_CONNECT_PROBE,
         CB_OPEN_POST,
         CB_POST_DONE,
+        CB_CL_AREA,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
         CB_WATCH_ON,
@@ -156,6 +159,16 @@ def open_post_controls(item_id: str) -> list:
     return [(OPEN_POST_LABEL, f"{item_id}:{CB_OPEN_POST}")]
 
 
+def area_controls(labels) -> list:
+    """One button per Craigslist area, each storing its label when tapped. A label too long for a
+    callback is left off; the seller can still type it."""
+    return [
+        (label, f"{label}:{CB_CL_AREA}")
+        for label in labels
+        if label and ":" not in label and len(f"{label}:{CB_CL_AREA}".encode()) <= 64
+    ]
+
+
 def check_again_controls(market: str) -> list:
     """The one-button control spec that re-probes `market` without touching the window."""
     return [(CHECK_AGAIN_LABEL, f"{market}:{CB_CONNECT_PROBE}")]
@@ -175,6 +188,7 @@ OPEN_POST_ACK = "Opening that Craigslist post in my Chrome now — I'll tell you
 OPEN_POST_GONE = "I don't have that Craigslist post on record any more, so there's nothing to open."
 OPEN_POST_NOT_SOLD = "That item isn't marked sold any more, so I've left its Craigslist post alone."
 POST_DONE_ACK = "Thanks — I've taken the window back."
+AREA_ACK = "Got it, {area}. Your Craigslist post will go ahead."
 OPEN_POST_OFF = "Craigslist is switched off, so I can't open that post — /sellee to turn it on."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
@@ -326,6 +340,8 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         )
     if token == CB_OPEN_POST:
         return _open_post_button(store, event["payload"].get("ref"))
+    if token == CB_CL_AREA:
+        return _area_button(store, event["payload"].get("ref"))
     if token == CB_POST_DONE:
         # Idempotent: a hold already gone or expired is simply not there to release.
         store.release_browser_hold(HOLD_POST_PREFIX + str(event["payload"].get("ref") or ""))
@@ -375,6 +391,16 @@ def _connect_button(store, market, mode: str) -> tuple:
     if market not in settings.connected_markets(store):
         return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
     return _request(store, market, mode)
+
+
+def _area_button(store, label) -> tuple:
+    """A tap on one of Craigslist's areas, stored straight into basics so the post can go on."""
+    area = " ".join(str(label or "").split())
+    if not area:
+        return SURVEY_UNKNOWN, None
+    basics = store.get_seller_config_section("basics") or {}
+    store.set_seller_config_section("basics", {**basics, "craigslist_area": area})
+    return AREA_ACK.format(area=area), None
 
 
 def _open_post_button(store, item_id) -> tuple:

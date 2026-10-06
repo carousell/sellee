@@ -78,17 +78,17 @@ def _update_listing(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    manual = _manual_take_downs(ctx, item_id)
+    manual = manual_take_downs(ctx.store, item_id)
     return {"status": "taken_down", "item_id": item_id, "manual_take_downs": manual}
 
 
-def _manual_take_downs(ctx: ToolContext, item_id: str) -> list:
+def manual_take_downs(store, item_id: str) -> list:
     """Queue a needs-me item per browser-market listing still up, and report them.
 
     Named rather than silently skipped: the whole point of confirming a sale is that the other
-    listings come down, so the ones the agent will not close itself have to be visible work.
+    listings come down. Each is queued once, whichever of the sale or the archive asks first.
     """
-    item = ctx.store.get_item(item_id)
+    item = store.get_item(item_id)
     remaining = []
     for market, url in sorted((item or {}).get("listing_urls", {}).items()):
         if not url or marketplaces.connector_type(market) != "browser":
@@ -100,7 +100,8 @@ def _manual_take_downs(ctx: ToolContext, item_id: str) -> list:
             else MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url)
         )
         controls = fastpaths.open_post_controls(item_id) if craigslist else None
-        ctx.store.queue_notice(text, ref=item_id, controls=controls)
+        if not store.has_notice_text(item_id, text):
+            store.queue_notice(text, ref=item_id, controls=controls)
         remaining.append({"market": market, "url": url})
     return remaining
 

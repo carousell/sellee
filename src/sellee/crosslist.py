@@ -45,6 +45,7 @@ from sellee.browser import craigslist_account, doorbell, publisher, reconcile
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
+from sellee.channel import fastpaths
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
 
@@ -111,11 +112,17 @@ def _basics(deps: CrosslistDeps) -> dict:
     return deps.store.get_seller_config_section("basics") or {}
 
 
-def _notify_once(deps: CrosslistDeps, key: str, text: str) -> None:
+def _notify_once(
+    deps: CrosslistDeps, key: str, text: str, *, controls=None, durable: bool = False
+) -> None:
+    """`durable` questions are asked once ever, so a daemon restart does not ask them again."""
     if deps.notified.get(key):
         return
     deps.notified[key] = True
-    deps.store.queue_notice(text)
+    ref = f"crosslist:{key}" if durable else None
+    if ref and deps.store.has_notice_with_ref(ref):
+        return
+    deps.store.queue_notice(text, ref=ref, controls=controls)
 
 
 def _clear_notice(deps: CrosslistDeps, key: str) -> None:
@@ -187,8 +194,9 @@ def _shots_spent(index, now: float) -> dict:
         if not market or market == DEFAULT_PUBLISH_MARKET:
             continue
         key = (row.get("item_id"), market)
-        if row.get("status") in ("queued", "running"):
-            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS  # in flight: hold it
+        if row.get("status") in ("queued", "running") or row.get("unverified"):
+            # In flight, or a listing may already exist: either way, never queue it again.
+            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS
             continue
         attempts[key] = attempts.get(key, 0) + 1
         finished = row.get("finished_ts") or 0
@@ -344,7 +352,13 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         # Only the seller can answer it; nothing is spent while the post waits for them.
         key, asked = exc.key, _basics(deps).get(exc.key)
         deps.waiting_on[market] = lambda: _basics(deps).get(key) == asked
-        _notify_once(deps, f"{market}:{key}:{asked}", exc.question)
+        _notify_once(
+            deps,
+            f"{market}:{key}:{asked}",
+            exc.question,
+            controls=fastpaths.area_controls(exc.options) or None,
+            durable=True,
+        )
         deps.bus.publish(
             "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": key}
         )
@@ -383,7 +397,9 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         return
     except publisher.PublishUnverified as exc:
         # Something may exist. Never re-driven.
-        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+        deps.store.record_driven_publish(
+            item["id"], market, status="error", origin=ORIGIN, unverified=True
+        )
         deps.bus.publish(
             "crosslist.unverified",
             {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
@@ -395,7 +411,9 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     except BrowserError as exc:
         # The driver should never leak a bare browser error. If one escapes we cannot tell which
         # side of the commit it came from, so treat it as the dangerous side: retire the pair.
-        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+        deps.store.record_driven_publish(
+            item["id"], market, status="error", origin=ORIGIN, unverified=True
+        )
         deps.bus.publish(
             "crosslist.unverified",
             {"item_id": item["id"], "market": market, "reason": f"unexpected: {str(exc)[:180]}"},
@@ -406,7 +424,11 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         publisher.clear_staged(item["id"])
 
     deps.store.record_driven_publish(
-        item["id"], market, status="done" if outcome.verified else "error", origin=ORIGIN
+        item["id"],
+        market,
+        status="done" if outcome.verified else "error",
+        origin=ORIGIN,
+        unverified=not outcome.verified,
     )
     if outcome.verified and outcome.url:
         deps.store.record_listing_url(item["id"], market, outcome.url)
@@ -445,7 +467,7 @@ def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
         del deps.waiting_on[market]
     held = craigslist_account.hold_post(deps.store, market)
     if held == "zip":
-        _notify_once(deps, "craigslist_zip", craigslist_account.ZIP_NOTICE)
+        _notify_once(deps, "craigslist_zip", craigslist_account.ZIP_NOTICE, durable=True)
     if held:
         return False
     try:

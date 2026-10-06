@@ -430,6 +430,12 @@ class ChannelMixin:
         once-guard for proactive pushes (retention never prunes notices)."""
         return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
 
+    def has_notice_text(self, ref: str, text: str) -> bool:
+        """Whether this exact notice was ever queued under `ref`, so it can be queued once."""
+        return bool(
+            self._db.query("SELECT 1 FROM notices WHERE ref = ? AND text = ? LIMIT 1", (ref, text))
+        )
+
     def notices_with_ref_prefix(self, prefix: str) -> list[dict]:
         """Every notice whose ref starts with `prefix`, as {ref, status}, oldest first."""
         rows = self._db.query(

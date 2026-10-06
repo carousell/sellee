@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from sellee import settings
 from sellee.store import StoreError
+from sellee.tools import listing
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -78,9 +79,12 @@ def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
 def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     _require_pair(ctx, params)
     try:
-        return ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
+        result = ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+    # Browser listings only the seller can close are named now, not after the rail archive.
+    result["manual_take_downs"] = listing.manual_take_downs(ctx.store, params["item_id"])
+    return result
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:

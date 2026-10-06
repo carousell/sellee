@@ -53,10 +53,11 @@ class PublishNeedsSeller(PublishNotAttempted):
     """Nothing was created, and the form needs an answer only the seller has. `key` is the basics
     setting the answer goes in; the post waits until it changes."""
 
-    def __init__(self, message: str, *, key: str, question: str):
+    def __init__(self, message: str, *, key: str, question: str, options: tuple = ()):
         super().__init__(message, retryable=True)
         self.key = key
         self.question = question
+        self.options = tuple(options)  # answers the seller can tap, when the page lists them
 
 
 class PublishSignedOut(PublishNotAttempted):

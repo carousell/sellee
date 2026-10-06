@@ -36,7 +36,9 @@ class PassesMixin:
             )
         return pass_id
 
-    def record_driven_publish(self, item_id: str, market: str, *, status: str, origin: str) -> str:
+    def record_driven_publish(
+        self, item_id: str, market: str, *, status: str, origin: str, unverified: bool = False
+    ) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
         A driven market spawns no model pass, so it would otherwise leave no trace — and the
@@ -55,7 +57,9 @@ class PassesMixin:
         if status not in _PASS_TERMINAL:
             raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
         pass_id = _new_id("pass")
-        payload = {"item_id": item_id, "market": market, "origin": origin}
+        payload: dict = {"item_id": item_id, "market": market, "origin": origin}
+        if unverified:
+            payload["unverified"] = True  # a listing may exist: the pair is never driven again
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
@@ -319,6 +323,8 @@ class PassesMixin:
                     "finished_ts": row["finished_ts"],
                 }
             )
+            if payload.get("unverified"):
+                out[-1]["unverified"] = True  # a listing may exist: never driven again
         return out
 
     def unreported_crosslist_passes(self) -> list[dict]:

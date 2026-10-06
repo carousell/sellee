@@ -302,6 +302,34 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
     assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")
 
 
+def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, make_ctx) -> None:
+    # Live: the agent confirmed a sale but skipped the archive, so no Open on desktop was sent.
+    from sellee.channel import fastpaths
+    from sellee.tools import dispatch, listing
+
+    item = _item(store, list_price=20.0, floor=15.0)
+    post = "https://www.craigslist.org/view/d/samsung-buds3/9TXkjafxYMDS5VaPLGdRyk"
+    store.record_listing_url(item["id"], "craigslist", post)
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 20)
+    ctx = _pair_ctx(store, make_ctx)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+    listing.manual_take_downs(store, item["id"])  # the archive step asking again
+
+    assert result["manual_take_downs"] == [{"market": "craigslist", "url": post}]
+    [notice] = [n for n in store.list_queued_notices() if post in n["text"]]
+    assert [tuple(c) for c in notice["controls"]] == fastpaths.open_post_controls(item["id"])
+
+
 # --- the floor is never quoted ----------------------------------------------------------------
 
 
