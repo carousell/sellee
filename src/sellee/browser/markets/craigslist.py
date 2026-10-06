@@ -99,7 +99,8 @@ PUBLISH_MARK_JS = f"""() => {{
 
 STEP_JS = """() => {
   try {
-    const step = new URLSearchParams(location.search).get('s') || '';
+    const terms = location.pathname.startsWith('/login/tou');
+    const step = terms ? 'terms' : new URLSearchParams(location.search).get('s') || '';
     const confirmed = /posting confirmation/i.test(document.title);
     const loggedIn = !!document.querySelector('a[href*="/logout"]');
     const images = ((document.body && document.body.innerText) || '')

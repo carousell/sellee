@@ -56,6 +56,12 @@ def _to_preview(client, item: dict, create_url: str, photos, seller: dict, pause
     client.navigate_visible(create_url)
     for _ in range(MAX_STEPS):
         page = _read(client)
+        step = page.get("step") or ""
+        log.info("Craigslist posting step %r", step)
+        if step == "terms":
+            # Live, Craigslist put its terms of use in front of a post; sellee always accepts.
+            _accept_terms(client, pause)
+            continue
         if not page.get("logged_in"):
             raise PublishSignedOut("Craigslist shows the account signed out", market="Craigslist")
         site = str(page.get("site") or "")
@@ -63,7 +69,6 @@ def _to_preview(client, item: dict, create_url: str, photos, seller: dict, pause
             raise PublishNotAttempted(
                 f"Craigslist put the post on {site!r}, not {craigslist.SITE_NAME}"
             )
-        step = page.get("step") or ""
         if step == "preview":
             _check_preview(client, item)
             return
@@ -87,6 +92,11 @@ def _wait_past(client, step: str, pause, wait_sec: float = TRANSITION_WAIT_SEC) 
             return now
         pause(_POLL_SEC)
     raise PublishNotAttempted(f"Craigslist did not move past {step!r}", retryable=True)
+
+
+def _accept_terms(client, pause) -> str:
+    _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
+    return _wait_past(client, "terms", pause)
 
 
 def _submit(client, target: str, element: str) -> None:
@@ -258,9 +268,12 @@ def _commit(client, pause) -> PublishOutcome:
     _press_publish(client)
     try:
         try:
-            _wait_past(client, "preview", pause)
+            after = _wait_past(client, "preview", pause)
+            if after == "terms":
+                after = _accept_terms(client, pause)
         except PublishNotAttempted:
             return _unverified("Craigslist did not confirm the post")
+        log.info("Craigslist publish led to %r", after)
         if _read(client).get("step") != "confirmed":
             return _unverified("Craigslist did not confirm the post; it may want an email click")
         manage = (client.evaluate(craigslist.MANAGE_LINK_JS) or {}).get("url")

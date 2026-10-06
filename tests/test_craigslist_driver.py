@@ -69,6 +69,7 @@ class FakeForm:
         self.grouped = grouped
         self.mark_fails = mark_fails
         self.paced: list = []
+        self.accepted_terms = 0
 
     def pace(self, url: str) -> None:
         self.paced.append(self.step)
@@ -165,6 +166,10 @@ class FakeForm:
                 self._advance()
         elif target in (craigslist.CONTINUE, craigslist.MAP_CONTINUE, craigslist.DONE_WITH_IMAGES):
             self._advance()
+        elif target == craigslist.ACCEPT_TERMS:
+            assert self.step == "terms", "accepted terms on a page that did not show them"
+            self.accepted_terms += 1
+            self._advance()
 
 
 def _seller(**more) -> dict:
@@ -200,6 +205,23 @@ def test_a_small_site_is_posted_and_its_view_url_returned() -> None:
     assert form.fields[craigslist.ZIP] == "94103" and form.fields[craigslist.PRICE] == "80"
     assert form.published_with["chat_on"] is False
     assert form.navigated == [craigslist.POST_URL, _MANAGE]
+
+
+def test_terms_shown_before_the_walk_are_accepted_and_the_post_goes_up() -> None:
+    form = FakeForm(["terms", *_BOZEMAN])
+
+    outcome = _drive(form)
+
+    assert outcome.verified and form.accepted_terms == 1 and form.published
+
+
+def test_terms_shown_after_publish_are_accepted_and_the_post_confirmed() -> None:
+    # Live: the terms of use stood between the publish press and the confirmation.
+    form = FakeForm([*_BOZEMAN, "terms"])
+
+    outcome = _drive(form)
+
+    assert outcome.verified and outcome.url == _POST and form.accepted_terms == 1
 
 
 def test_a_post_put_on_another_site_is_refused_before_anything_is_chosen() -> None:
