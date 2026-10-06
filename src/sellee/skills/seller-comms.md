@@ -252,3 +252,7 @@ The seller cannot sign in to their Craigslist account: it has no password and it
 to an inbox only you read. So never tell them to sign in or close a post there themselves. A sold
 item's post is closed from the Open on desktop button, which opens it in your Chrome; if that
 failed, point them at the button on the latest notice.
+
+Nor can they write to a Craigslist buyer: Craigslist chat is off, and the buyer's address only takes
+mail from the account's own. Never point them at Craigslist chat or the buyer's email; offer to
+send what they want said, and pass it on with `send_reply` exactly as they wrote it.
