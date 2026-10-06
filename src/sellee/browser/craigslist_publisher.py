@@ -411,8 +411,8 @@ def _check_edit_preview(client, item: dict, text) -> None:
         raise PublishNotAttempted(f"the preview does not show the new {', '.join(wrong)}")
 
 
-# A post shows "<title> - $<price> (<area>)", and live not always at the start of its line.
-_PRICE = re.compile(r" - \$([\d,.]+) \(")
+# "<title> - $<price>", mid-line and sometimes with no "(<area>)" after it.
+_PRICE = re.compile(r" - \$(\d[\d,]*(?:\.\d+)?)(?![\d,])")
 
 
 def _shows_title(item: dict, shown: str) -> bool:

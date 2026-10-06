@@ -47,6 +47,7 @@ class FakePost:
         self.number_box = False
         self.caret_at_end = False
         self.header_mid_line = False
+        self.no_area = False
         self.signed_in = True
 
     @contextlib.contextmanager
@@ -73,7 +74,8 @@ class FakePost:
         if function == craigslist.PREVIEW_TEXT_JS:
             d = self.draft
             lead = "CL SF bay area > san francisco > " if self.header_mid_line else ""
-            return {"text": f"{lead}{d['title']} - ${d['price']} (Downtown)\n{d['description']}"}
+            area = "" if self.no_area else " (Downtown)"
+            return {"text": f"{lead}{d['title']} - ${d['price']}{area}\n{d['description']}"}
         if function == craigslist.PUBLISH_MARK_JS:
             return {"marked": self.step == "preview"}
         if function == craigslist.DELETE_IMAGE_MARK_JS:
@@ -256,6 +258,16 @@ def test_a_preview_whose_header_is_not_at_the_start_of_its_line_is_read() -> Non
     # Live: "the preview does not show the new list_price" with $18 typed and read back.
     post = FakePost()
     post.header_mid_line = True
+
+    outcome = _revise(post, _item(list_price=18.0), ["list_price"])
+
+    assert outcome.verified and post.post["price"] == "18"
+
+
+def test_a_preview_header_with_no_area_after_the_price_is_read() -> None:
+    # Live: the edit preview read "... with charging case - $18" then a line break.
+    post = FakePost()
+    post.no_area = True
 
     outcome = _revise(post, _item(list_price=18.0), ["list_price"])
 
