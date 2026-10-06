@@ -95,7 +95,9 @@ def _wait_past(client, step: str, pause, wait_sec: float = TRANSITION_WAIT_SEC) 
 
 
 def _accept_terms(client, pause) -> str:
-    _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
+    if not (client.evaluate(craigslist.TERMS_MARK_JS) or {}).get("marked"):
+        raise PublishNotAttempted("the terms page offered no accept button", retryable=True)
+    _submit(client, craigslist.TERMS, "ACCEPT the terms of use")
     return _wait_past(client, "terms", pause)
 
 

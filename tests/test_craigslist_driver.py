@@ -70,6 +70,7 @@ class FakeForm:
         self.mark_fails = mark_fails
         self.paced: list = []
         self.accepted_terms = 0
+        self.terms_unmarkable = False
 
     def pace(self, url: str) -> None:
         self.paced.append(self.step)
@@ -137,6 +138,8 @@ class FakeForm:
             if self.mark_fails:
                 raise BrowserError("the page went away")
             return {"marked": self.step == "preview"}
+        if function == craigslist.TERMS_MARK_JS:
+            return {"marked": self.step == "terms" and not self.terms_unmarkable}
         if function == craigslist.MANAGE_LINK_JS:
             return {"url": _MANAGE}
         if function == craigslist.MANAGED_POST_JS:
@@ -166,7 +169,7 @@ class FakeForm:
                 self._advance()
         elif target in (craigslist.CONTINUE, craigslist.MAP_CONTINUE, craigslist.DONE_WITH_IMAGES):
             self._advance()
-        elif target == craigslist.ACCEPT_TERMS:
+        elif target == craigslist.TERMS:
             assert self.step == "terms", "accepted terms on a page that did not show them"
             self.accepted_terms += 1
             self._advance()
@@ -222,6 +225,20 @@ def test_terms_shown_after_publish_are_accepted_and_the_post_confirmed() -> None
     outcome = _drive(form)
 
     assert outcome.verified and outcome.url == _POST and form.accepted_terms == 1
+
+
+def test_a_terms_page_with_no_accept_button_is_never_clicked_through() -> None:
+    form = FakeForm(["terms", *_BOZEMAN])
+    form.terms_unmarkable = True
+    with pytest.raises(publisher.PublishNotAttempted):
+        _drive(form)
+    assert form.accepted_terms == 0 and not form.published
+
+
+def test_the_posting_flows_own_terms_step_reads_as_terms() -> None:
+    # Live: publish led to post.craigslist.org/…?s=tou, which the driver did not accept.
+    assert "params.get('s') === 'tou'" in craigslist.STEP_JS
+    assert "button[name=continue][value=y]" in craigslist.TERMS_MARK_JS
 
 
 def test_a_post_put_on_another_site_is_refused_before_anything_is_chosen() -> None:

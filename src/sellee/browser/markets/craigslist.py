@@ -96,11 +96,21 @@ PUBLISH_MARK_JS = f"""() => {{
   if (button) button.setAttribute('{CHOICE_ATTR}', 'publish');
   return {{ marked: !!button }};
 }}"""
+# The account's terms form, or the posting flow's terms step with two identical ACCEPT buttons.
+TERMS = f"[{CHOICE_ATTR}=terms]"
+TERMS_MARK_JS = f"""() => {{
+  const account = 'form:has(input[name=step][value=touAccepted]) [type=submit]';
+  const button = document.querySelector(account)
+    || document.querySelector('button[name=continue][value=y]');
+  if (button) button.setAttribute('{CHOICE_ATTR}', 'terms');
+  return {{ marked: !!button }};
+}}"""
 
 STEP_JS = """() => {
   try {
-    const terms = location.pathname.startsWith('/login/tou');
-    const step = terms ? 'terms' : new URLSearchParams(location.search).get('s') || '';
+    const params = new URLSearchParams(location.search);
+    const terms = location.pathname.startsWith('/login/tou') || params.get('s') === 'tou';
+    const step = terms ? 'terms' : params.get('s') || '';
     const confirmed = /posting confirmation/i.test(document.title);
     const loggedIn = !!document.querySelector('a[href*="/logout"]');
     const images = ((document.body && document.body.innerText) || '')
