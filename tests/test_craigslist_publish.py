@@ -177,6 +177,18 @@ def test_an_account_still_being_set_up_holds_the_post(store, bus, crosslisting) 
     assert _queued_markets(store) == []
 
 
+def test_a_seller_who_has_not_chosen_craigslist_is_never_asked_for_its_basics(
+    store, bus, crosslisting
+) -> None:
+    seed_setting(store, "connected_markets", [])
+    store.set_seller_config_section("basics", {"region": "US"})
+
+    crosslist.enqueue_next(_deps(store, bus))
+
+    assert _notices(store) == []
+    assert store.craigslist_account() is None
+
+
 def test_without_a_zip_code_the_seller_is_asked_once(store, bus, crosslisting) -> None:
     _active(store)
     store.set_seller_config_section("basics", {"region": "US"})
