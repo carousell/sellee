@@ -31,7 +31,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import marketplaces, settings
+from sellee import craigslist_posts, marketplaces, settings
 from sellee.browser import craigslist_account, doorbell, editor
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
@@ -73,6 +73,8 @@ class ReviseDeps:
     now: Callable[[], float] = time.time
     # (revision, reason) holds already reported, so each wait is said once.
     held: set = field(default_factory=set)
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
 
 
 # The pages one driven edit costs: the listing to edit, and the listing again to confirm it.
@@ -164,6 +166,11 @@ def _refusal(deps: ReviseDeps, revision: dict, item) -> str:
         return "the item has sold"
     if not (item.get("listing_urls") or {}).get(market):
         return "it is no longer listed there"
+    if market == marketplaces.CRAIGSLIST and (
+        craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post)
+        in craigslist_posts.REMOVED
+    ):
+        return "Craigslist has taken the post down"
     if market not in settings.connected_markets(deps.store):
         return f"{marketplaces.display_name(market)} is disconnected"
     if deps.store.market_block(market):

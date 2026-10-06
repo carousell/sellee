@@ -163,7 +163,7 @@ def _type(client, page, item, photos, seller, pause) -> None:
 
 
 def _cat(client, page, item, photos, seller, pause) -> None:
-    _pick(client, craigslist.DEFAULT_CATEGORY)
+    _pick(client, item.get(craigslist.CATEGORY_KEY) or craigslist.DEFAULT_CATEGORY)
 
 
 def _pick(client, label: str) -> None:

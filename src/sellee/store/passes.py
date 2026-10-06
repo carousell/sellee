@@ -37,7 +37,15 @@ class PassesMixin:
         return pass_id
 
     def record_driven_publish(
-        self, item_id: str, market: str, *, status: str, origin: str, unverified: bool = False
+        self,
+        item_id: str,
+        market: str,
+        *,
+        status: str,
+        origin: str,
+        unverified: bool = False,
+        category: str | None = None,
+        retired: bool = False,
     ) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
@@ -53,6 +61,8 @@ class PassesMixin:
         a pass row does. Written as `reported=1` it was invisible to `unreported_crosslist_passes` —
         a Facebook listing went live with nobody told, which is the one failure the fan-out's
         reporting exists to prevent.
+
+        `category` is the one the post was made in; `retired` ends the pair for good.
         """
         if status not in _PASS_TERMINAL:
             raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
@@ -60,6 +70,10 @@ class PassesMixin:
         payload: dict = {"item_id": item_id, "market": market, "origin": origin}
         if unverified:
             payload["unverified"] = True  # a listing may exist: the pair is never driven again
+        if category:
+            payload["category"] = category
+        if retired:
+            payload["retired"] = True
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
@@ -325,6 +339,10 @@ class PassesMixin:
             )
             if payload.get("unverified"):
                 out[-1]["unverified"] = True  # a listing may exist: never driven again
+            if payload.get("retired"):
+                out[-1]["retired"] = True
+            if payload.get("category"):
+                out[-1]["category"] = payload["category"]
         return out
 
     def unreported_crosslist_passes(self) -> list[dict]:

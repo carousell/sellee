@@ -246,7 +246,9 @@ the areas). Their answer is yours to store: `update_seller_config` with `basics`
 digits or `craigslist_area` exactly as one of the offered names — "city of san francisco", not
 "SF". The post goes ahead on its own once it is stored, so say that, not that it is live. Never
 ask for either outside those questions. The area question also carries a button per area, and a
-tap stores it with no help from you.
+tap stores it with no help from you. The category is not theirs to pick: sellee chooses it, and if
+Craigslist takes a post down after a flag, posts it again in the next one and tells them. Never ask
+them for a category.
 
 The seller cannot sign in to their Craigslist account: it has no password and its login links go
 to an inbox only you read. So never tell them to sign in or close a post there themselves. A sold

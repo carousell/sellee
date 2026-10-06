@@ -29,7 +29,7 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import deployment, marketplaces, settings
+from sellee import craigslist_posts, deployment, marketplaces, settings
 from sellee.browser import blindness, craigslist_account, doorbell, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
@@ -147,6 +147,8 @@ class ConnectDeps:
     config: object
     browser_factory: object
     now: Callable[[], float] = time.time
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
 
 
 def _shell_where() -> str:
@@ -230,6 +232,7 @@ POST_CANT_OPEN_NOTICE = (
     "again."
 )
 POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
+POST_GONE_NOTICE = "That Craigslist post is already down, so there's nothing to delete."
 
 
 def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
@@ -246,6 +249,12 @@ def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
         # Waiting behind another opened post is not stale: that hold ends at Done or its expiry.
         if not _behind_a_post(deps) and deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
             _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    item = deps.store.get_item(item_id)
+    if item and craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post) in (
+        craigslist_posts.REMOVED
+    ):
+        _post_done(deps, item_id, POST_GONE_NOTICE)
         return
     try:
         client = deps.browser_factory()

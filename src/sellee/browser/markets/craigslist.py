@@ -3,6 +3,8 @@ is driven here is the account itself, located by stable ids and form fields."""
 
 from __future__ import annotations
 
+import re
+
 # Logged out it redirects to the login page, which also carries the sign-up form.
 ACCOUNT_URL = "https://accounts.craigslist.org/login/home"
 LOGIN_URL = "https://accounts.craigslist.org/login"
@@ -273,6 +275,110 @@ DELETE_IMAGE_MARK_JS = f"""() => {{
 def manage_url(listing_url: str) -> str:
     """The manage page of the post at this canonical address: both carry the post's token."""
     return MANAGE_URL.format(token=listing_url.rstrip("/").rsplit("/", 1)[-1])
+
+
+# --- categories ---------------------------------------------------------------------------------
+
+# By-owner categories as the SF bay area category step labels them, with the words that place an
+# item there. Fee, vehicle, "wanted", "free" and "barter" categories are never chosen.
+CATEGORY_WORDS = {
+    "antiques": "antique|vintage|victorian|art deco",
+    "appliances": (
+        "appliance|fridge|refrigerator|freezer|washer|dryer|dishwasher|microwave|oven|stove|"
+        "air conditioner|vacuum|blender|kettle|toaster|air fryer|coffee maker|espresso"
+    ),
+    "arts & crafts": "craft|yarn|sewing|fabric|paint|easel|canvas|cricut",
+    "auto parts": "car part|auto part|bumper|headlight|brake|exhaust|radiator",
+    "auto wheels & tires": "tire|tires|rim|rims|wheel set",
+    "baby & kid stuff": "baby|stroller|crib|toddler|car seat|high chair|infant",
+    "bicycle parts": "bike part|derailleur|pedals|saddle|handlebar|bike helmet",
+    "bicycles": "bicycle|bike|e-bike|ebike|road bike|mountain bike",
+    "books & magazines": "book|books|novel|magazine|textbook|comic",
+    "cds / dvds / vhs": "cd|cds|dvd|dvds|blu-ray|vhs|vinyl|record",
+    "cell phones": "phone|iphone|smartphone|android|pixel|galaxy|phone case|charger",
+    "clothing & accessories": (
+        "shirt|jacket|coat|dress|jeans|pants|shoes|sneakers|boots|hoodie|sweater|handbag|"
+        "purse|backpack|wallet|sunglasses|hat"
+    ),
+    "collectibles": "collectible|figurine|funko|trading card|pokemon card|coin",
+    "computer parts": (
+        "gpu|graphics card|cpu|ram|ssd|hard drive|motherboard|keyboard|mouse|monitor|power supply"
+    ),
+    "computers": "laptop|macbook|computer|pc|desktop|chromebook|imac",
+    "electronics": (
+        "earbuds|buds|airpods|headphones|headset|speaker|bluetooth|wireless|tv|television|"
+        "soundbar|tablet|ipad|kindle|smartwatch|watch|charger|projector|router|drone|"
+        "electronic"
+    ),
+    "farm & garden": "garden|plant|planter|lawn|mower|hose|shovel|soil",
+    "furniture": (
+        "sofa|couch|chair|table|desk|dresser|bed|mattress|bookshelf|shelf|cabinet|nightstand|"
+        "wardrobe|ottoman|stool"
+    ),
+    "health and beauty": "makeup|skincare|perfume|hair dryer|shaver|massager",
+    "household items": (
+        "lamp|rug|curtain|mirror|pan|pot|dishes|cookware|bedding|towel|storage|organizer|decor"
+    ),
+    "jewelry": "ring|necklace|bracelet|earrings|jewelry|pendant",
+    "materials": "lumber|plywood|tiles|bricks|drywall|insulation",
+    "motorcycle parts": "motorcycle part|motorcycle helmet",
+    "musical instruments": (
+        "guitar|piano|keyboard piano|drum|drums|violin|ukulele|amp|amplifier|synth|microphone"
+    ),
+    "photo/video": "camera|lens|tripod|gopro|dslr|mirrorless|gimbal",
+    "sporting goods": (
+        "golf|tennis|ski|skis|snowboard|surfboard|weights|dumbbell|treadmill|yoga|kayak|tent|"
+        "camping|fishing|basketball|skateboard"
+    ),
+    "tickets": "ticket|tickets",
+    "tools": "drill|saw|wrench|tool|tools|toolbox|sander|ladder",
+    "toys & games": "toy|toys|lego|board game|puzzle|doll|action figure",
+    "video gaming": "playstation|ps4|ps5|xbox|nintendo|switch|video game|controller|steam deck",
+}
+# Never more than this many categories per item: each one is a whole post.
+MAX_CATEGORIES = 3
+# Where the crosslist lane hands the driver the category it picked.
+CATEGORY_KEY = "craigslist_category"
+
+
+def categories_for(item: dict) -> list:
+    """The categories to post an item in, best first, ending with the catch-all."""
+    title = (item.get("title") or "").lower()
+    description = (item.get("description") or "").lower()
+
+    def hits(text: str, words) -> int:
+        return sum(1 for word in words.split("|") if re.search(rf"\b{re.escape(word)}\b", text))
+
+    scored = []
+    for category, words in CATEGORY_WORDS.items():
+        # The title names the thing; the description only tips a tie.
+        score = 3 * hits(title, words) + hits(description, words)
+        if score:
+            scored.append((-score, category))
+    ranked = [category for _, category in sorted(scored)][: MAX_CATEGORIES - 1]
+    return [*ranked, DEFAULT_CATEGORY]
+
+
+# --- a posted post, as any visitor sees it ------------------------------------------------------
+
+POST_LIVE = "live"
+POST_FLAGGED = "flagged"
+POST_GONE = "gone"
+POST_UNKNOWN = "unknown"
+_FLAGGED = re.compile(r"flagged for removal", re.I)
+_GONE = re.compile(r"deleted by its author|this posting has expired", re.I)
+
+
+def post_state(status: int, body: str) -> str:
+    """What a post's public page says about it. Anything unexpected is unknown, which acts on
+    nothing: a removal is only ever read from Craigslist's own words or a gone status."""
+    if _FLAGGED.search(body or ""):
+        return POST_FLAGGED
+    if status in (404, 410) or _GONE.search(body or ""):
+        return POST_GONE
+    if status == 200:
+        return POST_LIVE
+    return POST_UNKNOWN
 
 
 _CONDITIONS = ("new", "like new", "excellent", "good", "fair", "salvage")
