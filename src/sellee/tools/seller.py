@@ -176,8 +176,9 @@ register(
 register(
     ToolSpec(
         name="update_seller_config",
-        description="Write seller configuration sections: basics (region/currency/timezone), "
-        "shipping (zones/size_surcharge), and origin (the private pickup address).",
+        description="Write seller configuration sections: basics (region/currency/timezone, and "
+        "for Craigslist zip and craigslist_area, the area name exactly as Craigslist offered "
+        "it), shipping (zones/size_surcharge), and origin (the private pickup address).",
         input_schema={
             "type": "object",
             "properties": {

@@ -239,12 +239,15 @@ def _activate(deps: AccountDeps, client, link: str) -> None:
 
 def _finish_activation(deps: AccountDeps, client) -> None:
     kind = _page(client)
+    log.info("Craigslist activation link shows %s", kind)
     if kind == "password_options":
         _submit(client, craigslist.GO_PASSWORDLESS, "Go Passwordless")
         kind = _next_page(deps, client, "password_options")
+        log.info("Craigslist Go Passwordless led to %s", kind)
     if kind == "terms":
         _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
-        _next_page(deps, client, "terms")
+        kind = _next_page(deps, client, "terms")
+        log.info("Craigslist terms led to %s", kind)
 
 
 def _settle(deps: AccountDeps, client, link: str) -> None:
