@@ -13,6 +13,7 @@ from tests.conftest import seed_setting
 from sellee import revise
 from sellee.browser import editor
 from sellee.browser import markets as market_adapters
+from sellee.browser.client import COMPOSER_TEXT_JS
 from sellee.browser.markets import craigslist
 from sellee.config import Config
 
@@ -42,6 +43,7 @@ class FakePost:
         self.clicks = 0
         self.marked_delete = False
         self.published = 0
+        self.leaves_a_char = False
         self.signed_in = True
 
     @contextlib.contextmanager
@@ -58,7 +60,9 @@ class FakePost:
     def pace(self, url: str) -> None:
         self.paced += 1
 
-    def evaluate(self, function: str, **_):
+    def evaluate(self, function: str, *, target: str = "", **_):
+        if function == COMPOSER_TEXT_JS:
+            return self.draft.get(_BOXES[target]) or ""
         if function == craigslist.STEP_JS:
             return {"step": self.step, "logged_in": self.signed_in, "images": self.images}
         if function == craigslist.EDIT_READBACK_JS:
@@ -108,7 +112,10 @@ class FakePost:
     def call_tool(self, name: str, arguments: dict):
         if name == "browser_press_key":
             if arguments["key"] == "Backspace" and self.selected and self.focus:
-                self.draft[_BOXES[self.focus]] = ""
+                held = self.draft.get(_BOXES[self.focus]) or ""
+                # Live, one clear left a character behind.
+                self.draft[_BOXES[self.focus]] = held[:1] if self.leaves_a_char else ""
+                self.leaves_a_char = False
             self.selected = arguments["key"] != "Backspace"
         elif name == "browser_file_upload" and self.uploads:
             self.images += len(arguments["paths"])
@@ -217,6 +224,16 @@ def test_new_photos_replace_every_old_one(tmp_path, monkeypatch) -> None:
 
     assert outcome.verified
     assert post.post_images == 2
+
+
+def test_a_clear_that_leaves_a_character_is_cleared_again_before_typing() -> None:
+    # Live: "20" cleared to "1", then "18" typed after it read back as "118".
+    post = FakePost()
+    post.leaves_a_char = True
+
+    outcome = _revise(post, _item(list_price=18.0), ["list_price"])
+
+    assert outcome.verified and post.post["price"] == "18"
 
 
 def test_a_box_that_did_not_take_the_change_publishes_nothing() -> None:

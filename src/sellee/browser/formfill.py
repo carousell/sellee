@@ -17,7 +17,7 @@ import re
 import time
 from typing import Callable
 
-from sellee.browser.client import BrowserError
+from sellee.browser.client import COMPOSER_TEXT_JS, BrowserError, BrowserToolError
 
 log = logging.getLogger(__name__)
 
@@ -36,6 +36,8 @@ JITTER = 0.4
 # Selecting everything in the focused box before typing a replacement. A value already in the box
 # is exactly what an edit form arrives with, and a per-character type appends to it.
 _SELECT_ALL = "ControlOrMeta+a"
+# Live, one select-all and delete left a character behind and "18" was typed after it as "118".
+CLEAR_TRIES = 3
 
 # The first number in a price reading, cents included, once thousands separators are gone.
 _PRICE_RE = re.compile(r"\d+(?:\.\d+)?")
@@ -119,11 +121,22 @@ def type_fields(
             continue
         try:
             if replace:
-                client.click(target(step), step)
-                client.call_tool("browser_press_key", {"key": _SELECT_ALL})
-                client.call_tool("browser_press_key", {"key": "Backspace"})
+                _empty(client, target(step), step)
             if not blank:
                 client.type_humanly(target(step), f"the {step} field", str(text))
         except BrowserError as exc:
             raise refusal(f"could not fill {step}: {exc}") from exc
         pause(FIELD_SETTLE_SEC)
+
+
+def _empty(client, box: str, step: str) -> None:
+    """Empty a box with real keys, and read it back: typing into one that is not empty appends."""
+    for _ in range(CLEAR_TRIES):
+        client.click(box, step)
+        client.call_tool("browser_press_key", {"key": _SELECT_ALL})
+        client.call_tool("browser_press_key", {"key": "Backspace"})
+        left = client.evaluate(COMPOSER_TEXT_JS, target=box, element=f"the {step} field")
+        if not left:
+            return
+        log.info("the %s box still held %r after clearing", step, left)
+    raise BrowserToolError(f"the {step} box would not empty")
