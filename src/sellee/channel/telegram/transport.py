@@ -87,6 +87,16 @@ def commands_hash(commands: list) -> str:
     return hashlib.sha1(blob).hexdigest()[:12]
 
 
+def _tapped_label(message: dict, data: str) -> str:
+    """The label of the button carrying `data` on the message it was tapped on, or ""."""
+    rows = (message.get("reply_markup") or {}).get("inline_keyboard") or []
+    for row in rows:
+        for button in row:
+            if button.get("callback_data") == data:
+                return str(button.get("text") or "")
+    return ""
+
+
 def _normalize(update: dict, authorized_chat: int | None) -> tuple:
     """Turn one Telegram update into (event, chat_id), or (None, chat_id) when it is not from the
     authorized chat. The event is {event_id, kind, text, payload, src_ts}; kind is
@@ -106,7 +116,8 @@ def _normalize(update: dict, authorized_chat: int | None) -> tuple:
             {
                 "event_id": update["update_id"],
                 "kind": "action",
-                "text": choice,
+                # What the seller tapped, as later passes read it back; the token stays in payload.
+                "text": _tapped_label(cq.get("message") or {}, data) or choice,
                 "payload": {
                     "ref": ref,
                     "choice": choice,

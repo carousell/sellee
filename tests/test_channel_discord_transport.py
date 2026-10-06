@@ -78,6 +78,26 @@ def test_normalize_lifts_an_attachment_to_photo_kind() -> None:
     assert ev["payload"]["url"] == "http://example/attachments/fake.jpg"
 
 
+def test_a_button_click_reads_as_the_label_pressed() -> None:
+    row = {
+        "type": 1,
+        "components": [{"type": 2, "label": "peninsula", "custom_id": "peninsula:clarea"}],
+    }
+    interaction = {
+        "t": "INTERACTION_CREATE",
+        "d": {
+            "id": "111222333444555667",
+            "token": "int-token",
+            "type": 3,
+            "channel_id": str(CHANNEL_ID),
+            "data": {"custom_id": "peninsula:clarea"},
+            "message": {"components": [row]},
+        },
+    }
+    ev = transport._normalize(interaction)
+    assert ev["text"] == "peninsula" and ev["payload"]["choice"] == "clarea"
+
+
 def test_normalize_button_click() -> None:
     # A real Discord snowflake shape (all-digit string) — _normalize casts event_id to int for the
     # channel_inbox INTEGER column, so a non-numeric placeholder here would mask that behavior.
