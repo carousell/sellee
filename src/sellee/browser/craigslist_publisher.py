@@ -403,21 +403,27 @@ def _check_edit_preview(client, item: dict, text) -> None:
     shown = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
     wrong = _still_old(item, text, shown)
     if wrong:
+        log.info("Craigslist edit preview read as %r", shown[:300])
         raise PublishNotAttempted(f"the preview does not show the new {', '.join(wrong)}")
 
 
-# A post shows itself as "<title> - $<price> (<area>)".
-_HEADER = re.compile(r"^(.*?) - \$([\d,.]+)", re.M)
+# A post shows "<title> - $<price> (<area>)", and live not always at the start of its line.
+_PRICE = re.compile(r" - \$([\d,.]+) \(")
+
+
+def _shows_title(item: dict, shown: str) -> bool:
+    title = (item.get("title") or "").strip()
+    return bool(title) and re.search(re.escape(title) + r" - \$", shown) is not None
 
 
 def _still_old(item: dict, text, shown: str) -> list:
     """Which changed fields `shown`, a post's page text, does not carry."""
-    header = _HEADER.search(shown)
+    price = _PRICE.search(shown)
     wrong = []
-    if "title" in text and (header is None or _norm(header.group(1)) != _norm(item.get("title"))):
+    if "title" in text and not _shows_title(item, shown):
         wrong.append("title")
     if "list_price" in text and (
-        header is None or not formfill.price_matches(header.group(2), item.get("list_price"))
+        price is None or not formfill.price_matches(price.group(1), item.get("list_price"))
     ):
         wrong.append("list_price")
     if "description" in text and _norm(item.get("description")) not in _norm(shown):
@@ -500,8 +506,10 @@ def _confirm_revision(
         raise
     except BrowserError as exc:
         raise editor.ReviseUnverified(f"saved, but the post could not be read back: {exc}") from exc
-    header = _HEADER.search(shown)
-    accepted = {"title": header.group(1).strip(), "price": header.group(2)} if header else {}
+    price = _PRICE.search(shown)
+    accepted = {"price": price.group(1)} if price else {}
+    if _shows_title(item, shown):
+        accepted["title"] = (item.get("title") or "").strip()
     mismatched = _still_old(item, text, shown)
     if "description" in text and "description" not in mismatched:
         accepted["description"] = item.get("description")

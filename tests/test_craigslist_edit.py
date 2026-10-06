@@ -44,6 +44,7 @@ class FakePost:
         self.marked_delete = False
         self.published = 0
         self.leaves_a_char = False
+        self.header_mid_line = False
         self.signed_in = True
 
     @contextlib.contextmanager
@@ -69,7 +70,8 @@ class FakePost:
             return {**self.draft, "zip": "94103", "chat_on": False}
         if function == craigslist.PREVIEW_TEXT_JS:
             d = self.draft
-            return {"text": f"{d['title']} - ${d['price']} (Downtown)\n{d['description']}"}
+            lead = "CL SF bay area > san francisco > " if self.header_mid_line else ""
+            return {"text": f"{lead}{d['title']} - ${d['price']} (Downtown)\n{d['description']}"}
         if function == craigslist.PUBLISH_MARK_JS:
             return {"marked": self.step == "preview"}
         if function == craigslist.DELETE_IMAGE_MARK_JS:
@@ -230,6 +232,16 @@ def test_a_clear_that_leaves_a_character_is_cleared_again_before_typing() -> Non
     # Live: "20" cleared to "1", then "18" typed after it read back as "118".
     post = FakePost()
     post.leaves_a_char = True
+
+    outcome = _revise(post, _item(list_price=18.0), ["list_price"])
+
+    assert outcome.verified and post.post["price"] == "18"
+
+
+def test_a_preview_whose_header_is_not_at_the_start_of_its_line_is_read() -> None:
+    # Live: "the preview does not show the new list_price" with $18 typed and read back.
+    post = FakePost()
+    post.header_mid_line = True
 
     outcome = _revise(post, _item(list_price=18.0), ["list_price"])
 
