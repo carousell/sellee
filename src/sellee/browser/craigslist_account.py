@@ -99,6 +99,10 @@ def start_login(store, market: str) -> bool:
     return True
 
 
+DESCRIPTION_NOTICE = (
+    "Craigslist won't take a post without a description. Tell me a line or two about "
+    "\"{title}\" (what's included, any wear) and I'll post it."
+)
 ZIP_NOTICE = (
     "Craigslist posts need your ZIP code — it's shown on every post as the item's area. "
     "Tell me yours and I'll start posting there."
@@ -126,6 +130,13 @@ def hold_post(store, market: str) -> str | None:
     if not (store.get_seller_config_section("basics") or {}).get("zip"):
         return "zip"
     return None
+
+
+def missing_for_post(market: str, item: dict) -> str | None:
+    """What an item lacks that Craigslist's form requires: "description", or None."""
+    if market != marketplaces.CRAIGSLIST:
+        return None
+    return None if (item.get("description") or "").strip() else "description"
 
 
 def record_service_mail(store, mail: dict) -> None:

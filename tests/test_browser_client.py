@@ -412,6 +412,27 @@ def test_selecting_a_tab_that_is_not_ours_raises_and_gives_up_the_tab(make_clien
     assert client._tab_opened is False  # noqa: SLF001 — the handle is the thing under test
 
 
+def test_a_tab_that_redirected_off_its_url_is_still_ours(make_client) -> None:
+    """Live: a signed-out Craigslist account page redirects to its login. The tab that comes
+    forward shows the page it showed before the select, so it is ours, not someone else's."""
+    login = "https://accounts.craigslist.org/login?rp=%2Flogin%2Fhome&rt=L"
+    client = make_client(
+        {
+            "tools": {
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": login}},
+                    {"result": {"visible": True, "url": login}},
+                ],
+                "browser_tabs": [{"text": "ok"}, _TAB_LIST, {"text": "ok"}],
+                "browser_navigate": {"text": "ok"},
+            }
+        }
+    )
+    client.navigate("https://accounts.craigslist.org/login/home")
+    client.ensure_frontmost("https://accounts.craigslist.org/login/home")
+    assert client._tab_opened is True  # noqa: SLF001 — the handle is the thing under test
+
+
 def test_a_tab_that_stays_hidden_is_an_error_but_stays_ours(make_client) -> None:
     """Still our tab, just not visible — so the handle is kept and only the send is refused. Giving
     the tab up here would abandon a healthy one on every failure."""

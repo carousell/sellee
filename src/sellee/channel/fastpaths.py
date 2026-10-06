@@ -275,6 +275,13 @@ def is_settings_door(event: dict) -> bool:
     return False
 
 
+def claims(event: dict) -> bool:
+    """`is_fast_path` for a raw event about to be ingested, so its row is stored already handled."""
+    return is_fast_path(
+        {"kind": event["kind"], "text": event.get("text"), "payload": event.get("payload") or {}}
+    )
+
+
 def is_fast_path(event: dict) -> bool:
     """True if `event` (a normalized inbox row's kind/text/payload) is one the daemon answers
     itself. A command matches on its exact first-word token; an action on its callback choice; a

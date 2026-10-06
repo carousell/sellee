@@ -27,6 +27,7 @@ MAX_STEPS = 12
 TRANSITION_WAIT_SEC = 20.0
 IMAGE_WAIT_SEC = 60.0
 _POLL_SEC = 0.5
+_MENU_WAIT_SEC = 3.0
 
 AREA_KEY = "craigslist_area"
 ZIP_KEY = "zip"
@@ -91,7 +92,14 @@ def _wait_past(client, step: str, pause, wait_sec: float = TRANSITION_WAIT_SEC) 
         if now and now != step:
             return now
         pause(_POLL_SEC)
-    raise PublishNotAttempted(f"Craigslist did not move past {step!r}", retryable=True)
+    refusal = ""
+    try:
+        refusal = (client.evaluate(craigslist.REFUSAL_JS) or {}).get("text") or ""
+    except BrowserError:
+        pass
+    reason = f"Craigslist did not move past {step!r}" + (f": {refusal}" if refusal else "")
+    log.warning("%s", reason)
+    raise PublishNotAttempted(reason, retryable=True)
 
 
 def _accept_terms(client, pause) -> str:
@@ -180,7 +188,7 @@ def _edit(client, page, item, photos, seller, pause) -> None:
         if text:
             client.type_humanly(target, element, text)
             pause(formfill.FIELD_SETTLE_SEC)
-    _set_condition(client, item)
+    _set_condition(client, item, pause)
     if (client.evaluate(craigslist.EDIT_READBACK_JS) or {}).get("chat_on"):
         client.click(craigslist.CHAT, "CL chat")
     seen = client.evaluate(craigslist.EDIT_READBACK_JS) or {}
@@ -195,18 +203,31 @@ def _edit(client, page, item, photos, seller, pause) -> None:
     _submit(client, craigslist.CONTINUE, "continue")
 
 
-def _set_condition(client, item: dict) -> None:
-    """Best-effort: Craigslist's condition is optional, and its select sits behind a widget."""
+def _set_condition(client, item: dict, pause) -> None:
+    """Best-effort, as the condition is optional: open its menu widget and pick the item."""
     wanted = craigslist.condition_for(str(item.get("condition") or ""))
     if not wanted:
         return
     try:
-        client.call_tool(
-            "browser_select_option",
-            {"target": craigslist.CONDITION, "element": "the condition", "values": [wanted]},
-        )
+        if not (client.evaluate(craigslist.CONDITION_OPEN_MARK_JS) or {}).get("marked"):
+            log.warning("the Craigslist form has no condition menu")
+            return
+        client.click(craigslist.CONDITION_OPEN, "the condition")
+        found: dict = {}
+        for _ in range(int(_MENU_WAIT_SEC / _POLL_SEC)):
+            found = client.evaluate(craigslist.condition_item_js(wanted)) or {}
+            if found.get("marked"):
+                break
+            pause(_POLL_SEC)
+        if not found.get("marked"):
+            log.warning("the condition menu offered %r, not %r", found.get("options"), wanted)
+            return
+        client.click(craigslist.CONDITION_ITEM, wanted)
+        shown = (client.evaluate(craigslist.CONDITION_READ_JS) or {}).get("shown")
+        if shown != wanted:
+            log.warning("the Craigslist condition shows %r, not %r", shown, wanted)
     except BrowserError:
-        log.info("could not set the Craigslist condition", exc_info=True)
+        log.warning("could not set the Craigslist condition", exc_info=True)
 
 
 def _geoverify(client, page, item, photos, seller, pause) -> None:

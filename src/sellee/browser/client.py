@@ -1015,11 +1015,14 @@ class BrowserClient:
         """
         with self._lock:
             self._start()
-            if (self.evaluate(_PAGE_STATE_JS) or {}).get("visible"):
+            before = self.evaluate(_PAGE_STATE_JS) or {}
+            if before.get("visible"):
                 return
             self.call_tool("browser_tabs", {"action": "select", "index": self._current_tab_index()})
             state = self.evaluate(_AWAIT_VISIBLE_JS) or {}
-            if not same_page(state.get("url") or "", url):
+            # Ours is the page our tab showed, which a redirect may have moved off `url`.
+            landed = state.get("url") or ""
+            if not (same_page(landed, url) or same_page(landed, before.get("url") or "")):
                 self._tab_opened = False  # not ours any more; the next call opens a fresh one
                 raise BrowserToolError(
                     f"selecting our own tab landed on {state.get('url')!r}, not {url!r}"

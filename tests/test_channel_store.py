@@ -12,6 +12,7 @@ import time
 import pytest
 from tests.conftest import patch_store_attr
 
+from sellee.channel import fastpaths
 from sellee.store import BIND_NONCE_TTL_SEC, StoreError, bind_nonce_live
 
 # --- channel state: off -> awaiting-bind -> bound -------------------------------------------
@@ -198,6 +199,19 @@ def test_ingest_dedups_by_event_id(store) -> None:
     again = store.ingest_updates([_ev(100), _ev(101)], update_offset=102)
     assert [r["event_id"] for r in again] == [101]  # 100 already ingested
     assert store.count_pending_inbox() == 2
+
+
+def test_a_fast_path_tap_is_stored_handled_so_no_pass_can_claim_it(store) -> None:
+    # Live: a channel pass claimed an area tap before the poller answered it, and the seller's
+    # agent then asked about the raw token "clarea".
+    store.arm_bind("b", "n")
+    store.complete_bind(1, update_offset=0, nonce=store.get_channel()["bind_nonce"])
+    tap = _ev(100, kind="action", text="clarea", ref="city of san francisco", choice="clarea")
+    words = _ev(101, text="hello")
+    inserted = store.ingest_updates([tap, words], update_offset=102, fast_path=fastpaths.claims)
+    assert [r["status"] for r in inserted] == ["handled", "pending"]
+    pass_id = store.enqueue_channel_pass()
+    assert [r["event_id"] for r in store.inbox_for_pass(pass_id)] == [101]
 
 
 def test_fast_path_handled_rows_leave_pending(store) -> None:

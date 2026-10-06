@@ -27,6 +27,7 @@ _SF = ["subarea", "hood", "type", "cat", "edit", "geoverify", "editimage", "prev
 _BOZEMAN = ["type", "cat", "edit", "geoverify", "editimage", "preview"]
 _AREAS = ["city of san francisco", "south bay area", "east bay area"]
 _CATEGORIES = ["computer parts", "cars & trucks ($5)", "general for sale", "rvs ($5)"]
+_CONDITIONS = ["-", "new", "like new", "excellent", "good", "fair", "salvage"]
 _ITEM = {"id": "i1", "title": "Samsung Buds3", "list_price": 80.0, "description": "Barely used."}
 
 
@@ -71,6 +72,11 @@ class FakeForm:
         self.paced: list = []
         self.accepted_terms = 0
         self.terms_unmarkable = False
+        # The condition select sits behind a menu widget built only once it is opened.
+        self.condition_open = False
+        self.condition_marked: str | None = None
+        self.condition = ""
+        self.refusal = ""
 
     def pace(self, url: str) -> None:
         self.paced.append(self.step)
@@ -113,7 +119,7 @@ class FakeForm:
         if function == craigslist.HOOD_BYPASS_JS:
             self.marked = "bypass"
             return {"chosen": True}
-        if "const wanted" in function:
+        if "const wanted" in function and "condition-item" not in function:
             wanted = re.search(r"const wanted = '([^']*)'", function).group(1)
             options = {"subarea": _AREAS, "type": ["for sale by owner"], "cat": _CATEGORIES}
             offered = options.get(self.step, [])
@@ -138,6 +144,17 @@ class FakeForm:
             if self.mark_fails:
                 raise BrowserError("the page went away")
             return {"marked": self.step == "preview"}
+        if function == craigslist.CONDITION_OPEN_MARK_JS:
+            return {"marked": self.step == "edit"}
+        if "condition-item" in function:
+            wanted = re.search(r"const wanted = '([^']*)'", function).group(1)
+            offered = list(_CONDITIONS) if self.condition_open else []
+            self.condition_marked = wanted if wanted in offered else None
+            return {"marked": self.condition_marked is not None, "options": offered}
+        if function == craigslist.CONDITION_READ_JS:
+            return {"shown": self.condition}
+        if function == craigslist.REFUSAL_JS:
+            return {"text": self.refusal}
         if function == craigslist.TERMS_MARK_JS:
             return {"marked": self.step == "terms" and not self.terms_unmarkable}
         if function == craigslist.MANAGE_LINK_JS:
@@ -168,7 +185,14 @@ class FakeForm:
             if self.confirms:
                 self._advance()
         elif target in (craigslist.CONTINUE, craigslist.MAP_CONTINUE, craigslist.DONE_WITH_IMAGES):
-            self._advance()
+            if not self.refusal:  # a refused form comes back to the same step
+                self._advance()
+        elif target == craigslist.CONDITION_OPEN:
+            assert self.step == "edit"
+            self.condition_open = True
+        elif target == craigslist.CONDITION_ITEM:
+            assert self.condition_open and self.condition_marked, "picked an unmarked condition"
+            self.condition, self.condition_open = self.condition_marked, False
         elif target == craigslist.TERMS:
             assert self.step == "terms", "accepted terms on a page that did not show them"
             self.accepted_terms += 1
@@ -391,7 +415,9 @@ def _no_rail():
 def crosslisting(store, monkeypatch):
     monkeypatch.setattr("sellee.browser.formfill.sleep", lambda _seconds: None)
     store.set_seller_config_section("basics", {"region": "US", "zip": "94103"})
-    made = store.create_item(title="Samsung Buds3", list_price=80.0, currency="USD")
+    made = store.create_item(
+        title="Samsung Buds3", list_price=80.0, currency="USD", description="Barely used."
+    )
     seed_setting(store, "connected_markets", ["craigslist"])
     store.record_listing_url(made["id"], "carousell-ai", _RAIL_URL)
     store.request_craigslist_signup()
@@ -429,6 +455,64 @@ def test_a_ready_post_is_driven_and_its_url_recorded(store, bus, crosslisting) -
     assert store.publish_pass_index() == [] or all(
         row["status"] != "queued" for row in store.publish_pass_index()
     )
+
+
+def test_the_condition_is_picked_through_its_menu_widget() -> None:
+    # Live: the select is hidden behind a jQuery UI menu, and selecting it directly timed out.
+    form = FakeForm()
+    _drive(form, item={**_ITEM, "condition": "fair, scratches on the case"})
+    assert form.condition == "fair" and form.published
+
+
+def test_a_form_craigslist_sends_back_names_its_reason() -> None:
+    form = FakeForm()
+    form.refusal = "Some required information is missing. All postings must have a description"
+    with pytest.raises(publisher.PublishNotAttempted, match="must have a description"):
+        _drive(form)
+    assert not form.published
+
+
+def test_an_item_with_no_description_asks_once_and_spends_nothing(store, bus, crosslisting) -> None:
+    # Live: Craigslist refused the form for it, and each refusal cost an attempt and ten pages.
+    _set_description(store, crosslisting["id"], "")
+    form = FakeForm()
+    deps = _deps(store, bus, form)
+
+    crosslist.enqueue_next(deps)
+    crosslist.enqueue_next(deps)
+
+    assert form.navigated == [] and not form.published
+    asked = [text for text in _notices(store) if "description" in text]
+    assert len(asked) == 1 and "Samsung Buds3" in asked[0]
+    assert deps.attempts == {}
+    _set_description(store, crosslisting["id"], "Barely used.")
+    crosslist.enqueue_next(deps)
+    assert form.published
+
+
+def _set_description(store, item_id: str, text: str) -> None:
+    # A listed item's description changes through a live edit; the record is what this reads.
+    with store._db.transaction() as conn:  # noqa: SLF001
+        conn.execute("UPDATE items SET description = ? WHERE id = ?", (text, item_id))
+
+
+def test_a_post_held_for_page_loads_says_so_once(store, bus, crosslisting) -> None:
+    form = FakeForm()
+    deps = _deps(store, bus, form)
+    deps.governor = _NoRoom()
+    held = []
+    bus.subscribe(lambda event: held.append(event) if event.kind == "crosslist.held" else None)
+
+    crosslist.enqueue_next(deps)
+    crosslist.enqueue_next(deps)
+
+    assert [event.payload["reason"] for event in held] == ["page_loads"]
+    assert form.navigated == []
+
+
+class _NoRoom:
+    def can_start(self, market, loads):
+        return False
 
 
 def test_a_missing_area_asks_once_and_waits_for_the_answer(store, bus, crosslisting) -> None:

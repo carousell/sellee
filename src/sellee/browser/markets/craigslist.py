@@ -86,6 +86,35 @@ PRICE = "form input[name=price]"
 ZIP = "form input[name=postal]"
 BODY = "#PostingBody"
 CONDITION = "form select[name=condition]"
+# The select is hidden behind a jQuery UI selectmenu; a person opens its button and picks an item.
+CONDITION_OPEN = f"[{CHOICE_ATTR}=condition-open]"
+CONDITION_ITEM = f"[{CHOICE_ATTR}=condition-item]"
+CONDITION_OPEN_MARK_JS = f"""() => {{
+  const select = document.querySelector('{CONDITION}');
+  const button = select && document.getElementById(select.id + '-button');
+  if (button) button.setAttribute('{CHOICE_ATTR}', 'condition-open');
+  return {{ marked: !!button }};
+}}"""
+CONDITION_READ_JS = f"""() => {{
+  const select = document.querySelector('{CONDITION}');
+  const option = select && select.options[select.selectedIndex];
+  return {{ shown: option ? option.text.trim().toLowerCase() : '' }};
+}}"""
+
+
+def condition_item_js(wanted: str) -> str:
+    """Marks the open condition menu's item labelled `wanted`, ignoring case."""
+    return f"""() => {{
+  const wanted = {wanted.strip().lower()!r};
+  const select = document.querySelector('{CONDITION}');
+  const menu = select && document.getElementById(select.id + '-menu');
+  const items = menu ? [...menu.querySelectorAll('li.ui-menu-item')] : [];
+  const item = items.find((li) => li.innerText.trim().toLowerCase() === wanted);
+  if (item) item.setAttribute('{CHOICE_ATTR}', 'condition-item');
+  return {{ marked: !!item, options: items.map((li) => li.innerText.trim()) }};
+}}"""
+
+
 CHAT = "form input[name=contact_chat_ok]"
 ADD_IMAGES = "#plupload"
 DONE_WITH_IMAGES = "#doneWithImages"
@@ -105,6 +134,15 @@ TERMS_MARK_JS = f"""() => {{
   if (button) button.setAttribute('{CHOICE_ATTR}', 'terms');
   return {{ marked: !!button }};
 }}"""
+
+# Why Craigslist sent a form back, e.g. "All postings must have a description".
+REFUSAL_JS = """() => {
+  const texts = [...document.querySelectorAll('[class*="error"]')]
+    .map((el) => (el.innerText || '').trim().replace(/\\s+/g, ' '))
+    .filter((text) => /required|must|missing|invalid|incorrect/i.test(text));
+  texts.sort((a, b) => b.length - a.length);
+  return { text: (texts[0] || '').slice(0, 300) };
+}"""
 
 STEP_JS = """() => {
   try {

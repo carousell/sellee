@@ -96,6 +96,8 @@ class CrosslistDeps:
     # Per market, a check that is true while a publish must wait for a seller's answer or a
     # sign-out to pass. In process: a restart costs one more look at the form.
     waiting_on: dict = field(default_factory=dict)
+    # Per market, why its publishes are held back by pacing, so each hold is reported once.
+    held_for: dict = field(default_factory=dict)
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
@@ -324,11 +326,34 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     create_url = adapter.publish_url or marketplaces.market_url(market, "sell", region)
     if create_url is None:
         return
-    if page_governor.unprompted_held(
-        deps.store, deps.config, market, deps.now()
-    ) or not page_governor.has_room(deps.governor, market, adapter.publish_loads):
-        # Left eligible with no attempt spent: the morning, or the next hour's page loads, will do.
+    missing = craigslist_account.missing_for_post(market, item)
+    if missing:
+        # Craigslist refuses the form without it; asking first spends no attempt and no page.
+        _notify_once(
+            deps,
+            f"{market}:{missing}:{item['id']}",
+            craigslist_account.DESCRIPTION_NOTICE.format(title=item.get("title") or "this item"),
+            durable=True,
+        )
+        deps.bus.publish(
+            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": missing}
+        )
         return
+    if page_governor.unprompted_held(deps.store, deps.config, market, deps.now()):
+        held = "quiet_hours"
+    elif not page_governor.has_room(deps.governor, market, adapter.publish_loads):
+        held = "page_loads"
+    else:
+        held = None
+    if held:
+        # Left eligible with no attempt spent: the morning, or the next hour's page loads, will do.
+        if deps.held_for.get(market) != held:
+            deps.held_for[market] = held
+            deps.bus.publish(
+                "crosslist.held", {"item_id": item["id"], "market": market, "reason": held}
+            )
+        return
+    deps.held_for.pop(market, None)
     # Staged where the browser server may read from: the media store is outside its roots.
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])
     try:
