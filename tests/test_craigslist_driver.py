@@ -43,7 +43,7 @@ class FakeForm:
         mangle=None,
         confirms=True,
         post_url=_POST,
-        site="bozeman",
+        site="SF bay area",
         grouped=False,
         mark_fails=False,
     ):
@@ -200,6 +200,16 @@ def test_a_small_site_is_posted_and_its_view_url_returned() -> None:
     assert form.fields[craigslist.ZIP] == "94103" and form.fields[craigslist.PRICE] == "80"
     assert form.published_with["chat_on"] is False
     assert form.navigated == [craigslist.POST_URL, _MANAGE]
+
+
+def test_a_post_put_on_another_site_is_refused_before_anything_is_chosen() -> None:
+    # Live: a San Francisco VPN exit landed on Craigslist's Egypt site.
+    form = FakeForm(site="egypt")
+
+    with pytest.raises(publisher.PublishNotAttempted, match="egypt"):
+        _drive(form)
+
+    assert form.chosen == {} and form.fields == {} and not form.published
 
 
 def test_a_multi_area_site_takes_the_sellers_area_and_bypasses_the_neighborhood() -> None:

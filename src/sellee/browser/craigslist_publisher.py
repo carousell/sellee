@@ -58,6 +58,11 @@ def _to_preview(client, item: dict, create_url: str, photos, seller: dict, pause
         page = _read(client)
         if not page.get("logged_in"):
             raise PublishSignedOut("Craigslist shows the account signed out", market="Craigslist")
+        site = str(page.get("site") or "")
+        if site.lower() != craigslist.SITE_NAME.lower():
+            raise PublishNotAttempted(
+                f"Craigslist put the post on {site!r}, not {craigslist.SITE_NAME}"
+            )
         step = page.get("step") or ""
         if step == "preview":
             _check_preview(client, item)

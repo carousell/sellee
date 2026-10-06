@@ -59,8 +59,11 @@ PAGE_JS = f"""() => {{
 
 # --- posting -------------------------------------------------------------------------------------
 
-# Craigslist picks the site from the IP and serves every step on one URL, named by its `?s=`.
-POST_URL = "https://post.craigslist.org/c/"
+# The site is opened by its code, never picked from the IP: a VPN exit in San Francisco was put
+# on Craigslist's Egypt site. Every step is served on one URL, named by its `?s=`.
+SITE = "sfo"
+SITE_NAME = "SF bay area"
+POST_URL = f"https://post.craigslist.org/c/{SITE}"
 FOR_SALE_BY_OWNER = "for sale by owner"
 # Its catch-all by-owner category, as Facebook's driver files under "Miscellaneous".
 DEFAULT_CATEGORY = "general for sale"
