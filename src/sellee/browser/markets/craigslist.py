@@ -12,7 +12,8 @@ LOGIN_EMAIL = "#inputEmailHandle"
 LOGIN_LINK_BUTTON = "#onetime"
 SIGN_UP_BUTTON = "#create"
 # The activation page offers two forms; the one without a password field is "Go Passwordless".
-GO_PASSWORDLESS = "form:not(:has(#inputNewPassword)) [type=submit]"
+# Live, a second submit on the page also had no password field; the button is named.
+GO_PASSWORDLESS = 'input[type=submit][value="Go Passwordless"]'
 ACCEPT_TERMS = "form:has(input[name=step][value=touAccepted]) [type=submit]"
 
 # Never guesses logged_out, which emails a login link and holds every post: it needs a password

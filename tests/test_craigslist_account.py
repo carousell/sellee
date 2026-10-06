@@ -94,6 +94,8 @@ class FakeCraigslist:
         self.lag = lag
         self.on_sign_up = on_sign_up
         self.signed_in = False
+        # An activation link works until Go Passwordless is pressed on it.
+        self.link_spent = False
         self.pending: tuple | None = None
         self.opened: list = []
         self.typed: list = []
@@ -112,7 +114,7 @@ class FakeCraigslist:
         self.opened.append(url)
         self.pending = None
         if url.startswith("https://accounts.craigslist.org/pass?"):
-            self._arrive("password_options")
+            self._arrive("unknown" if self.link_spent else "password_options")
         elif url == craigslist.LOGIN_URL:
             self._arrive("login")
         elif url == craigslist.ACCOUNT_URL:
@@ -145,6 +147,7 @@ class FakeCraigslist:
                 self.on_sign_up()
             after = self.sign_up_page
         elif target == craigslist.GO_PASSWORDLESS and self.kind == "password_options":
+            self.link_spent = True
             after = "terms" if self.terms else "account_home"
             after = after if self.activation_signs_in else "unknown"
         elif target == craigslist.ACCEPT_TERMS and self.kind == "terms":
@@ -393,7 +396,8 @@ def test_a_mail_read_again_after_its_link_was_opened_does_not_reopen_it(
     account.record_service_mail(us_seller, _activation_mail())
     account.account_lane(_deps(us_seller, bus, page, fake))
 
-    assert _LINK not in page.opened
+    # Only the settle reopens it; the re-read mail adds no second open.
+    assert page.opened.count(_LINK) == 1
 
 
 def test_an_activation_that_does_not_end_signed_in_starts_over_with_a_notice(
@@ -408,7 +412,7 @@ def test_an_activation_that_does_not_end_signed_in_starts_over_with_a_notice(
     assert _state(us_seller) == account.AWAITING_ACTIVATION  # decided by reading, next tick
     account.account_lane(_deps(us_seller, bus, page, fake))
 
-    assert page.opened == [_LINK, craigslist.ACCOUNT_URL]
+    assert page.opened == [_LINK, _LINK, craigslist.ACCOUNT_URL]
     assert us_seller.craigslist_account() is None
     assert [n["text"] for n in us_seller.list_queued_notices()] == [
         account.ACTIVATION_FAILED_NOTICE
@@ -448,12 +452,21 @@ def test_a_link_recorded_before_the_sign_up_was_confirmed_goes_straight_to_activ
     assert _state(us_seller) == account.ACTIVE
 
 
-@pytest.mark.parametrize("signed_in", [True, False])
+@pytest.mark.parametrize(
+    "spent, signed_in, opened, active",
+    [
+        # Cut off before Go Passwordless was pressed: the link still works, so it is finished.
+        (False, False, [_LINK], True),
+        # Cut off after: the link is spent, and the account page decides.
+        (True, True, [_LINK, craigslist.ACCOUNT_URL], True),
+        (True, False, [_LINK, craigslist.ACCOUNT_URL], False),
+    ],
+)
 def test_an_activation_cut_off_after_opening_its_link_is_settled_on_the_next_tick(
-    us_seller, bus, fake, signed_in
+    us_seller, bus, fake, spent, signed_in, opened, active
 ) -> None:
     page = FakeCraigslist()
-    page.signed_in = signed_in
+    page.link_spent, page.signed_in = spent, signed_in
     us_seller.request_craigslist_signup()
     us_seller.set_craigslist_awaiting_activation()
     account.record_service_mail(us_seller, _activation_mail())
@@ -461,8 +474,8 @@ def test_an_activation_cut_off_after_opening_its_link_is_settled_on_the_next_tic
 
     account.account_lane(_deps(us_seller, bus, page, fake))
 
-    assert page.opened == [craigslist.ACCOUNT_URL]
-    if signed_in:
+    assert page.opened == opened
+    if active:
         assert _state(us_seller) == account.ACTIVE
     else:
         assert us_seller.craigslist_account() is None

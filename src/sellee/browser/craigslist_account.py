@@ -188,7 +188,7 @@ def account_lane(deps: AccountDeps) -> None:
             if not row["link"]:
                 _sign_up(deps, client)
             elif row["link_opened"]:
-                _settle(deps, client)
+                _settle(deps, client, row["link"])
             else:
                 # A link on a signup_requested row means the sign-up went through.
                 deps.store.set_craigslist_awaiting_activation()
@@ -232,6 +232,12 @@ def _activate(deps: AccountDeps, client, link: str) -> None:
     """Open the link once. Whether it worked is decided by `_settle`, now or on a later tick."""
     client.navigate(link)
     deps.store.mark_craigslist_link_opened(link)
+    _finish_activation(deps, client)
+    if _logged_in(client):
+        _activated(deps)
+
+
+def _finish_activation(deps: AccountDeps, client) -> None:
     kind = _page(client)
     if kind == "password_options":
         _submit(client, craigslist.GO_PASSWORDLESS, "Go Passwordless")
@@ -239,12 +245,16 @@ def _activate(deps: AccountDeps, client, link: str) -> None:
     if kind == "terms":
         _submit(client, craigslist.ACCEPT_TERMS, "I ACCEPT")
         _next_page(deps, client, "terms")
+
+
+def _settle(deps: AccountDeps, client, link: str) -> None:
+    """An opened link that left no active account: finish it if Craigslist still offers its
+    steps, otherwise read the account page and decide."""
+    client.navigate(link)
+    _finish_activation(deps, client)
     if _logged_in(client):
         _activated(deps)
-
-
-def _settle(deps: AccountDeps, client) -> None:
-    """An opened link that left no active account: read the account page and decide."""
+        return
     client.navigate(craigslist.ACCOUNT_URL)
     if _logged_in(client):
         _activated(deps)
