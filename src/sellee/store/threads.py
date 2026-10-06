@@ -215,13 +215,7 @@ class ThreadsMixin:
             for r in rows
         ]
 
-    _THREAD_WRITABLE = (
-        "buyer_location",
-        "agent_note",
-        "listed_price",
-        "listing_url",
-        "close_method",
-    )
+    _THREAD_WRITABLE = ("buyer_location", "agent_note", "listed_price", "listing_url")
     # The only status flips this generic writer owns. held is owned by hold/release, escalated by
     # escalate, and the sale states by the confirm-sold / buyer-accept flows.
     _THREAD_STATUS_TRANSITIONS = frozenset({("escalated", "active"), ("active", "closed")})
@@ -239,9 +233,6 @@ class ThreadsMixin:
             )
         if not fields:
             raise StoreError("no fields to update")
-        if "close_method" in other and other["close_method"] != "manual":
-            # Only a hand-over is written here: it stops the reply lane answering that buyer.
-            raise StoreError("close_method can only be set to 'manual' (the seller took it over)")
         with self._db.transaction() as conn:
             row = conn.execute(
                 "SELECT status FROM threads WHERE thread_id = ?", (thread_id,)

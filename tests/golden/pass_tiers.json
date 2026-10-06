@@ -30,7 +30,6 @@
     "quote_shipping",
     "record_manual_reply",
     "record_scam_signature",
-    "relay_to_buyer",
     "release_thread",
     "resolve_escalation",
     "scam_scan",

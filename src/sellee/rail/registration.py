@@ -28,13 +28,6 @@ _CRAIGSLIST_BUYER_HOST = "reply.craigslist.org"
 # The footer Craigslist appends to every relayed buyer mail; a buyer can type one above it.
 _CRAIGSLIST_FOOTER = re.compile(r"^Original craigslist post:[ \t]*(?:\r?\n[ \t]*(\S*))?", re.M)
 
-# The earlier mail a reply quotes, cut off with the relay footer before the seller sees it.
-_QUOTED_REPLY = re.compile(r"^On [^\n]*(?:\n[^\n]*)?wrote:[ \t]*$", re.M)
-BUYER_WROTE_NOTICE = (
-    '💬 The Craigslist buyer you took over on "{title}" wrote:\n"{words}"\n'
-    "Reply here with what to say and I'll pass it on to them word for word."
-)
-
 # A marketplace's own mail (sign-up, posting links), handed to its adapter: market -> callback.
 SERVICE_HOOKS: dict[str, Callable[[dict], None]] = {}
 
@@ -154,29 +147,7 @@ def _append_buyer_mail(deps: RegistrationDeps, mail: dict, sender: str, item_id:
     if mail.get("automatic") and not owed:
         # An out-of-office is kept but never answered: the reply cursor moves over it.
         deps.store.mark_relay_answered(thread_id, mail["id"], ts)
-    elif thread and thread.get("close_method") == "manual" and not mail.get("automatic"):
-        _tell_seller(deps, thread, mail)
     return thread_id
-
-
-def _tell_seller(deps: RegistrationDeps, thread: dict, mail: dict) -> None:
-    """A buyer the seller took over has no other way to reach them, so their words go to chat."""
-    ref = f"craigslist-buyer:{mail['id']}"
-    if deps.store.has_notice_with_ref(ref):
-        return
-    item = deps.store.get_item(thread["item_id"]) if thread.get("item_id") else None
-    title = (item or {}).get("title") or "your item"
-    words = buyer_words(mail["text"])
-    deps.store.queue_notice(BUYER_WROTE_NOTICE.format(title=title, words=words), ref=ref)
-
-
-def buyer_words(text: str) -> str:
-    """The buyer's own text: no relay footer, no quoted earlier mail."""
-    for pattern in (_CRAIGSLIST_FOOTER, _QUOTED_REPLY):
-        found = pattern.search(text)
-        if found:
-            text = text[: found.start()]
-    return text.strip().rstrip("-").strip()[:800]
 
 
 def _finish_our_sends(deps: RegistrationDeps, rail) -> None:

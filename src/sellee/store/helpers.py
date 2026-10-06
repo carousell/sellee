@@ -167,7 +167,6 @@ _UNHANDLED_INBOUND_SQL = (
     "     AND mx.dir = 'in') AS newest_in_ts "
     "FROM threads t "
     "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
-    "AND COALESCE(t.close_method, '') != 'manual' "
     "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
     "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
     "AND NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
