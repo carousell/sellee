@@ -118,6 +118,20 @@ def _hood(client, page, item, photos, seller, pause) -> None:
     _submit(client, craigslist.CONTINUE, "continue")
 
 
+def _copyfromanother(client, page, item, photos, seller, pause) -> None:
+    """Never copy an earlier post: that would republish another item."""
+    answer = client.evaluate(craigslist.NEW_POSTING_JS) or {}
+    if not answer.get("chosen"):
+        raise PublishNotAttempted(
+            f"no single 'start a new posting' choice among {answer.get('options') or []}"
+        )
+    if answer.get("radio"):
+        client.click(craigslist.CHOICE, "start a new posting")
+        _submit(client, craigslist.CONTINUE, "continue")
+    else:
+        _submit(client, craigslist.CHOICE, "start a new posting")
+
+
 def _type(client, page, item, photos, seller, pause) -> None:
     _pick(client, craigslist.FOR_SALE_BY_OWNER)
 
@@ -196,6 +210,7 @@ def _editimage(client, page, item, photos, seller, pause) -> None:
 
 
 _STEPS = {
+    "copyfromanother": _copyfromanother,
     "subarea": _subarea,
     "hood": _hood,
     "type": _type,

@@ -15,10 +15,21 @@ SIGN_UP_BUTTON = "#create"
 GO_PASSWORDLESS = "form:not(:has(#inputNewPassword)) [type=submit]"
 ACCEPT_TERMS = "form:has(input[name=step][value=touAccepted]) [type=submit]"
 
+# Never guesses logged_out, which emails a login link and holds every post: it needs a password
+# field in the accounts login form. Anything without positive evidence either way is unknown.
 LOGIN_JS = """() => {
   try {
-    if (document.querySelector('a[href*="/logout"]')) return { state: 'logged_in' };
-    if (document.querySelector('form.loginform')) return { state: 'logged_out' };
+    const seen = (selector) => !!document.querySelector(selector);
+    const password = seen('input[type="password"]');
+    const loginForm = Array.from(document.querySelectorAll('form')).some((form) =>
+      /accounts\\.craigslist\\.org\\/login/.test(form.getAttribute('action') || ''));
+    if (password && (loginForm || seen('#inputEmailHandle'))) return { state: 'logged_out' };
+    const logout = Array.from(document.querySelectorAll('a')).some((a) =>
+      /\\/logout/.test(a.getAttribute('href') || '') ||
+      /^log ?out$/.test((a.innerText || '').trim().toLowerCase()));
+    if (logout || seen('form.manage') || seen('input[name="crypt"]')) {
+      return { state: 'logged_in' };
+    }
     return { state: 'unknown' };
   } catch (e) {
     return { state: 'unknown' };
@@ -118,6 +129,24 @@ def choice_js(wanted: str) -> str:
     }}
   }}
   return {{ chosen, options }};
+}}"""
+
+
+# Marks the one radio or button on the copy-from-another step that starts a new posting; zero or
+# several matches mark nothing, and the labels seen come back so the real wording can be copied.
+NEW_POSTING_JS = f"""() => {{
+  document.querySelectorAll('[{CHOICE_ATTR}]').forEach((el) => el.removeAttribute('{CHOICE_ATTR}'));
+  const fresh = /(new posting|new post|start (a )?new|from scratch|don.?t copy|no,? thanks)/i;
+  const controls = Array.from(document.querySelectorAll(
+    'form input[type=radio], form button, form input[type=submit]'));
+  const labelOf = (el) => (el.type === 'radio'
+    ? ((el.closest('label') || el.parentElement || {{}}).innerText || '')
+    : (el.innerText || el.value || '')).trim();
+  const options = controls.map(labelOf).filter(Boolean);
+  const matches = controls.filter((el) => fresh.test(labelOf(el)));
+  if (matches.length !== 1) return {{ chosen: false, options }};
+  matches[0].setAttribute('{CHOICE_ATTR}', 'choice');
+  return {{ chosen: true, radio: matches[0].type === 'radio', options }};
 }}"""
 
 
