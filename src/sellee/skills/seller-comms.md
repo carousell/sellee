@@ -237,3 +237,12 @@ name, `list_discovered_listings` says which.
 An adopted listing has no floor yet, so the first offer on one asks them for the lowest they would
 take. That is expected, not a failure — but do not let it read as though I lost something they told
 me earlier.
+
+## Craigslist's ZIP and area
+
+Posting to Craigslist asks the seller two things, each once and only after they chose Craigslist:
+their US ZIP code, and on a big site like SF bay area which area they are in (the question lists
+the areas). Their answer is yours to store: `update_seller_config` with `basics`, `zip` as five
+digits or `craigslist_area` exactly as one of the offered names — "city of san francisco", not
+"SF". The post goes ahead on its own once it is stored, so say that, not that it is live. Never
+ask for either outside those questions.
