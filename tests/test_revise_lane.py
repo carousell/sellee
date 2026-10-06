@@ -125,6 +125,21 @@ class _NoRoom:
         return False
 
 
+def test_an_edit_held_for_page_loads_says_so_once(store, bus) -> None:
+    # Live run 4: a price edit waited half an hour with nothing to show why.
+    item = _listed(store)
+    store.queue_listing_revision(item["id"], "fb", ["list_price"])
+    deps = _deps(store, bus, StubEditForm())
+    deps.governor = _NoRoom()
+    held = []
+    bus.subscribe(lambda event: held.append(event) if event.kind == "revise.held" else None)
+
+    revise.run_next(deps)
+    revise.run_next(deps)
+
+    assert [event.payload["reason"] for event in held] == ["page_loads"]
+
+
 def test_an_edit_with_no_page_loads_left_is_not_claimed(store, bus) -> None:
     item = _listed(store)
     rev = store.queue_listing_revision(item["id"], "fb", ["list_price"])

@@ -147,6 +147,8 @@ class MarketAdapter:
     # Editing through a market's own driver, under `editor.revise`'s contract, and its page cost.
     edit_driver: Callable | None = None
     edit_loads: int = 2
+    # A text-only edit's cost, where it is cheaper than one that touches photos.
+    edit_text_loads: int | None = None
     # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
     # recorded only. The default treats every ring as a message; a market narrows it only from
     # notifications it has actually been seen to send.
@@ -240,6 +242,7 @@ CRAIGSLIST = MarketAdapter(
     publish_loads=craigslist.PUBLISH_LOADS,
     edit_driver=_edit_craigslist,
     edit_loads=craigslist.EDIT_LOADS,
+    edit_text_loads=craigslist.EDIT_TEXT_LOADS,
     editable_fields=craigslist.EDITABLE_FIELDS,
     polices_automation=True,
     read_trigger="mail",

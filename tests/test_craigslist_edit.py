@@ -423,8 +423,10 @@ def test_an_item_with_no_craigslist_post_settles_failed_and_drives_nothing(
 
 
 def test_a_craigslist_edit_reserves_its_own_page_budget() -> None:
-    assert revise._edit_loads("craigslist") == craigslist.EDIT_LOADS
-    assert revise._edit_loads("fb") == revise.EDIT_LOADS
+    # Live run 4: a price edit reserved a photo edit's 14 loads and waited out the hour.
+    assert revise._edit_loads("craigslist", ["list_price"]) == craigslist.EDIT_TEXT_LOADS
+    assert revise._edit_loads("craigslist", ["title", "photos"]) == craigslist.EDIT_LOADS
+    assert revise._edit_loads("fb", ["list_price"]) == revise.EDIT_LOADS
 
 
 def test_a_signed_out_edit_signs_back_in_and_waits_unclaimed(store, bus, listed) -> None:

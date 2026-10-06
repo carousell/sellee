@@ -255,6 +255,8 @@ EDITABLE_FIELDS = frozenset({"title", "list_price", "description", "photos"})
 # A text and a photo edit together: each opens the manage page, submits its steps and publishes,
 # then reads the manage page again, the photo edit reopening its images to count them.
 EDIT_LOADS = 14
+# A text-only edit: the manage page, the edit form, the preview, publish, the manage page again.
+EDIT_TEXT_LOADS = 6
 DELETE_IMAGE = f"[{CHOICE_ATTR}=delete]"
 # Marks the first image's own remove button on the images step: an in-page form, never the
 # manage page's "Delete this Posting".
