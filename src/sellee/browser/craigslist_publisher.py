@@ -403,7 +403,10 @@ def _check_edit_preview(client, item: dict, text) -> None:
     shown = str((client.evaluate(craigslist.PREVIEW_TEXT_JS) or {}).get("text") or "")
     wrong = _still_old(item, text, shown)
     if wrong:
-        log.info("Craigslist edit preview read as %r", shown[:300])
+        prices = [
+            shown[max(0, m.start() - 60) : m.end() + 20] for m in re.finditer(r"\$[\d,.]+", shown)
+        ]
+        log.info("Craigslist edit preview shows prices %r", prices[:4])
         raise PublishNotAttempted(f"the preview does not show the new {', '.join(wrong)}")
 
 

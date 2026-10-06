@@ -44,6 +44,8 @@ class FakePost:
         self.marked_delete = False
         self.published = 0
         self.leaves_a_char = False
+        self.number_box = False
+        self.caret_at_end = False
         self.header_mid_line = False
         self.signed_in = True
 
@@ -91,7 +93,7 @@ class FakePost:
         elif target == craigslist.EDIT_IMAGES:
             self.draft, self.images, self.step = dict(self.post), self.post_images, "editimage"
         elif target in _BOXES:
-            self.focus, self.selected = target, False
+            self.focus, self.selected, self.caret_at_end = target, False, False
         elif target == craigslist.CONTINUE and self.step == "edit":
             self.step = "preview"
         elif target == craigslist.DONE_WITH_IMAGES:
@@ -112,13 +114,20 @@ class FakePost:
             raise AssertionError(f"unexpected click on {target} at {self.step!r}")
 
     def call_tool(self, name: str, arguments: dict):
-        if name == "browser_press_key":
-            if arguments["key"] == "Backspace" and self.selected and self.focus:
-                held = self.draft.get(_BOXES[self.focus]) or ""
+        if name == "browser_press_key" and self.focus:
+            key, field = arguments["key"], _BOXES[self.focus]
+            held = self.draft.get(field) or ""
+            if key == "ControlOrMeta+a":
+                # Live, select-all did nothing in the number price box.
+                self.selected = field != "price" or not self.number_box
+            elif key == "End":
+                self.caret_at_end = True
+            elif key == "Backspace" and self.selected:
                 # Live, one clear left a character behind.
-                self.draft[_BOXES[self.focus]] = held[:1] if self.leaves_a_char else ""
-                self.leaves_a_char = False
-            self.selected = arguments["key"] != "Backspace"
+                self.draft[field] = held[:1] if self.leaves_a_char else ""
+                self.leaves_a_char, self.selected = False, False
+            elif key == "Backspace" and self.caret_at_end:
+                self.draft[field] = held[:-1]
         elif name == "browser_file_upload" and self.uploads:
             self.images += len(arguments["paths"])
         return ""
@@ -242,6 +251,16 @@ def test_a_preview_whose_header_is_not_at_the_start_of_its_line_is_read() -> Non
     # Live: "the preview does not show the new list_price" with $18 typed and read back.
     post = FakePost()
     post.header_mid_line = True
+
+    outcome = _revise(post, _item(list_price=18.0), ["list_price"])
+
+    assert outcome.verified and post.post["price"] == "18"
+
+
+def test_a_number_box_that_ignores_select_all_is_emptied_from_its_end() -> None:
+    # Live: Cmd+A and Backspace left "12" in the price box and "18" went in as "1812".
+    post = FakePost()
+    post.number_box = True
 
     outcome = _revise(post, _item(list_price=18.0), ["list_price"])
 

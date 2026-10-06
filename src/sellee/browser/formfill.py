@@ -131,12 +131,16 @@ def type_fields(
 
 def _empty(client, box: str, step: str) -> None:
     """Empty a box with real keys, and read it back: typing into one that is not empty appends."""
+    client.click(box, step)
+    client.call_tool("browser_press_key", {"key": _SELECT_ALL})
+    client.call_tool("browser_press_key", {"key": "Backspace"})
     for _ in range(CLEAR_TRIES):
-        client.click(box, step)
-        client.call_tool("browser_press_key", {"key": _SELECT_ALL})
-        client.call_tool("browser_press_key", {"key": "Backspace"})
         left = client.evaluate(COMPOSER_TEXT_JS, target=box, element=f"the {step} field")
         if not left:
             return
         log.info("the %s box still held %r after clearing", step, left)
+        # Live, select-all did nothing in a number box; deleting back from its end does.
+        client.call_tool("browser_press_key", {"key": "End"})
+        for _ in range(len(left)):
+            client.call_tool("browser_press_key", {"key": "Backspace"})
     raise BrowserToolError(f"the {step} box would not empty")
