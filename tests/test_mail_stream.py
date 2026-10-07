@@ -1,4 +1,4 @@
-"""The mail lanes driven by bazaar's ring stream, against a fake bazaar that streams."""
+"""The mail lanes driven by bazaar's mail stream, against a fake bazaar that streams."""
 
 from __future__ import annotations
 
