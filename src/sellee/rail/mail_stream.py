@@ -160,7 +160,8 @@ def reconnect_wait(failures: int, rand: Callable[[], float] = random.random) -> 
     """Seconds to wait after the nth failure in a row: 1–30 at random, doubling, at most 60, so
     installs dropped together do not all come back at once."""
     first = 1.0 + (FIRST_WAIT_MAX_SEC - 1.0) * rand()
-    return min(WAIT_CAP_SEC, first * 2 ** (failures - 1))
+    # Six doublings pass the cap from any start; a larger exponent would overflow a float.
+    return min(WAIT_CAP_SEC, first * 2 ** min(failures - 1, 6))
 
 
 class MailStream:

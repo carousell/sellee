@@ -220,12 +220,40 @@ def test_a_failed_read_does_not_end_the_stream():
 
 
 @_SPREAD
-@given(st.integers(min_value=1, max_value=40), st.randoms(use_true_random=False))
+@given(st.integers(min_value=1, max_value=10**9), st.randoms(use_true_random=False))
 def test_reconnect_waits_spread_then_back_off_to_a_minute(failures, rng):
     wait = reconnect_wait(failures, rng.random)
     assert 1.0 <= wait <= 60.0
     if failures == 1:
         assert wait <= 30.0
+
+
+def test_the_stream_outlives_thousands_of_failures_and_recovers():
+    bazaar = FakeBazaar()
+    opens = itertools.count()
+    waits = []
+
+    def open_stream():
+        if next(opens) < 3000:
+            raise OSError("no route to host")
+        return Connection(bazaar, [], "planned", [])
+
+    class Stop:
+        def is_set(self):
+            return bazaar.reads >= 2 or len(waits) > 5000
+
+        def wait(self, seconds):
+            waits.append(seconds)
+
+    client = MailStream(
+        open_stream=open_stream,
+        reads={kind: SingleFlight(lambda kind=kind: bazaar.read(kind)) for kind in KINDS},
+        clock=_clock(),
+    )
+    client._stop = Stop()  # type: ignore[assignment]
+    client.run()
+    assert len(waits) == 3000 and max(waits) <= mail_stream.WAIT_CAP_SEC
+    assert bazaar.reads == 2
 
 
 def test_reconnect_waits_are_spread_across_installs():
@@ -386,6 +414,28 @@ def test_shutdown_ends_a_waiting_stream_at_once():
         assert not runner.is_alive()
         assert time.monotonic() - started < mail_stream.KEEP_ALIVE_SEC
     finally:
+        handler.hold.set()
+        server.shutdown()
+
+
+def test_after_shutdown_the_thread_ends_only_once_its_read_has_finished():
+    server, client, handler = _serve([b"event: ready\ndata: {}\n\n"], hold=True)
+    flight, started, release, runs = _held_read()
+    stream = MailStream(
+        open_stream=client.open_mail_stream, reads={"relay": flight, "registration": flight}
+    )
+    runner = threading.Thread(target=stream.run)
+    runner.start()
+    try:
+        assert started.wait(2)
+        stream.shutdown()
+        runner.join(0.3)
+        assert runner.is_alive(), "the read the stream started is still running"
+        release.set()
+        runner.join(5)
+        assert not runner.is_alive()
+    finally:
+        release.set()
         handler.hold.set()
         server.shutdown()
 

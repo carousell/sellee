@@ -80,8 +80,6 @@ _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
 # announced, and is the only read against a bazaar without the stream.
 _RELAY_READ_INTERVAL_SEC = 300.0
 _REGISTRATION_READ_INTERVAL_SEC = 300.0
-# Long enough for a read the stream started to finish before the store closes.
-_MAIL_STREAM_JOIN_SEC = 60.0
 _CRAIGSLIST_ACCOUNT_INTERVAL_SEC = 30.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
@@ -1009,7 +1007,9 @@ def run_daemon(*, once: bool) -> int:
     finally:
         if mail_thread is not None:
             mail.shutdown()
-            mail_thread.join(timeout=_MAIL_STREAM_JOIN_SEC)
+            # Untimed, like the scheduler's drain: a read the stream started must finish before
+            # the stores close and the lock is released.
+            mail_thread.join()
         if channels is not None:
             channels.shutdown_all()
         scheduler.shutdown()
