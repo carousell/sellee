@@ -56,7 +56,7 @@ from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
 from sellee.rail import inbox as relay_inbox
-from sellee.rail import registration, registration_sink
+from sellee.rail import mail_stream, registration, registration_sink
 from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
@@ -77,8 +77,10 @@ _REPLY_LANE_INTERVAL_SEC = 10.0
 # enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
 # A buyer's email reaches the seller's inbox at once; this only sets how soon the agent sees it.
-_RELAY_READ_INTERVAL_SEC = 60.0
-_REGISTRATION_READ_INTERVAL_SEC = 60.0
+# bazaar's mail stream rings these reads as mail lands; the timer catches what no ring announced,
+# and carries the mail alone against a bazaar without the stream.
+_RELAY_READ_INTERVAL_SEC = 300.0
+_REGISTRATION_READ_INTERVAL_SEC = 300.0
 _CRAIGSLIST_ACCOUNT_INTERVAL_SEC = 30.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
@@ -800,12 +802,9 @@ def run_daemon(*, once: bool) -> int:
     # Read carousell.ai email threads through the rail. Token-free and off the browser, so it
     # neither waits on Chrome nor counts against a marketplace's pacing.
     relay_deps = relay_inbox.RelayDeps(store=store, bus=bus, config=cfg, rail_factory=rail_factory)
+    relay_read = mail_stream.SingleFlight(lambda: relay_inbox.relay_lane(relay_deps))
     scheduler.register(
-        Task(
-            name="relay_read",
-            interval_sec=_RELAY_READ_INTERVAL_SEC,
-            func=lambda: relay_inbox.relay_lane(relay_deps),
-        )
+        Task(name="relay_read", interval_sec=_RELAY_READ_INTERVAL_SEC, func=relay_read.run)
     )
     # Read mail to the seller's registration address: Craigslist's buyers and its own mail.
     registration_deps = registration.RegistrationDeps(
@@ -815,12 +814,19 @@ def run_daemon(*, once: bool) -> int:
         rail_factory=rail_factory,
         service_hooks=craigslist_account.service_hooks(store),
     )
+    registration_read = mail_stream.SingleFlight(
+        lambda: registration.registration_lane(registration_deps)
+    )
     scheduler.register(
         Task(
             name="registration_read",
             interval_sec=_REGISTRATION_READ_INTERVAL_SEC,
-            func=lambda: registration.registration_lane(registration_deps),
+            func=registration_read.run,
         )
+    )
+    mail = mail_stream.MailStream(
+        open_stream=lambda: rail_factory().open_mail_stream(),
+        reads={"relay": relay_read, "registration": registration_read},
     )
     # Open the links Craigslist mails while the seller creates or signs in to their account.
     craigslist_deps = craigslist_account.AccountDeps(
@@ -990,12 +996,19 @@ def run_daemon(*, once: bool) -> int:
     if channels is not None:
         channels.register_configured()
 
+    mail_thread = None
+    if not once:
+        mail_thread = threading.Thread(target=mail.run, name="mail-stream", daemon=True)
+        mail_thread.start()
     try:
         if once:
             scheduler.run_once()
         else:
             scheduler.run()
     finally:
+        if mail_thread is not None:
+            mail.shutdown()
+            mail_thread.join(timeout=mail_stream.KEEP_ALIVE_SEC)
         if channels is not None:
             channels.shutdown_all()
         scheduler.shutdown()

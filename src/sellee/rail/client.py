@@ -9,9 +9,15 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 
 from __future__ import annotations
 
+import http.client
 import json
+import socket
 import urllib.error
+import urllib.parse
 import urllib.request
+from collections.abc import Iterator
+
+from sellee.rail.mail_stream import READ_TIMEOUT_SEC, StreamMissing, parse_events
 
 _DEFAULT_TIMEOUT_SEC = 15.0
 _VERIFY_TIMEOUT_SEC = 5.0
@@ -63,7 +69,8 @@ class RailClient:
         web_base_url: str,
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
     ):
-        self._endpoint = api_base.rstrip("/") + "/mcp"
+        self._api_base = api_base.rstrip("/")
+        self._endpoint = self._api_base + "/mcp"
         self._api_key = api_key
         self._web_base_url = web_base_url.rstrip("/")
         self._timeout = timeout_sec
@@ -109,6 +116,12 @@ class RailClient:
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result
+
+    def open_mail_stream(self) -> MailStreamConnection:
+        """bazaar's ring stream for this key; nothing is sent until its events are read."""
+        return MailStreamConnection(
+            url=self._api_base + "/api/v1/me/mail-stream", api_key=self._api_key
+        )
 
     def initialize(self) -> dict:
         return self._rpc(
@@ -327,6 +340,43 @@ class RailClient:
             raise RailToolError(f"listing page not reachable: {type(exc).__name__}") from exc
         if status != 200:
             raise RailToolError(f"listing page returned HTTP {status}")
+
+
+class MailStreamConnection:
+    """One open mail stream. `close` from another thread ends a read blocked on it at once."""
+
+    def __init__(self, *, url: str, api_key: str, timeout_sec: float = READ_TIMEOUT_SEC):
+        parts = urllib.parse.urlsplit(url)
+        cls = http.client.HTTPSConnection if parts.scheme == "https" else http.client.HTTPConnection
+        self._conn = cls(parts.hostname, parts.port, timeout=timeout_sec)
+        self._path = parts.path
+        self._api_key = api_key
+
+    def events(self) -> Iterator[tuple[str, str | None]]:
+        self._conn.request(
+            "GET",
+            self._path,
+            headers={
+                "Accept": "text/event-stream",
+                "Authorization": f"Bearer {self._api_key}",
+                "User-Agent": _CLIENT_UA,
+            },
+        )
+        resp = self._conn.getresponse()
+        if resp.status in (401, 403):
+            raise RailAuthError("carousell.ai rejected the guest key")
+        if resp.status != 200 or "text/event-stream" not in (resp.getheader("Content-Type") or ""):
+            raise StreamMissing(f"mail stream answered HTTP {resp.status}")
+        yield from parse_events(line.decode("utf-8", "replace") for line in resp)
+
+    def close(self) -> None:
+        sock = self._conn.sock
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+        self._conn.close()
 
 
 def listing_id_from_url(url) -> str:
