@@ -76,11 +76,12 @@ _REPLY_LANE_INTERVAL_SEC = 10.0
 # The proposal TTL is a day; an hourly sweep gives at most an hour's slack past it. The doors also
 # enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
-# A buyer's email reaches the seller's inbox at once; this only sets how soon the agent sees it.
-# bazaar's mail stream rings these reads as mail lands; the timer catches what no ring announced,
-# and carries the mail alone against a bazaar without the stream.
+# bazaar's mail stream rings these reads as mail lands. The timed read catches what no ring
+# announced, and is the only read against a bazaar without the stream.
 _RELAY_READ_INTERVAL_SEC = 300.0
 _REGISTRATION_READ_INTERVAL_SEC = 300.0
+# Long enough for a read the stream started to finish before the store closes.
+_MAIL_STREAM_JOIN_SEC = 60.0
 _CRAIGSLIST_ACCOUNT_INTERVAL_SEC = 30.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
@@ -1008,7 +1009,7 @@ def run_daemon(*, once: bool) -> int:
     finally:
         if mail_thread is not None:
             mail.shutdown()
-            mail_thread.join(timeout=mail_stream.KEEP_ALIVE_SEC)
+            mail_thread.join(timeout=_MAIL_STREAM_JOIN_SEC)
         if channels is not None:
             channels.shutdown_all()
         scheduler.shutdown()

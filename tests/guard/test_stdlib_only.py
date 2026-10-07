@@ -61,6 +61,7 @@ NETWORK_ALLOWLIST: set[str] = {
     "sellee/installer/update.py",  # fetches the release archive and its checksums
     "sellee/installer/runtime.py",  # fetches the pinned uv release archive
     "sellee/rail/client.py",  # carousell.ai MCP client + live listing verify
+    "sellee/rail/mail_stream.py",  # bazaar's mail stream, one held GET to the same API
     "sellee/rail/provision.py",  # carousell.ai guest-key provisioning
     "sellee/channel/telegram/transport.py",  # the Telegram Bot API transport (one pipe)
     "sellee/channel/discord/transport.py",  # the Discord REST API transport (one pipe)

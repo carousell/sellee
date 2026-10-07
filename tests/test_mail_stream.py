@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import http.server
+import itertools
 import random
 import threading
 import time
@@ -12,13 +13,27 @@ from hypothesis import strategies as st
 
 from sellee.rail import mail_stream
 from sellee.rail.client import RailClient
-from sellee.rail.mail_stream import KINDS, MailStream, SingleFlight, StreamMissing, reconnect_wait
+from sellee.rail.mail_stream import (
+    KINDS,
+    MailStream,
+    MailStreamConnection,
+    SingleFlight,
+    StreamMissing,
+    reconnect_wait,
+)
 
 _PROPERTY = settings(
     max_examples=200,
     deadline=None,
     suppress_health_check=[HealthCheck.too_slow],
 )
+_SPREAD = settings(max_examples=300, deadline=None)
+
+
+def _clock():
+    """Ten seconds pass between looks, so every scripted stream outlasts MIN_PLANNED_SEC."""
+    ticks = itertools.count()
+    return lambda: 10.0 * next(ticks)
 
 
 class FakeBazaar:
@@ -38,8 +53,8 @@ class FakeBazaar:
             if mail not in self.stored[kind]:
                 self.stored[kind].append(mail)
 
-    def all_stored(self, kinds=KINDS):
-        return all(self.stored[k] == self.mail[k] for k in kinds)
+    def all_stored(self):
+        return all(self.stored[k] == self.mail[k] for k in KINDS)
 
 
 class Connection:
@@ -52,8 +67,7 @@ class Connection:
         if self.ending == "missing":
             raise StreamMissing("no mail stream on this bazaar")
         yield ("ready", None)
-        for step in self.steps:
-            kind, rung = step
+        for kind, rung in self.steps:
             self.bazaar.deliver(kind)
             if rung:
                 self.log.append(("ring", kind, len(self.bazaar.mail[kind])))
@@ -75,7 +89,8 @@ def _client(bazaar, connections, log):
 
         reads[kind] = SingleFlight(read)
     pending = iter(connections)
-    return MailStream(open_stream=lambda: next(pending), reads=reads), reads
+    stream = MailStream(open_stream=lambda: next(pending), reads=reads, clock=_clock())
+    return stream, reads
 
 
 _steps = st.lists(st.tuples(st.sampled_from(KINDS), st.booleans()), max_size=5)
@@ -86,7 +101,7 @@ _connections = st.lists(
 
 @_PROPERTY
 @given(_connections)
-def test_rings_and_connects_read_what_they_should_and_the_five_minute_read_catches_the_rest(script):
+def test_rings_and_connects_read_what_they_should_and_the_timed_read_catches_the_rest(script):
     bazaar, log = FakeBazaar(), []
     connections = [Connection(bazaar, steps, ending, log) for steps, ending in script]
     client, reads = _client(bazaar, connections, log)
@@ -111,7 +126,7 @@ def test_rings_and_connects_read_what_they_should_and_the_five_minute_read_catch
             assert any(e[0] == "read" and e[1] == kind and e[2] >= delivered for e in log[i + 1 :])
     # No idle reads: at most one per ring, two per reading connect.
     assert bazaar.reads <= rings + 2 * ready_reads
-    # Catch-up: the 5-minute read stores whatever no ring announced.
+    # Catch-up: the timed read stores whatever no ring announced.
     for kind in KINDS:
         reads[kind].run()
     assert bazaar.all_stored()
@@ -152,6 +167,41 @@ def test_a_ring_reads_only_its_kind():
     assert bazaar.stored["relay"] == []
 
 
+def test_a_stream_that_ends_at_once_is_a_failure_not_a_planned_close():
+    bazaar, log = FakeBazaar(), []
+    connection = Connection(bazaar, [], "planned", log)
+    client = MailStream(
+        open_stream=lambda: connection,
+        reads={kind: SingleFlight(lambda: None) for kind in KINDS},
+        clock=lambda: 0.0,
+    )
+    assert client.serve_one() == "failed"
+
+
+def test_with_no_stream_the_retry_waits_as_long_as_the_timed_read():
+    waits = []
+
+    class Stop:
+        def __init__(self):
+            self.calls = 0
+
+        def is_set(self):
+            return self.calls > 0
+
+        def wait(self, seconds):
+            waits.append(seconds)
+            self.calls += 1
+
+    client = MailStream(
+        open_stream=lambda: Connection(FakeBazaar(), [], "missing", []),
+        reads={kind: SingleFlight(lambda: None) for kind in KINDS},
+        rand=lambda: 0.5,
+    )
+    client._stop = Stop()  # type: ignore[assignment]
+    client.run()
+    assert waits == [mail_stream.UNAVAILABLE_WAIT_SEC]
+
+
 def test_a_failed_read_does_not_end_the_stream():
     calls = []
 
@@ -163,12 +213,13 @@ def test_a_failed_read_does_not_end_the_stream():
     client = MailStream(
         open_stream=lambda: connection,
         reads={kind: SingleFlight(broken) for kind in KINDS},
+        clock=_clock(),
     )
     assert client.serve_one() == "closed"
     assert len(calls) == 2
 
 
-@settings(max_examples=300, deadline=None)
+@_SPREAD
 @given(st.integers(min_value=1, max_value=40), st.randoms(use_true_random=False))
 def test_reconnect_waits_spread_then_back_off_to_a_minute(failures, rng):
     wait = reconnect_wait(failures, rng.random)
@@ -182,7 +233,7 @@ def test_reconnect_waits_are_spread_across_installs():
     assert min(first) < 5 and max(first) > 25
 
 
-def test_a_ring_during_a_read_runs_exactly_one_more_read():
+def _held_read(fail_first=False):
     started, release = threading.Event(), threading.Event()
     runs = []
 
@@ -191,12 +242,29 @@ def test_a_ring_during_a_read_runs_exactly_one_more_read():
         if len(runs) == 1:
             started.set()
             release.wait(2)
+            if fail_first:
+                raise RuntimeError("rail down")
 
-    flight = SingleFlight(read)
+    return SingleFlight(read), started, release, runs
+
+
+def test_a_ring_during_a_read_runs_exactly_one_more_read():
+    flight, started, release, runs = _held_read()
     first = threading.Thread(target=flight.run)
     first.start()
     started.wait(2)
     flight.run()
+    flight.run()
+    release.set()
+    first.join(2)
+    assert len(runs) == 2
+
+
+def test_a_ring_during_a_failing_read_still_runs_its_read():
+    flight, started, release, runs = _held_read(fail_first=True)
+    first = threading.Thread(target=lambda: flight.run())
+    first.start()
+    started.wait(2)
     flight.run()
     release.set()
     first.join(2)
@@ -208,29 +276,44 @@ def test_a_ring_during_a_read_runs_exactly_one_more_read():
 
 class _Bazaar(http.server.BaseHTTPRequestHandler):
     frames: list[bytes] = []
-    hold = threading.Event()
     status = 200
+    chunked = False
+    hold: threading.Event
+    served: threading.Event
 
     def do_GET(self):
         if self.status != 200:
             self.send_response(self.status)
+            self.send_header("Content-Length", "0")
             self.end_headers()
             return
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
+        if self.chunked:
+            self.send_header("Transfer-Encoding", "chunked")
         self.end_headers()
         for frame in self.frames:
-            self.wfile.write(frame)
+            self.wfile.write(b"%x\r\n%s\r\n" % (len(frame), frame) if self.chunked else frame)
             self.wfile.flush()
+        self.served.set()
         self.hold.wait(5)
+        if self.chunked:
+            self.wfile.write(b"0\r\n\r\n")
 
-    def log_message(self, *args):
-        pass
 
-
-def _serve(frames, *, status=200, hold=False):
+def _serve(frames, *, status=200, hold=False, chunked=False):
     handler = type(
-        "Handler", (_Bazaar,), {"frames": frames, "status": status, "hold": threading.Event()}
+        "Handler",
+        (_Bazaar,),
+        {
+            "frames": frames,
+            "status": status,
+            "chunked": chunked,
+            "hold": threading.Event(),
+            "served": threading.Event(),
+            "protocol_version": "HTTP/1.1" if chunked else "HTTP/1.0",
+            "log_message": lambda *a: None,
+        },
     )
     if not hold:
         handler.hold.set()
@@ -244,37 +327,46 @@ def _serve(frames, *, status=200, hold=False):
     return server, client, handler
 
 
+_FRAMES = [
+    b"event: ready\ndata: {}\n\n",
+    b": keep-alive\n\n",
+    b'event: ring\ndata: {"kind":"registration"}\n\n',
+    b'event: ring\ndata: {"kind":"relay"}\n\n',
+    b'event: ring\ndata: {"kind":"listings"}\n\n',
+]
+
+
 def test_the_client_reads_bazaars_events_and_skips_keep_alives():
-    server, client, _ = _serve(
-        [
-            b"event: ready\ndata: {}\n\n",
-            b": keep-alive\n\n",
-            b'event: ring\ndata: {"kind":"registration"}\n\n',
-            b'event: ring\ndata: {"kind":"relay"}\n\n',
-            b'event: ring\ndata: {"kind":"listings"}\n\n',
-        ]
-    )
-    try:
-        stream = client.open_mail_stream()
-        assert list(stream.events()) == [
-            ("ready", None),
-            ("ring", "registration"),
-            ("ring", "relay"),
-        ]
-    finally:
-        server.shutdown()
+    for chunked in (False, True):
+        server, client, _ = _serve(_FRAMES, chunked=chunked)
+        try:
+            events = list(client.open_mail_stream().events())
+            assert events == [("ready", None), ("ring", "registration"), ("ring", "relay")]
+        finally:
+            server.shutdown()
 
 
 def test_a_bazaar_without_the_route_is_no_stream():
-    server, client, _ = _serve([], status=404)
+    for status in (404, 401):
+        server, client, _ = _serve([], status=status)
+        try:
+            try:
+                list(client.open_mail_stream().events())
+            except StreamMissing:
+                pass
+            else:
+                raise AssertionError(f"HTTP {status} is no stream")
+        finally:
+            server.shutdown()
+
+
+def test_a_stream_closed_before_it_is_read_never_connects():
+    server, client, handler = _serve(_FRAMES)
     try:
         stream = client.open_mail_stream()
-        try:
-            list(stream.events())
-        except StreamMissing:
-            pass
-        else:
-            raise AssertionError("a 404 is no stream")
+        stream.close()
+        assert list(stream.events()) == []
+        assert not handler.served.is_set()
     finally:
         server.shutdown()
 
@@ -286,10 +378,8 @@ def test_shutdown_ends_a_waiting_stream_at_once():
     runner = threading.Thread(target=stream.run)
     runner.start()
     try:
-        deadline = time.monotonic() + 2
-        while stream.connected is False and time.monotonic() < deadline:
-            time.sleep(0.01)
-        assert stream.connected
+        assert handler.served.wait(2)
+        time.sleep(0.1)
         started = time.monotonic()
         stream.shutdown()
         runner.join(5)
@@ -298,3 +388,12 @@ def test_shutdown_ends_a_waiting_stream_at_once():
     finally:
         handler.hold.set()
         server.shutdown()
+
+
+def test_the_connection_uses_the_proxy_the_reads_use(monkeypatch):
+    monkeypatch.setenv("https_proxy", "http://proxy.example:3128")
+    monkeypatch.delenv("no_proxy", raising=False)
+    monkeypatch.delenv("NO_PROXY", raising=False)
+    conn = MailStreamConnection(url="https://api.carousell.ai/api/v1/me/mail-stream", api_key="k")
+    assert (conn._conn.host, conn._conn.port) == ("proxy.example", 3128)
+    assert conn._conn._tunnel_host == "api.carousell.ai"
