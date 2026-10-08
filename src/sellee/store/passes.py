@@ -260,19 +260,20 @@ class PassesMixin:
         return {"pass_id": pass_id, **payload}
 
     def last_finished_pass(self, pass_type: str) -> dict | None:
-        """The most recently finished pass of a type, as {class, finished_ts} — or None.
-
-        The reply lane's cooldown read: a pass that ended `no_send` is the one signal that
-        respawning right now would only repeat it.
-        """
+        """The most recently finished pass of a type, as {class, finished_ts, payload}, or None.
+        The reply lane's cooldown reads it."""
         rows = self._db.query(
-            "SELECT class, finished_ts FROM passes WHERE type = ? AND finished_ts IS NOT NULL "
-            "ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",
+            "SELECT class, finished_ts, payload FROM passes WHERE type = ? "
+            "AND finished_ts IS NOT NULL ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",
             (pass_type,),
         )
         if not rows:
             return None
-        return {"class": rows[0]["class"], "finished_ts": rows[0]["finished_ts"]}
+        return {
+            "class": rows[0]["class"],
+            "finished_ts": rows[0]["finished_ts"],
+            "payload": json.loads(rows[0]["payload"] or "{}"),
+        }
 
     def active_passes_of_types(self, types) -> list[dict]:
         """Queued or running passes of the given types, as {type, payload}.

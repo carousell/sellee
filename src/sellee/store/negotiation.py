@@ -130,7 +130,9 @@ class NegotiationMixin:
                 if not isinstance(list_price, (int, float)) or list_price <= 0:
                     raise StoreError(f"item {item_id!r} has no valid list price to negotiate")
                 if offer < list_price:
-                    return self._hold_for_floor(conn, item_id, thread_id, handle, offer, currency)
+                    return self._hold_for_floor(
+                        conn, item_id, thread_id, handle, offer, currency, list_price
+                    )
                 # at/above list needs no real floor: persist the documented default (= list price)
                 conn.execute(
                     "INSERT INTO floors (item_id, floor, currency, source, updated_ts) "
@@ -185,7 +187,9 @@ class NegotiationMixin:
             "currency": currency,
         }
 
-    def _hold_for_floor(self, conn, item_id, thread_id, handle, offer, currency) -> dict:
+    def _hold_for_floor(
+        self, conn, item_id, thread_id, handle, offer, currency, list_price
+    ) -> dict:
         """No floor and a below-list offer: record the offer and hold, so the caller asks the
         seller for the floor once. Nothing is decided (no rounds/front-runner consumed), and the
         held offer still bars rivals via other_best once the floor lands."""
@@ -211,6 +215,9 @@ class NegotiationMixin:
             "message_intent": "hold_for_floor",
             "item_state": led["state"],
             "currency": currency,
+            # Used as the escalation question, so the seller sees the offer they are deciding on.
+            "floor_ask": f"A buyer offered {_money(offer, currency)}; your list price is "
+            f"{_money(list_price, currency)}. What's the lowest you'd take? It stays private.",
         }
 
     @staticmethod
@@ -619,3 +626,9 @@ class NegotiationMixin:
                 (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
             )
         return self.get_checkout(sale_id)  # type: ignore[return-value]
+
+
+def _money(amount, currency) -> str:
+    """Format 150.0 with SGD as "150 SGD"."""
+    number = f"{amount:g}" if isinstance(amount, (int, float)) else str(amount)
+    return f"{number} {currency}" if currency else number

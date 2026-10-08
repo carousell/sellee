@@ -16,7 +16,8 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
 
-from sellee import marketplaces
+from sellee import marketplaces, prompt_data
+from sellee.channel import refs as channel_refs
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.rail.client import (
@@ -69,6 +70,7 @@ def relay_lane(deps: RelayDeps) -> None:
             if pending["placed"] or _item_for(items, pending["listing_id"]):
                 _import(deps, rail, None, items, bazaar_id=pending["id"])
         _finish_our_sends(deps, rail)
+        _nudge_escalated_buyers(deps)
     except RailUnprovisioned:
         return
     except (RailNetworkError, RailAuthError) as exc:
@@ -151,6 +153,35 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
             if last_buyer:
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
+
+
+def _nudge_escalated_buyers(deps: RelayDeps) -> None:
+    """Tell the seller about buyer mail on an escalated relay thread, which the reply lane skips.
+    Read from stored rows each tick, so mail held back by an undelivered nudge is sent later."""
+    for esc in deps.store.list_open_escalations():
+        if not esc["thread_id"].startswith(f"{MARKET}:"):
+            continue
+        prefix = f"buyer-wrote-again:{esc['id']}:"
+        sent = deps.store.notices_with_ref_prefix(prefix)
+        if any(n["status"] == "queued" for n in sent):
+            continue
+        messages = deps.store.get_thread_messages(esc["thread_id"])
+        covered = {sent[-1]["ref"][len(prefix) :]} if sent else set()
+        since = esc["created_ts"]
+        for row in messages:
+            if row["msg_id"] in covered:
+                since = max(since, row["ts"])
+        wrote = [m for m in messages if m["dir"] == "in" and m["ts"] > since]
+        if not wrote:
+            continue
+        # The buyer wrote this text, so newlines are removed before it goes into a notice.
+        said = " / ".join(f'"{prompt_data.one_line(m["text"])}"' for m in wrote)
+        about = channel_refs.thread_reference(deps.store, esc["thread_id"])
+        about = f" — {about}" if about else ""
+        deps.store.queue_notice(
+            f"The buyer wrote again while this waits on you{about}: {said}",
+            ref=prefix + wrote[-1]["msg_id"],
+        )
 
 
 def _settle_our_send(deps: RelayDeps, message: dict) -> None:

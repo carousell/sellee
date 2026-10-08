@@ -359,3 +359,74 @@ def test_a_hold_landing_mid_read_keeps_the_block_pending(store, bus, fake, item,
     relay.relay_lane(deps)
 
     assert store.get_thread("carousell-ai:t1")["status"] == "closed"
+
+
+def _nudges(store) -> list:
+    return [
+        n for n in store.list_queued_notices() if (n["ref"] or "").startswith("buyer-wrote-again:")
+    ]
+
+
+def test_a_buyer_writing_while_the_seller_decides_nudges_the_seller(store, bus, fake, item):
+    """The reply lane skips an escalated thread, so the seller is told when its buyer writes
+    again."""
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Can I see it this weekend?")
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    store.escalate("carousell-ai:t1", open_question="How do you want to close?")
+
+    # Two messages read in one tick are one nudge carrying both, naming the item.
+    fake.add_message("t1", "m2", "buyer", "Hello?")
+    fake.add_message("t1", "m3", "buyer", "Does it come with lights?")
+    relay.relay_lane(deps)
+    [nudge] = _nudges(store)
+    assert "Hello?" in nudge["text"] and "lights" in nudge["text"]
+    assert "Teak lamp" in nudge["text"]
+
+    # While that nudge waits to be delivered, more mail adds no second one.
+    fake.add_message("t1", "m4", "buyer", "Anyone?")
+    relay.relay_lane(deps)
+    assert len(_nudges(store)) == 1
+
+    # Once that nudge is delivered, the buyer's next message queues a new one.
+    store.mark_notice_delivered(nudge["id"], via="channel")
+    fake.add_message("t1", "m5", "buyer", "Still there?")
+    relay.relay_lane(deps)
+    [again] = _nudges(store)
+    assert "Still there?" in again["text"]
+
+
+def test_a_buyer_writing_on_a_thread_nobody_escalated_nudges_no_one(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Still available?")
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    fake.add_message("t1", "m2", "buyer", "Hello?")
+    relay.relay_lane(deps)
+    assert not [
+        n for n in store.list_queued_notices() if (n["ref"] or "").startswith("buyer-wrote-again:")
+    ]
+
+
+def test_a_question_held_back_by_an_undelivered_nudge_reaches_the_seller_after(
+    store, bus, fake, item
+):
+    """A question that arrives while the last nudge is undelivered still reaches the seller once
+    it is, with no further mail from the buyer."""
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Can I see it this weekend?")
+    deps = _deps(store, bus, fake)
+    relay.relay_lane(deps)
+    store.escalate("carousell-ai:t1", open_question="How do you want to close?")
+    fake.add_message("t1", "m2", "buyer", "Hello?")
+    relay.relay_lane(deps)
+    fake.add_message("t1", "m3", "buyer", "Does it come with lights?")
+    relay.relay_lane(deps)
+    [first] = _nudges(store)
+    assert "lights" not in first["text"]
+
+    store.mark_notice_delivered(first["id"], via="channel")
+    relay.relay_lane(deps)
+    [second] = _nudges(store)
+    assert "lights" in second["text"] and "Hello?" not in second["text"]
