@@ -9,7 +9,8 @@ under-sends — the safe direction.
 Verdicts: `go` (act after the returned jitter), `wait` (at the hourly cap; delay is when a slot
 frees), `quiet` (inside quiet hours; delay is until the window ends). quiet hours and the cap are
 checked BEFORE any jitter is chosen, so a mode can only change the jitter, never a safety floor.
-Quiet hours hold only the kinds we *start* — see REACTIVE_KINDS; the cap holds every kind.
+Quiet hours hold only the kinds we *start* — see REACTIVE_KINDS; the cap holds every kind. A reply
+on a market that is no browser send skips this engine: see UNPACED_MARKETS in store/send.py.
 FAST mode zeroes jitter, lifts the cap to its ceiling, and disables quiet hours — it drops the
 account-safety disguise for a live demo and never auto-reverts.
 

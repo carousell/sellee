@@ -6,6 +6,7 @@ import hashlib
 import json
 from typing import TYPE_CHECKING
 
+from sellee import marketplaces
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
 from sellee.store.helpers import ThreadNotFound, _new_id, _now
@@ -52,6 +53,14 @@ UNCHECKED_SEND_CONTEXT = (
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 
+# Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
+# answers; the sweep never asks the seller about one.
+LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
+
+# Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
+# carousell.ai replies per buyer itself.
+UNPACED_MARKETS = frozenset({marketplaces.RAIL})
+
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
 # the composer, `sent_unverified` was taken by the page and could not be read back, and
 # `unconfirmed` is one the sweep gave up on and asked the seller about. All three are answered by
@@ -96,10 +105,12 @@ class SendMixin:
         cfg,
         now: float | None = None,
         interactive: bool = False,
+        pass_id: str | None = None,
     ) -> dict:
         """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
-        one transaction. A wait/quiet/unverified_open verdict records no pacing action and no
-        intent — a blocked reply leaves nothing behind for a sweep to re-drive. Returns the verdict
+        one transaction; an unpaced market skips the reserve. A wait/quiet/unverified_open verdict
+        records no pacing action and no intent — a blocked reply leaves nothing behind for a sweep
+        to re-drive. Returns the verdict
         and, on go, the intent id; the caller performs the sink send outside this transaction."""
         now = now if now is not None else _now()
         with self._db.transaction() as conn:
@@ -121,6 +132,14 @@ class SendMixin:
             if unverified:
                 return {"verdict": "unverified_open", "delay_sec": 0.0}
             marketplace = thread["market"]
+            if marketplace in UNPACED_MARKETS:
+                return {
+                    "verdict": "go",
+                    "delay_sec": 0.0,
+                    "intent_id": self._new_intent_in_txn(
+                        conn, thread_id, in_msg_id, text, kind, now, pass_id
+                    ),
+                }
             cutoff = now - pacing_engine.WINDOW_SECONDS
             rows = conn.execute(
                 "SELECT ts FROM pacing_actions WHERE marketplace = ? AND ts > ?",
@@ -139,18 +158,28 @@ class SendMixin:
                 "DELETE FROM pacing_actions WHERE marketplace = ? AND ts <= ?",
                 (marketplace, cutoff),
             )
-            intent_id = _new_id("intent")
-            conn.execute(
-                "INSERT INTO send_intents "
-                "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
-                "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-                (intent_id, thread_id, in_msg_id, text, kind, now),
-            )
             return {
                 "verdict": "go",
                 "delay_sec": verdict["delay_sec"],
-                "intent_id": intent_id,
+                "intent_id": self._new_intent_in_txn(
+                    conn, thread_id, in_msg_id, text, kind, now, pass_id
+                ),
             }
+
+    def _new_intent_in_txn(self, conn, thread_id, in_msg_id, text, kind, now, pass_id) -> str:
+        if in_msg_id is None:
+            # Fix what this reply answers now, so a commit long after it never claims a message
+            # the buyer sent while it was being delivered.
+            target = self._cursor_target(conn, thread_id, None, pass_id)
+            in_msg_id = target[0] if target else None
+        intent_id = _new_id("intent")
+        conn.execute(
+            "INSERT INTO send_intents "
+            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
+            (intent_id, thread_id, in_msg_id, text, kind, now),
+        )
+        return intent_id
 
     def commit_reply(
         self,
@@ -162,6 +191,7 @@ class SendMixin:
         kind: str,
         pass_id: str | None = None,
         now: float | None = None,
+        msg_id: str | None = None,
     ) -> dict:
         """Transaction B: fold the outbound row (a deterministic msg_id from the intent id makes a
         retried commit a UNIQUE no-op), advance the cursor over the handled inbound, mark the intent
@@ -182,15 +212,18 @@ class SendMixin:
                 kind=kind,
                 pass_id=pass_id,
                 now=now,
+                msg_id=msg_id,
             )
 
     def _commit_reply_in_txn(
-        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now
+        self, conn, *, intent_id, thread_id, in_msg_id, text, kind, pass_id, now, msg_id=None
     ) -> dict:
         """Transaction B's body, callable from inside a larger transaction — shared with the settle
         path, so "a reply is committed" has exactly one definition wherever the confirmation came
         from (the send's own read-back, or a later lane finding the bubble on the page)."""
-        out_msg_id = f"out|{intent_id}"
+        # A market that names its own messages is recorded under that name, so the read lane
+        # finding the same message later adds nothing.
+        out_msg_id = msg_id or f"out|{intent_id}"
         conn.execute(
             "INSERT OR IGNORE INTO thread_messages "
             "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
@@ -280,6 +313,16 @@ class SendMixin:
                 (_now(), intent_id),
             )
 
+    def drop_refused_intent(self, intent_id: str) -> None:
+        """Remove a send the market refused outright. Nothing was delivered, so, like a blocked
+        verdict, it leaves nothing for the sweep to ask the seller about."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM send_intents WHERE intent_id = ? "
+                "AND status IN ('pending', 'sent_unverified')",
+                (intent_id,),
+            )
+
     def unsettled_intents(self, max_attempts: int = MAX_VERIFY_ATTEMPTS) -> list[dict]:
         """Every send whose fate is still unknown and still worth looking for.
 
@@ -302,6 +345,17 @@ class SendMixin:
         )
         return [dict(row) for row in rows]
 
+    def unsettled_intents_on(self, market: str, created_before: float) -> list[dict]:
+        """A market's sends still unsettled, oldest first, made before `created_before`."""
+        rows = self._db.query(
+            "SELECT i.intent_id, i.thread_id, i.text FROM send_intents i "
+            "JOIN threads t ON t.thread_id = i.thread_id "
+            f"WHERE t.market = ? AND i.status IN ({_UNSETTLED_PLACEHOLDERS}) "
+            "AND i.created_ts < ? ORDER BY i.created_ts ASC",
+            (market, *UNSETTLED_STATUSES, created_before),
+        )
+        return [dict(row) for row in rows]
+
     def bump_verify_attempt(self, intent_id: str) -> int:
         """Record that a lane looked for this message and did not find it. Returns the new count.
 
@@ -319,7 +373,9 @@ class SendMixin:
             ).fetchone()
         return row["verify_attempts"] if row else 0
 
-    def settle_intent_from_read(self, intent_id: str, now: float | None = None) -> dict | None:
+    def settle_intent_from_read(
+        self, intent_id: str, now: float | None = None, msg_id: str | None = None
+    ) -> dict | None:
         """Commit an unsettled intent because its message was just found on the page.
 
         The whole point of the self-settling loop: the reply is folded exactly as a verified send
@@ -353,6 +409,7 @@ class SendMixin:
                 # so the cursor falls back to the message the intent itself named.
                 pass_id=None,
                 now=now,
+                msg_id=msg_id,
             )
             resolved = self._resolve_escalations_in_txn(
                 conn,
@@ -438,14 +495,21 @@ class SendMixin:
         hard_cutoff = now - hard_grace_sec
         folded: list[dict] = []
         with self._db.transaction() as conn:
+            retried = ", ".join("?" for _ in LANE_RETRIED_MARKETS)
             stale = conn.execute(
-                "SELECT intent_id, thread_id, verify_attempts FROM send_intents "
-                "WHERE status IN ('pending', 'sent_unverified') AND created_ts < ? "
-                "AND (verify_attempts >= ? OR created_ts < ?)",
-                (cutoff, min_verify_attempts, hard_cutoff),
+                "SELECT i.intent_id, i.thread_id, i.verify_attempts FROM send_intents i "
+                "JOIN threads t ON t.thread_id = i.thread_id "
+                "WHERE i.status IN ('pending', 'sent_unverified') AND i.created_ts < ? "
+                f"AND t.market NOT IN ({retried}) "
+                "AND (i.verify_attempts >= ? OR i.created_ts < ?)",
+                (cutoff, *LANE_RETRIED_MARKETS, min_verify_attempts, hard_cutoff),
             ).fetchall()
             for row in stale:
                 looked = row["verify_attempts"] >= min_verify_attempts
+                if looked:
+                    ask, context = UNCONFIRMED_SEND_ASK, UNCONFIRMED_SEND_CONTEXT
+                else:
+                    ask, context = UNCHECKED_SEND_ASK, UNCHECKED_SEND_CONTEXT
                 conn.execute(
                     "UPDATE send_intents SET status = 'unconfirmed' WHERE intent_id = ?",
                     (row["intent_id"],),
@@ -453,11 +517,9 @@ class SendMixin:
                 esc_id, new = self._open_escalation_in_txn(
                     conn,
                     row["thread_id"],
-                    open_question=UNCONFIRMED_SEND_ASK if looked else UNCHECKED_SEND_ASK,
+                    open_question=ask,
                     kind="unconfirmed_send",
-                    context_summary=(
-                        UNCONFIRMED_SEND_CONTEXT if looked else UNCHECKED_SEND_CONTEXT
-                    ),
+                    context_summary=context,
                     options=list(UNCONFIRMED_SEND_OPTIONS),
                 )
                 folded.append(
