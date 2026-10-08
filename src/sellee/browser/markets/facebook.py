@@ -533,13 +533,17 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   // names them, and Facebook interleaves a "Today's picks" grid of OTHER people's listings down
   // the same page at overlapping positions. The first ancestor of the heading that holds any
   // listing link is the seller's grid and holds only it — read the wrong container and the survey
-  // offers to relist strangers' items.
+  // offers to relist strangers' items. The profile now opens as a dialog over that feed, so the
+  // climb stops at the dialog's edge, and at a section saying the seller has nothing listed.
+  const EMPTY = /^No listings found$/im;
   const scope = () => {
     const heading = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
       .find((el) => /listings$/i.test((el.innerText || '').trim()));
     if (!heading) return null;
     for (let node = heading; node; node = node.parentElement) {
-      if (node.querySelector('a[href*="/marketplace/item/"]')) return node;
+      if (node.querySelector('a[href*="/marketplace/item/"]')) return { root: node, empty: false };
+      if (EMPTY.test(node.innerText || '')) return { root: node, empty: true };
+      if (node.getAttribute('role') === 'dialog') return null;
     }
     return null;
   };
@@ -553,8 +557,14 @@ _MY_LISTINGS_TEMPLATE = """async () => {
     return seen;
   };
 
-  const root = scope();
-  if (root === null) {
+  // The dialog fills in after it opens; nothing in it yet is not nothing listed.
+  const deadline = Date.now() + 5000;
+  let found = scope();
+  while (found === null && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+    found = scope();
+  }
+  if (found === null) {
     return {
       error: 'no scoped listings container',
       headings: document.querySelectorAll('h1,h2,h3,[role="heading"]').length,
@@ -567,6 +577,17 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   // small inventory.
   const bodyText = (document.body && document.body.innerText) || '';
   const active = Number((bodyText.match(/(\\d+)\\s+active listings?/i) || [])[1]) || 0;
+  const root = found.root;
+  if (found.empty) {
+    return {
+      listings: [],
+      active_count: active,
+      dropped: 0,
+      unreadable: 0,
+      truncated: active > 0,
+      visible: document.visibilityState === 'visible',
+    };
+  }
 
   // The grid loads lazily, and `window.scrollTo` does not drive it — bringing the last card into
   // view does. Stop when the count has stopped growing, or when it reaches the page's own tally.
@@ -587,6 +608,8 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   cards(root).forEach((a, id) => {
     // Title by position: a listing may legitimately be titled something that parses as a price.
     const lines = (a.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
+    // A fresh listing's card opens with a badge above its price.
+    while (lines.length && /^Just listed$/i.test(lines[0])) lines.shift();
     const priceText = lines[0] || '';
     const title = lines[1] || '';
     const price = parsePrice(priceText);

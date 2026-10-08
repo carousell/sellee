@@ -236,11 +236,8 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
         # Rows that were on the page but would not parse. `truncated` does not catch this — a
         # dropped row counts as read — and an unread row leaves no trace anywhere, which the
         # fan-out reads as "not listed there" and answers by posting a duplicate.
-        _unserved(
-            deps,
-            market,
-            f"{answer['unreadable']} of {answer.get('active_count')} listings would not read",
-        )
+        rows = len(answer["listings"]) + answer["unreadable"]
+        _unserved(deps, market, f"{answer['unreadable']} of {rows} listings would not read")
         return
     if not fresh:
         # Surveyed, with nothing to ask about. Recorded as done so it is not asked again.
