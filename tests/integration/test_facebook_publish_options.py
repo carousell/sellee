@@ -78,5 +78,5 @@ def test_the_suggestion_naming_the_zip_is_taken_and_not_a_lookalike() -> None:
         "San Francisco, CA, US 94103\nSan Francisco, CA, US · 17 people checked in here",
     ]
 
-    assert _place("94103", offered)["chosen"] == "San Francisco, CA, US 94103"
+    assert _place("94103", offered) == {"chosen": "San Francisco, CA, US 94103", "at": 1}
     assert _place("94110", offered)["chosen"] is None

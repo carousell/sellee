@@ -88,6 +88,7 @@ class StubForm:
         self.place = place
         self._open = None
         self._offered = None
+        self._highlighted = None
 
     class _Exclusive:
         def __init__(self, client):
@@ -128,8 +129,10 @@ class StubForm:
                     self.misses -= 1
                 else:
                     self.picked[self._open] = self._offered
-            elif step == "place":
-                self.picked["location"] = self.place
+        if name == "browser_press_key" and arguments.get("key") == "ArrowDown":
+            self._highlighted = self.focused == "location" and self.place
+        if name == "browser_press_key" and arguments.get("key") == "Enter" and self._highlighted:
+            self.picked["location"] = self._highlighted
         if name == "browser_press_key" and self.focused:
             key = arguments.get("key", "")
             if len(key) == 1 or key == "Shift+Enter":
@@ -172,7 +175,11 @@ class StubForm:
         if function == _ADAPTER.publish_result_js:
             return {"listing_id": self.listing_id, "url": _listing_url(self.listing_id)}
         if "const zip" in function:
-            return {"chosen": self.place}
+            if self.place == "94103":
+                # As live: the choice left the box holding the ZIP alone.
+                self.picked["location"] = "94103"
+                return {"chosen": "San Francisco, CA, US 94103", "at": 0}
+            return {"chosen": self.place, "at": 0}
         # An options artifact, built per call with the wanted text baked in.
         self.option_queries.append(function)
         self._offered = self.chosen
@@ -661,9 +668,19 @@ def test_an_empty_location_is_given_the_place_facebook_suggests_for_the_zip() ->
 
     assert client.typed.get("location") == "94103"
     assert client.picked["location"] == "San Francisco, CA, US 94103"
-    assert client.actions.index(("browser_click", "place")) < client.actions.index(
-        ("browser_click", "next")
-    )
+    enter = client.actions.index(("browser_press_key", "browser_press_key"))
+    assert enter < client.actions.index(("browser_click", "next"))
+
+
+def test_a_typed_zip_left_unchosen_stops_before_next() -> None:
+    """Live, a press on the suggestion left the box holding the ZIP alone, which Facebook calls
+    invalid; that is not a place."""
+    client = StubForm(marked=[*_ALL_FIELDS, "location"], place="94103")
+
+    with pytest.raises(publisher.PublishNotAttempted, match="did not take ZIP"):
+        _publish(client, seller={"zip": "94103"})
+
+    assert "next" not in _steps(client)
 
 
 def test_a_location_the_form_already_holds_is_left_alone() -> None:

@@ -260,8 +260,9 @@ def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None
 
 
 def _place(client, adapter, zip_code: str, found: dict, pause) -> None:
-    """Give the form the seller's place when it has none: type the ZIP and take the suggestion
-    that names it. Facebook leaves Next greyed out without a location it suggested itself."""
+    """Give the form the seller's place when it has none: type the ZIP and choose the suggestion
+    naming it with the arrow keys and Enter, as a click on a suggestion does not take. Facebook
+    leaves Next greyed out until the box holds a place it suggested, not the ZIP typed."""
     if "location" not in (found.get("marked") or []) or _holds(client, adapter, "location"):
         return
     if not zip_code:
@@ -276,15 +277,19 @@ def _place(client, adapter, zip_code: str, found: dict, pause) -> None:
             raise PublishNotAttempted(
                 f"{adapter.market} suggested no place for ZIP {zip_code}", retryable=True
             )
-        client.click(adapter.publish_target("place"), "the suggested place")
+        for _ in range(int(answer.get("at") or 0) + 1):
+            client.call_tool("browser_press_key", {"key": "ArrowDown"})
+        client.call_tool("browser_press_key", {"key": "Enter"})
         pause(STEP_SETTLE_SEC)
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
             raise
         raise PublishNotAttempted(f"could not set the location: {exc}", retryable=True) from exc
-    if not _holds(client, adapter, "location"):
+    held = _holds(client, adapter, "location")
+    if zip_code not in held or held.strip() == zip_code:
         raise PublishNotAttempted(
-            f"the {adapter.market} form did not take ZIP {zip_code}", retryable=True
+            f"the {adapter.market} form did not take ZIP {zip_code} (it holds {held!r})",
+            retryable=True,
         )
 
 

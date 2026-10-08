@@ -868,23 +868,21 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
 }}"""
 
 
-# The place Facebook suggests for a ZIP, marked so it can be clicked. Its list also offers places
-# that merely resemble what was typed, so only a suggestion naming the ZIP is taken.
-_PUBLISH_PLACE_TEMPLATE = f"""async () => {{
-  const MARK = '{PUBLISH_MARK_ATTR}';
+# Where in Facebook's suggestions for a ZIP the place naming it sits. The list also offers places
+# that merely resemble what was typed, so only one naming the ZIP counts. A click on a suggestion
+# does not take; the arrow keys and Enter do, so the driver needs its position, not a mark.
+_PUBLISH_PLACE_TEMPLATE = """async () => {
   const zip = String(__ZIP__);
   const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {{
-    const rows = Array.from(document.querySelectorAll('[role="option"]'));
-    const at = rows.find((el) => (el.innerText || '').split(/\\s+/).includes(zip));
-    if (at) {{
-      at.setAttribute(MARK, 'place');
-      return {{ chosen: (at.innerText || '').trim().split('\\n')[0] }};
-    }}
+  while (Date.now() < deadline) {
+    const rows = Array.from(document.querySelectorAll('[role="option"]'))
+      .filter((el) => !(el.parentElement && el.parentElement.closest('[role="option"]')));
+    const at = rows.findIndex((el) => (el.innerText || '').split(/\\s+/).includes(zip));
+    if (at >= 0) return { chosen: (rows[at].innerText || '').trim().split('\\n')[0], at };
     await new Promise((r) => setTimeout(r, 250));
-  }}
-  return {{ chosen: null }};
-}}"""
+  }
+  return { chosen: null };
+}"""
 
 
 def place_js(zip_code: str) -> str:
