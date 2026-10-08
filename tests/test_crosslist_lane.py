@@ -602,6 +602,22 @@ def test_an_abandoned_survey_does_not_open_the_gate(store, bus) -> None:
     assert crosslist.pending_pairs(_deps(store, bus)) == []
 
 
+def test_the_gate_never_puts_an_abandoned_survey_back_in_line(store, bus) -> None:
+    """Each tick asks for a look, but an abandoned one waits for the seller's tap: re-owing it
+    would loop five failing looks at a time on the shared tab, forever."""
+    store.set_seller_config_section("basics", {"region": "SG"})
+    seed_setting(store, "connected_markets", ["carousell"])
+    _rail_item(store)
+    store.request_market_survey("carousell")
+    store.abandon_market_survey("carousell")
+
+    for _ in range(3):
+        crosslist.crosslist_lane(_deps(store, bus))
+
+    assert store.get_market_survey("carousell")["state"] == "abandoned"
+    assert store.pending_market_surveys() == []
+
+
 def test_the_fan_out_waits_while_the_seller_is_still_being_asked(store, bus) -> None:
     """The title match is whole-string, so a differently worded listing is only caught by the ask;
     publishing first posts the copy the ask exists to prevent."""

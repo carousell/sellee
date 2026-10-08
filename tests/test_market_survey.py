@@ -995,6 +995,30 @@ def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) 
     assert (fastpaths.LOOK_AGAIN_LABEL, f"{_MARKET}:{fastpaths.CB_SURVEY_YES}") in controls
 
 
+def test_abandoning_says_posting_there_waits_on_the_look(store, bus) -> None:
+    """The fan-out holds a market it could not read, so a seller told an item is "going up there"
+    must hear, once, why it is not."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    for _ in range(survey.SURVEY_MAX_ATTEMPTS + 2):
+        survey.discover_phase(deps)
+
+    texts = [n["text"] for n in _notices(store)]
+    assert [t for t in texts if "couldn't read your" in t] == [
+        survey.abandoned_text(store, _MARKET)
+    ]
+    assert "won't post anything new to Carousell" in texts[0]
+
+
+def test_a_market_not_posted_to_is_not_told_posting_waits(store, bus) -> None:
+    _ready(store)
+    seed_setting(store, "connected_markets", [])
+
+    assert "won't post" not in survey.abandoned_text(store, _MARKET)
+
+
 def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:
     """The button has to reach a handler; it rides the yes token, which already reopens a
     survey."""
