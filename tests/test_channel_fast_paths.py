@@ -379,6 +379,9 @@ _NO_CONTROLS_ON_PURPOSE = {
     fastpaths.CB_SURVEY_YES: "the adopt decision is made; a re-ask comes from the survey lane",
     fastpaths.CB_SURVEY_NO: "the adopt decision is made",
     fastpaths.CB_SKIP_CTA: "one-shot, and it is the seller declining to be asked again",
+    fastpaths.CB_CL_AREA: "the area is answered; the post goes ahead with nothing left to tap",
+    fastpaths.CB_CL_SIGN_IN_MYSELF: "with no account there is nothing to sign in to; the ready "
+    "notice brings the button, and an ack with an account carries it back",
 }
 _REF_FOR = {
     fastpaths.CB_ADD_MARKET: "fb",
@@ -387,6 +390,7 @@ _REF_FOR = {
     fastpaths.CB_CONNECT_PROBE: "fb",
     fastpaths.CB_SURVEY_YES: "fb",
     fastpaths.CB_SURVEY_NO: "fb",
+    fastpaths.CB_CL_AREA: "city of san francisco",
 }
 
 

@@ -21,9 +21,16 @@ def test_resolve_falls_back_to_star_default() -> None:
     assert marketplaces.resolve_domain("fb", None) == "www.facebook.com"
 
 
-def test_resolve_falls_back_to_listing_url_host() -> None:
-    # craigslist has no domains map and a real host, so the listing_url host is the answer
-    assert marketplaces.resolve_domain("craigslist", "US") == "craigslist.org"
+def test_resolve_falls_back_to_listing_url_host(monkeypatch) -> None:
+    # No registry entry lacks a domains map any more, so this one is made up.
+    entry = {"id": "x", "listing_url": {"host": "example.org", "path": "/d/"}}
+    monkeypatch.setattr(marketplaces, "get_marketplace", lambda market: entry)
+    assert marketplaces.resolve_domain("x", "US") == "example.org"
+
+
+def test_craigslist_has_a_site_for_us_sellers_only() -> None:
+    assert marketplaces.resolve_domain("craigslist", "US") == "www.craigslist.org"
+    assert marketplaces.resolve_domain("craigslist", "SG") is None
 
 
 def test_resolve_unknown_market_is_none() -> None:
@@ -67,14 +74,14 @@ def test_allowlist_covers_markets_without_adapters() -> None:
 def test_supported_markets_is_the_adapter_registry() -> None:
     """The markets something knows how to publish to — every other browser entry is a host the
     scanner needs, not a market anything can drive."""
-    assert market_adapters.supported_markets() == ["fb", "carousell"]
+    assert market_adapters.supported_markets() == ["fb", "carousell", "craigslist"]
 
 
 def test_a_publish_path_is_a_recipe_or_a_driver(monkeypatch) -> None:
-    """A recipe skill a pass reads, or the publish selectors the driver fills — both need an
-    adapter."""
+    """A recipe skill a pass reads, or a driver: the publish selectors Facebook's form fills, or a
+    market's own driver — all need an adapter."""
     monkeypatch.setattr(marketplaces, "listing_flow", lambda market: "")
-    assert market_adapters.supported_markets() == ["fb"]
+    assert market_adapters.supported_markets() == ["fb", "craigslist"]
 
     monkeypatch.undo()
     monkeypatch.setattr(market_adapters, "_ADAPTERS", {})
@@ -92,10 +99,9 @@ def test_a_market_with_neither_recipe_nor_driver_cannot_be_published_to(monkeypa
 
 
 def test_publishable_markets_follow_the_seller_region() -> None:
-    """Carousell runs no US site, but Facebook serves everywhere, so a US seller still has one
-    marketplace."""
+    """Carousell runs no US site and Craigslist only a US one; Facebook serves everywhere."""
     assert market_adapters.publishable_markets("SG") == ["fb", "carousell"]
-    assert market_adapters.publishable_markets("US") == ["fb"]
+    assert market_adapters.publishable_markets("US") == ["fb", "craigslist"]
     assert market_adapters.publishable_markets(None) == ["fb"]
 
 
@@ -121,3 +127,11 @@ def test_no_entry_ever_resolves_to_a_bare_host_suffix() -> None:
         for region in ("SG", "US", "MY", "ZZ", None):
             host = marketplaces.resolve_domain(entry["id"], region)
             assert host is None or not host.endswith("."), (entry["id"], region, host)
+
+
+def test_a_us_seller_is_offered_facebook_before_craigslist() -> None:
+    from sellee.browser import markets as market_adapters
+
+    offered = market_adapters.connectable_markets("US")
+    assert offered.index("fb") < offered.index("craigslist")
+    assert offered[-1] == "craigslist"

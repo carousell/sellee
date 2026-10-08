@@ -28,7 +28,7 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces, settings
@@ -71,6 +71,8 @@ class ReviseDeps:
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
+    # (revision, reason) holds already reported, so each wait is said once.
+    held: set = field(default_factory=set)
 
 
 # The pages one driven edit costs: the listing to edit, and the listing again to confirm it.
@@ -97,12 +99,23 @@ def run_next(deps: ReviseDeps) -> str | None:
     if upcoming is None:
         return None
     market = upcoming["market"]
-    if page_governor.unprompted_held(
-        deps.store, deps.config, market, deps.now()
-    ) or not page_governor.has_room(deps.governor, market, EDIT_LOADS):
+    if page_governor.unprompted_held(deps.store, deps.config, market, deps.now()):
+        held = "quiet_hours"
+    elif not page_governor.has_room(deps.governor, market, EDIT_LOADS):
+        held = "page_loads"
+    else:
+        held = None
+    if held:
         # Not claimed, so it spends nothing: a retry waits for the morning or the page loads. The
         # seller's own first ask is held the same way — it is theirs to have made at 3am, but the
         # account starting an edit then is the same thing to Facebook.
+        key = (upcoming["revision_id"], held)
+        if key not in deps.held:
+            deps.held.add(key)
+            deps.bus.publish(
+                "revise.held",
+                {"item_id": upcoming["item_id"], "market": market, "reason": held},
+            )
         return None
     try:
         deps.browser_factory()

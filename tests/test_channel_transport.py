@@ -95,6 +95,29 @@ def test_normalize_callback_query_splits_ref() -> None:
     assert ev["payload"]["callback_query_id"] == "cbq9"
 
 
+def test_a_tap_reads_as_the_label_on_the_button_pressed() -> None:
+    # Live: an area tap was stored as "clarea", which a later pass read back as the seller's words.
+    keyboard = [
+        [{"text": "city of san francisco", "callback_data": "city of san francisco:clarea"}],
+        [{"text": "east bay area", "callback_data": "east bay area:clarea"}],
+    ]
+    upd = {
+        "update_id": 9,
+        "callback_query": {
+            "id": "cbq10",
+            "data": "east bay area:clarea",
+            "message": {
+                "chat": {"id": CHAT_ID},
+                "date": 223,
+                "reply_markup": {"inline_keyboard": keyboard},
+            },
+        },
+    }
+    ev, _chat = transport._normalize(upd, CHAT_ID)
+    assert ev["text"] == "east bay area"
+    assert ev["payload"]["choice"] == "clarea" and ev["payload"]["ref"] == "east bay area"
+
+
 def test_normalize_photo_picks_largest_and_group_hint() -> None:
     upd = {
         "update_id": 8,

@@ -9,11 +9,12 @@ the lane always ends in exactly one notice the seller can act on.
 from __future__ import annotations
 
 import pytest
-from tests.conftest import seed_setting
+from tests.conftest import connect_craigslist, seed_setting
 
-from sellee import marketplaces
-from sellee.browser import blindness, connect
+from sellee import marketplaces, settings
+from sellee.browser import blindness, connect, craigslist_account
 from sellee.browser import markets as market_adapters
+from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.store import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -577,3 +578,76 @@ def test_the_sign_in_page_is_left_open_for_the_seller(store, bus) -> None:
     connect.connect_lane(_deps(store, bus, client))
 
     assert doorbell.AWAY_URL not in client.navigations
+
+
+# --- Craigslist: nobody can sign in by hand, so connecting creates the account -----------------
+
+
+@pytest.fixture
+def us_craigslist(store):
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    return store
+
+
+class _Rail:
+    def get_registration_address(self) -> str:
+        return "seller@inbox.carousell.ai"
+
+
+def test_connecting_craigslist_signed_out_has_the_seller_create_the_account_themselves(
+    us_craigslist, bus
+) -> None:
+    """sellee opens Craigslist and names the address it made; the seller makes the account."""
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+    client = StubClient(login="logged_out")
+
+    connect.connect_lane(_deps(us_craigslist, bus, client, rail_factory=_Rail))
+
+    assert client.navigations == [craigslist.ACCOUNT_URL]
+    # The steps go out before the page opens; the open page is said after.
+    steps, opened = _texts(us_craigslist)
+    assert "seller@inbox.carousell.ai" in steps and craigslist_account.TERMS_LINE in steps
+    assert "sign-in page is open" in opened and "seller@inbox.carousell.ai" not in opened
+    row = us_craigslist.craigslist_account()
+    assert row["state"] == "awaiting_activation" and row["requested_ts"] > 0
+    assert us_craigslist.pending_market_connects() == []
+
+
+def test_connecting_a_signed_out_craigslist_account_asks_the_seller_to_sign_back_in(
+    us_craigslist, bus
+) -> None:
+    connect_craigslist(us_craigslist)
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+
+    connect.connect_lane(
+        _deps(us_craigslist, bus, StubClient(login="logged_out"), rail_factory=_Rail)
+    )
+
+    [text] = _texts(us_craigslist)
+    assert text.startswith("Sign back in to Craigslist") and "seller@inbox.carousell.ai" in text
+    row = us_craigslist.craigslist_account()
+    assert row["state"] == craigslist_account.AWAITING_LOGIN_LINK and row["requested_ts"] > 0
+
+
+def test_connecting_craigslist_twice_keeps_one_account(us_craigslist, bus) -> None:
+    for _ in range(2):
+        us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+        connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_out")))
+
+    assert len(us_craigslist._db.query("SELECT 1 FROM craigslist_account")) == 1
+
+
+def test_a_craigslist_account_found_signed_in_is_connected_once(us_craigslist, bus) -> None:
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_PROBE)
+
+    connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_in")))
+
+    assert _texts(us_craigslist) == [craigslist_account.ACTIVATED_NOTICE]
+    assert us_craigslist.craigslist_account()["state"] == craigslist_account.ACTIVE
+
+
+def test_craigslist_is_refused_for_a_seller_outside_the_us(store, bus) -> None:
+    with pytest.raises(settings.SettingError) as excinfo:
+        settings.set_now(store, bus, key="connected_markets", raw_value=["craigslist"])
+    assert "Craigslist isn't available for SG accounts" in str(excinfo.value)

@@ -16,6 +16,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.channel import refs
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
+from sellee.tools.seller import BasicsError, validate_basics
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
 # channel pass.
@@ -36,6 +37,10 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# Answers Craigslist's area question; the area label rides in the ref and is stored as is.
+CB_CL_AREA = "clarea"
+# The seller signing in to their own Craigslist account from their browser.
+CB_CL_SIGN_IN_MYSELF = "clmyself"
 # The two answers to the take-these-over ask. The ref carries the market, so a tap months later
 # still says which list it meant.
 CB_SURVEY_YES = "adoptyes"
@@ -63,6 +68,8 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_SKIP_CTA,
         CB_CONNECT_MARKET,
         CB_CONNECT_PROBE,
+        CB_CL_AREA,
+        CB_CL_SIGN_IN_MYSELF,
         CB_SURVEY_YES,
         CB_SURVEY_NO,
         CB_WATCH_ON,
@@ -101,6 +108,7 @@ SIGN_IN_LABEL = "Sign in on desktop"
 CHECK_AGAIN_LABEL = "Check again"
 # The two answers to the ask. One yes: an agent that answers buyers on a listing it cannot relist
 # has to explain that split in every conversation. The tools carry the finer answers.
+SIGN_IN_MYSELF_LABEL = "🔑 Sign in myself"
 SURVEY_YES_LABEL = "Yes, manage them"
 SURVEY_NO_LABEL = "No thanks"
 # The way back from a look that could not be served — rides CB_SURVEY_YES, whose handler already
@@ -138,6 +146,20 @@ def look_again_controls(market: str) -> list:
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
+def area_controls(labels) -> list:
+    """One button per Craigslist area, each storing its label when tapped. A label too long for a
+    callback is left off; the seller can still type it."""
+    return [
+        (label, f"{label}:{CB_CL_AREA}")
+        for label in labels
+        if label and ":" not in label and len(f"{label}:{CB_CL_AREA}".encode()) <= 64
+    ]
+
+
+def sign_in_myself_controls() -> list:
+    return [(SIGN_IN_MYSELF_LABEL, f"craigslist:{CB_CL_SIGN_IN_MYSELF}")]
+
+
 def check_again_controls(market: str) -> list:
     """The one-button control spec that re-probes `market` without touching the window."""
     return [(CHECK_AGAIN_LABEL, f"{market}:{CB_CONNECT_PROBE}")]
@@ -153,6 +175,17 @@ CONNECT_ACK = (
 # promises a follow-up rather than a duration. "One moment while I look" was the phrasing
 # voice-and-style.md bans, sitting two lines under a comment explaining why not to write it.
 CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell you what I find."
+AREA_ACK = "Got it, {area}. Your Craigslist post will go ahead."
+SIGN_IN_MYSELF_ACK = (
+    "Open https://accounts.craigslist.org/login in your own browser, enter {address} and tap "
+    '"email a login link". Craigslist mails it to your sellee address, and I\'ll send it to you '
+    "here."
+)
+SIGN_IN_MYSELF_NONE = "There's no Craigslist account to sign in to yet."
+SIGN_IN_MYSELF_OWN = (
+    "Your Craigslist account is your own, {email}, so sign in from your own browser as you "
+    "usually would."
+)
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
@@ -238,6 +271,13 @@ def is_settings_door(event: dict) -> bool:
     return False
 
 
+def claims(event: dict) -> bool:
+    """`is_fast_path` for a raw event about to be ingested, so its row is stored already handled."""
+    return is_fast_path(
+        {"kind": event["kind"], "text": event.get("text"), "payload": event.get("payload") or {}}
+    )
+
+
 def is_fast_path(event: dict) -> bool:
     """True if `event` (a normalized inbox row's kind/text/payload) is one the daemon answers
     itself. A command matches on its exact first-word token; an action on its callback choice; a
@@ -301,6 +341,10 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
         )
+    if token == CB_CL_AREA:
+        return _area_button(store, event["payload"].get("ref"))
+    if token == CB_CL_SIGN_IN_MYSELF:
+        return _sign_in_myself_button(store)
     if token == "/connect":
         return _connect_command(store, bus)
     if token in ("/pause", CB_PAUSE):
@@ -346,6 +390,27 @@ def _connect_button(store, market, mode: str) -> tuple:
     if market not in settings.connected_markets(store):
         return CONNECT_DISCONNECTED.format(name=marketplaces.display_name(market)), None
     return _request(store, market, mode)
+
+
+def _area_button(store, label) -> tuple:
+    """A tap on one of Craigslist's areas, stored into basics through its one validator."""
+    try:
+        area = validate_basics({"craigslist_area": label})["craigslist_area"]
+    except BasicsError:
+        return SURVEY_UNKNOWN, None
+    basics = store.get_seller_config_section("basics") or {}
+    store.set_seller_config_section("basics", {**basics, "craigslist_area": area})
+    return AREA_ACK.format(area=area), None
+
+
+def _sign_in_myself_button(store) -> tuple:
+    """The seller wants into their own Craigslist account: the next login link is theirs."""
+    row = store.craigslist_account() or {}
+    if row.get("own_email"):
+        return SIGN_IN_MYSELF_OWN.format(email=row["own_email"]), None
+    if not row.get("address") or not store.want_seller_login_link(time.time()):
+        return SIGN_IN_MYSELF_NONE, None
+    return SIGN_IN_MYSELF_ACK.format(address=row["address"]), sign_in_myself_controls()
 
 
 def _market_button(store, bus, market, token: str) -> tuple:

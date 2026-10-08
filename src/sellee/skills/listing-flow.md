@@ -46,6 +46,10 @@ setting names other marketplaces, name them here as well — they were maybe set
 "listing this" should never turn out to mean more places than they had in mind. If the setting is
 empty, say nothing about it.
 
+**When Craigslist is one of them,** add this line to the confirmation, word for word: "Posting to
+Craigslist means accepting its terms of use for this post: craigslist.org/about/terms.of.use". The
+seller's ✅ List it is their acceptance, so posting can go through Craigslist's own terms step.
+
 **Give it a box size for shipping.** carousell.ai prices shipping from a size class, so every
 listing needs one — publishing refuses an item without one. Pick it from the photos, the title and
 whatever the seller said — judge the box it would pack into, not the weight:

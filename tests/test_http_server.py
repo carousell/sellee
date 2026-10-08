@@ -619,6 +619,8 @@ def test_query_string_tokens_stay_off_browser_navigable_surfaces() -> None:
         "_handle_channel_status",  # CLI-only
         "_handle_settings_list",  # CLI-only
         "_handle_seller_basics_read",  # CLI-only
+        "_handle_craigslist_intro",  # CLI-only
+        "_handle_craigslist_account",  # CLI-only
         # The buyer page's own fetches, on the same footing as the tail page's: the page is
         # navigated to as /buyer?ticket=… and trades that one-shot ticket for the token before
         # either of these runs, so no token ever reaches the address bar. sim-items is a CLI read

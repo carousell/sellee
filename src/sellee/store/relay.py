@@ -1,4 +1,5 @@
-"""The relay lane's state: its cursor, the threads it reads again, and the reply cursor it moves."""
+"""The relay and registration lanes' state: their cursors, the relay threads read again, the
+registration mail handled, and the reply cursor the relay moves."""
 
 from __future__ import annotations
 
@@ -89,3 +90,41 @@ class RelayMixin:
                 ).fetchone()
             ):
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
+
+    def get_registration_cursor(self) -> str:
+        """Where the next list_registration_mail poll resumes; empty before the first poll."""
+        rows = self._db.query("SELECT cursor FROM registration_cursor WHERE id = 1")
+        return rows[0]["cursor"] if rows else ""
+
+    def set_registration_cursor(self, cursor: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO registration_cursor (id, cursor, updated_ts) VALUES (1, ?, ?) "
+                "ON CONFLICT (id) DO UPDATE SET cursor = excluded.cursor, "
+                "updated_ts = excluded.updated_ts",
+                (cursor, _now()),
+            )
+
+    def registration_mail_seen(self, mail_id: str) -> bool:
+        rows = self._db.query("SELECT 1 FROM registration_seen WHERE mail_id = ?", (mail_id,))
+        return bool(rows)
+
+    def mark_registration_mail_seen(
+        self, mail_id: str, *, thread_id: str | None, subject: str, received_ts: float
+    ) -> None:
+        """Record a mail as handled; `thread_id` is the thread it joined, or None if dropped."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT OR IGNORE INTO registration_seen "
+                "(mail_id, thread_id, subject, received_ts, seen_ts) VALUES (?, ?, ?, ?, ?)",
+                (mail_id, thread_id, subject, received_ts, _now()),
+            )
+
+    def latest_registration_subject(self, thread_id: str) -> str:
+        """The subject of the newest mail that joined this thread, or "" when none did."""
+        rows = self._db.query(
+            "SELECT subject FROM registration_seen WHERE thread_id = ? "
+            "ORDER BY received_ts DESC, mail_id DESC LIMIT 1",
+            (thread_id,),
+        )
+        return rows[0]["subject"] if rows else ""

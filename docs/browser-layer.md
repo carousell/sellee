@@ -282,6 +282,7 @@ process per recycle, in no holder and reaped by nobody.
 | `listing_id_pattern` | where a listing's id sits in a permalink, one regex group |
 | `composer` | shipped selector defaults, by step |
 | `publish_skill` | the skill holding this market's publish recipe |
+| `publish_driver`, `publish_url`, `publish_loads` | **publishing through a market's own driver** when its form spans pages — the function, where it starts, and the page loads one publish may cost; every step submit asks the governor through `BrowserClient.pace` |
 | `edit_entry_js`, `edit_fields_js`, `edit_readback_js`, `edit_target` | **editing a live listing by driving its form** — the listing page's own Edit control, the form's marked controls, and what the form holds before saving |
 | `editable_fields` | which item fields the edit driver can change; a change outside it is the seller's to make by hand, and they are told so |
 | `system_handles` | rows an inbox read must never treat as a buyer |
@@ -552,7 +553,8 @@ A person does not reload Messenger every five minutes to see whether a buyer wro
 the browser pings, and a minute or two later they open the conversation. Facebook was shown the
 other thing — its inbox loaded eleven to thirteen times an hour around the clock, with every
 conversation opened every half hour — and flagged the account for automation twice. So a market
-whose adapter has `read_trigger = "notification"` is read only when it rings.
+whose adapter has `read_trigger = "notification"` is read only when it rings. Craigslist's is
+`"mail"`: it has no inbox page, and its buyers arrive through the registration lane instead.
 
 **What rings is a notification the agent's Chrome displayed**, and it is heard without going near
 the page. DevTools keeps a background-services log of every notification a site shows — its title,
@@ -926,6 +928,11 @@ the account starting things at 4am is what gets noticed; elsewhere a listing sit
 someone looks, so the hour it went up is not what a buyer sees. Quiet hours hold the *start* of
 work; nothing running is interrupted.
 
+A Craigslist post also waits, spending nothing, for an active account (the account lane creates
+one, or signs it back in by an emailed login link when a page shows it signed out), the seller's ZIP code, and on a site split into areas the seller's `craigslist_area`. The
+area is only learned from the form: the driver stops there (`PublishNeedsSeller`), the seller is
+asked once with the labels it read, and the post waits until that basics setting changes.
+
 **The outcome is read off the rows, not off the pass.** A recorded URL becomes a success
 notice with the link. Anything else — including a pass that exited clean having recorded
 nothing, which leaves no listing anyone can find — becomes a failure notice naming the
@@ -1035,12 +1042,16 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
 1. **Offered at onboarding** — a registry entry plus an adapter.
 2. **Connect / disconnect** — free once 1 exists.
 3. **Listing to it** — a publish recipe, or the selectors the deterministic
-   driver needs.
+   driver needs. A form spread over several pages gets its own driver instead
+   (`publish_driver`, starting at `publish_url`), under the same contract: Craigslist's walks
+   its `?s=` steps. A market that polices automation must be driven, never given to a recipe.
 4. **Adopting existing listings** — a read of the seller's own listings, a
    listing-page read, and permission to fetch its photos.
 5. **Inbox and replies** — a conversation list, a message read, a composer, and a
    way to name the listing a conversation is about.
-6. **Signing back in** — a login probe. Every adapter must have one.
+6. **Signing back in** — a login probe. Every adapter must have one. It reads the market's
+   front page, or the adapter's `home_url` when signing in happens elsewhere, as on Craigslist,
+   whose account the seller creates in sellee's Chrome with the registration address.
 7. **Changing a live listing** — an `edit_flow` recipe (a skill an `edit` pass
    follows), or the edit selectors `browser/editor.py` drives.
 

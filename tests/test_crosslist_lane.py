@@ -792,6 +792,115 @@ def test_an_unverified_publish_is_never_driven_twice(store, bus, monkeypatch) ->
     assert crosslist.pending_pairs(deps) == []
 
 
+class _Killed(BaseException):
+    """sellee dying mid-publish: nothing in the lane catches it."""
+
+
+def test_a_crash_after_the_commit_click_is_never_driven_again(store, bus, monkeypatch) -> None:
+    """The click may have made a listing before the process died, so the next tick must not make a
+    second one: the attempt is on record from before the click, as unverified."""
+    from sellee.browser import publisher
+
+    clicks: list = []
+    _driving(store, bus, monkeypatch)
+
+    def clicks_then_dies(*args, before_commit=None, **kwargs):
+        if before_commit:
+            before_commit()
+        clicks.append(True)
+        raise _Killed
+
+    monkeypatch.setattr(publisher, "publish", clicks_then_dies)
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    with pytest.raises(_Killed):
+        crosslist.enqueue_next(deps)
+    next_tick = _deps(store, bus, browser_factory=_HeldClient)
+    next_tick.now = _later(10**7)
+    crosslist.enqueue_next(next_tick)
+
+    assert clicks == [True]
+    assert [row.get("unverified") for row in _ledger(store)] == [True]
+
+
+def test_a_commit_click_the_page_refused_spends_nothing(store, bus, monkeypatch) -> None:
+    from sellee.browser import publisher
+
+    _driving(store, bus, monkeypatch)
+
+    def refused_at_the_click(*args, before_commit=None, **kwargs):
+        if before_commit:
+            before_commit()
+        raise publisher.PublishNotAttempted("Next moved before it was pressed", retryable=True)
+
+    monkeypatch.setattr(publisher, "publish", refused_at_the_click)
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert _ledger(store) == []
+    assert crosslist.pending_pairs(deps)
+
+
+def test_a_verified_publish_after_its_ledgered_attempt_is_one_done_row(
+    store, bus, monkeypatch
+) -> None:
+    from sellee.browser import publisher
+    from sellee.browser.publisher import PublishOutcome
+
+    item = _driving(store, bus, monkeypatch)
+
+    def publishes(*args, before_commit=None, **kwargs):
+        if before_commit:
+            before_commit()
+        return PublishOutcome(listing_id="9", url=_CAROUSELL_URL, verified=True)
+
+    monkeypatch.setattr(publisher, "publish", publishes)
+    deps = _deps(store, bus, browser_factory=_HeldClient)
+
+    crosslist.enqueue_next(deps)
+
+    assert [(r["status"], r.get("unverified")) for r in _ledger(store)] == [("done", None)]
+    assert store.get_item(item["id"])["listing_urls"]["carousell"] == _CAROUSELL_URL
+    assert crosslist.report_settled(deps) == 1
+
+
+def test_a_crash_while_settling_a_verified_publish_never_drives_it_again(
+    store, bus, monkeypatch
+) -> None:
+    """The URL is written with the settlement: dying before both commit leaves the pair guarded as
+    unverified, never settled without its URL and so free to post a second time."""
+    from sellee.browser import publisher
+    from sellee.browser.publisher import PublishOutcome
+    from sellee.store import passes
+
+    item = _driving(store, bus, monkeypatch)
+    calls: list = []
+    record_url = passes.record_listing_url_in_txn
+
+    def publishes(*args, before_commit=None, **kwargs):
+        before_commit()
+        calls.append(True)
+        return PublishOutcome(listing_id="9", url=_CAROUSELL_URL, verified=True)
+
+    def dies(*args, **kwargs):
+        raise _Killed
+
+    monkeypatch.setattr(publisher, "publish", publishes)
+    monkeypatch.setattr(passes, "record_listing_url_in_txn", dies)
+
+    with pytest.raises(_Killed):
+        crosslist.enqueue_next(_deps(store, bus, browser_factory=_HeldClient))
+    monkeypatch.setattr(passes, "record_listing_url_in_txn", record_url)
+    next_tick = _deps(store, bus, browser_factory=_HeldClient)
+    next_tick.now = _later(10**7)
+    crosslist.enqueue_next(next_tick)
+
+    assert calls == [True]
+    assert [(r["status"], r.get("unverified")) for r in _ledger(store)] == [("error", True)]
+    assert "carousell" not in (store.get_item(item["id"])["listing_urls"] or {})
+
+
 def test_an_unexpected_browser_error_is_treated_as_maybe_published(store, bus, monkeypatch) -> None:
     """A bare error escaping the driver could come from either side of the commit, so it is treated
     as the dangerous side."""

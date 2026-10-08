@@ -70,7 +70,7 @@ _QA_SOURCES = ("seller",)
 _REPLY_THREAD_STATUSES = ("active", "liaising", "agreed")
 # Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
 # answers; the sweep never asks the seller about one.
-LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
+LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 UI_CACHE_STALE_FAILS = 3
 UI_CACHE_STALE_DAYS = 30

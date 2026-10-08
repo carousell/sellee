@@ -32,7 +32,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse, urlsplit
 
-from sellee import __version__, buyer_sim, passes
+from sellee import __version__, buyer_sim, marketplaces, passes
 from sellee.browser import connect as _connect
 from sellee.db import connect_reader
 from sellee.events import event_to_wire, latest_seq, query_events, routine_kinds
@@ -194,6 +194,7 @@ class HttpServer:
         config=None,
         channels=None,
         host: str = "127.0.0.1",
+        rail_factory=None,
     ):
         self.bus = bus
         self.store = store
@@ -201,6 +202,8 @@ class HttpServer:
         self.context_factory = context_factory
         self.config = config
         self.channels = channels  # the ChannelManager, so connect can start a provider at runtime
+        # bazaar, for what only it knows: the seller's registration address.
+        self.rail_factory = rail_factory
         self.auth = Auth(attended_token)
         self.host = host
         self._httpd = _Server((host, port), _Handler)
@@ -470,6 +473,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(405, {"error": "method not allowed"})
         elif parsed.path == "/control/seller-basics":
             self._handle_seller_basics_read(parsed)
+        elif parsed.path == "/control/craigslist-intro":
+            self._handle_craigslist_intro(parsed)
+        elif parsed.path == "/control/craigslist-account":
+            self._handle_craigslist_account(parsed)
         elif parsed.path == "/control/sim-items":
             self._handle_sim_items(parsed)
         elif parsed.path == "/control/sim-thread":
@@ -702,11 +709,39 @@ class _Handler(BaseHTTPRequestHandler):
         basics = self._app.store.get_seller_config_section("basics") or {}
         self._send_json(200, {"basics": basics})
 
+    def _handle_craigslist_intro(self, parsed) -> None:
+        # Read before the connect, so the seller has the steps before Chrome opens Craigslist.
+        # Empty for a connected account: a sign-in that finds it signed out says so afterwards.
+        from sellee.browser import craigslist_account
+
+        if self._attended_query(parsed) is None:
+            return
+        row = self._app.store.craigslist_account() or {}
+        intro = address = ""
+        if row.get("state") != craigslist_account.ACTIVE and self._app.rail_factory:
+            intro = craigslist_account.connect_intro(self._app.store, self._app.rail_factory)
+            # The address to copy for the seller, unless they sign in with their own.
+            if not row.get("own_email"):
+                address = craigslist_account.registration_address(self._app.rail_factory)
+        self._send_json(200, {"intro": intro, "address": address})
+
+    def _handle_craigslist_account(self, parsed) -> None:
+        # Where the seller's Craigslist sign-in has got to, so the terminal can follow it. Reads
+        # the account row only: polling it never touches the browser.
+        from sellee.browser import craigslist_account
+
+        if self._attended_query(parsed) is None:
+            return
+        rail = self._app.rail_factory or (lambda: None)
+        stage, line = craigslist_account.progress(self._app.store, rail)
+        self._send_json(200, {"stage": stage, "line": line})
+
     def _handle_connect_market(self) -> None:
         # Open the marketplace in the agent's own Chrome so the seller can sign in there. We
         # never sign in for them, and nothing about their session is recorded: the cookies in
         # that profile are the truth, and the probe re-derives the answer whenever it is asked.
         from sellee import settings
+        from sellee.browser import craigslist_account
 
         body = self._attended_body()
         if body is None:
@@ -727,10 +762,17 @@ class _Handler(BaseHTTPRequestHandler):
             )
             return
         try:
-            state, url, _wall = self._open_and_probe(adapter, bring_tab_forward=True)
+            state, url, _wall, email = self._open_and_probe(adapter, bring_tab_forward=True)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
+        state = craigslist_account.connect_state(
+            self._app.store,
+            adapter.market,
+            state,
+            email=email,
+            rail_factory=self._app.rail_factory,
+        )
         if state != "logged_in":
             # Claimed here, not by the caller: this navigation put the login screen up, and a CLI
             # that forgot to ask would leave the lanes free to navigate away.
@@ -741,10 +783,22 @@ class _Handler(BaseHTTPRequestHandler):
         # The OS-level raise happens in the CLI (the seller's own frontmost terminal, where
         # activation is honored), but whether they want it is a setting only this side can read.
         raise_window = bool(settings.get(self._app.store, "raise_browser"))
-        self._send_json(
-            200,
-            {"market": adapter.market, "url": url, "state": state, "raise_window": raise_window},
-        )
+        answer = {
+            "market": adapter.market,
+            "url": url,
+            "state": state,
+            "raise_window": raise_window,
+        }
+        if (
+            adapter.market == marketplaces.CRAIGSLIST
+            and state != "logged_in"
+            and self._app.rail_factory
+        ):
+            # The seller signs up or back in with the address sellee made, which only bazaar knows.
+            answer["intro"] = craigslist_account.connect_intro(
+                self._app.store, self._app.rail_factory
+            )
+        self._send_json(200, answer)
 
     def _handle_browser_hold(self) -> None:
         """Claim the shared tab for a caller the daemon is not driving — a person signing in.
@@ -792,7 +846,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_json(200, {"market": adapter.market, "state": "unknown", "detail": blocked})
             return
         try:
-            state, url, _wall = self._open_and_probe(adapter)
+            state, url, _wall, _email = self._open_and_probe(adapter)
         except _BrowserDown as exc:
             self._send_json(503, {"error": "browser_unavailable", "detail": str(exc)})
             return
@@ -845,7 +899,7 @@ class _Handler(BaseHTTPRequestHandler):
                 if adapter is None:
                     continue
                 try:
-                    state, _url, _wall = self._open_and_probe(adapter)
+                    state, _url, _wall, _email = self._open_and_probe(adapter)
                 except _BrowserDown as exc:
                     results.append({"market": market, "state": "unknown", "detail": str(exc)})
                     continue

@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
-from tests.conftest import seed_setting
+from tests.conftest import connect_craigslist, seed_setting
 
 import sellee.tools  # noqa: F401  tool registration
 from sellee import settings
@@ -301,6 +301,75 @@ def test_connect_market_opens_the_regional_site_and_reports_the_probe(
         "raise_window": True,
     }
     assert browser.visited == ["https://www.carousell.sg/"]
+
+
+class _Rail:
+    def get_registration_address(self) -> str:
+        return "seller@inbox.carousell.ai"
+
+
+def test_connect_craigslist_signed_out_has_the_seller_create_the_account_at_the_computer(
+    server, store, browser
+) -> None:
+    """A sign-in like any market's, held for the seller, with an intro naming their address."""
+    from sellee.browser.markets import craigslist
+
+    server.rail_factory = _Rail
+    store.set_seller_config_section("basics", {"region": "US"})
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200 and body["state"] == "logged_out"
+    assert "seller@inbox.carousell.ai" in body["intro"]
+    assert browser.visited == [craigslist.ACCOUNT_URL]
+    assert store.browser_hold_reason() != ""
+    assert store.craigslist_account()["state"] == "awaiting_activation"
+
+
+def test_connect_a_signed_out_craigslist_account_asks_the_seller_to_sign_back_in(
+    server, store, browser
+) -> None:
+    server.rail_factory = _Rail
+    store.set_seller_config_section("basics", {"region": "US"})
+    connect_craigslist(store)
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200 and body["state"] == "logged_out"
+    assert body["intro"].startswith("Sign back in to Craigslist")
+    assert store.craigslist_account()["state"] == "awaiting_login_link"
+
+
+def test_the_craigslist_steps_are_read_without_opening_anything(server, store, browser) -> None:
+    server.rail_factory = _Rail
+
+    status, body = _call(server, "GET", "/control/craigslist-intro")
+
+    assert status == 200 and body["intro"].startswith("To connect Craigslist:")
+    assert "seller@inbox.carousell.ai" in body["intro"]
+    assert body["address"] == "seller@inbox.carousell.ai"
+    assert browser.visited == []
+
+    connect_craigslist(store)
+    assert _call(server, "GET", "/control/craigslist-intro") == (
+        200,
+        {"intro": "", "address": ""},
+    )
+
+
+def test_the_craigslist_sign_in_stage_is_read_without_opening_anything(
+    server, store, browser
+) -> None:
+    server.rail_factory = _Rail
+
+    assert _call(server, "GET", "/control/craigslist-account")[1]["stage"] == "waiting"
+
+    connect_craigslist(store)
+    status, body = _call(server, "GET", "/control/craigslist-account")
+    assert status == 200 and body["stage"] == "connected"
+    assert browser.visited == []
 
 
 def test_connect_market_reports_the_sellers_window_preference(server, store) -> None:

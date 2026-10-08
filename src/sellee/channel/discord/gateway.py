@@ -343,7 +343,7 @@ class DiscordGateway:
             return
         if event["kind"] == "photo":
             event["media_paths"] = self._download_photo(client, event)
-        inserted = self.store.ingest_updates([event], 0)
+        inserted = self.store.ingest_updates([event], 0, fast_path=fastpaths.claims)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
         handled = self._dispatch_fast_paths(client, ch["chat_id"], inserted)
@@ -361,7 +361,7 @@ class DiscordGateway:
         # Before ingest, so the durable row carries the words the seller tapped rather than the
         # token — every downstream reader then needs no special path. See channel/asks.py.
         events = asks.resolve_ask_answers(self.store, [event])
-        inserted = self.store.ingest_updates(events, 0)
+        inserted = self.store.ingest_updates(events, 0, fast_path=fastpaths.claims)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
         self._ack_taps(client, inserted)

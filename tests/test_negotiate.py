@@ -302,6 +302,79 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
     assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")
 
 
+def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, make_ctx) -> None:
+    # Live: the agent confirmed a sale but skipped the archive, so no take-down was sent.
+    from sellee.tools import dispatch, listing
+
+    item = _item(store, list_price=20.0, floor=15.0)
+    post = "https://www.craigslist.org/view/d/samsung-buds3/9TXkjafxYMDS5VaPLGdRyk"
+    store.record_listing_url(item["id"], "craigslist", post)
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 20)
+    ctx = _pair_ctx(store, make_ctx)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+    listing.manual_take_downs(store, item["id"])  # the archive step asking again
+
+    assert result["manual_take_downs"] == [{"market": "craigslist", "url": post}]
+    assert len([n for n in store.list_queued_notices() if post in n["text"]]) == 1
+
+
+class _Rail:
+    def __init__(self, refuse: bool = False):
+        self.archived: list = []
+        self.refuse = refuse
+
+    def update_listing(self, listing_id, *, status):
+        from sellee.rail.client import RailError
+
+        if self.refuse:
+            raise RailError("carousell.ai is down")
+        self.archived.append((listing_id, status))
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_confirming_a_sale_archives_the_carousell_ai_listing(
+    store: Store, make_ctx, refuse
+) -> None:
+    # Live: the agent was handed the take-down list, never archived it, and the listing stayed up.
+    from sellee.tools import dispatch
+    from sellee.tools.registry import TIER_ATTENDED
+
+    item = _item(store, list_price=60.0, floor=40.0)
+    store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/listing/abc-123")
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 60)
+    rail = _Rail(refuse=refuse)
+    ctx = make_ctx(TIER_ATTENDED, rail_factory=lambda: rail)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+
+    assert store.negotiate_status(item["id"])["item_state"] == "sold"
+    if refuse:
+        assert result["carousell_ai_take_down"].startswith("failed:")
+        assert "carousell_ai_update_listing" in result["carousell_ai_take_down"]
+    else:
+        assert rail.archived == [("abc-123", "archived")]
+        assert result["carousell_ai_take_down"] == "taken_down"
+
+
 # --- the floor is never quoted ----------------------------------------------------------------
 
 

@@ -31,6 +31,11 @@ _REFUSED_TEXT = (
     "client_message_id is required",
     "thread not found",
     "the buyer is blocked",
+    "to is required",
+    "subject is required",
+    "subject must be one line",
+    "the seller has no registration address in use",
+    "to has never mailed",
 )
 
 # bazaar's answer to a reply whose id it already holds: an earlier attempt of ours stored it.

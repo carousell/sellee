@@ -67,8 +67,8 @@ UNSETTLED_EMAIL_CONTEXT = (
 UNSETTLED_EMAIL_OPTIONS = ("✉️ Write again", "🙅 Leave it")
 
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
-# carousell.ai replies per buyer itself.
-UNPACED_MARKETS = frozenset({marketplaces.RAIL})
+# carousell.ai and registration replies itself.
+UNPACED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past
 # the composer, `sent_unverified` was taken by the page and could not be read back, and
@@ -355,6 +355,18 @@ class SendMixin:
             (*UNSETTLED_STATUSES, max_attempts),
         )
         return [dict(row) for row in rows]
+
+    def pin_intent_subject(self, intent_id: str, subject: str) -> str:
+        """The intent's subject: `subject` if none is pinned yet, else the one already pinned."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE send_intents SET subject = ? WHERE intent_id = ? AND subject IS NULL",
+                (subject, intent_id),
+            )
+            row = conn.execute(
+                "SELECT subject FROM send_intents WHERE intent_id = ?", (intent_id,)
+            ).fetchone()
+        return row["subject"] if row and row["subject"] is not None else subject
 
     def unsettled_intents_on(self, market: str, created_before: float) -> list[dict]:
         """A market's sends a lane still retries, oldest first, made before `created_before`. One

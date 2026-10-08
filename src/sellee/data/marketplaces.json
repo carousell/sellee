@@ -146,14 +146,19 @@
     {
       "id": "craigslist",
       "display_name": "Craigslist",
+      "domains": {
+        "US": "www.craigslist.org"
+      },
       "listing_url": {
         "host": "craigslist.org",
-        "path": "/d/"
+        "path": "/view/d/",
+        "pattern": "https://www\\.craigslist\\.org/view/d/[a-z0-9-]+/[A-Za-z0-9]+"
       },
       "connector": {
         "type": "browser"
       },
-      "status": "active"
+      "status": "active",
+      "offer_last": true
     }
   ]
 }

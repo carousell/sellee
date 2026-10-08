@@ -20,6 +20,7 @@ import logging
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 from urllib.parse import urljoin
 
 from sellee import paths
@@ -49,6 +50,26 @@ class PublishNotAttempted(BrowserError):
         self.retryable = retryable
 
 
+class PublishNeedsSeller(PublishNotAttempted):
+    """Nothing was created, and the form needs an answer only the seller has. `key` is the basics
+    setting the answer goes in; the post waits until it changes."""
+
+    def __init__(self, message: str, *, key: str, question: str, options: tuple = ()):
+        super().__init__(message, retryable=True)
+        self.key = key
+        self.question = question
+        self.options = tuple(options)  # answers the seller can tap, when the page lists them
+
+
+class PublishSignedOut(PublishNotAttempted):
+    """Nothing was created: the market showed the account signed out. `market` is its display
+    name, for the seller."""
+
+    def __init__(self, message: str, *, market: str):
+        super().__init__(message, retryable=True)
+        self.market = market
+
+
 class PublishUnverified(BrowserError):
     """A listing may exist. Never re-driven — the seller would end up with two."""
 
@@ -64,14 +85,35 @@ class PublishOutcome:
 
 
 def publish(
-    client, adapter, item: dict, *, create_url: str, photos=(), listings_url=None, sleep=None
+    client,
+    adapter,
+    item: dict,
+    *,
+    create_url: str,
+    photos=(),
+    listings_url=None,
+    sleep=None,
+    seller: dict | None = None,
+    before_commit: Callable[[], None] | None = None,
 ) -> PublishOutcome:
     """Fill this market's create form from an item and publish it.
 
     Answers a `PublishOutcome`. Raises `PublishNotAttempted` when nothing was created and
     `PublishUnverified` when something may have been — never a bare `BrowserError`, because the
-    caller's decision to retry turns entirely on which of those two it is.
+    caller's decision to retry turns entirely on which of those two it is. A market whose form is
+    several pages has its own driver, held to the same contract; `seller` is the seller's basics.
+    `before_commit` runs just before the first click that may create a listing.
     """
+    if adapter.publish_driver:
+        return adapter.publish_driver(
+            client,
+            item,
+            create_url=create_url,
+            photos=photos,
+            seller=seller or {},
+            sleep=sleep,
+            before_commit=before_commit,
+        )
     if not adapter.publish_fields_js:
         raise PublishNotAttempted(f"{adapter.market} has no publish selectors")
     pause = sleep or formfill.sleep
@@ -87,7 +129,7 @@ def publish(
         raise PublishNotAttempted(f"could not fill in the form: {exc}", retryable=True) from exc
 
     # Everything past here may have created a listing.
-    return _commit(client, adapter, item, listings_url, pause)
+    return _commit(client, adapter, item, listings_url, pause, before_commit)
 
 
 def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> None:
@@ -239,7 +281,7 @@ def _verify_form(client, adapter, item: dict) -> None:
         raise PublishNotAttempted(f"the form shows the price as {seen.get('price')!r}, not {price}")
 
 
-def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
+def _commit(client, adapter, item: dict, listings_url, pause, before_commit=None) -> PublishOutcome:
     """Press through the form's own steps, and find out what was made.
 
     Everything in here is past the point of no return, so every failure is `PublishUnverified`:
@@ -260,6 +302,8 @@ def _commit(client, adapter, item: dict, listings_url, pause) -> PublishOutcome:
             f"the {adapter.market} form will not accept this listing yet — it still wants "
             "something, and nothing was submitted"
         )
+    if before_commit:
+        before_commit()
     try:
         client.click(adapter.publish_target("next"), "Next")
     except ControlMoved as exc:
@@ -389,4 +433,4 @@ def clear_staged(item_id: str) -> None:
 def can_drive(market: str) -> bool:
     """Whether this marketplace can be published to by driving its form."""
     adapter = market_adapters.get_adapter(market)
-    return bool(adapter and adapter.publish_fields_js)
+    return bool(adapter and adapter.drives_publish)
