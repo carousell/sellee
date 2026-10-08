@@ -229,7 +229,7 @@ class Poller:
         # words the seller tapped here means the durable row — and so the pass prompt, the
         # transcript, and catchup — all read as them saying it, with no special path downstream.
         events = asks.resolve_ask_answers(self.store, events)
-        inserted = self.store.ingest_updates(events, max_id + 1)
+        inserted = self.store.ingest_updates(events, max_id + 1, fast_path=fastpaths.claims)
         for row in inserted:
             routing.publish_channel_in(self.bus, row)
         self._ack_taps(client, inserted)

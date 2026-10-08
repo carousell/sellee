@@ -942,6 +942,32 @@ def test_an_unreadable_row_stops_the_survey_closing_as_complete(store, bus) -> N
     assert store.list_discovered_listings("fb") == []
 
 
+def test_unreadable_rows_are_counted_against_the_rows_read_when_the_page_gives_no_tally(
+    store, bus
+) -> None:
+    """The profile page carries no "N active listings" line, so the tally reads 0; the reason must
+    not say "3 of 0"."""
+    from sellee.browser import survey
+
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    store.request_market_survey("fb")
+    row = {
+        "listing_id": "1",
+        "url": "https://www.facebook.com/marketplace/item/1/",
+        "title": "A thing",
+        "price": 10.0,
+        "price_text": "SGD10",
+    }
+    client = SurveyStub(
+        listings={"listings": [row], "active_count": 0, "unreadable": 3, "truncated": False}
+    )
+
+    survey.discover_phase(_survey_deps(store, bus, client))
+
+    reasons = [e.payload["reason"] for e in _kinds(bus, "survey.unserved")]
+    assert reasons == ["3 of 4 listings would not read"]
+
+
 def test_an_ambiguous_twin_is_asked_about_rather_than_dropped(store, bus) -> None:
     """Dropped silently, the fan-out would read the listing as absent and duplicate it."""
     from sellee.browser import survey

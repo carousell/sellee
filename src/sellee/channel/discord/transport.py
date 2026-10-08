@@ -108,6 +108,15 @@ def _epoch(timestamp: str | None) -> float | None:
         return None
 
 
+def _tapped_label(message: dict, custom_id: str) -> str:
+    """The label of the button carrying `custom_id` on the message it was tapped on, or ""."""
+    for row in message.get("components") or []:
+        for component in row.get("components") or []:
+            if component.get("custom_id") == custom_id:
+                return str(component.get("label") or "")
+    return ""
+
+
 def _normalize(event: dict) -> dict | None:
     kind = event.get("t")
     data = event.get("d") or {}
@@ -154,7 +163,8 @@ def _normalize(event: dict) -> dict | None:
         return {
             "event_id": int(data["id"]),
             "kind": "action",
-            "text": choice,
+            # What the seller tapped, as later passes read it back; the token stays in payload.
+            "text": _tapped_label(data.get("message") or {}, custom_id) or choice,
             "payload": {
                 "ref": ref,
                 "choice": choice,

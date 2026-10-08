@@ -105,6 +105,9 @@ class StubForm:
         """The page receives a click on the control; how the cursor got there is the client's."""
         return self.call_tool("browser_click", {"target": target, "element": element})
 
+    def click_to_choose_files(self, target, element):
+        self.actions.append(("choose files", target.split("'")[1]))
+
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
@@ -352,6 +355,25 @@ def test_a_form_that_is_not_ready_is_never_pressed_and_stays_retryable() -> None
     assert "next" not in _steps(client)
 
 
+def test_the_attempt_is_ledgered_before_next_is_pressed_and_not_before() -> None:
+    client = StubForm()
+    steps_at_ledger: list = []
+
+    _publish(client, before_commit=lambda: steps_at_ledger.append(list(_steps(client))))
+
+    assert len(steps_at_ledger) == 1 and "next" not in steps_at_ledger[0]
+    assert "next" in _steps(client)
+
+
+def test_a_form_refused_before_its_commit_ledgers_no_attempt() -> None:
+    ledgered: list = []
+
+    with pytest.raises(publisher.PublishNotAttempted):
+        _publish(StubForm(next_enabled=False), before_commit=lambda: ledgered.append(True))
+
+    assert ledgered == []
+
+
 def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
     """The browser server only accepts an upload while the chooser is actually open."""
     client = StubForm()
@@ -359,9 +381,19 @@ def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
     _publish(client, photos=["/tmp/a.jpg"])
 
     order = [
-        step for name, step in client.actions if name in ("browser_click", "browser_file_upload")
+        step for name, step in client.actions if name in ("choose files", "browser_file_upload")
     ]
     assert order.index("add_photos") < order.index("browser_file_upload")
+
+
+def test_the_photo_chooser_is_opened_by_the_click_that_hands_the_server_the_chooser() -> None:
+    """A humanised press opened no chooser the server could hand files to (run 12, 2026-10-08)."""
+    client = StubForm()
+
+    _publish(client, photos=["/tmp/a.jpg"])
+
+    assert ("choose files", "add_photos") in client.actions
+    assert ("browser_click", "add_photos") not in client.actions
 
 
 # --- confirming a publish the landing page does not name --------------------------------------

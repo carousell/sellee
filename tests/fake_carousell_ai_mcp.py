@@ -1,5 +1,5 @@
-"""A fake carousell.ai seller MCP server holding relay threads, as bazaar's list_threads and
-get_thread serve them: proto field names, RFC 3339 times, and at-least-once paging."""
+"""A fake carousell.ai seller MCP server holding relay threads and registration mail, as bazaar
+serves them: proto field names, RFC 3339 times, and at-least-once paging."""
 
 from __future__ import annotations
 
@@ -36,6 +36,17 @@ class FakeRelay:
         self.reply_calls: list = []
         self.slow_sec = 0.0
         self._replies = 0
+        # Registration mail, its correspondents, and the replies bazaar stored and actually sent.
+        self.mail: list = []
+        self.correspondents: set = set()
+        self.registration_replies: dict = {}
+        self.registration_sent: list = []
+        self.registration_calls: list = []
+        # One send_registration_reply outcome per call ("ok" once empty): unavailable and http503
+        # send nothing; lost sends, then answers as a 5xx.
+        self.registration_script: list = []
+        # The seller's registration address, as get_registration_address mints it.
+        self.registration_email = "seller-token@inbox.carousell.ai"
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -138,11 +149,93 @@ class FakeRelay:
         cursor = str(page[-1]["updated"]) if page else (args.get("cursor") or "")
         return {"threads": [self._summary(t["id"]) for t in page], "next_cursor": cursor}
 
+    def add_mail(
+        self, mail_id, *, from_email, subject, text, from_domain=None, from_name="", automatic=False
+    ):
+        """Mail to the seller's registration address; its sender becomes a correspondent."""
+        from_email = from_email.lower()
+        self.mail.append(
+            {
+                "id": mail_id,
+                "from_email": from_email,
+                "from_name": from_name,
+                "from_domain": from_domain or from_email.rsplit("@", 1)[-1],
+                "subject": subject,
+                "text": text,
+                "automatic": automatic,
+                "received": self.tick(),
+            }
+        )
+        self.correspondents.add(from_email)
+
+    def list_registration_mail(self, args: dict) -> dict:
+        after = float(args.get("cursor") or 0)
+        limit = int(args.get("limit") or 50)
+        rows = sorted(self.mail, key=lambda m: (m["received"], m["id"]))
+        page = [m for m in rows if m["received"] > after][:limit]
+        if self.repeat_tail and after:
+            page = ([m for m in rows if m["received"] == after] + page)[:limit]
+        cursor = str(page[-1]["received"]) if page else (args.get("cursor") or "")
+        mail = [
+            {
+                "received_at": rfc3339(m["received"]),
+                **{k: v for k, v in m.items() if k != "received"},
+            }
+            for m in page
+        ]
+        return {"mail": mail, "next_cursor": cursor}
+
+    def get_registration_address(self, args: dict) -> dict:
+        return {"registration_email": self.registration_email}
+
+    def send_registration_reply(self, args: dict) -> dict:
+        """Send once per client_message_id, only to a correspondent, as bazaar does."""
+        self.registration_calls.append(dict(args))
+        step = self.registration_script.pop(0) if self.registration_script else "ok"
+        subject = args.get("subject") or ""
+        if not subject.strip() or "\n" in subject or "\r" in subject:
+            raise ToolFailure("subject must be one line")
+        to = args["to"].lower()
+        stored = self.registration_replies.get(args["client_message_id"])
+        if stored is None:
+            stored = {"to": to, "subject": subject, "text": args["text"], "sent_at": ""}
+            if to not in self.correspondents:
+                raise ToolFailure("to has never mailed the seller's registration address")
+            self.registration_replies[args["client_message_id"]] = stored
+        elif (stored["to"], stored["subject"], stored["text"]) != (to, subject, args["text"]):
+            raise ToolFailure("client_message_id already names a different reply")
+        if not stored["sent_at"]:
+            if stored["to"] not in self.correspondents:
+                raise ToolFailure("to has never mailed the seller's registration address")
+            if step == "unavailable":
+                raise ToolFailure(
+                    "the reply may not have been sent; retry with the same client_message_id"
+                )
+            if step == "sending":
+                raise ToolFailure("the reply is being sent; retry with the same client_message_id")
+            if step == "unknown":
+                raise ToolFailure("an answer sellee has never seen")
+            stored["sent_at"] = rfc3339(self.tick())
+            self.registration_sent.append({**args, "to": stored["to"]})
+        if step == "lost":
+            raise ToolFailure("internal server error")
+        return {"sent_at": stored["sent_at"]}
+
     def get_thread(self, args: dict) -> dict:
         thread_id = args["id"]
         if thread_id in self.broken:
             raise LookupError(thread_id)
         return {"thread": self._summary(thread_id), "messages": list(self.messages[thread_id])}
+
+
+_TOOLS = (
+    "list_threads",
+    "get_thread",
+    "reply_to_thread",
+    "list_registration_mail",
+    "send_registration_reply",
+    "get_registration_address",
+)
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -156,7 +249,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(503, {"error": "unavailable"})
             return
         if body.get("method") == "tools/list":
-            tools = [{"name": n} for n in ("list_threads", "get_thread", "reply_to_thread")]
+            tools = [{"name": n} for n in _TOOLS]
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {"tools": tools}})
             return
         if body.get("method") != "tools/call":
@@ -169,10 +262,18 @@ class _Handler(BaseHTTPRequestHandler):
             relay.reply_calls.append(dict(args))
             self._send(status, {"error": "unavailable"})
             return
+        if name == "send_registration_reply" and relay.registration_script[:1] == ["http503"]:
+            relay.registration_script.pop(0)
+            relay.registration_calls.append(dict(args))
+            self._send(503, {"error": "unavailable"})
+            return
         handler = {
             "list_threads": relay.list_threads,
             "get_thread": relay.get_thread,
             "reply_to_thread": relay.reply_to_thread,
+            "list_registration_mail": relay.list_registration_mail,
+            "send_registration_reply": relay.send_registration_reply,
+            "get_registration_address": relay.get_registration_address,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}

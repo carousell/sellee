@@ -6,12 +6,15 @@ from __future__ import annotations
 import time
 
 import pytest
+from hypothesis import given
+from hypothesis import strategies as st
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
 from sellee.config import Config
 from sellee.rail import inbox as relay
-from sellee.rail.client import RailClient
-from sellee.rail.sink import RelayReplySink
+from sellee.rail.client import RailClient, RailToolRefused
+from sellee.rail.sink import _REFUSED_TEXT, RelayReplySink, is_already_stored, is_refusal
+from sellee.store.send import LANE_RETRY_GIVE_UP_SEC, UNSETTLED_EMAIL_ASK
 from sellee.tools.registry import dispatch
 
 _WEB = "https://www.carousell.ai"
@@ -233,10 +236,20 @@ def test_a_retry_bazaar_refuses_drops_the_send(make_ctx, store, bus, waiting):
 
 
 # The lane retries an unsettled relay send until bazaar answers, so there is nothing to ask.
-def test_the_sweep_never_asks_the_seller_about_a_relay_send(make_ctx, store, bus, waiting):
+def test_a_relay_send_bazaar_never_settles_asks_the_seller_after_a_day(
+    make_ctx, store, bus, waiting
+):
+    """The lane retries it for a day, then stops; the seller is asked once, in email words."""
     _stuck(make_ctx, store, bus, waiting)
+    later = time.time() + LANE_RETRY_GIVE_UP_SEC
 
-    assert store.stale_intent_sweep(grace_sec=600, now=time.time() + 30 * 86400) == []
+    assert store.stale_intent_sweep(grace_sec=600, now=later - 60) == []
+    [folded] = store.stale_intent_sweep(grace_sec=600, now=later + 60)
+
+    [esc] = store.list_open_escalations()
+    assert esc["open_question"] == UNSETTLED_EMAIL_ASK
+    assert esc["thread_id"] == folded["thread_id"]
+    assert store.unsettled_intents_on("carousell-ai", created_before=later + 60) == []
 
 
 def test_a_paused_agent_sends_nothing_from_the_lane(make_ctx, store, bus, waiting):
@@ -267,3 +280,34 @@ def test_a_retried_send_answers_only_what_the_reply_was_written_against(
     assert _intent_statuses(store) == ["committed"]
     assert store.get_thread(_THREAD)["cursor_last_msg_id"] == "m1"
     assert _waiting_threads(store) == {_THREAD}
+
+
+@given(start=st.sampled_from(_REFUSED_TEXT), rest=st.text(max_size=40))
+def test_bazaars_known_refusals_are_final(start, rest) -> None:
+    assert is_refusal(RailToolRefused(start + rest))
+
+
+@given(text=st.text(max_size=80))
+def test_any_other_answer_may_have_stored_the_reply(text) -> None:
+    if not text.strip().lower().startswith(_REFUSED_TEXT):
+        assert not is_refusal(RailToolRefused(text))
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "the reply may not have been sent; retry with the same client_message_id",
+        "the reply is being sent; retry with the same client_message_id",
+        "too many replies to this buyer; try again later",
+        "internal server error",
+    ],
+)
+def test_bazaars_retry_answers_are_not_refusals(text) -> None:
+    assert not is_refusal(RailToolRefused(text))
+
+
+@given(rest=st.text(max_size=40))
+def test_an_id_bazaar_already_holds_is_stored_never_refused(rest) -> None:
+    """bazaar names our id as used only when an earlier attempt of ours stored a reply under it."""
+    exc = RailToolRefused("client_message_id already names" + rest)
+    assert is_already_stored(exc) and not is_refusal(exc)

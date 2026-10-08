@@ -15,6 +15,7 @@ needs-me item naming the listing to close by hand.
 from __future__ import annotations
 
 from sellee import marketplaces
+from sellee.channel import fastpaths
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
 from sellee.store import StoreError
 from sellee.tools.registry import (
@@ -33,6 +34,11 @@ _ACTIONS = ("take_down",)
 MANUAL_TAKE_DOWN_NOTICE = (
     "One thing left on the sold item: its {market} listing is still up. "
     "Close it in the app when you get a chance — {url}"
+)
+# Only sellee's Chrome is signed in to the Craigslist account, so the button opens it there.
+CRAIGSLIST_TAKE_DOWN_NOTICE = (
+    "One thing left on the sold item: its Craigslist post is still up. Tap Open on desktop and "
+    'press "Delete this Posting" on the page that opens in my Chrome — {url}'
 )
 
 
@@ -72,25 +78,40 @@ def _update_listing(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    manual = _manual_take_downs(ctx, item_id)
+    manual = manual_take_downs(ctx.store, item_id)
     return {"status": "taken_down", "item_id": item_id, "manual_take_downs": manual}
 
 
-def _manual_take_downs(ctx: ToolContext, item_id: str) -> list:
+def take_down_on_sale(ctx: ToolContext, item_id: str, take_down: list) -> str | None:
+    """Archive the carousell.ai listing a sale left live; None when the sale named none."""
+    if not any(entry.get("platform") == _MARKET for entry in take_down):
+        return None
+    try:
+        return _update_listing(ctx, {"item_id": item_id})["status"]
+    except ToolError as exc:
+        return f"failed: {exc} — retry with carousell_ai_update_listing"
+
+
+def manual_take_downs(store, item_id: str) -> list:
     """Queue a needs-me item per browser-market listing still up, and report them.
 
     Named rather than silently skipped: the whole point of confirming a sale is that the other
-    listings come down, so the ones the agent will not close itself have to be visible work.
+    listings come down. Each is queued once, whichever of the sale or the archive asks first.
     """
-    item = ctx.store.get_item(item_id)
+    item = store.get_item(item_id)
     remaining = []
     for market, url in sorted((item or {}).get("listing_urls", {}).items()):
         if not url or marketplaces.connector_type(market) != "browser":
             continue
-        ctx.store.queue_notice(
-            MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url),
-            ref=item_id,
+        craigslist = market == marketplaces.CRAIGSLIST
+        text = (
+            CRAIGSLIST_TAKE_DOWN_NOTICE.format(url=url)
+            if craigslist
+            else MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url)
         )
+        controls = fastpaths.open_post_controls(item_id) if craigslist else None
+        if not store.has_notice_text(item_id, text):
+            store.queue_notice(text, ref=item_id, controls=controls)
         remaining.append({"market": market, "url": url})
     return remaining
 

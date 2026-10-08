@@ -68,8 +68,13 @@ STALE_NOTICE = (
 # market that quietly stops working with no explanation anywhere.
 ABANDONED_NOTICE = (
     "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
-    "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
-    "again."
+    "stopped for now. I'm still reading your {name} messages.{waiting} Tap below when you'd like "
+    "me to try again."
+)
+# The fan-out holds a market until it has been read, so a seller who publishes there hears why.
+ABANDONED_WAITING = (
+    " I won't post anything new to {name} until I've had that look, so nothing you already have "
+    "there gets a second copy."
 )
 ALREADY_MANAGING_NOTICE = (
     "I've already taken over {count} on {name} and I'm answering buyers on them. Tell me which "
@@ -236,11 +241,8 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
         # Rows that were on the page but would not parse. `truncated` does not catch this — a
         # dropped row counts as read — and an unread row leaves no trace anywhere, which the
         # fan-out reads as "not listed there" and answers by posting a duplicate.
-        _unserved(
-            deps,
-            market,
-            f"{answer['unreadable']} of {answer.get('active_count')} listings would not read",
-        )
+        rows = len(answer["listings"]) + answer["unreadable"]
+        _unserved(deps, market, f"{answer['unreadable']} of {rows} listings would not read")
         return
     if not fresh:
         # Surveyed, with nothing to ask about. Recorded as done so it is not asked again.
@@ -376,8 +378,11 @@ def stale_text(market: str) -> str:
     return STALE_NOTICE.format(name=marketplaces.display_name(market))
 
 
-def abandoned_text(market: str) -> str:
-    return ABANDONED_NOTICE.format(name=marketplaces.display_name(market))
+def abandoned_text(store, market: str) -> str:
+    name = marketplaces.display_name(market)
+    posted_to = market in settings.publish_markets(store)
+    waiting = ABANDONED_WAITING.format(name=name) if posted_to else ""
+    return ABANDONED_NOTICE.format(name=name, waiting=waiting)
 
 
 def already_managing_text(market: str, count: int) -> str:
@@ -400,5 +405,5 @@ def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
         deps.store.abandon_market_survey(market)
         deps.bus.publish("survey.abandoned", {"market": market, "reason": reason[:200]})
         deps.store.queue_notice(
-            abandoned_text(market), controls=fastpaths.look_again_controls(market)
+            abandoned_text(deps.store, market), controls=fastpaths.look_again_controls(market)
         )

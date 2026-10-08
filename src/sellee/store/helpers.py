@@ -68,6 +68,9 @@ _QA_SOURCES = ("seller",)
 # Sell threads a reply pass may be spawned for: a buyer is mid-conversation, not gone or handed
 # over. A held/escalated thread is deliberately excluded — it is waiting on someone else.
 _REPLY_THREAD_STATUSES = ("active", "liaising", "agreed")
+# Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
+# answers; the sweep never asks the seller about one.
+LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 UI_CACHE_STALE_FAILS = 3
 UI_CACHE_STALE_DAYS = 30
@@ -154,11 +157,11 @@ def _term_overlap(entry: dict, terms: set) -> int:
 # replied and the buyer has since said more" — the common one, which must stay eligible.
 #
 # The last answers "is an earlier send still in the air". `reserve_reply` refuses a thread holding a
-# `sent_unverified` intent — the buyer may already have that message — so a pass spawned for one
-# could only be turned away. Mirrored here because eligibility is what the lane spends a pass on,
-# and a refusal it could have predicted is the livelock of 2026-08-29 in miniature. Bounded exactly
-# as the refusal is: the sweep folds the intent to `unconfirmed` and opens the escalation that the
-# clause below already holds the thread on.
+# `sent_unverified` intent, or a `pending` one its lane will retry — the buyer may get that
+# message — so a pass spawned for one could only be turned away. Mirrored here because eligibility
+# is what the lane spends a pass on, and a refusal it could have predicted is the livelock of
+# 2026-08-29 in miniature. Bounded as the refusal is: the lane's retry settles the intent, or the
+# sweep folds it to `unconfirmed` and opens the escalation the clause below holds the thread on.
 _UNHANDLED_INBOUND_SQL = (
     "SELECT t.thread_id, t.item_id, t.market, "
     "  (SELECT mw.msg_id FROM thread_messages mw WHERE mw.thread_id = t.thread_id "
@@ -176,9 +179,13 @@ _UNHANDLED_INBOUND_SQL = (
     "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
     "  AND e.status = 'open') "
     "AND NOT EXISTS (SELECT 1 FROM send_intents si WHERE si.thread_id = t.thread_id "
-    "  AND si.status = 'sent_unverified') "
+    "  AND (si.status = 'sent_unverified' "
+    "       OR (si.status = 'pending' AND t.market IN ({retried})))) "
     "ORDER BY t.thread_id ASC"
-).format(statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES))
+).format(
+    statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES),
+    retried=",".join(f"'{market}'" for market in sorted(LANE_RETRIED_MARKETS)),
+)
 
 
 def _unhandled_inbound_rows(rows) -> list[dict]:

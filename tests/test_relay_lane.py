@@ -430,3 +430,32 @@ def test_a_question_held_back_by_an_undelivered_nudge_reaches_the_seller_after(
     relay.relay_lane(deps)
     [second] = _nudges(store)
     assert "lights" in second["text"] and "Hello?" not in second["text"]
+
+
+def test_a_send_saved_but_not_sent_before_a_crash_reaches_the_buyer_once(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1")
+    fake.add_message("t1", "m1", "buyer", "Is the lamp still available?")
+    relay.relay_lane(_deps(store, bus, fake))
+    # The intent is saved, then the process dies before the sink is called.
+    reserved = store.reserve_reply(
+        thread_id="carousell-ai:t1",
+        kind="reply",
+        text="Yes, still here.",
+        in_msg_id="m1",
+        cfg=Config(),
+    )
+    assert reserved["verdict"] == "go"
+
+    assert _waiting(store) == set()
+    again = store.reserve_reply(
+        thread_id="carousell-ai:t1", kind="reply", text="Yes!", in_msg_id="m1", cfg=Config()
+    )
+    assert again["verdict"] == "unverified_open"
+
+    later = _deps(store, bus, fake)
+    later.now = lambda: 10**10
+    relay.relay_lane(later)
+
+    agent = [m for m in fake.messages["t1"] if m["author"] == "agent"]
+    assert [m["text"] for m in agent] == ["Yes, still here."]
+    assert _waiting(store) == set()

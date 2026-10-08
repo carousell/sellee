@@ -155,19 +155,25 @@ class ChannelMixin:
 
     # --- channel inbox (durable intake; persist-then-ack in one transaction) --------------------
 
-    def ingest_updates(self, events: list, update_offset: int) -> list[InboxRecord]:
+    def ingest_updates(
+        self, events: list, update_offset: int, *, fast_path=None
+    ) -> list[InboxRecord]:
         """Persist a batch of inbound updates and advance the cursor in ONE transaction (the next
         getUpdates offset silently acks the batch): acking and durability commit together, so a
         crash either re-delivers (deduped by event_id UNIQUE) or finds the rows already safe.
-        Returns the rows actually inserted (new event_ids), arrival order, for the poller to act."""
+        Returns the rows actually inserted (new event_ids), arrival order, for the poller to act.
+
+        A row `fast_path` claims is stored already handled, so a channel pass routed in the gap
+        before the poller answers it can never claim it too."""
         now = _now()
         inserted: list[InboxRecord] = []
         with self._db.transaction() as conn:
             for ev in events:
+                handled = bool(fast_path and fast_path(ev))
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO channel_inbox "
                     "(event_id, kind, text, payload, media_paths, src_ts, received_ts, "
-                    " status, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    " status, handled_by, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         ev["event_id"],
                         ev["kind"],
@@ -176,6 +182,8 @@ class ChannelMixin:
                         json.dumps(ev.get("media_paths") or []),
                         ev.get("src_ts"),
                         now,
+                        "handled" if handled else "pending",
+                        "fast_path" if handled else None,
                         now,
                     ),
                 )
@@ -429,6 +437,12 @@ class ChannelMixin:
         """Whether any notice — queued or delivered — was ever queued under `ref`. The durable
         once-guard for proactive pushes (retention never prunes notices)."""
         return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
+
+    def has_notice_text(self, ref: str, text: str) -> bool:
+        """Whether this exact notice was ever queued under `ref`, so it can be queued once."""
+        return bool(
+            self._db.query("SELECT 1 FROM notices WHERE ref = ? AND text = ? LIMIT 1", (ref, text))
+        )
 
     def notices_with_ref_prefix(self, prefix: str) -> list[dict]:
         """Every notice whose ref starts with `prefix`, as {ref, status}, oldest first."""

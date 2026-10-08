@@ -739,6 +739,12 @@ class BrowserClient:
             self.ensure_tab()
             self._load(url)
 
+    def pace(self, url: str) -> None:
+        """Ask the governor before a click that loads a page of `url`'s market, as a form submit
+        does: the market sees a page load either way."""
+        if self._governor is not None:
+            self._governor.before_load(url)
+
     def _load(self, url: str, *, once: bool = False) -> None:
         """Load `url` in our tab, once the governor has let it through."""
         if self._governor is not None:
@@ -869,6 +875,16 @@ class BrowserClient:
                 "browser_mouse_click_xy",
                 {"x": aim[0], "y": aim[1], "delay": pointer.press_ms(self._rng)},
             )
+
+    def click_to_choose_files(self, target: str, element: str) -> None:
+        """Open a file chooser: the cursor travels to the control, then the server's own click
+        presses it. After a raw press the server refused the upload as having no chooser open."""
+        with self._lock:
+            placed = self._box_in_view(target, element) if self._has_mouse else None
+            if placed is not None:
+                box, viewport = placed
+                self._travel(pointer.aim(box, self._rng), viewport)
+            self.call_tool("browser_click", {"target": target, "element": element})
 
     def _box(self, target: str, element: str):
         """`(box, (viewport width, height))` for the control now, or None when it is not drawn."""
@@ -1009,11 +1025,14 @@ class BrowserClient:
         """
         with self._lock:
             self._start()
-            if (self.evaluate(_PAGE_STATE_JS) or {}).get("visible"):
+            before = self.evaluate(_PAGE_STATE_JS) or {}
+            if before.get("visible"):
                 return
             self.call_tool("browser_tabs", {"action": "select", "index": self._current_tab_index()})
             state = self.evaluate(_AWAIT_VISIBLE_JS) or {}
-            if not same_page(state.get("url") or "", url):
+            # Ours is the page our tab showed, which a redirect may have moved off `url`.
+            landed = state.get("url") or ""
+            if not (same_page(landed, url) or same_page(landed, before.get("url") or "")):
                 self._tab_opened = False  # not ours any more; the next call opens a fresh one
                 raise BrowserToolError(
                     f"selecting our own tab landed on {state.get('url')!r}, not {url!r}"

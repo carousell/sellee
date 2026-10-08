@@ -5,3 +5,7 @@
 setup text eol=lf
 bin/sellee text eol=lf
 Dockerfile text eol=lf
+
+# Redacted Craigslist mail and pages the tests read; folded away in GitHub's diff view.
+tests/fixtures/craigslist/*.eml linguist-generated=true
+tests/fixtures/craigslist/*.html linguist-generated=true

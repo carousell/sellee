@@ -139,6 +139,9 @@ class StubEditForm:
             return True
         if function == client_mod.HAS_CARET_JS:
             return True
+        if function == client_mod.COMPOSER_TEXT_JS:
+            target = kwargs.get("target") or ""
+            return self.values.get(target.split("'")[1] if "'" in target else "", "")
         if function == _ADAPTER.block_wall_js:
             return self.wall
         if function == _ADAPTER.edit_entry_js:

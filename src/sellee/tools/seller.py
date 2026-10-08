@@ -20,7 +20,7 @@ from sellee.tools.registry import (
     register,
 )
 
-_BASICS_KEYS = {"region", "currency", "timezone"}
+_BASICS_KEYS = {"region", "currency", "timezone", "zip", "craigslist_area"}
 _SHIPPING_KEYS = {"zones", "size_surcharge"}
 
 
@@ -62,6 +62,20 @@ def validate_basics(basics: dict) -> dict:
             raise BasicsError("timezone must be a zone name (e.g. Asia/Singapore)")
         _require_known_timezone(timezone)
         out["timezone"] = timezone
+
+    zip_code = str(basics.get("zip", "")).strip()
+    if "zip" in basics:
+        # A US ZIP code, which Craigslist posts show publicly; the street address stays in origin.
+        if len(zip_code) != 5 or not zip_code.isdigit():
+            raise BasicsError(f"zip must be a five-digit US ZIP code, got {zip_code!r}")
+        out["zip"] = zip_code
+
+    if "craigslist_area" in basics:
+        # One of the area labels Craigslist offered the seller, matched exactly when posting.
+        area = " ".join(str(basics.get("craigslist_area") or "").split())
+        if not area or len(area) > 80:
+            raise BasicsError("craigslist_area must be one of the area names Craigslist offered")
+        out["craigslist_area"] = area
     return out
 
 
@@ -162,8 +176,10 @@ register(
 register(
     ToolSpec(
         name="update_seller_config",
-        description="Write seller configuration sections: basics (region/currency/timezone), "
-        "shipping (zones/size_surcharge), and origin (the private pickup address).",
+        description="Write seller configuration sections: basics (region/currency/timezone; "
+        "zip and craigslist_area only when the seller answers a Craigslist question, the area "
+        "exactly as Craigslist offered it — never ask for them otherwise), shipping "
+        "(zones/size_surcharge), and origin (the private pickup address).",
         input_schema={
             "type": "object",
             "properties": {

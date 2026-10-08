@@ -18,6 +18,7 @@ from sellee.store.helpers import (
     _now,
     _unhandled_inbound_rows,
 )
+from sellee.store.items import record_listing_url_in_txn
 
 
 class PassesMixin:
@@ -36,7 +37,18 @@ class PassesMixin:
             )
         return pass_id
 
-    def record_driven_publish(self, item_id: str, market: str, *, status: str, origin: str) -> str:
+    def record_driven_publish(
+        self,
+        item_id: str,
+        market: str,
+        *,
+        status: str,
+        origin: str,
+        unverified: bool = False,
+        category: str | None = None,
+        retired: bool = False,
+        url: str | None = None,
+    ) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
         A driven market spawns no model pass, so it would otherwise leave no trace — and the
@@ -51,11 +63,20 @@ class PassesMixin:
         a pass row does. Written as `reported=1` it was invisible to `unreported_crosslist_passes` —
         a Facebook listing went live with nobody told, which is the one failure the fan-out's
         reporting exists to prevent.
+
+        `category` is the one the post was made in; `retired` ends the pair for good. `url`, for
+        a verified publish, is recorded in the same transaction as the row.
         """
         if status not in _PASS_TERMINAL:
             raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
         pass_id = _new_id("pass")
-        payload = {"item_id": item_id, "market": market, "origin": origin}
+        payload: dict = {"item_id": item_id, "market": market, "origin": origin}
+        if unverified:
+            payload["unverified"] = True  # a listing may exist: the pair is never driven again
+        if category:
+            payload["category"] = category
+        if retired:
+            payload["retired"] = True
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
@@ -63,7 +84,36 @@ class PassesMixin:
                 "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 0)",
                 (pass_id, json.dumps(payload, sort_keys=True), status, now, now, now),
             )
+            if url:
+                record_listing_url_in_txn(conn, item_id, market, url)
         return pass_id
+
+    def settle_driven_publish(
+        self, pass_id: str, *, status: str, unverified: bool, url: str | None = None
+    ) -> None:
+        """Turn a publish recorded unverified ahead of its commit click into how it ended. A
+        verified `url` is recorded in the same transaction, so the guard never clears without it."""
+        if status not in _PASS_TERMINAL:
+            raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            payload.pop("unverified", None)
+            if unverified:
+                payload["unverified"] = True
+            conn.execute(
+                "UPDATE passes SET status = ?, payload = ?, finished_ts = ? WHERE pass_id = ?",
+                (status, json.dumps(payload, sort_keys=True), _now(), pass_id),
+            )
+            if url:
+                record_listing_url_in_txn(conn, payload["item_id"], payload["market"], url)
+
+    def forget_driven_publish(self, pass_id: str) -> None:
+        """Drop a publish recorded ahead of a commit click the page refused, so nothing was sent."""
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM passes WHERE pass_id = ?", (pass_id,))
 
     def claim_queued_pass(self) -> ClaimedPass | None:
         """Claim the oldest queued pass, stamping it running in the same transaction so two
@@ -319,6 +369,12 @@ class PassesMixin:
                     "finished_ts": row["finished_ts"],
                 }
             )
+            if payload.get("unverified"):
+                out[-1]["unverified"] = True  # a listing may exist: never driven again
+            if payload.get("retired"):
+                out[-1]["retired"] = True
+            if payload.get("category"):
+                out[-1]["category"] = payload["category"]
         return out
 
     def unreported_crosslist_passes(self) -> list[dict]:

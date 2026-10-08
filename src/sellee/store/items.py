@@ -179,16 +179,7 @@ class ItemsMixin:
         otherwise never be looked at again.
         """
         with self._db.transaction() as conn:
-            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
-            if not row:
-                raise ItemNotFound(f"no item with id {item_id!r}")
-            urls = json.loads(row["listing_urls"])
-            urls[market] = url
-            conn.execute(
-                "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
-                (json.dumps(urls, sort_keys=True), _now(), item_id),
-            )
-            _forget_thread_listings_in_txn(conn, market)
+            record_listing_url_in_txn(conn, item_id, market, url)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     # --- Q&A bank ---------------------------------------------------------------------------
@@ -374,6 +365,23 @@ class ItemsMixin:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
+    def record_post_read(self, url: str, state: str, *, live: bool) -> dict:
+        """Ledger one read of a post's public page. Returns the read before it, as {state,
+        seen_live}, or {} for the first; `live` says whether this read saw the post up."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT state, seen_live FROM post_reads WHERE url = ?", (url,)
+            ).fetchone()
+            before = {"state": row["state"], "seen_live": bool(row["seen_live"])} if row else {}
+            conn.execute(
+                "INSERT INTO post_reads (url, state, seen_live, read_ts) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (url) DO UPDATE SET state = excluded.state, "
+                "seen_live = MAX(post_reads.seen_live, excluded.seen_live), "
+                "read_ts = excluded.read_ts",
+                (url, state, int(live), _now()),
+            )
+        return before
+
     # --- floors -----------------------------------------------------------------------------
 
     def get_floor(self, item_id: str) -> FloorRecord | None:
@@ -452,3 +460,17 @@ class ItemsMixin:
                 ),
             )
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
+
+
+def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:
+    """`record_listing_url` inside a caller's transaction, so a publish settles with its URL."""
+    row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise ItemNotFound(f"no item with id {item_id!r}")
+    urls = json.loads(row["listing_urls"])
+    urls[market] = url
+    conn.execute(
+        "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
+        (json.dumps(urls, sort_keys=True), _now(), item_id),
+    )
+    _forget_thread_listings_in_txn(conn, market)

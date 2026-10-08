@@ -56,6 +56,15 @@ def _never_write_real_secrets(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
+def _no_real_craigslist_reads(monkeypatch):
+    """Every Craigslist post reads as up unless a test says otherwise: the lanes read the real page
+    by default, and a test's made-up post would read as gone."""
+    from sellee import craigslist_posts
+
+    monkeypatch.setattr(craigslist_posts, "fetch_state", lambda _url: "live")
+
+
+@pytest.fixture(autouse=True)
 def _close_databases(monkeypatch):
     """Close every Database a test opened, once it is done.
 
@@ -168,6 +177,15 @@ def seed_setting(store, key, value) -> None:
             "updated_ts = excluded.updated_ts",
             (key, json.dumps(value), time.time()),
         )
+
+
+def connect_craigslist(store) -> None:
+    """The seller has created their Craigslist account in sellee's Chrome and is signed in."""
+    store.craigslist_signed_in(
+        activated_notice="connected", activated_controls=[], back_in_notice="back in"
+    )
+    with store._db.transaction() as conn:  # noqa: SLF001 — tests may arrange store state directly
+        conn.execute("DELETE FROM notices WHERE text = 'connected'")
 
 
 @pytest.fixture

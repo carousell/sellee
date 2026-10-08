@@ -28,6 +28,8 @@ CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 # whole marketplace phase, which outlives every sign-in inside it.
 HOLD_SIGNIN = "signin"
 HOLD_SETUP = "setup"
+# One per opened post, `post:<item id>`, so its Done button frees only that post's hold.
+HOLD_POST_PREFIX = "post:"
 
 # How long a claim survives unrenewed — for a seller who wandered off or closed the terminal.
 # Long enough to find a password, short enough that a dead CLI is not a permanent outage.
@@ -73,6 +75,28 @@ class BrowserMixin:
             for r in rows
         ]
 
+    def request_post_open(self, item_id: str, market: str, url: str) -> None:
+        """Ask the connect lane to open this sold item's post at `url` for the seller."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO post_open_requests (item_id, market, url, requested_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (item_id) DO UPDATE SET "
+                "market = excluded.market, url = excluded.url, "
+                "requested_ts = excluded.requested_ts",
+                (item_id, market, url, _now()),
+            )
+
+    def pending_post_opens(self) -> list[dict]:
+        rows = self._db.query(
+            "SELECT item_id, market, url, requested_ts FROM post_open_requests "
+            "ORDER BY requested_ts ASC, item_id ASC"
+        )
+        return [dict(r) for r in rows]
+
+    def clear_post_open(self, item_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM post_open_requests WHERE item_id = ?", (item_id,))
+
     def clear_market_connect_request(self, market: str) -> None:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""
         with self._db.transaction() as conn:
@@ -100,6 +124,12 @@ class BrowserMixin:
         """Give the tab back. Safe for a holder that never held it, or whose hold has expired."""
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
+
+    def browser_holders(self, now: float | None = None) -> set[str]:
+        """Who holds the browser right now; expired holds are not counted."""
+        now = _now() if now is None else now
+        rows = self._db.query("SELECT holder FROM browser_holds WHERE expires_ts > ?", (now,))
+        return {str(r["holder"]) for r in rows}
 
     # --- a marketplace that has told us to stop ------------------------------------------------
 
@@ -346,3 +376,135 @@ class BrowserMixin:
             (now,),
         )
         return str(rows[0]["reason"]) if rows else ""
+
+    # --- the seller's Craigslist account -------------------------------------------------------
+    # Each write names the state it moves from; a notice is queued in the move's own transaction.
+    # `requested_ts` is when the seller last started a sign-in in sellee's Chrome; 0 when none is
+    # under way, so no emailed link is opened.
+
+    def craigslist_account(self) -> dict | None:
+        rows = self._db.query("SELECT * FROM craigslist_account WHERE id = 1")
+        return dict(rows[0]) if rows else None
+
+    def begin_craigslist_sign_in(self, now: float, *, restart: bool = True) -> None:
+        """The seller is about to create the account, or sign back in, in sellee's Chrome: a link
+        Craigslist mails from now on is theirs to finish there. Without `restart`, a sign-in
+        already under way keeps its start, so a link it was mailed is not dropped as stale."""
+        keep = "" if restart else " WHERE craigslist_account.requested_ts = 0"
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO craigslist_account (id, state, requested_ts, updated_ts) "
+                "VALUES (1, 'awaiting_activation', ?, ?) ON CONFLICT (id) DO UPDATE SET "
+                "state = CASE WHEN state IN ('active', 'awaiting_login_link') "
+                "THEN 'awaiting_login_link' ELSE 'awaiting_activation' END, "
+                "link = NULL, link_opened = 0, requested_ts = excluded.requested_ts, "
+                "late_reported = 0, updated_ts = excluded.updated_ts" + keep,
+                (now, _now()),
+            )
+
+    def record_craigslist_link(self, link: str, *, received_ts: float) -> bool:
+        """Keep an emailed link for the lane to open, if the seller started a sign-in no later
+        than it was sent."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link = ?, link_opened = 0, updated_ts = ? "
+                "WHERE id = 1 AND state IN ('awaiting_activation', 'awaiting_login_link') "
+                "AND requested_ts > 0 AND requested_ts <= ? "
+                "AND link IS NOT ?",
+                (link, _now(), received_ts, link),
+            )
+            return bool(cur.rowcount)
+
+    def mark_craigslist_link_opened(self, link: str, address: str, notice: str) -> None:
+        """The lane opened `link` in sellee's Chrome; `address` is the one it reached."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link_opened = 1, address = ?, updated_ts = ? "
+                "WHERE id = 1 AND link = ? AND link_opened = 0",
+                (address, _now(), link),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+
+    def craigslist_signed_in(
+        self,
+        *,
+        activated_notice: str,
+        activated_controls: list,
+        back_in_notice: str,
+        own_email: str = "",
+        own_notice: str = "",
+    ) -> bool:
+        """The seller is signed in: a new account is connected, a signed-out one is back, or a
+        connected one changed between the seller's own account (`own_email`) and sellee's."""
+        now = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT state, own_email FROM craigslist_account WHERE id = 1"
+            ).fetchone()
+            changed = row is not None and (row["own_email"] or "") != own_email
+            if row is not None and row["state"] == "active" and not changed:
+                return False
+            conn.execute(
+                "INSERT INTO craigslist_account (id, state, requested_ts, updated_ts, own_email) "
+                "VALUES (1, 'active', 0, ?, ?) ON CONFLICT (id) DO UPDATE SET state = 'active', "
+                "link = NULL, link_opened = 0, requested_ts = 0, late_reported = 0, "
+                "updated_ts = excluded.updated_ts, own_email = excluded.own_email",
+                (now, own_email or None),
+            )
+            if row is not None and row["state"] == "awaiting_login_link" and not changed:
+                _insert_notice(conn, back_in_notice)
+            elif own_email:
+                _insert_notice(conn, own_notice)
+            else:
+                _insert_notice(conn, activated_notice, controls=activated_controls)
+            return True
+
+    def mark_craigslist_signed_out(self, notice: str, controls: list) -> bool:
+        """An active account was found signed out: ask the seller once to sign back in."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'awaiting_login_link', link = NULL, "
+                "link_opened = 0, requested_ts = 0, late_reported = 0, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active'",
+                (_now(),),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice, controls=controls)
+            return bool(cur.rowcount)
+
+    def want_seller_login_link(self, now: float) -> bool:
+        """The seller asked to sign in themselves; False when there is no active account."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET seller_login_ts = ?, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active'",
+                (now, _now()),
+            )
+            return bool(cur.rowcount)
+
+    def hand_seller_login_link(
+        self, link: str, *, received_ts: float, wait_sec: float, notice: str
+    ) -> bool:
+        """Send the seller a login link mailed after they asked for one, once."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET seller_login_ts = NULL, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active' AND seller_login_ts IS NOT NULL "
+                "AND seller_login_ts <= ? AND ? - seller_login_ts <= ?",
+                (_now(), received_ts, received_ts, wait_sec),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)
+
+    def report_craigslist_late_once(self, notice: str) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET late_reported = 1, updated_ts = ? "
+                "WHERE id = 1 AND state != 'active' AND requested_ts > 0 AND late_reported = 0",
+                (_now(),),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)

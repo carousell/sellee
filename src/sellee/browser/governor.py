@@ -75,6 +75,9 @@ def _policed_hosts() -> dict:
         entry = marketplaces.get_marketplace(adapter.market) or {}
         for host in (entry.get("domains") or {}).values():
             hosts[str(host).lower()] = adapter.market
+        for url in (adapter.home_url, adapter.publish_url):
+            if url:
+                hosts[urllib.parse.urlsplit(url).netloc.lower()] = adapter.market
     return hosts
 
 

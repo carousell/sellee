@@ -57,6 +57,29 @@ def test_facebook_is_governed_and_carousell_is_not() -> None:
     assert gov.market_for("about:blank") is None
 
 
+def test_craigslists_account_pages_are_governed_as_well_as_its_site() -> None:
+    gov, _ = _governor()
+
+    assert gov.market_for("https://accounts.craigslist.org/login") == "craigslist"
+    assert gov.market_for("https://accounts.craigslist.org/pass?key=1") == "craigslist"
+    assert gov.market_for("https://www.craigslist.org/") == "craigslist"
+
+
+def test_craigslists_posting_and_manage_pages_share_its_pacing_and_allowance() -> None:
+    gov, clock = _governor(policed_pages_per_hour=3)
+    post = "https://post.craigslist.org/c/"
+    manage = "https://post.craigslist.org/manage/9TXkjafxYMDS5VaPLGdRyk"
+
+    assert gov.market_for(post) == gov.market_for(manage) == "craigslist"
+    gov.before_load(post)
+    gov.before_load(manage)
+    gov.before_load("https://accounts.craigslist.org/login/home")
+
+    assert len(clock.slept) == 2 and all(gap >= governor.GAP_FLOOR_SEC for gap in clock.slept)
+    with pytest.raises(governor.PagesSpent):
+        gov.before_load(post)
+
+
 def test_a_market_that_does_not_police_automation_is_never_slowed() -> None:
     gov, clock = _governor(policed_pages_per_hour=1)
 

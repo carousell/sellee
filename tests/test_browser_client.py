@@ -412,6 +412,27 @@ def test_selecting_a_tab_that_is_not_ours_raises_and_gives_up_the_tab(make_clien
     assert client._tab_opened is False  # noqa: SLF001 — the handle is the thing under test
 
 
+def test_a_tab_that_redirected_off_its_url_is_still_ours(make_client) -> None:
+    """Live: a signed-out Craigslist account page redirects to its login. The tab that comes
+    forward shows the page it showed before the select, so it is ours, not someone else's."""
+    login = "https://accounts.craigslist.org/login?rp=%2Flogin%2Fhome&rt=L"
+    client = make_client(
+        {
+            "tools": {
+                "browser_evaluate": [
+                    {"result": {"visible": False, "url": login}},
+                    {"result": {"visible": True, "url": login}},
+                ],
+                "browser_tabs": [{"text": "ok"}, _TAB_LIST, {"text": "ok"}],
+                "browser_navigate": {"text": "ok"},
+            }
+        }
+    )
+    client.navigate("https://accounts.craigslist.org/login/home")
+    client.ensure_frontmost("https://accounts.craigslist.org/login/home")
+    assert client._tab_opened is True  # noqa: SLF001 — the handle is the thing under test
+
+
 def test_a_tab_that_stays_hidden_is_an_error_but_stays_ours(make_client) -> None:
     """Still our tab, just not visible — so the handle is kept and only the send is refused. Giving
     the tab up here would abandon a healthy one on every failure."""
@@ -1529,6 +1550,33 @@ def test_a_control_the_page_has_not_drawn_is_left_to_the_locator(tmp_path) -> No
 
     assert names[-1] == "browser_click"
     assert "browser_mouse_click_xy" not in names
+
+
+def test_a_control_that_opens_a_file_chooser_is_pressed_by_the_locator(tmp_path) -> None:
+    """The cursor still travels there, but the press is the server's own click: after a raw
+    press the server refused the upload as having no chooser open (run 12, 2026-10-08)."""
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}))
+    try:
+        client.click_to_choose_files("[data-step='add_photos']", "Add photos")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    names = [c["tool"] for c in calls]
+    assert "browser_mouse_click_xy" not in names
+    assert names[-1] == "browser_click"
+    assert names.count("browser_mouse_move_xy") >= pointer.MIN_STEPS
+
+
+def test_a_file_chooser_on_a_server_without_the_mouse_is_still_opened(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}), caps=False)
+    try:
+        client.click_to_choose_files("[data-step='add_photos']", "Add photos")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names == ["browser_click"]
 
 
 def test_a_control_wider_than_the_window_is_pressed_on_the_part_that_shows(tmp_path) -> None:

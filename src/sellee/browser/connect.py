@@ -29,12 +29,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import deployment, marketplaces, settings
-from sellee.browser import blindness, doorbell, inbox, window
+from sellee import craigslist_posts, deployment, marketplaces, settings
+from sellee.browser import blindness, craigslist_account, doorbell, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import CONNECT_MODE_OPEN
+from sellee.store.browser import (
+    BROWSER_HOLD_TTL_SEC,
+    CONNECT_MODE_OPEN,
+    HOLD_POST_PREFIX,
+)
 
 log = logging.getLogger(__name__)
 
@@ -60,10 +64,11 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     asked to sign in: being asked to open a marketplace is being asked for a window, while a read
     probe that reordered tabs would elbow the seller mid-browse.
 
-    Returns (state, url, wall) where state is logged_in | logged_out | unknown and `wall` is the
-    marketplace's own refusal of the account ('' when there is none). The wall is read here rather
-    than left to the read lane because this is the probe a *blocked* market is cleared by, and
-    "signed in" is not the same question as "no longer being refused": Facebook answers a login
+    Returns (state, url, wall, email) where state is logged_in | logged_out | unknown, `wall` is
+    the marketplace's own refusal of the account ('' when there is none), and `email` is the
+    signed-in account's, where the market's page names it ('' otherwise). The wall is read here
+    rather than left to the read lane because this is the probe a *blocked* market is cleared by,
+    and "signed in" is not the same question as "no longer being refused": Facebook answers a login
     probe perfectly while holding a warning over the account.
     """
     region = store.seller_region()
@@ -73,6 +78,8 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
             f"{marketplaces.display_name(adapter.market)} has no site for "
             f"{region or 'an unset region'}"
         )
+    # The market has a site here; some sign in on a page other than its front one.
+    url = adapter.home_url or url
     try:
         client = browser_factory()
         with client.exclusive():
@@ -106,7 +113,8 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     except BrowserError as exc:
         raise BrowserDown(str(exc)) from exc
     state = answer.get("state")
-    return (state if state in ("logged_in", "logged_out") else "unknown"), url, wall
+    email = str(answer.get("email") or "")
+    return (state if state in ("logged_in", "logged_out") else "unknown"), url, wall, email
 
 
 # --- the lane -----------------------------------------------------------------------------------
@@ -141,6 +149,10 @@ class ConnectDeps:
     config: object
     browser_factory: object
     now: Callable[[], float] = time.time
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
+    # bazaar, for the registration address a Craigslist connect names.
+    rail_factory: Callable | None = None
 
 
 def _shell_where() -> str:
@@ -204,14 +216,109 @@ def connect_lane(deps: ConnectDeps) -> None:
                 )
             continue
         _serve(deps, market, adapter, request["mode"])
+    for request in deps.store.pending_post_opens():
+        _serve_post_open(deps, request, connected)
+
+
+# The seller asked for these, so quiet hours do not hold them; the governor still paces the load.
+POST_OPEN_NOTICE = (
+    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
+    "there to take it down, then tap Done."
+)
+POST_SIGNED_OUT_NOTICE = (
+    "Craigslist shows me signed out, so the post didn't open. I'm signing back in by myself; "
+    "tap Open on desktop again in a few minutes."
+)
+POST_BLOCKED_NOTICE = "Craigslist has asked me to stop for now, so I didn't open the post."
+POST_OFF_NOTICE = "Craigslist was switched off before I could open that post."
+POST_CANT_OPEN_NOTICE = (
+    "I couldn't reach Craigslist just now, so the post didn't open. Tap Open on desktop to try "
+    "again."
+)
+POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
+POST_GONE_NOTICE = "That Craigslist post is already down, so there's nothing to delete."
+
+
+def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
+    """Put one sold item's post in front of the seller, signed in, for them to close."""
+    item_id, market, url = request["item_id"], request["market"], request["url"]
+    adapter = market_adapters.get_adapter(market)
+    if market not in connected or adapter is None:
+        _post_done(deps, item_id, POST_OFF_NOTICE)
+        return
+    if deps.store.market_block(market):
+        _post_done(deps, item_id, POST_BLOCKED_NOTICE)
+        return
+    if inbox.browser_busy(deps.store):
+        # Waiting behind another opened post is not stale: that hold ends at Done or its expiry.
+        if not _behind_a_post(deps) and deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
+            _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    item = deps.store.get_item(item_id)
+    if item and craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post) in (
+        craigslist_posts.REMOVED
+    ):
+        _post_done(deps, item_id, POST_GONE_NOTICE)
+        return
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            client.navigate_visible(url)
+            signed_in = (client.evaluate(adapter.login_js) or {}).get("state") == "logged_in"
+    except BrowserDetached:
+        return
+    except BrowserError as exc:
+        # The browser's own error is for the log; the seller gets a plain line and the button back.
+        log.warning("opening a %s post failed: %s", market, exc)
+        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    if not signed_in:
+        craigslist_account.start_login(deps.store, market)
+        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    # Held like a sign-in, so no lane moves the tab while the seller is deleting.
+    deps.store.hold_browser(
+        HOLD_POST_PREFIX + item_id, f"closing a {market} post", BROWSER_HOLD_TTL_SEC
+    )
+    _raise_window(deps)
+    _post_done(
+        deps,
+        item_id,
+        POST_OPEN_NOTICE.format(where=window.where()),
+        fastpaths.post_done_controls(item_id),
+    )
+
+
+def _behind_a_post(deps: ConnectDeps) -> bool:
+    holders = deps.store.browser_holders()
+    return (
+        not inbox.browser_pass_running(deps.store)
+        and bool(holders)
+        and all(h.startswith(HOLD_POST_PREFIX) for h in holders)
+    )
+
+
+def _post_done(deps: ConnectDeps, item_id: str, notice: str, controls=None) -> None:
+    deps.store.clear_post_open(item_id)
+    deps.store.queue_notice(notice, controls=controls)
 
 
 def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     """Open (or just re-probe) one market and tell the seller what came back."""
     name = marketplaces.display_name(market)
     opening = mode == CONNECT_MODE_OPEN
+    # Craigslist's steps go out before its page opens, so the seller knows why it is there.
+    intro_sent = False
+    if (
+        opening
+        and market == marketplaces.CRAIGSLIST
+        and deps.rail_factory is not None
+        and (deps.store.craigslist_account() or {}).get("state") != craigslist_account.ACTIVE
+    ):
+        deps.store.queue_notice(craigslist_account.connect_intro(deps.store, deps.rail_factory))
+        intro_sent = True
     try:
-        state, _url, wall = open_and_probe(
+        state, _url, wall, email = open_and_probe(
             store=deps.store,
             browser_factory=deps.browser_factory,
             adapter=adapter,
@@ -241,17 +348,36 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     deps.bus.publish("browser.login", {"market": market, "state": state})
     if not _settle_block(deps, market, name, state, wall):
         return
+    known = (deps.store.craigslist_account() or {}).get("state")
+    state = craigslist_account.connect_state(
+        deps.store, market, state, restart=opening, email=email, rail_factory=deps.rail_factory
+    )
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
-        deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
+        # A Craigslist account just connected has its own notice, with Sign in myself.
+        if market != marketplaces.CRAIGSLIST or known == craigslist_account.ACTIVE:
+            deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
         return
     if opening:
         _raise_window(deps)
     template = SIGN_IN_HERE_NOTICE if opening else STILL_OUT_NOTICE
-    deps.store.queue_notice(
-        template.format(name=name, where=window.where()),
-        controls=fastpaths.check_again_controls(market),
-    )
+    if not opening and market == marketplaces.CRAIGSLIST and not _own_craigslist(deps.store):
+        # Its login links come to sellee, so the seller need not keep checking.
+        template = craigslist_account.STILL_SIGNING_IN_NOTICE
+    text = template.format(name=name, where=window.where())
+    if (
+        opening
+        and not intro_sent
+        and market == marketplaces.CRAIGSLIST
+        and deps.rail_factory is not None
+    ):
+        # Its account is made with the address sellee minted, so the seller is told which.
+        text = f"{craigslist_account.connect_intro(deps.store, deps.rail_factory)}\n\n{text}"
+    deps.store.queue_notice(text, controls=fastpaths.check_again_controls(market))
+
+
+def _own_craigslist(store) -> bool:
+    return bool((store.craigslist_account() or {}).get("own_email"))
 
 
 def _settle_block(deps: ConnectDeps, market: str, name: str, state: str, wall: str) -> bool:

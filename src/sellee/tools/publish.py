@@ -184,6 +184,7 @@ def _record_published_listing_url(ctx: ToolContext, params: dict) -> dict:
     verdict = verify_market_url(ctx, market, url, ctx.store.seller_region())
     if not verdict.get("ok"):
         raise ToolError(f"not a listing URL on {market}: {verdict.get('reason')}")
+    url = verdict["url"]
     try:
         item = ctx.store.record_listing_url(params["item_id"], market, url)
     except StoreError as exc:

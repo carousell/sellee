@@ -54,14 +54,13 @@ def test_every_edit_recipe_named_in_the_registry_exists() -> None:
 
 
 def test_every_field_an_adapter_offers_to_edit_is_one_the_driver_can_type() -> None:
-    """An adapter naming an editable field the driver has no step for is a capability that says
-    yes while the code says no. `can_edit_fields` already refuses it; this keeps the two lists from
-    drifting apart silently."""
+    """An adapter naming a field the form driver cannot type says yes while the code says no; a
+    market with its own edit driver answers for its fields itself."""
     from sellee.browser import markets as market_adapters
 
     offenders = {
         adapter.market: sorted(set(adapter.editable_fields) - set(editor._STEPS))
         for adapter in market_adapters.adapters()
-        if set(adapter.editable_fields) - set(editor._STEPS)
+        if not adapter.edit_driver and set(adapter.editable_fields) - set(editor._STEPS)
     }
     assert offenders == {}

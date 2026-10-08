@@ -10,6 +10,7 @@ marketplace ineligible for them. Pure and stdlib — reads the registry, mutates
 from __future__ import annotations
 
 import json
+import re
 from functools import lru_cache
 
 from sellee.paths import PACKAGE_DATA_DIR
@@ -21,6 +22,9 @@ _ANY = "*"
 
 # The rail: the marketplace every listing goes on, whatever else the seller enables.
 RAIL = "carousell-ai"
+
+# Every Craigslist conversation is email, read and answered through the registration address.
+CRAIGSLIST = "craigslist"
 
 
 @lru_cache(maxsize=1)
@@ -83,6 +87,12 @@ def media_host_suffixes(market: str) -> list:
     return list((get_marketplace(market) or {}).get("media_host_suffixes") or [])
 
 
+def is_canonical_listing_url(market: str, url: str) -> bool:
+    """Whether `url` is in the one shape the registry pins for this market, where it has one."""
+    exact = ((get_marketplace(market) or {}).get("listing_url") or {}).get("pattern")
+    return not exact or re.fullmatch(exact, url) is not None
+
+
 def listing_flow(market: str) -> str:
     """The skill holding this market's publish recipe, or "" when it has none."""
     return str((get_marketplace(market) or {}).get("listing_flow") or "")
@@ -96,6 +106,24 @@ def edit_flow(market: str) -> str:
     edit what it published.
     """
     return str((get_marketplace(market) or {}).get("edit_flow") or "")
+
+
+def market_for_domain(domain: str) -> str | None:
+    """The marketplace whose hosts sit under this registered domain, as bazaar gives a mail's
+    `from_domain`, or None. A bare suffix such as "org" names no marketplace."""
+    domain = (domain or "").strip().lower()
+    if "." not in domain:
+        return None
+    for entry in all_marketplaces():
+        hosts = [
+            *(entry.get("domains") or {}).values(),
+            (entry.get("listing_url") or {}).get("host"),
+        ]
+        for host in hosts:
+            host = str(host or "").lower()
+            if host and not host.endswith(".") and (host == domain or host.endswith("." + domain)):
+                return entry["id"]
+    return None
 
 
 def browser_markets() -> list[str]:

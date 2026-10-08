@@ -61,6 +61,22 @@ _UNGUARDED_BY_DESIGN = {
         "daemon-only: the inbox lane's own memory of a lookup it already performed, read before a "
         "thread exists, and no pass tier carries a tool that reaches it"
     ),
+    ("mark_registration_mail_seen", "thread_id"): (
+        "daemon-only: the registration lane records the thread a mail joined, and no pass tier "
+        "carries a tool that reaches it"
+    ),
+    ("latest_registration_subject", "thread_id"): (
+        "daemon-only: the registration reply sink reads it through the unscoped store, and no "
+        "pass tier carries a tool that reaches it"
+    ),
+    ("request_post_open", "item_id"): (
+        "daemon-only: the seller's own Open on desktop tap writes it from the fast path, and no "
+        "pass tier carries a tool that reaches it"
+    ),
+    ("clear_post_open", "item_id"): (
+        "daemon-only: the connect lane clears a request it served, and no pass tier carries a "
+        "tool that reaches it"
+    ),
     ("create_thread", "thread_id"): (
         "the new row's own natural key, not a reference to an existing thread — the insert "
         "refuses a duplicate and the prefix rule validates its shape"

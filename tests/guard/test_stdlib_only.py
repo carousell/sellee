@@ -69,6 +69,8 @@ NETWORK_ALLOWLIST: set[str] = {
     # Fetches a listing's photographs: https only, to a host the registry names, no redirects,
     # byte-capped per file and per set, every body sniffed as an image.
     "sellee/browser/photo_fetch.py",
+    # Reads a Craigslist post's public page, as any visitor does, to see whether it is still up.
+    "sellee/craigslist_posts.py",
 }
 
 

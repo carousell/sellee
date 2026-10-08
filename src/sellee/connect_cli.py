@@ -25,6 +25,8 @@ phone?" offer shares one implementation of the UX.
 from __future__ import annotations
 
 import getpass
+import shutil
+import subprocess
 import sys
 import time
 
@@ -109,6 +111,19 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     if interactive is None:
         interactive = sys.stdin.isatty()
 
+    # Craigslist's steps come first: the connect below opens its page in Chrome straight away.
+    shown, address = _craigslist_intro(port, mcp_token) if market == _CRAIGSLIST else ("", "")
+    if shown:
+        print(shown)
+        if address and _copy_to_clipboard(address):
+            print(f"{address} is copied to your clipboard.")
+        if interactive:
+            try:
+                input("Press Enter to open Craigslist in my Chrome window (or Ctrl-C to skip)… ")
+            except (EOFError, KeyboardInterrupt):
+                print(file=sys.stderr)
+                return 1
+
     try:
         status, body = control.post(port, mcp_token, "/control/connect-market", {"market": market})
     except control.DaemonUnreachable as exc:
@@ -130,15 +145,22 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     name = _display_name(market)
     state = body.get("state")
     if state == "logged_in":
-        print(_MARKET_STATE_MESSAGES["logged_in"].format(name=name))
+        # A Craigslist account found signed in may be the seller's own, with its limits to say.
+        _stage, line = _craigslist_progress(port, mcp_token) if market == _CRAIGSLIST else ("", "")
+        print(line or _MARKET_STATE_MESSAGES["logged_in"].format(name=name))
         return 0
-
     # From here a person is typing into a login screen the connect route claimed a hold for; every
     # path below releases it before returning.
 
-    print(f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
+    # Craigslist's account is made with the address sellee minted, so its intro names it.
+    intro = "" if shown else body.get("intro")
+    print(intro or f"Opened {name} in my Chrome window — sign in there. I never sign in for you.")
     print(f"  {body.get('url', '')}")
     _surface_window(body)
+    if interactive and market == _CRAIGSLIST:
+        followed = _follow_craigslist(port, mcp_token)
+        if followed is not None:
+            return followed
     if interactive:
         try:
             input("Press Enter once you've signed in (or Ctrl-C to skip)… ")
@@ -151,6 +173,119 @@ def market_flow(port: int, mcp_token: str, market: str, *, interactive: bool | N
     _release_browser(port, mcp_token, HOLD_SIGNIN)
     print(_MARKET_STATE_MESSAGES.get(state or "unknown", "").format(name=name))
     return 0 if state == "logged_in" else 1
+
+
+_CRAIGSLIST = "craigslist"
+# How often the terminal looks at the sign-in, how long it follows it, and how often it renews
+# the hold that keeps the lanes off the seller's tab.
+_FOLLOW_POLL_SEC = 2.0
+_FOLLOW_TIMEOUT_SEC = 1800.0
+_HOLD_RENEW_SEC = 300.0
+_FOLLOWING = (
+    "Opened Craigslist in my Chrome window. You don't need to come back here: I'll follow along, "
+    "and pressing Enter does nothing. Ctrl-C to stop watching."
+)
+_FOLLOW_LEFT = (
+    "Stopped watching. The sign-up stays open in my Chrome window; finish it whenever you like, "
+    "and I'll connect Craigslist as soon as you're in."
+)
+_FOLLOW_TIMED_OUT = (
+    "Still not signed in after 30 minutes. Finish in my Chrome window whenever you like, or run "
+    "`sellee connect craigslist` again."
+)
+
+
+def _craigslist_intro(port: int, mcp_token: str) -> tuple:
+    """(the steps for connecting Craigslist, the address to copy), each "" when there is none or
+    the daemon cannot say; the connect's own answer still carries the steps then."""
+    try:
+        status, body = control.get(port, mcp_token, "/control/craigslist-intro")
+    except control.DaemonUnreachable:
+        return "", ""
+    if status != 200:
+        return "", ""
+    return str(body.get("intro") or ""), str(body.get("address") or "")
+
+
+def _craigslist_progress(port: int, mcp_token: str) -> tuple:
+    """(stage, line) of the Craigslist sign-in, or ("", "") when the daemon cannot say."""
+    try:
+        status, body = control.get(port, mcp_token, "/control/craigslist-account")
+    except control.DaemonUnreachable:
+        return "", ""
+    if status != 200:
+        return "", ""
+    return str(body.get("stage") or ""), str(body.get("line") or "")
+
+
+def _follow_craigslist(port: int, mcp_token: str) -> int | None:
+    """Follow the seller's Craigslist sign-in to the end, saying each step as it happens, so they
+    never have to come back and press anything. None when the daemon cannot say where it is; the
+    caller falls back to asking them to press Enter."""
+    print(_FOLLOWING)
+    seen = ""
+    deadline = time.monotonic() + _FOLLOW_TIMEOUT_SEC
+    renew_at = time.monotonic() + _HOLD_RENEW_SEC
+    try:
+        while True:
+            stage, line = _craigslist_progress(port, mcp_token)
+            if not stage and not seen:
+                return None
+            if line and line != seen:
+                print(line)
+                seen = line
+            if stage == "connected":
+                _release_browser(port, mcp_token, HOLD_SIGNIN)
+                return 0
+            now = time.monotonic()
+            if now > deadline:
+                print(_FOLLOW_TIMED_OUT)
+                return 1
+            if now > renew_at:
+                _renew_hold(port, mcp_token)
+                renew_at = now + _HOLD_RENEW_SEC
+            time.sleep(_FOLLOW_POLL_SEC)
+    except KeyboardInterrupt:
+        # The hold stays until it expires, so no lane moves the tab the seller is still using.
+        print(file=sys.stderr)
+        print(_FOLLOW_LEFT)
+        return 1
+    finally:
+        _discard_typed_input()
+
+
+def _renew_hold(port: int, mcp_token: str) -> None:
+    try:
+        control.post(
+            port,
+            mcp_token,
+            "/control/browser-hold",
+            {"holder": HOLD_SIGNIN, "reason": "signing in to craigslist"},
+        )
+    except control.DaemonUnreachable:
+        pass
+
+
+def _discard_typed_input() -> None:
+    """Drop whatever was typed while following, so a stray Enter does not answer the next prompt."""
+    try:
+        import termios
+
+        if sys.stdin.isatty():
+            termios.tcflush(sys.stdin, termios.TCIFLUSH)
+    except Exception:
+        pass
+
+
+def _copy_to_clipboard(text: str) -> bool:
+    """Put `text` on the macOS clipboard; False wherever that is not possible."""
+    if sys.platform != "darwin" or not shutil.which("pbcopy"):
+        return False
+    try:
+        subprocess.run(["pbcopy"], input=text.encode(), check=True, timeout=2)
+    except (OSError, subprocess.SubprocessError):
+        return False
+    return True
 
 
 def _release_browser(port: int, mcp_token: str, holder: str) -> None:

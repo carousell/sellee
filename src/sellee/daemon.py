@@ -38,7 +38,7 @@ from sellee import (
     secrets,
     settings,
 )
-from sellee.browser import chrome, inbox
+from sellee.browser import chrome, craigslist_account, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
 from sellee.browser import doorbell as browser_doorbell
@@ -56,6 +56,7 @@ from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
 from sellee.rail import inbox as relay_inbox
+from sellee.rail import registration, registration_sink
 from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
@@ -77,6 +78,8 @@ _REPLY_LANE_INTERVAL_SEC = 10.0
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
 # A buyer's email reaches the seller's inbox at once; this only sets how soon the agent sees it.
 _RELAY_READ_INTERVAL_SEC = 60.0
+_REGISTRATION_READ_INTERVAL_SEC = 60.0
+_CRAIGSLIST_ACCOUNT_INTERVAL_SEC = 30.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
 # throughput.
@@ -458,6 +461,22 @@ def _notice_window_reopening(store, bus, holder: dict, port: int) -> None:
     bus.publish("browser.window_reopened", {"port": port})
 
 
+def reply_sink_for(market: str, *, store, bus, cfg, rail_factory, browser_factory):
+    """The send for a market's threads: bazaar for the email markets, Chrome for the rest."""
+    if market == marketplaces.RAIL:
+        return relay_sink.RelayReplySink(client=rail_factory(), store=store, bus=bus)
+    if market == marketplaces.CRAIGSLIST:
+        return registration_sink.RegistrationReplySink(client=rail_factory(), store=store, bus=bus)
+    return browser_sink.BrowserReplySink(
+        client=browser_factory(),
+        store=store,
+        bus=bus,
+        region=inbox.seller_region(store),
+        on_drive=lambda: browser_window.raise_if_watching(cfg, store),
+        verify_window_sec=cfg.send_verify_window_sec,
+    )
+
+
 def _is_loopback_bind(host: str) -> bool:
     """Whether binding to `host` keeps the socket on this machine."""
     if host == "localhost":
@@ -595,16 +614,13 @@ def run_daemon(*, once: bool) -> int:
             # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
             # rather than silently swallowing a real buyer's reply while the seller plays.
             return buyer_sim.SimReplySink(bus=bus)
-        if market == marketplaces.RAIL:
-            # carousell.ai email threads are answered through bazaar, not a browser.
-            return relay_sink.RelayReplySink(client=rail_factory(), store=store, bus=bus)
-        return browser_sink.BrowserReplySink(
-            client=browser_factory(),
+        return reply_sink_for(
+            market,
             store=store,
             bus=bus,
-            region=inbox.seller_region(store),
-            on_drive=lambda: browser_window.raise_if_watching(cfg, store),
-            verify_window_sec=cfg.send_verify_window_sec,
+            cfg=cfg,
+            rail_factory=rail_factory,
+            browser_factory=browser_factory,
         )
 
     def context_factory(session):
@@ -664,6 +680,7 @@ def run_daemon(*, once: bool) -> int:
             attended_token=attended_token,
             config=cfg,
             channels=channels,
+            rail_factory=rail_factory,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so
@@ -790,6 +807,36 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: relay_inbox.relay_lane(relay_deps),
         )
     )
+    # Read mail to the seller's registration address: Craigslist's buyers and its own mail.
+    registration_deps = registration.RegistrationDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        rail_factory=rail_factory,
+        service_hooks=craigslist_account.service_hooks(store),
+    )
+    scheduler.register(
+        Task(
+            name="registration_read",
+            interval_sec=_REGISTRATION_READ_INTERVAL_SEC,
+            func=lambda: registration.registration_lane(registration_deps),
+        )
+    )
+    # Open the links Craigslist mails while the seller creates or signs in to their account.
+    craigslist_deps = craigslist_account.AccountDeps(
+        store=store,
+        bus=bus,
+        browser_factory=browser_factory,
+        rail_factory=rail_factory,
+        config=cfg,
+    )
+    scheduler.register(
+        Task(
+            name="craigslist_account",
+            interval_sec=_CRAIGSLIST_ACCOUNT_INTERVAL_SEC,
+            func=lambda: craigslist_account.account_lane(craigslist_deps),
+        )
+    )
     # Sign the seller in to a marketplace when they ask from chat. The tap itself lands on the
     # provider's receive loop, which must keep answering messages, so it only writes a row — this
     # is what actually drives Chrome, and what tells them how it went.
@@ -798,6 +845,7 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        rail_factory=rail_factory,
     )
     scheduler.register(
         Task(
