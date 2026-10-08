@@ -175,22 +175,20 @@ def _refuse_unless_ready(market: str, found: dict) -> None:
 
 
 def _attach(client, adapter, photos, found: dict, pause) -> None:
-    """Hand the item's photographs to the form.
-
-    The control that opens a file chooser is pressed first, because the browser server only
-    accepts an upload while a chooser is open. Facebook requires a photo and leaves Next greyed
-    out until it has one.
-    """
-    if "add_photos" in (found.get("marked") or []):
-        try:
-            client.click_to_choose_files(adapter.publish_target("add_photos"), "Add photos")
-            pause(STEP_SETTLE_SEC)
-        except BrowserError as exc:
-            raise PublishNotAttempted(
-                f"the photo chooser would not open: {exc}", retryable=True
-            ) from exc
+    """Drop the item's photographs on "Add photos". In Chrome, pressing it opens no file chooser;
+    a drop needs none. Facebook leaves Next greyed out until it has a photo."""
+    if "add_photos" not in (found.get("marked") or []):
+        raise PublishNotAttempted("the form has no place to drop photos", retryable=True)
     try:
-        client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
+        client.call_tool(
+            "browser_drop",
+            {
+                "element": "Add photos",
+                "target": adapter.publish_target("add_photos"),
+                "paths": [str(path) for path in photos],
+            },
+        )
+        pause(STEP_SETTLE_SEC)
     except BrowserError as exc:
         raise PublishNotAttempted(
             f"the photographs would not attach: {exc}", retryable=True

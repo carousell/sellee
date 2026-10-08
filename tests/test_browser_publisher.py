@@ -78,6 +78,7 @@ class StubForm:
         # Every options artifact evaluated, with the wanted text baked in.
         self.option_queries: list = []
         self._pressed_next = False
+        self.dropped = None
 
     class _Exclusive:
         def __init__(self, client):
@@ -105,9 +106,6 @@ class StubForm:
         """The page receives a click on the control; how the cursor got there is the client's."""
         return self.call_tool("browser_click", {"target": target, "element": element})
 
-    def click_to_choose_files(self, target, element):
-        self.actions.append(("choose files", target.split("'")[1]))
-
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
@@ -123,6 +121,11 @@ class StubForm:
             self.typed[step] = self.typed.get(step, "") + arguments.get("text")
         if name in self.fail_on or step in self.fail_on:
             raise BrowserToolError(self.fail_on.get(name) or self.fail_on.get(step))
+        if name == "browser_file_upload":
+            # As in Chrome: pressing "Add photos" opens no chooser to hand files to.
+            raise BrowserToolError("can only be used when there is related modal state present")
+        if name == "browser_drop":
+            self.dropped = (step, list(arguments.get("paths") or []))
         if step == "next":
             self._pressed_next = True
         return ""
@@ -285,7 +288,7 @@ def test_a_paid_boost_that_will_not_turn_off_refuses_to_publish() -> None:
 
 
 def test_photographs_that_will_not_attach_stop_the_publish() -> None:
-    client = StubForm(fail_on={"browser_file_upload": "the file input went away"})
+    client = StubForm(fail_on={"browser_drop": "the drop area went away"})
 
     with pytest.raises(publisher.PublishNotAttempted):
         _publish(client, photos=["/tmp/a.jpg"])
@@ -374,26 +377,26 @@ def test_a_form_refused_before_its_commit_ledgers_no_attempt() -> None:
     assert ledgered == []
 
 
-def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
-    """The browser server only accepts an upload while the chooser is actually open."""
+def test_the_photographs_are_dropped_on_add_photos_before_next() -> None:
+    """In Chrome, pressing "Add photos" opens no chooser, so the photographs are dropped on it."""
     client = StubForm()
 
-    _publish(client, photos=["/tmp/a.jpg"])
+    _publish(client, photos=["/tmp/a.jpg", "/tmp/b.jpg"])
 
-    order = [
-        step for name, step in client.actions if name in ("choose files", "browser_file_upload")
-    ]
-    assert order.index("add_photos") < order.index("browser_file_upload")
+    assert client.dropped == ("add_photos", ["/tmp/a.jpg", "/tmp/b.jpg"])
+    assert "browser_file_upload" not in [name for name, _step in client.actions]
+    assert client.actions.index(("browser_drop", "add_photos")) < client.actions.index(
+        ("browser_click", "next")
+    )
 
 
-def test_the_photo_chooser_is_opened_by_the_click_that_hands_the_server_the_chooser() -> None:
-    """A humanised press opened no chooser the server could hand files to (run 12, 2026-10-08)."""
-    client = StubForm()
+def test_a_form_with_nowhere_to_drop_photographs_is_not_attempted() -> None:
+    client = StubForm(marked=[step for step in _ALL_FIELDS if step != "add_photos"])
 
-    _publish(client, photos=["/tmp/a.jpg"])
+    with pytest.raises(publisher.PublishNotAttempted):
+        _publish(client, photos=["/tmp/a.jpg"])
 
-    assert ("choose files", "add_photos") in client.actions
-    assert ("browser_click", "add_photos") not in client.actions
+    assert "next" not in _steps(client)
 
 
 # --- confirming a publish the landing page does not name --------------------------------------
