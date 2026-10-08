@@ -83,6 +83,8 @@ class MarketAdapter:
     # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
+    # On the listings page, the titles the marketplace is still reviewing and has given no link.
+    my_listings_in_review_js: str = ""
     # Publishing by driving the form rather than by a recipe a model reads. These move together: a
     # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
     # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
@@ -192,6 +194,7 @@ FACEBOOK = MarketAdapter(
     my_listings_js=facebook.MY_LISTINGS_JS,
     listing_detail_js=facebook.LISTING_DETAIL_JS,
     my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
+    my_listings_in_review_js=facebook.MY_LISTINGS_IN_REVIEW_JS,
     publish_fields_js=facebook.PUBLISH_FIELDS_JS,
     publish_readback_js=facebook.PUBLISH_READBACK_JS,
     publish_result_js=facebook.PUBLISH_RESULT_JS,

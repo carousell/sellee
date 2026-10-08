@@ -82,6 +82,8 @@ class PublishOutcome:
     url: str
     verified: bool
     reason: str = ""
+    # Up, and the marketplace is reviewing it: no link yet, but not a doubt about whether it exists.
+    in_review: bool = False
 
 
 def publish(
@@ -382,7 +384,7 @@ def _commit(client, adapter, item: dict, listings_url, pause, before_commit=None
 
         # The page we land on may not name the listing (Facebook redirects to its selling page,
         # whose cards carry no id), so ask the seller's own listings instead.
-        found = _confirm_by_title(client, adapter, item, listings_url, pause)
+        found = confirm_by_title(client, adapter, item, listings_url, pause)
         if found is not None:
             return found
         # Unverified, not an error: left for a human rather than retried into a duplicate.
@@ -398,35 +400,54 @@ def _commit(client, adapter, item: dict, listings_url, pause, before_commit=None
         raise PublishUnverified(f"the publish may have gone through: {exc}") from exc
 
 
-def _confirm_by_title(client, adapter, item: dict, listings_url, pause) -> PublishOutcome | None:
+def confirm_by_title(
+    client, adapter, item: dict, listings_url, pause=None
+) -> PublishOutcome | None:
     """Find the listing we just made among the seller's own, by title.
 
     Only used to confirm, never to decide whether to publish — the listing exists either way, and
     the alternative to a title match is a human going to look. Ambiguity abstains: with two live
     listings of the same title, claiming the wrong id would record a URL pointing at the older
-    one, and buyers on the new listing would never join this item.
+    one, and buyers on the new listing would never join this item. One the marketplace is still
+    reviewing has no link to claim, and comes back `in_review`.
     """
     if not (listings_url and adapter.my_listings_js):
         return None
+    pause = pause or formfill.sleep
+    wanted = reconcile.normalize(item.get("title") or "")
+    reviewing: list = []
     try:
         client.navigate_visible(listings_url)
         pause(STEP_SETTLE_SEC)
+        if adapter.my_listings_in_review_js:
+            reviewing = (client.evaluate(adapter.my_listings_in_review_js) or {}).get(
+                "in_review"
+            ) or []
         if adapter.my_listings_entry_js:
             answer = client.evaluate(adapter.my_listings_entry_js) or {}
-            if not answer.get("url"):
-                return None
-            client.navigate_visible(urljoin(listings_url, str(answer["url"])))
-            pause(STEP_SETTLE_SEC)
-        listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
+            listings = []
+            if answer.get("url"):
+                client.navigate_visible(urljoin(listings_url, str(answer["url"])))
+                pause(STEP_SETTLE_SEC)
+                listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
+        else:
+            listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
     except BrowserError:
         log.debug(
             "could not confirm the %s publish from the listings page", adapter.market, exc_info=True
         )
-        return None
+        listings = []
 
-    wanted = reconcile.normalize(item.get("title") or "")
     matches = [row for row in listings if reconcile.normalize(row.get("title") or "") == wanted]
     if len(matches) != 1:
+        if [title for title in reviewing if reconcile.normalize(title) == wanted] and not matches:
+            return PublishOutcome(
+                listing_id=None,
+                url="",
+                verified=False,
+                in_review=True,
+                reason="published; the marketplace is reviewing it, so it has no link yet",
+            )
         return None
     row = matches[0]
     return PublishOutcome(

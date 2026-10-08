@@ -48,6 +48,7 @@ class PassesMixin:
         category: str | None = None,
         retired: bool = False,
         url: str | None = None,
+        in_review: bool = False,
     ) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
@@ -77,6 +78,8 @@ class PassesMixin:
             payload["category"] = category
         if retired:
             payload["retired"] = True
+        if in_review:
+            payload["in_review"] = True  # up, but the marketplace has not given it a link yet
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
@@ -89,7 +92,13 @@ class PassesMixin:
         return pass_id
 
     def settle_driven_publish(
-        self, pass_id: str, *, status: str, unverified: bool, url: str | None = None
+        self,
+        pass_id: str,
+        *,
+        status: str,
+        unverified: bool,
+        url: str | None = None,
+        in_review: bool = False,
     ) -> None:
         """Turn a publish recorded unverified ahead of its commit click into how it ended. A
         verified `url` is recorded in the same transaction, so the guard never clears without it."""
@@ -103,12 +112,67 @@ class PassesMixin:
             payload.pop("unverified", None)
             if unverified:
                 payload["unverified"] = True
+            if in_review:
+                payload["in_review"] = True
             conn.execute(
                 "UPDATE passes SET status = ?, payload = ?, finished_ts = ? WHERE pass_id = ?",
                 (status, json.dumps(payload, sort_keys=True), _now(), pass_id),
             )
             if url:
                 record_listing_url_in_txn(conn, payload["item_id"], payload["market"], url)
+
+    def in_review_publishes(self) -> list[dict]:
+        """Publishes that went up but are still waiting on the marketplace's review for a link,
+        as {pass_id, item_id, market, finished_ts, checked_ts}."""
+        rows = self._db.query(
+            "SELECT pass_id, payload, finished_ts FROM passes "
+            "WHERE type = 'publish' AND status = 'error' ORDER BY finished_ts ASC"
+        )
+        out = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if not payload.get("in_review"):
+                continue
+            out.append(
+                {
+                    "pass_id": row["pass_id"],
+                    "item_id": payload.get("item_id"),
+                    "market": payload.get("market"),
+                    "finished_ts": row["finished_ts"] or 0,
+                    "checked_ts": payload.get("review_checked_ts") or 0,
+                }
+            )
+        return out
+
+    def note_review_checked(self, pass_id: str, ts: float) -> None:
+        """Record that an in-review publish was looked for and still has no link."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            payload["review_checked_ts"] = ts
+            conn.execute(
+                "UPDATE passes SET payload = ? WHERE pass_id = ?",
+                (json.dumps(payload, sort_keys=True), pass_id),
+            )
+
+    def settle_reviewed_publish(self, pass_id: str, url: str) -> None:
+        """An in-review publish found with its link: done and verified, with the URL in the same
+        transaction, and owed a report again so the seller is sent the link."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            for key in ("unverified", "in_review", "review_checked_ts"):
+                payload.pop(key, None)
+            conn.execute(
+                "UPDATE passes SET status = 'done', payload = ?, finished_ts = ?, reported = 0 "
+                "WHERE pass_id = ?",
+                (json.dumps(payload, sort_keys=True), _now(), pass_id),
+            )
+            record_listing_url_in_txn(conn, payload["item_id"], payload["market"], url)
 
     def forget_driven_publish(self, pass_id: str) -> None:
         """Drop a publish recorded ahead of a commit click the page refused, so nothing was sent."""
@@ -404,6 +468,7 @@ class PassesMixin:
                     "market": payload.get("market"),
                     "status": row["status"],
                     "class": row["class"],
+                    "in_review": bool(payload.get("in_review")),
                 }
             )
         if owes_nothing:

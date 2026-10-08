@@ -435,11 +435,14 @@ class ConfirmingForm(StubForm):
     """A form whose publish lands on a page that names no listing; confirmation comes from the
     seller's own listings."""
 
-    def __init__(self, *, listings=None, **kwargs):
+    def __init__(self, *, listings=None, reviewing=(), **kwargs):
         super().__init__(listing_id=None, **kwargs)
         self.listings = listings
+        self.reviewing = list(reviewing)
 
     def evaluate(self, function, **kwargs):
+        if function == _ADAPTER.my_listings_in_review_js:
+            return {"in_review": self.reviewing}
         if function == _ADAPTER.my_listings_entry_js:
             return {"url": "/marketplace/profile/1/"}
         if function == _ADAPTER.my_listings_js:
@@ -478,6 +481,27 @@ def test_two_listings_sharing_the_title_leave_the_publish_unverified() -> None:
 
     assert outcome.verified is False
     assert outcome.listing_id is None
+
+
+def test_a_publish_facebook_is_reviewing_is_up_without_a_link() -> None:
+    """Live, a listing in review sat on the selling page under "This listing is being reviewed."
+    with no item link, so it could not be found among the seller's own."""
+    client = ConfirmingForm(listings=[], reviewing=["White Study Desk"])
+
+    outcome = _publish(client, listings_url="https://www.facebook.com/marketplace/you/selling")
+
+    assert outcome.in_review
+    assert outcome.verified is False
+    assert outcome.listing_id is None
+
+
+def test_a_different_listing_in_review_does_not_confirm_this_one() -> None:
+    client = ConfirmingForm(listings=[], reviewing=["Something Else"])
+
+    outcome = _publish(client, listings_url="https://www.facebook.com/marketplace/you/selling")
+
+    assert not outcome.in_review
+    assert outcome.verified is False
 
 
 def test_confirmation_is_skipped_when_there_is_nowhere_to_look() -> None:

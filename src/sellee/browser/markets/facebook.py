@@ -516,6 +516,23 @@ LOGIN_JS = """() => {
 #
 # Answers `{url}`, or `{url: null}` when the link is not there, which the caller reports rather
 # than reading the wrong page.
+# The titles on the seller's selling page that Facebook is still reviewing. A listing in review
+# carries no item link, so it cannot be read like the rest; its card reads the notice, then its
+# title, then its price.
+MY_LISTINGS_IN_REVIEW_JS = """async () => {
+  const NOTICE = 'This listing is being reviewed.';
+  const lines = () => ((document.body && document.body.innerText) || '').split('\\n')
+    .map((s) => s.trim()).filter(Boolean);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !lines().includes('Your listings')) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const all = lines();
+  const titles = [];
+  all.forEach((line, i) => { if (line === NOTICE && all[i + 1]) titles.push(all[i + 1]); });
+  return { in_review: titles };
+}"""
+
 MY_LISTINGS_ENTRY_JS = """() => {
   const link = document.querySelector('a[href*="/marketplace/profile/"]');
   const href = link ? link.getAttribute('href') : null;

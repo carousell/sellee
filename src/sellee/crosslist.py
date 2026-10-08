@@ -71,6 +71,14 @@ NO_BROWSER_NOTICE = (
     "unaffected. Details: {reason}"
 )
 PUBLISHED_NOTICE = "{item} is now listed on {market}: {url}"
+IN_REVIEW_NOTICE = (
+    "{item} is up on {market}, and {market} is reviewing it before it shows to buyers. I'll send "
+    "you its link once the review clears."
+)
+# How often a listing in review is looked for again, and for how long, before the seller's own
+# look is the only one left.
+REVIEW_CHECK_EVERY_SEC = 30 * 60.0
+REVIEW_WAIT_SEC = 3 * 24 * 3600.0
 FAILED_NOTICE = (
     "I couldn't list {item} on {market}. Everything else about it is fine, including its "
     "carousell.ai listing. Ask me and I'll have another go at it."
@@ -142,6 +150,7 @@ def crosslist_lane(deps: CrosslistDeps) -> None:
     if deps.store.is_paused():
         return
     push_crosslinks(deps)
+    link_reviewed(deps)
     craigslist_posts.sweep(deps.store, deps.bus, deps.post_checks, deps.now(), deps.fetch_post)
     enqueue_next(deps)
 
@@ -393,10 +402,12 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
             )
         )
 
-    def ledger(status: str, *, unverified: bool = False, url: str | None = None) -> None:
+    def ledger(
+        status: str, *, unverified: bool = False, url: str | None = None, in_review: bool = False
+    ) -> None:
         if attempted:
             deps.store.settle_driven_publish(
-                attempted[0], status=status, unverified=unverified, url=url
+                attempted[0], status=status, unverified=unverified, url=url, in_review=in_review
             )
         else:
             deps.store.record_driven_publish(
@@ -407,6 +418,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 unverified=unverified,
                 category=category,
                 url=url,
+                in_review=in_review,
             )
 
     # Staged where the browser server may read from: the media store is outside its roots.
@@ -507,6 +519,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         "done" if outcome.verified else "error",
         unverified=not outcome.verified,
         url=outcome.url if outcome.verified else None,
+        in_review=outcome.in_review,
     )
     deps.bus.publish(
         "crosslist.published",
@@ -516,9 +529,56 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
             "listing_id": outcome.listing_id,
             "url": outcome.url,
             "verified": outcome.verified,
+            "in_review": outcome.in_review,
             "reason": outcome.reason,
         },
     )
+
+
+def link_reviewed(deps: CrosslistDeps) -> None:
+    """Look again, now and then, for a listing that went up into the marketplace's review, and
+    record its link once it has one. At most one look a tick; the seller is sent the link by the
+    report phase when it lands."""
+    now = deps.now()
+    for row in deps.store.in_review_publishes():
+        if now - row["finished_ts"] > REVIEW_WAIT_SEC:
+            continue
+        if now - max(row["finished_ts"], row["checked_ts"]) < REVIEW_CHECK_EVERY_SEC:
+            continue
+        item = deps.store.get_item(row["item_id"])
+        adapter = market_adapters.get_adapter(row["market"])
+        if not item or adapter is None:
+            continue
+        if not _browser_ready(deps, row["market"]):
+            return
+        if not page_governor.has_room(deps.governor, row["market"], 2):
+            return
+        listings_url = marketplaces.market_url(
+            row["market"], "my_listings", deps.store.seller_region()
+        )
+        found = None
+        try:
+            client = deps.browser_factory()
+            with client.exclusive(), doorbell.visiting(client, adapter):
+                found = publisher.confirm_by_title(client, adapter, item, listings_url)
+        except (BrowserUnavailable, BrowserError):
+            log.debug("could not look for %s's reviewed listing", row["item_id"], exc_info=True)
+        if found is not None and found.verified and found.url:
+            deps.store.settle_reviewed_publish(row["pass_id"], found.url)
+            deps.bus.publish(
+                "crosslist.published",
+                {
+                    "item_id": row["item_id"],
+                    "market": row["market"],
+                    "listing_id": found.listing_id,
+                    "url": found.url,
+                    "verified": True,
+                    "reason": "the marketplace's review cleared",
+                },
+            )
+        else:
+            deps.store.note_review_checked(row["pass_id"], now)
+        return
 
 
 def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
@@ -594,6 +654,8 @@ def report_settled(deps: CrosslistDeps) -> int:
         market_name = marketplaces.display_name(market)
         if url:
             text = PUBLISHED_NOTICE.format(item=title, market=market_name, url=url)
+        elif row.get("in_review"):
+            text = IN_REVIEW_NOTICE.format(item=title, market=market_name)
         elif not spent.get((row["item_id"], market)) or (row["item_id"], market) in announced:
             # Another go is coming, or this pair has already had its say in this sweep. The row is
             # still marked reported so the sweep stays bounded; what is withheld is the message,
