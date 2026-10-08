@@ -850,11 +850,14 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
     options.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
   }}
   const texts = options.map(label);
-  const want = String(__WANTED__ || '').trim().toLowerCase();
+  // Facebook switches between "-" and "–" in its labels, so any dash and spacing count as one.
+  const same = (t) => String(t || '').toLowerCase().replace(/\\s*[-\\u2010-\\u2015]\\s*/g, ' - ')
+    .replace(/\\s+/g, ' ').trim();
+  const want = same(__WANTED__);
   // Exact first, then a prefix — a listing must never be filed under a category that merely
   // contains the word we were looking for.
-  let at = texts.findIndex((t) => t.toLowerCase() === want);
-  if (at < 0) at = texts.findIndex((t) => t.toLowerCase().startsWith(want));
+  let at = texts.findIndex((t) => same(t) === want);
+  if (at < 0) at = texts.findIndex((t) => same(t).startsWith(want));
   if (at < 0) return {{ chosen: null, options: texts.slice(0, 40) }};
   options[at].setAttribute(MARK, 'option');
   return {{ chosen: texts[at], options: texts.slice(0, 40) }};
@@ -885,9 +888,9 @@ PUBLISH_RESULT_JS = """() => {
   };
 }"""
 
-# Facebook's own condition wording, offered verbatim by the dropdown. Anything else is mapped by
-# `condition_for`; an item with no usable condition does not publish, because guessing "New" for a
-# used thing is a lie told to a buyer.
+# Facebook's condition wording; its menu varies the dash and case, which the picker ignores. Any
+# other wording is mapped by `condition_for`; an item with no usable condition does not publish,
+# because guessing "New" for a used thing is a lie told to a buyer.
 CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
 
 
