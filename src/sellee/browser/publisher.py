@@ -183,7 +183,7 @@ def _attach(client, adapter, photos, found: dict, pause) -> None:
     """
     if "add_photos" in (found.get("marked") or []):
         try:
-            client.click(adapter.publish_target("add_photos"), "Add photos")
+            client.click_to_choose_files(adapter.publish_target("add_photos"), "Add photos")
             pause(STEP_SETTLE_SEC)
         except BrowserError as exc:
             raise PublishNotAttempted(

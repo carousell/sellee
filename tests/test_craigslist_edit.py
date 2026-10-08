@@ -41,6 +41,7 @@ class FakePost:
         self.navigated: list = []
         self.paced = 0
         self.clicks = 0
+        self.chose_files = 0
         self.marked_delete = False
         self.published = 0
         self.leaves_a_char = False
@@ -87,7 +88,13 @@ class FakePost:
             return {"url": self.post_url, "post_id": "1", "text": text}
         raise AssertionError(f"unexpected script: {function[:60]}")
 
-    def click(self, target: str, element: str) -> None:
+    def click_to_choose_files(self, target: str, element: str) -> None:
+        assert target == craigslist.ADD_IMAGES, "only Add Images opens a file chooser"
+        self.chose_files += 1
+        self.click(target, element, chooser=True)
+
+    def click(self, target: str, element: str, *, chooser: bool = False) -> None:
+        assert chooser or target != craigslist.ADD_IMAGES, "a plain click opens no usable chooser"
         self.clicks += 1
         assert "discard" not in target, "cancel edit must never be pressed"
         if target == craigslist.EDIT_TEXT:

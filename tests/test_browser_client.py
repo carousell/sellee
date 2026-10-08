@@ -1552,6 +1552,33 @@ def test_a_control_the_page_has_not_drawn_is_left_to_the_locator(tmp_path) -> No
     assert "browser_mouse_click_xy" not in names
 
 
+def test_a_control_that_opens_a_file_chooser_is_pressed_by_the_locator(tmp_path) -> None:
+    """The cursor still travels there, but the press is the server's own click: after a raw
+    press the server refused the upload as having no chooser open (run 12, 2026-10-08)."""
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}))
+    try:
+        client.click_to_choose_files("[data-step='add_photos']", "Add photos")
+        calls = tool_calls(client)
+    finally:
+        client.close()
+
+    names = [c["tool"] for c in calls]
+    assert "browser_mouse_click_xy" not in names
+    assert names[-1] == "browser_click"
+    assert names.count("browser_mouse_move_xy") >= pointer.MIN_STEPS
+
+
+def test_a_file_chooser_on_a_server_without_the_mouse_is_still_opened(tmp_path) -> None:
+    client = _pointing_client(tmp_path, _mouse_tools({"result": _IN_VIEW}), caps=False)
+    try:
+        client.click_to_choose_files("[data-step='add_photos']", "Add photos")
+        names = [c["tool"] for c in tool_calls(client)]
+    finally:
+        client.close()
+
+    assert names == ["browser_click"]
+
+
 def test_a_control_wider_than_the_window_is_pressed_on_the_part_that_shows(tmp_path) -> None:
     wide = {**_IN_VIEW, "x": 900.0, "width": 800.0}
     client = _pointing_client(tmp_path, _mouse_tools({"result": wide}))

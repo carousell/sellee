@@ -239,7 +239,7 @@ def _geoverify(client, page, item, photos, seller, pause) -> None:
 
 def _editimage(client, page, item, photos, seller, pause) -> None:
     if photos:
-        client.click(craigslist.ADD_IMAGES, "Add Images")
+        client.click_to_choose_files(craigslist.ADD_IMAGES, "Add Images")
         client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
         for _ in range(int(IMAGE_WAIT_SEC / _POLL_SEC)):
             if (_read(client).get("images") or 0) >= len(photos):

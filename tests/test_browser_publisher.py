@@ -105,6 +105,9 @@ class StubForm:
         """The page receives a click on the control; how the cursor got there is the client's."""
         return self.call_tool("browser_click", {"target": target, "element": element})
 
+    def click_to_choose_files(self, target, element):
+        self.actions.append(("choose files", target.split("'")[1]))
+
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
@@ -378,9 +381,19 @@ def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
     _publish(client, photos=["/tmp/a.jpg"])
 
     order = [
-        step for name, step in client.actions if name in ("browser_click", "browser_file_upload")
+        step for name, step in client.actions if name in ("choose files", "browser_file_upload")
     ]
     assert order.index("add_photos") < order.index("browser_file_upload")
+
+
+def test_the_photo_chooser_is_opened_by_the_click_that_hands_the_server_the_chooser() -> None:
+    """A humanised press opened no chooser the server could hand files to (run 12, 2026-10-08)."""
+    client = StubForm()
+
+    _publish(client, photos=["/tmp/a.jpg"])
+
+    assert ("choose files", "add_photos") in client.actions
+    assert ("browser_click", "add_photos") not in client.actions
 
 
 # --- confirming a publish the landing page does not name --------------------------------------
