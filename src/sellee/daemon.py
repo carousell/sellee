@@ -54,6 +54,7 @@ from sellee.db import Database
 from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
+from sellee.rail import inbox as relay_inbox
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
@@ -72,6 +73,8 @@ _REPLY_LANE_INTERVAL_SEC = 10.0
 # The proposal TTL is a day; an hourly sweep gives at most an hour's slack past it. The doors also
 # enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
+# A buyer's email reaches the seller's inbox at once; this only sets how soon the agent sees it.
+_RELAY_READ_INTERVAL_SEC = 60.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
 # throughput.
@@ -769,6 +772,17 @@ def run_daemon(*, once: bool) -> int:
             interval_sec=_DOORBELL_INTERVAL_SEC,
             func=lambda: browser_doorbell.doorbell_lane(doorbell_deps),
             jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+
+    # Read carousell.ai email threads through the rail. Token-free and off the browser, so it
+    # neither waits on Chrome nor counts against a marketplace's pacing.
+    relay_deps = relay_inbox.RelayDeps(store=store, bus=bus, config=cfg, rail_factory=rail_factory)
+    scheduler.register(
+        Task(
+            name="relay_read",
+            interval_sec=_RELAY_READ_INTERVAL_SEC,
+            func=lambda: relay_inbox.relay_lane(relay_deps),
         )
     )
     # Sign the seller in to a marketplace when they ask from chat. The tap itself lands on the
