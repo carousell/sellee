@@ -13,6 +13,8 @@ import json
 import urllib.error
 import urllib.request
 
+from sellee.rail.mail_stream import MailStreamConnection
+
 _DEFAULT_TIMEOUT_SEC = 15.0
 _VERIFY_TIMEOUT_SEC = 5.0
 _LISTING_PATH = "/listing/"
@@ -63,7 +65,8 @@ class RailClient:
         web_base_url: str,
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
     ):
-        self._endpoint = api_base.rstrip("/") + "/mcp"
+        self._api_base = api_base.rstrip("/")
+        self._endpoint = self._api_base + "/mcp"
         self._api_key = api_key
         self._web_base_url = web_base_url.rstrip("/")
         self._timeout = timeout_sec
@@ -109,6 +112,12 @@ class RailClient:
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result
+
+    def open_mail_stream(self) -> MailStreamConnection:
+        """bazaar's mail stream for this key; nothing is sent until its events are read."""
+        return MailStreamConnection(
+            url=self._api_base + "/api/v1/me/mail-stream", api_key=self._api_key
+        )
 
     def initialize(self) -> dict:
         return self._rpc(
