@@ -516,6 +516,23 @@ LOGIN_JS = """() => {
 #
 # Answers `{url}`, or `{url: null}` when the link is not there, which the caller reports rather
 # than reading the wrong page.
+# The titles on the seller's selling page that Facebook is still reviewing. A listing in review
+# carries no item link, so it cannot be read like the rest; its card reads the notice, then its
+# title, then its price.
+MY_LISTINGS_IN_REVIEW_JS = """async () => {
+  const NOTICE = 'This listing is being reviewed.';
+  const lines = () => ((document.body && document.body.innerText) || '').split('\\n')
+    .map((s) => s.trim()).filter(Boolean);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !lines().includes('Your listings')) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const all = lines();
+  const titles = [];
+  all.forEach((line, i) => { if (line === NOTICE && all[i + 1]) titles.push(all[i + 1]); });
+  return { in_review: titles };
+}"""
+
 MY_LISTINGS_ENTRY_JS = """() => {
   const link = document.querySelector('a[href*="/marketplace/profile/"]');
   const href = link ? link.getAttribute('href') : null;
@@ -762,6 +779,9 @@ PUBLISH_FIELDS_JS = f"""() => {{
     category: mark(byLabel('label[role="combobox"]', 'Category'), 'category'),
     condition: mark(byLabel('label[role="combobox"]', 'Condition'), 'condition'),
     description: mark(byLabel('textarea', 'Description'), 'description'),
+    // Under "More details": a typed box that only takes a place Facebook suggests.
+    location: mark(
+      document.querySelector('input[role="combobox"][aria-label="Location"]'), 'location'),
     photos: mark(document.querySelector('input[type="file"]'), 'photos'),
     // The control that opens the file chooser, marked separately from the input: the upload only
     // works while a chooser is open, so the driver has to press this first.
@@ -811,6 +831,7 @@ PUBLISH_READBACK_JS = f"""() => {{
     description: value('description'),
     condition: value('condition'),
     category: value('category'),
+    location: value('location'),
   }};
 }}"""
 
@@ -850,15 +871,40 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
     options.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
   }}
   const texts = options.map(label);
-  const want = String(__WANTED__ || '').trim().toLowerCase();
+  // Facebook switches between "-" and "–" in its labels, so any dash and spacing count as one.
+  const same = (t) => String(t || '').toLowerCase().replace(/\\s*[-\\u2010-\\u2015]\\s*/g, ' - ')
+    .replace(/\\s+/g, ' ').trim();
+  const want = same(__WANTED__);
   // Exact first, then a prefix — a listing must never be filed under a category that merely
   // contains the word we were looking for.
-  let at = texts.findIndex((t) => t.toLowerCase() === want);
-  if (at < 0) at = texts.findIndex((t) => t.toLowerCase().startsWith(want));
+  let at = texts.findIndex((t) => same(t) === want);
+  if (at < 0) at = texts.findIndex((t) => same(t).startsWith(want));
   if (at < 0) return {{ chosen: null, options: texts.slice(0, 40) }};
   options[at].setAttribute(MARK, 'option');
   return {{ chosen: texts[at], options: texts.slice(0, 40) }};
 }}"""
+
+
+# Where in Facebook's suggestions for a ZIP the place naming it sits. The list also offers places
+# that merely resemble what was typed, so only one naming the ZIP counts. A click on a suggestion
+# does not take; the arrow keys and Enter do, so the driver needs its position, not a mark.
+_PUBLISH_PLACE_TEMPLATE = """async () => {
+  const zip = String(__ZIP__);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const rows = Array.from(document.querySelectorAll('[role="option"]'))
+      .filter((el) => !(el.parentElement && el.parentElement.closest('[role="option"]')));
+    const at = rows.findIndex((el) => (el.innerText || '').split(/\\s+/).includes(zip));
+    if (at >= 0) return { chosen: (rows[at].innerText || '').trim().split('\\n')[0], at };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return { chosen: null };
+}"""
+
+
+def place_js(zip_code: str) -> str:
+    """The suggestion-picking artifact for a ZIP, baked in as `options_js` bakes its wanted text."""
+    return _PUBLISH_PLACE_TEMPLATE.replace("__ZIP__", json.dumps(str(zip_code or "")))
 
 
 def options_js(wanted: str) -> str:
@@ -885,9 +931,9 @@ PUBLISH_RESULT_JS = """() => {
   };
 }"""
 
-# Facebook's own condition wording, offered verbatim by the dropdown. Anything else is mapped by
-# `condition_for`; an item with no usable condition does not publish, because guessing "New" for a
-# used thing is a lie told to a buyer.
+# Facebook's condition wording; its menu varies the dash and case, which the picker ignores. Any
+# other wording is mapped by `condition_for`; an item with no usable condition does not publish,
+# because guessing "New" for a used thing is a lie told to a buyer.
 CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
 
 

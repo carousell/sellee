@@ -82,6 +82,8 @@ class PublishOutcome:
     url: str
     verified: bool
     reason: str = ""
+    # Up, and the marketplace is reviewing it: no link yet, but not a doubt about whether it exists.
+    in_review: bool = False
 
 
 def publish(
@@ -119,7 +121,7 @@ def publish(
     pause = sleep or formfill.sleep
 
     try:
-        _fill_in(client, adapter, item, create_url, photos, pause)
+        _fill_in(client, adapter, item, create_url, photos, pause, seller or {})
     except (PublishNotAttempted, page_governor.PagesSpent):
         # Already the answer. Being paced is not an attempt at all, and the fan-out spends nothing
         # on it, so it is passed through as it is rather than dressed up as one.
@@ -132,7 +134,7 @@ def publish(
     return _commit(client, adapter, item, listings_url, pause, before_commit)
 
 
-def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> None:
+def _fill_in(client, adapter, item: dict, create_url: str, photos, pause, seller: dict) -> None:
     """Everything on the safe side of the commit: open the form, fill it, read it back."""
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
@@ -148,6 +150,7 @@ def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> Non
     condition = adapter.publish_condition_for(str(item.get("condition") or ""))
     _choose(client, adapter, "condition", condition, found, pause)
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
+    _place(client, adapter, str(seller.get("zip") or ""), found, pause)
     _refuse_paid_promotion(client, adapter)
     _verify_form(client, adapter, item)
 
@@ -175,22 +178,20 @@ def _refuse_unless_ready(market: str, found: dict) -> None:
 
 
 def _attach(client, adapter, photos, found: dict, pause) -> None:
-    """Hand the item's photographs to the form.
-
-    The control that opens a file chooser is pressed first, because the browser server only
-    accepts an upload while a chooser is open. Facebook requires a photo and leaves Next greyed
-    out until it has one.
-    """
-    if "add_photos" in (found.get("marked") or []):
-        try:
-            client.click_to_choose_files(adapter.publish_target("add_photos"), "Add photos")
-            pause(STEP_SETTLE_SEC)
-        except BrowserError as exc:
-            raise PublishNotAttempted(
-                f"the photo chooser would not open: {exc}", retryable=True
-            ) from exc
+    """Drop the item's photographs on "Add photos". In Chrome, pressing it opens no file chooser;
+    a drop needs none. Facebook leaves Next greyed out until it has a photo."""
+    if "add_photos" not in (found.get("marked") or []):
+        raise PublishNotAttempted("the form has no place to drop photos", retryable=True)
     try:
-        client.call_tool("browser_file_upload", {"paths": [str(path) for path in photos]})
+        client.call_tool(
+            "browser_drop",
+            {
+                "element": "Add photos",
+                "target": adapter.publish_target("add_photos"),
+                "paths": [str(path) for path in photos],
+            },
+        )
+        pause(STEP_SETTLE_SEC)
     except BrowserError as exc:
         raise PublishNotAttempted(
             f"the photographs would not attach: {exc}", retryable=True
@@ -225,28 +226,78 @@ def _text_fields(item: dict) -> list:
 
 
 def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None:
-    """Open one dropdown and pick an option by name.
+    """Open one dropdown, pick an option by name, and see the form took it.
 
     An unsatisfiable dropdown is fatal before the commit: Facebook requires both, so carrying on
-    would press Publish against a form that refuses.
+    would press Publish against a form that refuses. A pick the form did not take is tried once
+    more with the locator's click, which scrolls a long menu's own panel to the option.
     """
     if step not in (found.get("marked") or []) or not wanted:
         return
+    locator = lambda target, element: client.call_tool(  # noqa: E731
+        "browser_click", {"target": target, "element": element}
+    )
     try:
-        client.click(adapter.publish_target(step), f"the {step} dropdown")
-        pause(STEP_SETTLE_SEC)
-        answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
-        if not answer.get("chosen"):
-            raise PublishNotAttempted(
-                f"{adapter.market} offers no {step} called {wanted!r} "
-                f"(it offers {(answer.get('options') or [])[:8]})"
-            )
-        client.click(adapter.publish_target("option"), f"the {step}")
-        pause(STEP_SETTLE_SEC)
+        for press in (client.click, locator):
+            press(adapter.publish_target(step), f"the {step} dropdown")
+            pause(STEP_SETTLE_SEC)
+            answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
+            chosen = answer.get("chosen")
+            if not chosen:
+                raise PublishNotAttempted(
+                    f"{adapter.market} offers no {step} called {wanted!r} "
+                    f"(it offers {(answer.get('options') or [])[:8]})"
+                )
+            press(adapter.publish_target("option"), f"the {step}")
+            pause(STEP_SETTLE_SEC)
+            if _holds(client, adapter, step) == chosen:
+                return
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
             raise
         raise PublishNotAttempted(f"could not choose a {step}: {exc}", retryable=True) from exc
+    raise PublishNotAttempted(
+        f"the {adapter.market} form did not take the {step} {chosen!r}", retryable=True
+    )
+
+
+def _place(client, adapter, zip_code: str, found: dict, pause) -> None:
+    """Give the form the seller's place when it has none: type the ZIP and choose the suggestion
+    naming it with the arrow keys and Enter, as a click on a suggestion does not take. Facebook
+    leaves Next greyed out until the box holds a place it suggested, not the ZIP typed."""
+    if "location" not in (found.get("marked") or []) or _holds(client, adapter, "location"):
+        return
+    if not zip_code:
+        raise PublishNotAttempted(
+            f"{adapter.market} wants a location and the seller has no ZIP", retryable=True
+        )
+    try:
+        client.type_humanly(adapter.publish_target("location"), "the location field", zip_code)
+        pause(STEP_SETTLE_SEC)
+        answer = client.evaluate(adapter.publish_place_js(zip_code)) or {}
+        if not answer.get("chosen"):
+            raise PublishNotAttempted(
+                f"{adapter.market} suggested no place for ZIP {zip_code}", retryable=True
+            )
+        for _ in range(int(answer.get("at") or 0) + 1):
+            client.call_tool("browser_press_key", {"key": "ArrowDown"})
+        client.call_tool("browser_press_key", {"key": "Enter"})
+        pause(STEP_SETTLE_SEC)
+    except BrowserError as exc:
+        if isinstance(exc, PublishNotAttempted):
+            raise
+        raise PublishNotAttempted(f"could not set the location: {exc}", retryable=True) from exc
+    held = _holds(client, adapter, "location")
+    if zip_code not in held or held.strip() == zip_code:
+        raise PublishNotAttempted(
+            f"the {adapter.market} form did not take ZIP {zip_code} (it holds {held!r})",
+            retryable=True,
+        )
+
+
+def _holds(client, adapter, step: str) -> str:
+    """What one field of the form holds now."""
+    return str((client.evaluate(adapter.publish_readback_js) or {}).get(step) or "")
 
 
 def _refuse_paid_promotion(client, adapter) -> None:
@@ -333,7 +384,7 @@ def _commit(client, adapter, item: dict, listings_url, pause, before_commit=None
 
         # The page we land on may not name the listing (Facebook redirects to its selling page,
         # whose cards carry no id), so ask the seller's own listings instead.
-        found = _confirm_by_title(client, adapter, item, listings_url, pause)
+        found = confirm_by_title(client, adapter, item, listings_url, pause)
         if found is not None:
             return found
         # Unverified, not an error: left for a human rather than retried into a duplicate.
@@ -349,35 +400,54 @@ def _commit(client, adapter, item: dict, listings_url, pause, before_commit=None
         raise PublishUnverified(f"the publish may have gone through: {exc}") from exc
 
 
-def _confirm_by_title(client, adapter, item: dict, listings_url, pause) -> PublishOutcome | None:
+def confirm_by_title(
+    client, adapter, item: dict, listings_url, pause=None
+) -> PublishOutcome | None:
     """Find the listing we just made among the seller's own, by title.
 
     Only used to confirm, never to decide whether to publish — the listing exists either way, and
     the alternative to a title match is a human going to look. Ambiguity abstains: with two live
     listings of the same title, claiming the wrong id would record a URL pointing at the older
-    one, and buyers on the new listing would never join this item.
+    one, and buyers on the new listing would never join this item. One the marketplace is still
+    reviewing has no link to claim, and comes back `in_review`.
     """
     if not (listings_url and adapter.my_listings_js):
         return None
+    pause = pause or formfill.sleep
+    wanted = reconcile.normalize(item.get("title") or "")
+    reviewing: list = []
     try:
         client.navigate_visible(listings_url)
         pause(STEP_SETTLE_SEC)
+        if adapter.my_listings_in_review_js:
+            reviewing = (client.evaluate(adapter.my_listings_in_review_js) or {}).get(
+                "in_review"
+            ) or []
         if adapter.my_listings_entry_js:
             answer = client.evaluate(adapter.my_listings_entry_js) or {}
-            if not answer.get("url"):
-                return None
-            client.navigate_visible(urljoin(listings_url, str(answer["url"])))
-            pause(STEP_SETTLE_SEC)
-        listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
+            listings = []
+            if answer.get("url"):
+                client.navigate_visible(urljoin(listings_url, str(answer["url"])))
+                pause(STEP_SETTLE_SEC)
+                listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
+        else:
+            listings = (client.evaluate(adapter.my_listings_js) or {}).get("listings") or []
     except BrowserError:
         log.debug(
             "could not confirm the %s publish from the listings page", adapter.market, exc_info=True
         )
-        return None
+        listings = []
 
-    wanted = reconcile.normalize(item.get("title") or "")
     matches = [row for row in listings if reconcile.normalize(row.get("title") or "") == wanted]
     if len(matches) != 1:
+        if [title for title in reviewing if reconcile.normalize(title) == wanted] and not matches:
+            return PublishOutcome(
+                listing_id=None,
+                url="",
+                verified=False,
+                in_review=True,
+                reason="published; the marketplace is reviewing it, so it has no link yet",
+            )
         return None
     row = matches[0]
     return PublishOutcome(

@@ -876,16 +876,6 @@ class BrowserClient:
                 {"x": aim[0], "y": aim[1], "delay": pointer.press_ms(self._rng)},
             )
 
-    def click_to_choose_files(self, target: str, element: str) -> None:
-        """Open a file chooser: the cursor travels to the control, then the server's own click
-        presses it. After a raw press the server refused the upload as having no chooser open."""
-        with self._lock:
-            placed = self._box_in_view(target, element) if self._has_mouse else None
-            if placed is not None:
-                box, viewport = placed
-                self._travel(pointer.aim(box, self._rng), viewport)
-            self.call_tool("browser_click", {"target": target, "element": element})
-
     def _box(self, target: str, element: str):
         """`(box, (viewport width, height))` for the control now, or None when it is not drawn."""
         answer = self.evaluate(BOX_JS, target=target, element=element)

@@ -83,16 +83,20 @@ class MarketAdapter:
     # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
+    # On the listings page, the titles the marketplace is still reviewing and has given no link.
+    my_listings_in_review_js: str = ""
     # Publishing by driving the form rather than by a recipe a model reads. These move together: a
     # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
     # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
     # what the form holds; `publish_options_js(wanted)` marks one dropdown option;
-    # `publish_result_js` names the listing that was made.
+    # `publish_place_js(zip)` marks the place suggested for a ZIP; `publish_result_js` names the
+    # listing that was made.
     publish_fields_js: str = ""
     publish_readback_js: str = ""
     publish_result_js: str = ""
     publish_target: Callable[[str], str] = lambda step: ""
     publish_options_js: Callable[[str], str] = lambda wanted: ""
+    publish_place_js: Callable[[str], str] = lambda zip_code: ""
     # Where a driver files a listing when nothing better is known — choosing a category from a
     # title is the listing flow's judgement, not a driver's.
     publish_default_category: str = ""
@@ -190,11 +194,13 @@ FACEBOOK = MarketAdapter(
     my_listings_js=facebook.MY_LISTINGS_JS,
     listing_detail_js=facebook.LISTING_DETAIL_JS,
     my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
+    my_listings_in_review_js=facebook.MY_LISTINGS_IN_REVIEW_JS,
     publish_fields_js=facebook.PUBLISH_FIELDS_JS,
     publish_readback_js=facebook.PUBLISH_READBACK_JS,
     publish_result_js=facebook.PUBLISH_RESULT_JS,
     publish_target=facebook.publish_target,
     publish_options_js=facebook.options_js,
+    publish_place_js=facebook.place_js,
     publish_default_category=facebook.DEFAULT_CATEGORY,
     publish_condition_for=facebook.condition_for,
     edit_entry_js=facebook.EDIT_ENTRY_JS,

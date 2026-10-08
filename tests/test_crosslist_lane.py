@@ -963,3 +963,87 @@ def test_a_driven_publish_never_runs_while_a_pair_is_ineligible(store, bus, monk
     crosslist.enqueue_next(_deps(store, bus, browser_factory=_HeldClient))
 
     assert published == []
+
+
+# --- a listing that went up into the marketplace's review ---------------------------------------
+
+_IN_REVIEW = dict(
+    listing_id=None,
+    url="",
+    verified=False,
+    in_review=True,
+    reason="published; the marketplace is reviewing it, so it has no link yet",
+)
+
+
+def test_a_listing_in_review_is_reported_as_up_and_never_published_again(
+    store, bus, monkeypatch
+) -> None:
+    """Live, the wallet went up on Facebook into its review and the seller was told it could not
+    be listed."""
+    from sellee.browser import publisher
+
+    item = _driving(store, bus, monkeypatch, outcome=publisher.PublishOutcome(**_IN_REVIEW))
+    deps = _deps(store, bus, browser_factory=lambda: _HeldClient())
+
+    crosslist._drive_publish(deps, store.get_item(item["id"]), "carousell")
+    crosslist.report_settled(deps)
+
+    assert [r["unverified"] for r in _ledger(store)] == [True]
+    assert crosslist.pending_pairs(deps) == []
+    text = _notices(store)[-1]
+    assert "is up on Carousell" in text and "couldn't list" not in text
+
+
+def test_a_reviewed_listing_gets_its_link_once_the_review_clears(store, bus, monkeypatch) -> None:
+    from sellee.browser import publisher
+
+    item = _driving(store, bus, monkeypatch, outcome=publisher.PublishOutcome(**_IN_REVIEW))
+    deps = _deps(store, bus, browser_factory=lambda: _HeldClient())
+    crosslist._drive_publish(deps, store.get_item(item["id"]), "carousell")
+    crosslist.report_settled(deps)
+    looked: list = []
+
+    def found(client, adapter, it, listings_url, pause=None):
+        looked.append(it["id"])
+        return publisher.PublishOutcome(listing_id="42", url=_CAROUSELL_URL, verified=True)
+
+    monkeypatch.setattr(publisher, "confirm_by_title", found)
+    finished = _ledger(store)[0]["finished_ts"]
+
+    deps.now = lambda: finished + 60  # too soon to look again
+    crosslist.link_reviewed(deps)
+    assert looked == []
+
+    deps.now = lambda: finished + crosslist.REVIEW_CHECK_EVERY_SEC + 1
+    crosslist.link_reviewed(deps)
+    crosslist.report_settled(deps)
+
+    assert looked == [item["id"]]
+    assert store.get_item(item["id"])["listing_urls"]["carousell"] == _CAROUSELL_URL
+    assert _notices(store)[-1] == f"Teak lamp is now listed on Carousell: {_CAROUSELL_URL}"
+    assert store.in_review_publishes() == []
+
+
+def test_a_listing_still_in_review_is_looked_for_again_later(store, bus, monkeypatch) -> None:
+    from sellee.browser import publisher
+
+    item = _driving(store, bus, monkeypatch, outcome=publisher.PublishOutcome(**_IN_REVIEW))
+    deps = _deps(store, bus, browser_factory=lambda: _HeldClient())
+    crosslist._drive_publish(deps, store.get_item(item["id"]), "carousell")
+    looks: list = []
+
+    def still(client, adapter, it, listings_url, pause=None):
+        looks.append(deps.now())
+        return publisher.PublishOutcome(**_IN_REVIEW)
+
+    monkeypatch.setattr(publisher, "confirm_by_title", still)
+    start = _ledger(store)[0]["finished_ts"] + crosslist.REVIEW_CHECK_EVERY_SEC + 1
+
+    for offset in (0, 60, crosslist.REVIEW_CHECK_EVERY_SEC + 1):
+        deps.now = lambda offset=offset: start + offset
+        crosslist.link_reviewed(deps)
+
+    assert len(looks) == 2
+    last = start + crosslist.REVIEW_CHECK_EVERY_SEC + 1
+    assert store.in_review_publishes()[0]["checked_ts"] == last

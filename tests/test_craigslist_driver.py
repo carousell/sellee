@@ -70,7 +70,6 @@ class FakeForm:
         self.grouped = grouped
         self.mark_fails = mark_fails
         self.paced: list = []
-        self.chose_files = 0
         self.accepted_terms = 0
         self.terms_unmarkable = False
         # The condition select sits behind a menu widget built only once it is opened.
@@ -172,13 +171,7 @@ class FakeForm:
             self.images += len(arguments["paths"])
         return ""
 
-    def click_to_choose_files(self, target: str, element: str) -> None:
-        assert target == craigslist.ADD_IMAGES, "only Add Images opens a file chooser"
-        self.chose_files += 1
-        self.click(target, element, chooser=True)
-
-    def click(self, target: str, element: str, *, chooser: bool = False) -> None:
-        assert chooser or target != craigslist.ADD_IMAGES, "a plain click opens no usable chooser"
+    def click(self, target: str, element: str) -> None:
         if target == craigslist.CHOICE:
             assert self.marked is not None, "clicked a choice that was never marked"
             self.chosen[self.step] = self.marked
@@ -344,7 +337,7 @@ def test_photos_are_uploaded_before_moving_on() -> None:
     form = FakeForm()
 
     assert _drive(form, photos=["/tmp/01.jpg", "/tmp/02.jpg"]).verified
-    assert form.images == 2 and form.chose_files == 1
+    assert form.images == 2
 
 
 def test_a_post_craigslist_does_not_confirm_is_unverified_and_names_nothing() -> None:

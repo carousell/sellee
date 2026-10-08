@@ -54,6 +54,8 @@ class StubForm:
         next_enabled=True,
         fail_on=None,
         wall="",
+        misses=0,
+        place="San Francisco, CA, US 94103",
     ):
         # The real typing, so what a publish test says the form received is what it would have.
         # What the wall probe answers: '' is a marketplace that is not refusing the account.
@@ -78,6 +80,15 @@ class StubForm:
         # Every options artifact evaluated, with the wanted text baked in.
         self.option_queries: list = []
         self._pressed_next = False
+        self.dropped = None
+        # What each dropdown and the location now hold; `misses` presses on an option that the
+        # form does not take, as a long menu's own scroll can make one miss.
+        self.picked: dict = {}
+        self.misses = misses
+        self.place = place
+        self._open = None
+        self._offered = None
+        self._highlighted = None
 
     class _Exclusive:
         def __init__(self, client):
@@ -105,15 +116,23 @@ class StubForm:
         """The page receives a click on the control; how the cursor got there is the client's."""
         return self.call_tool("browser_click", {"target": target, "element": element})
 
-    def click_to_choose_files(self, target, element):
-        self.actions.append(("choose files", target.split("'")[1]))
-
     def call_tool(self, name, arguments):
         target = arguments.get("target", "")
         step = target.split("'")[1] if "'" in target else name
         self.actions.append((name, step))
         if name == "browser_click":
             self.focused = step
+            if step in ("condition", "category"):
+                self._open = step
+            elif step == "option" and self._open:
+                if self.misses:
+                    self.misses -= 1
+                else:
+                    self.picked[self._open] = self._offered
+        if name == "browser_press_key" and arguments.get("key") == "ArrowDown":
+            self._highlighted = self.focused == "location" and self.place
+        if name == "browser_press_key" and arguments.get("key") == "Enter" and self._highlighted:
+            self.picked["location"] = self._highlighted
         if name == "browser_press_key" and self.focused:
             key = arguments.get("key", "")
             if len(key) == 1 or key == "Shift+Enter":
@@ -123,6 +142,11 @@ class StubForm:
             self.typed[step] = self.typed.get(step, "") + arguments.get("text")
         if name in self.fail_on or step in self.fail_on:
             raise BrowserToolError(self.fail_on.get(name) or self.fail_on.get(step))
+        if name == "browser_file_upload":
+            # As in Chrome: pressing "Add photos" opens no chooser to hand files to.
+            raise BrowserToolError("can only be used when there is related modal state present")
+        if name == "browser_drop":
+            self.dropped = (step, list(arguments.get("paths") or []))
         if step == "next":
             self._pressed_next = True
         return ""
@@ -146,11 +170,19 @@ class StubForm:
                 "boost_on": self.boost_on,
             }
         if function == _ADAPTER.publish_readback_js:
-            return self.readback if self.readback is not None else dict(_GOOD_READBACK)
+            held = dict(self.readback if self.readback is not None else _GOOD_READBACK)
+            return {**held, **self.picked}
         if function == _ADAPTER.publish_result_js:
             return {"listing_id": self.listing_id, "url": _listing_url(self.listing_id)}
+        if "const zip" in function:
+            if self.place == "94103":
+                # As live: the choice left the box holding the ZIP alone.
+                self.picked["location"] = "94103"
+                return {"chosen": "San Francisco, CA, US 94103", "at": 0}
+            return {"chosen": self.place, "at": 0}
         # An options artifact, built per call with the wanted text baked in.
         self.option_queries.append(function)
+        self._offered = self.chosen
         return {"chosen": self.chosen, "options": ["New", "Used - Good", "Miscellaneous"]}
 
 
@@ -285,7 +317,7 @@ def test_a_paid_boost_that_will_not_turn_off_refuses_to_publish() -> None:
 
 
 def test_photographs_that_will_not_attach_stop_the_publish() -> None:
-    client = StubForm(fail_on={"browser_file_upload": "the file input went away"})
+    client = StubForm(fail_on={"browser_drop": "the drop area went away"})
 
     with pytest.raises(publisher.PublishNotAttempted):
         _publish(client, photos=["/tmp/a.jpg"])
@@ -374,26 +406,26 @@ def test_a_form_refused_before_its_commit_ledgers_no_attempt() -> None:
     assert ledgered == []
 
 
-def test_the_photo_chooser_is_opened_before_the_files_are_handed_over() -> None:
-    """The browser server only accepts an upload while the chooser is actually open."""
+def test_the_photographs_are_dropped_on_add_photos_before_next() -> None:
+    """In Chrome, pressing "Add photos" opens no chooser, so the photographs are dropped on it."""
     client = StubForm()
 
-    _publish(client, photos=["/tmp/a.jpg"])
+    _publish(client, photos=["/tmp/a.jpg", "/tmp/b.jpg"])
 
-    order = [
-        step for name, step in client.actions if name in ("choose files", "browser_file_upload")
-    ]
-    assert order.index("add_photos") < order.index("browser_file_upload")
+    assert client.dropped == ("add_photos", ["/tmp/a.jpg", "/tmp/b.jpg"])
+    assert "browser_file_upload" not in [name for name, _step in client.actions]
+    assert client.actions.index(("browser_drop", "add_photos")) < client.actions.index(
+        ("browser_click", "next")
+    )
 
 
-def test_the_photo_chooser_is_opened_by_the_click_that_hands_the_server_the_chooser() -> None:
-    """A humanised press opened no chooser the server could hand files to (run 12, 2026-10-08)."""
-    client = StubForm()
+def test_a_form_with_nowhere_to_drop_photographs_is_not_attempted() -> None:
+    client = StubForm(marked=[step for step in _ALL_FIELDS if step != "add_photos"])
 
-    _publish(client, photos=["/tmp/a.jpg"])
+    with pytest.raises(publisher.PublishNotAttempted):
+        _publish(client, photos=["/tmp/a.jpg"])
 
-    assert ("choose files", "add_photos") in client.actions
-    assert ("browser_click", "add_photos") not in client.actions
+    assert "next" not in _steps(client)
 
 
 # --- confirming a publish the landing page does not name --------------------------------------
@@ -403,11 +435,14 @@ class ConfirmingForm(StubForm):
     """A form whose publish lands on a page that names no listing; confirmation comes from the
     seller's own listings."""
 
-    def __init__(self, *, listings=None, **kwargs):
+    def __init__(self, *, listings=None, reviewing=(), **kwargs):
         super().__init__(listing_id=None, **kwargs)
         self.listings = listings
+        self.reviewing = list(reviewing)
 
     def evaluate(self, function, **kwargs):
+        if function == _ADAPTER.my_listings_in_review_js:
+            return {"in_review": self.reviewing}
         if function == _ADAPTER.my_listings_entry_js:
             return {"url": "/marketplace/profile/1/"}
         if function == _ADAPTER.my_listings_js:
@@ -446,6 +481,27 @@ def test_two_listings_sharing_the_title_leave_the_publish_unverified() -> None:
 
     assert outcome.verified is False
     assert outcome.listing_id is None
+
+
+def test_a_publish_facebook_is_reviewing_is_up_without_a_link() -> None:
+    """Live, a listing in review sat on the selling page under "This listing is being reviewed."
+    with no item link, so it could not be found among the seller's own."""
+    client = ConfirmingForm(listings=[], reviewing=["White Study Desk"])
+
+    outcome = _publish(client, listings_url="https://www.facebook.com/marketplace/you/selling")
+
+    assert outcome.in_review
+    assert outcome.verified is False
+    assert outcome.listing_id is None
+
+
+def test_a_different_listing_in_review_does_not_confirm_this_one() -> None:
+    client = ConfirmingForm(listings=[], reviewing=["Something Else"])
+
+    outcome = _publish(client, listings_url="https://www.facebook.com/marketplace/you/selling")
+
+    assert not outcome.in_review
+    assert outcome.verified is False
 
 
 def test_confirmation_is_skipped_when_there_is_nowhere_to_look() -> None:
@@ -604,3 +660,76 @@ def test_a_publish_button_that_moved_is_still_treated_as_maybe_published() -> No
 
     with pytest.raises(publisher.PublishUnverified):
         _publish(PublishMoves())
+
+
+# --- dropdowns and the location ------------------------------------------------------------------
+
+
+def test_a_pick_the_form_did_not_take_is_pressed_again_and_publishes() -> None:
+    client = StubForm(misses=1)
+
+    _publish(client)
+
+    assert client.picked["category"] == "ok"
+    assert ("browser_click", "next") in client.actions
+
+
+def test_a_pick_the_form_never_takes_stops_before_next() -> None:
+    """Live, Category stayed empty after the press and Facebook greyed Next out."""
+    client = StubForm(misses=9)
+
+    with pytest.raises(publisher.PublishNotAttempted) as raised:
+        _publish(client)
+
+    assert raised.value.retryable
+    assert "next" not in _steps(client)
+
+
+def test_an_empty_location_is_given_the_place_facebook_suggests_for_the_zip() -> None:
+    client = StubForm(marked=[*_ALL_FIELDS, "location"])
+
+    _publish(client, seller={"zip": "94103"})
+
+    assert client.typed.get("location") == "94103"
+    assert client.picked["location"] == "San Francisco, CA, US 94103"
+    enter = client.actions.index(("browser_press_key", "browser_press_key"))
+    assert enter < client.actions.index(("browser_click", "next"))
+
+
+def test_a_typed_zip_left_unchosen_stops_before_next() -> None:
+    """Live, a press on the suggestion left the box holding the ZIP alone, which Facebook calls
+    invalid; that is not a place."""
+    client = StubForm(marked=[*_ALL_FIELDS, "location"], place="94103")
+
+    with pytest.raises(publisher.PublishNotAttempted, match="did not take ZIP"):
+        _publish(client, seller={"zip": "94103"})
+
+    assert "next" not in _steps(client)
+
+
+def test_a_location_the_form_already_holds_is_left_alone() -> None:
+    client = StubForm(
+        marked=[*_ALL_FIELDS, "location"], readback={**_GOOD_READBACK, "location": "Oakland, CA"}
+    )
+
+    _publish(client, seller={"zip": "94103"})
+
+    assert "location" not in client.typed
+
+
+def test_an_empty_location_with_no_zip_stops_before_next() -> None:
+    client = StubForm(marked=[*_ALL_FIELDS, "location"])
+
+    with pytest.raises(publisher.PublishNotAttempted, match="no ZIP"):
+        _publish(client, seller={})
+
+    assert "next" not in _steps(client)
+
+
+def test_no_suggestion_for_the_zip_stops_before_next() -> None:
+    client = StubForm(marked=[*_ALL_FIELDS, "location"], place=None)
+
+    with pytest.raises(publisher.PublishNotAttempted, match="suggested no place"):
+        _publish(client, seller={"zip": "94103"})
+
+    assert "next" not in _steps(client)
