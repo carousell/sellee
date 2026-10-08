@@ -24,7 +24,6 @@ from sellee.browser import markets as market_adapters
 # the gap closes — this test fails while a waiver describes a surface that now works.
 WAIVERS: dict = {
     ("craigslist", "adopt"): "posts sellee did not make are never adopted on Craigslist",
-    ("craigslist", "edit"): "no edit recipe yet",
     ("craigslist", "inbox"): (
         "Craigslist has no chat: buyers mail the registration address, which the registration "
         "lane reads and answers"

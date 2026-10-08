@@ -28,6 +28,8 @@ CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 # whole marketplace phase, which outlives every sign-in inside it.
 HOLD_SIGNIN = "signin"
 HOLD_SETUP = "setup"
+# One per opened post, `post:<item id>`, so its Done button frees only that post's hold.
+HOLD_POST_PREFIX = "post:"
 
 # How long a claim survives unrenewed — for a seller who wandered off or closed the terminal.
 # Long enough to find a password, short enough that a dead CLI is not a permanent outage.
@@ -72,6 +74,28 @@ class BrowserMixin:
             MarketConnectRequest(market=r["market"], mode=r["mode"], requested_ts=r["requested_ts"])
             for r in rows
         ]
+
+    def request_post_open(self, item_id: str, market: str, url: str) -> None:
+        """Ask the connect lane to open this sold item's post at `url` for the seller."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO post_open_requests (item_id, market, url, requested_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (item_id) DO UPDATE SET "
+                "market = excluded.market, url = excluded.url, "
+                "requested_ts = excluded.requested_ts",
+                (item_id, market, url, _now()),
+            )
+
+    def pending_post_opens(self) -> list[dict]:
+        rows = self._db.query(
+            "SELECT item_id, market, url, requested_ts FROM post_open_requests "
+            "ORDER BY requested_ts ASC, item_id ASC"
+        )
+        return [dict(r) for r in rows]
+
+    def clear_post_open(self, item_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM post_open_requests WHERE item_id = ?", (item_id,))
 
     def clear_market_connect_request(self, market: str) -> None:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""

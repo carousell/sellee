@@ -285,6 +285,7 @@ process per recycle, in no holder and reaped by nobody.
 | `publish_driver`, `publish_url`, `publish_loads` | **publishing through a market's own driver** when its form spans pages — the function, where it starts, and the page loads one publish may cost; every step submit asks the governor through `BrowserClient.pace` |
 | `edit_entry_js`, `edit_fields_js`, `edit_readback_js`, `edit_target` | **editing a live listing by driving its form** — the listing page's own Edit control, the form's marked controls, and what the form holds before saving |
 | `editable_fields` | which item fields the edit driver can change; a change outside it is the seller's to make by hand, and they are told so |
+| `edit_driver`, `edit_loads` | **editing through a market's own driver** under `editor.revise`'s contract, and the page loads one edit may cost; Craigslist's edits from the post's manage page, photos included |
 | `system_handles` | rows an inbox read must never treat as a buyer |
 
 `chat_message_submit_js` is per-market decision rather than a per-market fact.
@@ -1053,7 +1054,7 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
    front page, or the adapter's `home_url` when signing in happens elsewhere, as on Craigslist,
    whose account the seller creates in sellee's Chrome with the registration address.
 7. **Changing a live listing** — an `edit_flow` recipe (a skill an `edit` pass
-   follows), or the edit selectors `browser/editor.py` drives.
+   follows), the edit selectors `browser/editor.py` drives, or a market's own `edit_driver`.
 
 Leave the page-dispatched submit mechanism empty unless someone has decided that
 market's account can afford it.

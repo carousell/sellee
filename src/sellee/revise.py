@@ -31,8 +31,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import marketplaces, settings
-from sellee.browser import doorbell, editor
+from sellee import craigslist_posts, marketplaces, settings
+from sellee.browser import craigslist_account, doorbell, editor
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
@@ -73,10 +73,21 @@ class ReviseDeps:
     now: Callable[[], float] = time.time
     # (revision, reason) holds already reported, so each wait is said once.
     held: set = field(default_factory=set)
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
 
 
 # The pages one driven edit costs: the listing to edit, and the listing again to confirm it.
 EDIT_LOADS = 2
+
+
+def _edit_loads(market: str, changed=()) -> int:
+    adapter = market_adapters.get_adapter(market)
+    if adapter is None:
+        return EDIT_LOADS
+    if adapter.edit_text_loads and "photos" not in set(changed):
+        return adapter.edit_text_loads
+    return adapter.edit_loads
 
 
 def revise_lane(deps: ReviseDeps) -> None:
@@ -99,9 +110,14 @@ def run_next(deps: ReviseDeps) -> str | None:
     if upcoming is None:
         return None
     market = upcoming["market"]
+    if craigslist_account.signing_in(deps.store, market):
+        # Not claimed, so the wait spends nothing; the account lane signs back in.
+        return None
     if page_governor.unprompted_held(deps.store, deps.config, market, deps.now()):
         held = "quiet_hours"
-    elif not page_governor.has_room(deps.governor, market, EDIT_LOADS):
+    elif not page_governor.has_room(
+        deps.governor, market, _edit_loads(market, upcoming["changed"])
+    ):
         held = "page_loads"
     else:
         held = None
@@ -150,6 +166,11 @@ def _refusal(deps: ReviseDeps, revision: dict, item) -> str:
         return "the item has sold"
     if not (item.get("listing_urls") or {}).get(market):
         return "it is no longer listed there"
+    if market == marketplaces.CRAIGSLIST and (
+        craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post)
+        in craigslist_posts.REMOVED
+    ):
+        return "Craigslist has taken the post down"
     if market not in settings.connected_markets(deps.store):
         return f"{marketplaces.display_name(market)} is disconnected"
     if deps.store.market_block(market):
@@ -170,6 +191,11 @@ def _drive(deps: ReviseDeps, revision: dict, item: dict) -> None:
             outcome = editor.revise(
                 client, adapter, item, listing_url=url, changed=revision["changed"]
             )
+    except editor.ReviseSignedOut as exc:
+        # Handed back, and held unclaimed until the account lane has signed back in.
+        craigslist_account.start_login(deps.store, market)
+        _settle_or_retry(deps, revision, str(exc), retryable=True)
+        return
     except editor.ReviseNotAttempted as exc:
         _settle_or_retry(deps, revision, str(exc), retryable=exc.retryable)
         return

@@ -303,7 +303,8 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
 
 
 def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, make_ctx) -> None:
-    # Live: the agent confirmed a sale but skipped the archive, so no take-down was sent.
+    # Live: the agent confirmed a sale but skipped the archive, so no Open on desktop was sent.
+    from sellee.channel import fastpaths
     from sellee.tools import dispatch, listing
 
     item = _item(store, list_price=20.0, floor=15.0)
@@ -325,7 +326,8 @@ def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, ma
     listing.manual_take_downs(store, item["id"])  # the archive step asking again
 
     assert result["manual_take_downs"] == [{"market": "craigslist", "url": post}]
-    assert len([n for n in store.list_queued_notices() if post in n["text"]]) == 1
+    [notice] = [n for n in store.list_queued_notices() if post in n["text"]]
+    assert [tuple(c) for c in notice["controls"]] == fastpaths.open_post_controls(item["id"])
 
 
 class _Rail:

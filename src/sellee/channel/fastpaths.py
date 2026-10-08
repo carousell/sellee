@@ -14,8 +14,9 @@ import time
 from sellee import channel, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
+from sellee.browser.markets import craigslist
 from sellee.channel import refs
-from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
+from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE, HOLD_POST_PREFIX
 from sellee.tools.seller import BasicsError, validate_basics
 
 # The commands answered deterministically (exact first-word token). Everything else routes to the
@@ -37,6 +38,10 @@ CB_SKIP_CTA = "skipcta"
 # Open = "sign me in"; probe = "I've signed in, look again".
 CB_CONNECT_MARKET = "connectmkt"
 CB_CONNECT_PROBE = "connectchk"
+# Opens a sold item's Craigslist post in sellee's Chrome; the item id rides in the ref.
+CB_OPEN_POST = "openpost"
+# Frees the tab held for that post, so the next opened post can come up.
+CB_POST_DONE = "postdone"
 # Answers Craigslist's area question; the area label rides in the ref and is stored as is.
 CB_CL_AREA = "clarea"
 # The seller signing in to their own Craigslist account from their browser.
@@ -68,6 +73,8 @@ _FAST_PATH_CALLBACKS = frozenset(
         CB_SKIP_CTA,
         CB_CONNECT_MARKET,
         CB_CONNECT_PROBE,
+        CB_OPEN_POST,
+        CB_POST_DONE,
         CB_CL_AREA,
         CB_CL_SIGN_IN_MYSELF,
         CB_SURVEY_YES,
@@ -105,6 +112,8 @@ _CONNECT_MODE_FOR_CALLBACK = {
 # is the same door. "on desktop" is the load-bearing half: this is tapped on a phone and acted on
 # at a computer, and a bare "Sign in" reads like something the phone is about to do.
 SIGN_IN_LABEL = "Sign in on desktop"
+OPEN_POST_LABEL = "Open on desktop"
+POST_DONE_LABEL = "Done"
 CHECK_AGAIN_LABEL = "Check again"
 # The two answers to the ask. One yes: an agent that answers buyers on a listing it cannot relist
 # has to explain that split in every conversation. The tools carry the finer answers.
@@ -146,6 +155,15 @@ def look_again_controls(market: str) -> list:
     return [(LOOK_AGAIN_LABEL, f"{market}:{CB_SURVEY_YES}")]
 
 
+def post_done_controls(item_id: str) -> list:
+    return [(POST_DONE_LABEL, f"{item_id}:{CB_POST_DONE}")]
+
+
+def open_post_controls(item_id: str) -> list:
+    """The one-button spec that opens this item's Craigslist post for the seller to close."""
+    return [(OPEN_POST_LABEL, f"{item_id}:{CB_OPEN_POST}")]
+
+
 def area_controls(labels) -> list:
     """One button per Craigslist area, each storing its label when tapped. A label too long for a
     callback is left off; the seller can still type it."""
@@ -175,6 +193,10 @@ CONNECT_ACK = (
 # promises a follow-up rather than a duration. "One moment while I look" was the phrasing
 # voice-and-style.md bans, sitting two lines under a comment explaining why not to write it.
 CONNECT_CHECK_ACK = "Checking whether you're signed in to {name} — I'll tell you what I find."
+OPEN_POST_ACK = "Opening that Craigslist post in my Chrome now — I'll tell you when it's up."
+OPEN_POST_GONE = "I don't have that Craigslist post on record any more, so there's nothing to open."
+OPEN_POST_NOT_SOLD = "That item isn't marked sold any more, so I've left its Craigslist post alone."
+POST_DONE_ACK = "Thanks — I've taken the window back."
 AREA_ACK = "Got it, {area}. Your Craigslist post will go ahead."
 SIGN_IN_MYSELF_ACK = (
     "Open https://accounts.craigslist.org/login in your own browser, enter {address} and tap "
@@ -186,6 +208,7 @@ SIGN_IN_MYSELF_OWN = (
     "Your Craigslist account is your own, {email}, so sign in from your own browser as you "
     "usually would."
 )
+OPEN_POST_OFF = "Craigslist is switched off, so I can't open that post — /sellee to turn it on."
 CONNECT_PICK = "Which marketplace do you want to sign in to?"
 CONNECT_NONE = (
     "You don't have any marketplaces switched on that I sign in to — /sellee to turn one on."
@@ -341,10 +364,16 @@ def handle_fast_path(store, bus, event: dict) -> tuple:
         return _connect_button(
             store, event["payload"].get("ref"), _CONNECT_MODE_FOR_CALLBACK[token]
         )
+    if token == CB_OPEN_POST:
+        return _open_post_button(store, event["payload"].get("ref"))
     if token == CB_CL_AREA:
         return _area_button(store, event["payload"].get("ref"))
     if token == CB_CL_SIGN_IN_MYSELF:
         return _sign_in_myself_button(store)
+    if token == CB_POST_DONE:
+        # Idempotent: a hold already gone or expired is simply not there to release.
+        store.release_browser_hold(HOLD_POST_PREFIX + str(event["payload"].get("ref") or ""))
+        return POST_DONE_ACK, None
     if token == "/connect":
         return _connect_command(store, bus)
     if token in ("/pause", CB_PAUSE):
@@ -411,6 +440,22 @@ def _sign_in_myself_button(store) -> tuple:
     if not row.get("address") or not store.want_seller_login_link(time.time()):
         return SIGN_IN_MYSELF_NONE, None
     return SIGN_IN_MYSELF_ACK.format(address=row["address"]), sign_in_myself_controls()
+
+
+def _open_post_button(store, item_id) -> tuple:
+    """A tap on Open on desktop: the sold item's recorded Craigslist post, at its manage page.
+    Checked at tap time, since the button may be tapped long after the sale."""
+    market = marketplaces.CRAIGSLIST
+    item = store.get_item(item_id) if item_id else None
+    url = ((item or {}).get("listing_urls") or {}).get(market)
+    if not url or not marketplaces.is_canonical_listing_url(market, url):
+        return OPEN_POST_GONE, None
+    if item_id not in store.sold_item_ids():
+        return OPEN_POST_NOT_SOLD, None
+    if market not in settings.connected_markets(store):
+        return OPEN_POST_OFF, None
+    store.request_post_open(item_id, market, craigslist.manage_url(url))
+    return OPEN_POST_ACK, None
 
 
 def _market_button(store, bus, market, token: str) -> tuple:

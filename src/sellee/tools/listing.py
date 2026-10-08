@@ -15,6 +15,7 @@ needs-me item naming the listing to close by hand.
 from __future__ import annotations
 
 from sellee import marketplaces
+from sellee.channel import fastpaths
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
 from sellee.store import StoreError
 from sellee.tools.registry import (
@@ -33,6 +34,11 @@ _ACTIONS = ("take_down",)
 MANUAL_TAKE_DOWN_NOTICE = (
     "One thing left on the sold item: its {market} listing is still up. "
     "Close it in the app when you get a chance — {url}"
+)
+# Only sellee's Chrome is signed in to the Craigslist account, so the button opens it there.
+CRAIGSLIST_TAKE_DOWN_NOTICE = (
+    "One thing left on the sold item: its Craigslist post is still up. Tap Open on desktop and "
+    'press "Delete this Posting" on the page that opens in my Chrome — {url}'
 )
 
 
@@ -97,9 +103,15 @@ def manual_take_downs(store, item_id: str) -> list:
     for market, url in sorted((item or {}).get("listing_urls", {}).items()):
         if not url or marketplaces.connector_type(market) != "browser":
             continue
-        text = MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url)
+        craigslist = market == marketplaces.CRAIGSLIST
+        text = (
+            CRAIGSLIST_TAKE_DOWN_NOTICE.format(url=url)
+            if craigslist
+            else MANUAL_TAKE_DOWN_NOTICE.format(market=marketplaces.display_name(market), url=url)
+        )
+        controls = fastpaths.open_post_controls(item_id) if craigslist else None
         if not store.has_notice_text(item_id, text):
-            store.queue_notice(text, ref=item_id)
+            store.queue_notice(text, ref=item_id, controls=controls)
         remaining.append({"market": market, "url": url})
     return remaining
 

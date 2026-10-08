@@ -221,6 +221,36 @@ MANAGED_POST_JS = """() => {
   return { url: a ? a.href : null, post_id: id ? id[1] : null, text };
 }"""
 
+# --- editing ------------------------------------------------------------------------------------
+
+MANAGE_URL = "https://post.craigslist.org/manage/{token}"
+EDIT_TEXT = "form.manage.edittext [name=go]"
+EDIT_IMAGES = "form.manage.editimage [name=go]"
+# What the driver can change; category, type and site are fixed once posted.
+EDITABLE_FIELDS = frozenset({"title", "list_price", "description", "photos"})
+# A text and a photo edit together: each opens the manage page, submits its steps and publishes,
+# then reads the manage page again, the photo edit reopening its images to count them.
+EDIT_LOADS = 14
+# A text-only edit: the manage page, the edit form, the preview, publish, the manage page again.
+EDIT_TEXT_LOADS = 6
+DELETE_IMAGE = f"[{CHOICE_ATTR}=delete]"
+# Marks the first image's own remove button on the images step: an in-page form, never the
+# manage page's "Delete this Posting".
+DELETE_IMAGE_MARK_JS = f"""() => {{
+  for (const el of document.querySelectorAll('[{CHOICE_ATTR}=delete]')) {{
+    el.removeAttribute('{CHOICE_ATTR}');
+  }}
+  const button = document.querySelector('form.delete.ajax button[name=go]');
+  if (button) button.setAttribute('{CHOICE_ATTR}', 'delete');
+  return {{ marked: !!button }};
+}}"""
+
+
+def manage_url(listing_url: str) -> str:
+    """The manage page of the post at this canonical address: both carry the post's token."""
+    return MANAGE_URL.format(token=listing_url.rstrip("/").rsplit("/", 1)[-1])
+
+
 # --- categories ---------------------------------------------------------------------------------
 
 # By-owner categories as the SF bay area category step labels them, with the words that place an

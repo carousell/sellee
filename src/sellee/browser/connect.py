@@ -29,12 +29,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import deployment, marketplaces, settings
+from sellee import craigslist_posts, deployment, marketplaces, settings
 from sellee.browser import blindness, craigslist_account, doorbell, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import CONNECT_MODE_OPEN
+from sellee.store.browser import (
+    BROWSER_HOLD_TTL_SEC,
+    CONNECT_MODE_OPEN,
+    HOLD_POST_PREFIX,
+)
 
 log = logging.getLogger(__name__)
 
@@ -145,6 +149,8 @@ class ConnectDeps:
     config: object
     browser_factory: object
     now: Callable[[], float] = time.time
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
     # bazaar, for the registration address a Craigslist connect names.
     rail_factory: Callable | None = None
 
@@ -210,6 +216,91 @@ def connect_lane(deps: ConnectDeps) -> None:
                 )
             continue
         _serve(deps, market, adapter, request["mode"])
+    for request in deps.store.pending_post_opens():
+        _serve_post_open(deps, request, connected)
+
+
+# The seller asked for these, so quiet hours do not hold them; the governor still paces the load.
+POST_OPEN_NOTICE = (
+    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
+    "there to take it down, then tap Done."
+)
+POST_SIGNED_OUT_NOTICE = (
+    "Craigslist shows me signed out, so the post didn't open. I'm signing back in by myself; "
+    "tap Open on desktop again in a few minutes."
+)
+POST_BLOCKED_NOTICE = "Craigslist has asked me to stop for now, so I didn't open the post."
+POST_OFF_NOTICE = "Craigslist was switched off before I could open that post."
+POST_CANT_OPEN_NOTICE = (
+    "I couldn't reach Craigslist just now, so the post didn't open. Tap Open on desktop to try "
+    "again."
+)
+POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
+POST_GONE_NOTICE = "That Craigslist post is already down, so there's nothing to delete."
+
+
+def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
+    """Put one sold item's post in front of the seller, signed in, for them to close."""
+    item_id, market, url = request["item_id"], request["market"], request["url"]
+    adapter = market_adapters.get_adapter(market)
+    if market not in connected or adapter is None:
+        _post_done(deps, item_id, POST_OFF_NOTICE)
+        return
+    if deps.store.market_block(market):
+        _post_done(deps, item_id, POST_BLOCKED_NOTICE)
+        return
+    if inbox.browser_busy(deps.store):
+        # Waiting behind another opened post is not stale: that hold ends at Done or its expiry.
+        if not _behind_a_post(deps) and deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
+            _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    item = deps.store.get_item(item_id)
+    if item and craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post) in (
+        craigslist_posts.REMOVED
+    ):
+        _post_done(deps, item_id, POST_GONE_NOTICE)
+        return
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            client.navigate_visible(url)
+            signed_in = (client.evaluate(adapter.login_js) or {}).get("state") == "logged_in"
+    except BrowserDetached:
+        return
+    except BrowserError as exc:
+        # The browser's own error is for the log; the seller gets a plain line and the button back.
+        log.warning("opening a %s post failed: %s", market, exc)
+        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    if not signed_in:
+        craigslist_account.start_login(deps.store, market)
+        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    # Held like a sign-in, so no lane moves the tab while the seller is deleting.
+    deps.store.hold_browser(
+        HOLD_POST_PREFIX + item_id, f"closing a {market} post", BROWSER_HOLD_TTL_SEC
+    )
+    _raise_window(deps)
+    _post_done(
+        deps,
+        item_id,
+        POST_OPEN_NOTICE.format(where=window.where()),
+        fastpaths.post_done_controls(item_id),
+    )
+
+
+def _behind_a_post(deps: ConnectDeps) -> bool:
+    holders = deps.store.browser_holders()
+    return (
+        not inbox.browser_pass_running(deps.store)
+        and bool(holders)
+        and all(h.startswith(HOLD_POST_PREFIX) for h in holders)
+    )
+
+
+def _post_done(deps: ConnectDeps, item_id: str, notice: str, controls=None) -> None:
+    deps.store.clear_post_open(item_id)
+    deps.store.queue_notice(notice, controls=controls)
 
 
 def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:

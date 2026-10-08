@@ -13,8 +13,10 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 from tests.test_craigslist_driver import FakeForm
+from tests.test_craigslist_edit import FakePost
+from tests.test_take_down_notice import _Chrome, _lane, _sold, _tap
 
-from sellee import craigslist_posts, crosslist
+from sellee import craigslist_posts, crosslist, revise
 from sellee.browser.markets import craigslist
 from sellee.config import Config
 from sellee.rail.client import RailUnprovisioned
@@ -357,3 +359,51 @@ def test_a_post_is_read_back_on_a_backoff_one_read_per_check(store, bus, crossli
     assert tick(3 * 3600 + day + 1) == 5  # then once a day, for late flags and expiry
     assert tick(3 * 3600 + day + 2) == 5
     assert tick(3 * 3600 + 2 * day + 1) == 6
+
+
+# --- where a post is about to be used ------------------------------------------------------------
+
+
+@pytest.fixture
+def seller(store, monkeypatch):
+    seed_setting(store, "connected_markets", ["craigslist"])
+    sold: set = set()
+    monkeypatch.setattr(store, "sold_item_ids", lambda: set(sold))
+    store.sold = sold
+    return store
+
+
+def test_open_on_desktop_on_a_removed_post_opens_nothing_and_says_so(seller, bus, monkeypatch):
+    item = _sold(seller, craigslist=_POST)
+    _tap(seller, bus, item["id"])
+    chrome = _Chrome()
+    monkeypatch.setattr(craigslist_posts, "fetch_state", lambda _url: craigslist.POST_GONE)
+
+    _lane(seller, bus, chrome, monkeypatch)
+
+    assert chrome.opened == []
+    assert seller.pending_post_opens() == []
+    texts = [n["text"] for n in seller.list_queued_notices()]
+    assert texts[-1] == "That Craigslist post is already down, so there's nothing to delete."
+
+
+def test_an_edit_to_a_removed_post_is_refused_and_drives_nothing(store, bus, monkeypatch):
+    seed_setting(store, "connected_markets", ["craigslist"])
+    made = store.create_item(title="Samsung Buds3 Pro", list_price=65.0, currency="USD")
+    store.record_listing_url(made["id"], "craigslist", _POST)
+    connect_craigslist(store)
+    rev = store.queue_listing_revision(made["id"], "craigslist", ["list_price"])
+    post = FakePost()
+    deps = revise.ReviseDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        browser_factory=lambda: post,
+        fetch_post=_Page(craigslist.POST_FLAGGED),
+    )
+
+    revise.run_next(deps)
+
+    row = store.get_listing_revision(rev)
+    assert row["status"] == "failed" and "taken the post down" in row["last_error"]
+    assert post.navigated == []
