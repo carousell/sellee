@@ -87,12 +87,14 @@ class MarketAdapter:
     # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
     # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
     # what the form holds; `publish_options_js(wanted)` marks one dropdown option;
-    # `publish_result_js` names the listing that was made.
+    # `publish_place_js(zip)` marks the place suggested for a ZIP; `publish_result_js` names the
+    # listing that was made.
     publish_fields_js: str = ""
     publish_readback_js: str = ""
     publish_result_js: str = ""
     publish_target: Callable[[str], str] = lambda step: ""
     publish_options_js: Callable[[str], str] = lambda wanted: ""
+    publish_place_js: Callable[[str], str] = lambda zip_code: ""
     # Where a driver files a listing when nothing better is known — choosing a category from a
     # title is the listing flow's judgement, not a driver's.
     publish_default_category: str = ""
@@ -195,6 +197,7 @@ FACEBOOK = MarketAdapter(
     publish_result_js=facebook.PUBLISH_RESULT_JS,
     publish_target=facebook.publish_target,
     publish_options_js=facebook.options_js,
+    publish_place_js=facebook.place_js,
     publish_default_category=facebook.DEFAULT_CATEGORY,
     publish_condition_for=facebook.condition_for,
     edit_entry_js=facebook.EDIT_ENTRY_JS,

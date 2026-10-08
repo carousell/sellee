@@ -13,7 +13,7 @@ import subprocess
 
 import pytest
 
-from sellee.browser.markets.facebook import CONDITIONS, options_js
+from sellee.browser.markets.facebook import CONDITIONS, options_js, place_js
 
 node_binary = shutil.which("node")
 
@@ -58,3 +58,25 @@ def test_each_condition_is_found_in_facebooks_current_wording(wanted, expected) 
 
 def test_a_dash_does_not_make_a_different_condition_match() -> None:
     assert _pick("Used - Good", ["Used – like new", "Used – fair"])["chosen"] is None
+
+
+def _place(zip_code: str, labels: list) -> dict:
+    script = (
+        _MENU % {"labels": json.dumps(labels)}
+        + f"({place_js(zip_code)})().then((r) => console.log(JSON.stringify(r)));"
+    )
+    out = subprocess.run(
+        [str(node_binary), "-e", script], capture_output=True, text=True, check=True
+    )
+    return json.loads(out.stdout)
+
+
+def test_the_suggestion_naming_the_zip_is_taken_and_not_a_lookalike() -> None:
+    """What Facebook offered for 94103 on 2026-10-08, lookalikes and all."""
+    offered = [
+        "Huatusco, Mexico\n0 people checked in here",
+        "San Francisco, CA, US 94103\nSan Francisco, CA, US · 17 people checked in here",
+    ]
+
+    assert _place("94103", offered)["chosen"] == "San Francisco, CA, US 94103"
+    assert _place("94110", offered)["chosen"] is None

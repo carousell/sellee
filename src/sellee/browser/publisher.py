@@ -119,7 +119,7 @@ def publish(
     pause = sleep or formfill.sleep
 
     try:
-        _fill_in(client, adapter, item, create_url, photos, pause)
+        _fill_in(client, adapter, item, create_url, photos, pause, seller or {})
     except (PublishNotAttempted, page_governor.PagesSpent):
         # Already the answer. Being paced is not an attempt at all, and the fan-out spends nothing
         # on it, so it is passed through as it is rather than dressed up as one.
@@ -132,7 +132,7 @@ def publish(
     return _commit(client, adapter, item, listings_url, pause, before_commit)
 
 
-def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> None:
+def _fill_in(client, adapter, item: dict, create_url: str, photos, pause, seller: dict) -> None:
     """Everything on the safe side of the commit: open the form, fill it, read it back."""
     client.navigate_visible(create_url)
     pause(STEP_SETTLE_SEC)
@@ -148,6 +148,7 @@ def _fill_in(client, adapter, item: dict, create_url: str, photos, pause) -> Non
     condition = adapter.publish_condition_for(str(item.get("condition") or ""))
     _choose(client, adapter, "condition", condition, found, pause)
     _choose(client, adapter, "category", adapter.publish_default_category, found, pause)
+    _place(client, adapter, str(seller.get("zip") or ""), found, pause)
     _refuse_paid_promotion(client, adapter)
     _verify_form(client, adapter, item)
 
@@ -223,28 +224,73 @@ def _text_fields(item: dict) -> list:
 
 
 def _choose(client, adapter, step: str, wanted: str, found: dict, pause) -> None:
-    """Open one dropdown and pick an option by name.
+    """Open one dropdown, pick an option by name, and see the form took it.
 
     An unsatisfiable dropdown is fatal before the commit: Facebook requires both, so carrying on
-    would press Publish against a form that refuses.
+    would press Publish against a form that refuses. A pick the form did not take is tried once
+    more with the locator's click, which scrolls a long menu's own panel to the option.
     """
     if step not in (found.get("marked") or []) or not wanted:
         return
+    locator = lambda target, element: client.call_tool(  # noqa: E731
+        "browser_click", {"target": target, "element": element}
+    )
     try:
-        client.click(adapter.publish_target(step), f"the {step} dropdown")
-        pause(STEP_SETTLE_SEC)
-        answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
-        if not answer.get("chosen"):
-            raise PublishNotAttempted(
-                f"{adapter.market} offers no {step} called {wanted!r} "
-                f"(it offers {(answer.get('options') or [])[:8]})"
-            )
-        client.click(adapter.publish_target("option"), f"the {step}")
-        pause(STEP_SETTLE_SEC)
+        for press in (client.click, locator):
+            press(adapter.publish_target(step), f"the {step} dropdown")
+            pause(STEP_SETTLE_SEC)
+            answer = client.evaluate(adapter.publish_options_js(wanted)) or {}
+            chosen = answer.get("chosen")
+            if not chosen:
+                raise PublishNotAttempted(
+                    f"{adapter.market} offers no {step} called {wanted!r} "
+                    f"(it offers {(answer.get('options') or [])[:8]})"
+                )
+            press(adapter.publish_target("option"), f"the {step}")
+            pause(STEP_SETTLE_SEC)
+            if _holds(client, adapter, step) == chosen:
+                return
     except BrowserError as exc:
         if isinstance(exc, PublishNotAttempted):
             raise
         raise PublishNotAttempted(f"could not choose a {step}: {exc}", retryable=True) from exc
+    raise PublishNotAttempted(
+        f"the {adapter.market} form did not take the {step} {chosen!r}", retryable=True
+    )
+
+
+def _place(client, adapter, zip_code: str, found: dict, pause) -> None:
+    """Give the form the seller's place when it has none: type the ZIP and take the suggestion
+    that names it. Facebook leaves Next greyed out without a location it suggested itself."""
+    if "location" not in (found.get("marked") or []) or _holds(client, adapter, "location"):
+        return
+    if not zip_code:
+        raise PublishNotAttempted(
+            f"{adapter.market} wants a location and the seller has no ZIP", retryable=True
+        )
+    try:
+        client.type_humanly(adapter.publish_target("location"), "the location field", zip_code)
+        pause(STEP_SETTLE_SEC)
+        answer = client.evaluate(adapter.publish_place_js(zip_code)) or {}
+        if not answer.get("chosen"):
+            raise PublishNotAttempted(
+                f"{adapter.market} suggested no place for ZIP {zip_code}", retryable=True
+            )
+        client.click(adapter.publish_target("place"), "the suggested place")
+        pause(STEP_SETTLE_SEC)
+    except BrowserError as exc:
+        if isinstance(exc, PublishNotAttempted):
+            raise
+        raise PublishNotAttempted(f"could not set the location: {exc}", retryable=True) from exc
+    if not _holds(client, adapter, "location"):
+        raise PublishNotAttempted(
+            f"the {adapter.market} form did not take ZIP {zip_code}", retryable=True
+        )
+
+
+def _holds(client, adapter, step: str) -> str:
+    """What one field of the form holds now."""
+    return str((client.evaluate(adapter.publish_readback_js) or {}).get(step) or "")
 
 
 def _refuse_paid_promotion(client, adapter) -> None:

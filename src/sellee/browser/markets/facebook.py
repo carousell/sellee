@@ -762,6 +762,9 @@ PUBLISH_FIELDS_JS = f"""() => {{
     category: mark(byLabel('label[role="combobox"]', 'Category'), 'category'),
     condition: mark(byLabel('label[role="combobox"]', 'Condition'), 'condition'),
     description: mark(byLabel('textarea', 'Description'), 'description'),
+    // Under "More details": a typed box that only takes a place Facebook suggests.
+    location: mark(
+      document.querySelector('input[role="combobox"][aria-label="Location"]'), 'location'),
     photos: mark(document.querySelector('input[type="file"]'), 'photos'),
     // The control that opens the file chooser, marked separately from the input: the upload only
     // works while a chooser is open, so the driver has to press this first.
@@ -811,6 +814,7 @@ PUBLISH_READBACK_JS = f"""() => {{
     description: value('description'),
     condition: value('condition'),
     category: value('category'),
+    location: value('location'),
   }};
 }}"""
 
@@ -862,6 +866,30 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
   options[at].setAttribute(MARK, 'option');
   return {{ chosen: texts[at], options: texts.slice(0, 40) }};
 }}"""
+
+
+# The place Facebook suggests for a ZIP, marked so it can be clicked. Its list also offers places
+# that merely resemble what was typed, so only a suggestion naming the ZIP is taken.
+_PUBLISH_PLACE_TEMPLATE = f"""async () => {{
+  const MARK = '{PUBLISH_MARK_ATTR}';
+  const zip = String(__ZIP__);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {{
+    const rows = Array.from(document.querySelectorAll('[role="option"]'));
+    const at = rows.find((el) => (el.innerText || '').split(/\\s+/).includes(zip));
+    if (at) {{
+      at.setAttribute(MARK, 'place');
+      return {{ chosen: (at.innerText || '').trim().split('\\n')[0] }};
+    }}
+    await new Promise((r) => setTimeout(r, 250));
+  }}
+  return {{ chosen: null }};
+}}"""
+
+
+def place_js(zip_code: str) -> str:
+    """The suggestion-picking artifact for a ZIP, baked in as `options_js` bakes its wanted text."""
+    return _PUBLISH_PLACE_TEMPLATE.replace("__ZIP__", json.dumps(str(zip_code or "")))
 
 
 def options_js(wanted: str) -> str:
