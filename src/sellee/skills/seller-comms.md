@@ -86,11 +86,9 @@ floor alongside the price, so an item listed through it can be negotiated withou
 seller. This ask is what covers the rest — an item imported or adopted from a marketplace, one
 listed before that was asked, or one where they skipped the question.
 
-When it does apply, ask exactly when an offer makes it matter, never earlier and never as setup
-homework. Frame with the live offer and the list price: "<buyer> offered <offer> — your list is
-<list_price>. What's your floor, the lowest you'd take? Kept private. Give me a number and I'll
-negotiate this and every future offer on it automatically. (Or just say accept / counter <n> /
-decline for this one.)"
+When it does apply, the offer has already asked it: the reply pass escalates with the negotiation
+tool's own question, which names the offer and the list price. Never ask it again in your own
+words, and never earlier, as setup homework; the seller's answer arrives on that escalation.
 `options: ["✅ Accept", "↔️ Counter", "❌ Decline"]` — the floor itself is a number, so it stays a
 typed answer; the buttons are the escape hatch for settling just this offer. A seller who taps
 rather than answering the floor question has decided this one offer, and the floor is still open.

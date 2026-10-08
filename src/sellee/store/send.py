@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from sellee import marketplaces
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
-from sellee.store.helpers import ThreadNotFound, _new_id, _now
+from sellee.store.helpers import LANE_RETRIED_MARKETS, ThreadNotFound, _new_id, _now
 
 # How hard the machine tries before the seller is asked anything. An unsettled send is re-read by
 # the inbox lane on its own cadence; two misses at that cadence is roughly the grace window the
@@ -24,6 +24,8 @@ HARD_GRACE_SEC = 3600.0
 # that conversation on every tick for the life of the install. Generous enough to cover a slow sync
 # at the inbox lane's cadence, then the intent is left as the seller's answer settled it.
 MAX_VERIFY_ATTEMPTS = 20
+# How long a lane retries an email send bazaar never settles before it stops and asks the seller.
+LANE_RETRY_GIVE_UP_SEC = 86400.0
 
 # The one place this ask is worded. It is authored here rather than by a model because it may only
 # ever be raised by a send that survived the whole gate above — a pass that writes it itself is
@@ -52,10 +54,17 @@ UNCHECKED_SEND_CONTEXT = (
     "buyer until this is settled, and the message is never re-sent without the seller's answer."
 )
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
-
-# Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
-# answers; the sweep never asks the seller about one.
-LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL})
+# An email reply the lane gave up retrying: there is no conversation the seller can open to check.
+UNSETTLED_EMAIL_ASK = (
+    "I've been trying to email this buyer my reply for a day, but carousell.ai never confirmed it "
+    "went out, so I've stopped. Should I write to them again?"
+)
+UNSETTLED_EMAIL_CONTEXT = (
+    "An email reply was retried under its own id for a day and bazaar never answered that it was "
+    "stored. It may or may not have reached the buyer. Nothing further goes to this buyer until "
+    "the seller answers, and the reply is never re-sent without it."
+)
+UNSETTLED_EMAIL_OPTIONS = ("✉️ Write again", "🙅 Leave it")
 
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
 # carousell.ai replies per buyer itself.
@@ -119,15 +128,17 @@ class SendMixin:
             ).fetchone()
             if not thread:
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
-            # A send on this thread already ended unverified: the buyer may have that message, so
-            # nothing further may be sent until it is settled. Refused here rather than left to the
-            # caller, so no flow can talk past an unconfirmed send; the window is bounded — the
-            # sweep folds the intent to unconfirmed and opens the escalation whose resolution is
-            # the deliberate way back in.
+            # A send on this thread ended unverified, or is pending where the lane will retry it:
+            # the buyer may get that message, so nothing further may be sent until it is settled.
+            held = (
+                ("pending", "sent_unverified")
+                if thread["market"] in LANE_RETRIED_MARKETS
+                else ("sent_unverified",)
+            )
             unverified = conn.execute(
-                "SELECT 1 FROM send_intents WHERE thread_id = ? AND status = 'sent_unverified' "
-                "LIMIT 1",
-                (thread_id,),
+                "SELECT 1 FROM send_intents WHERE thread_id = ? "
+                f"AND status IN ({', '.join('?' for _ in held)}) LIMIT 1",
+                (thread_id, *held),
             ).fetchone()
             if unverified:
                 return {"verdict": "unverified_open", "delay_sec": 0.0}
@@ -346,13 +357,14 @@ class SendMixin:
         return [dict(row) for row in rows]
 
     def unsettled_intents_on(self, market: str, created_before: float) -> list[dict]:
-        """A market's sends still unsettled, oldest first, made before `created_before`."""
+        """A market's sends a lane still retries, oldest first, made before `created_before`. One
+        the sweep gave up on and asked the seller about is theirs to settle, not the lane's."""
         rows = self._db.query(
             "SELECT i.intent_id, i.thread_id, i.text FROM send_intents i "
             "JOIN threads t ON t.thread_id = i.thread_id "
-            f"WHERE t.market = ? AND i.status IN ({_UNSETTLED_PLACEHOLDERS}) "
+            "WHERE t.market = ? AND i.status IN ('pending', 'sent_unverified') "
             "AND i.created_ts < ? ORDER BY i.created_ts ASC",
-            (market, *UNSETTLED_STATUSES, created_before),
+            (market, created_before),
         )
         return [dict(row) for row in rows]
 
@@ -497,16 +509,28 @@ class SendMixin:
         with self._db.transaction() as conn:
             retried = ", ".join("?" for _ in LANE_RETRIED_MARKETS)
             stale = conn.execute(
-                "SELECT i.intent_id, i.thread_id, i.verify_attempts FROM send_intents i "
+                "SELECT i.intent_id, i.thread_id, i.verify_attempts, t.market FROM send_intents i "
                 "JOIN threads t ON t.thread_id = i.thread_id "
-                "WHERE i.status IN ('pending', 'sent_unverified') AND i.created_ts < ? "
-                f"AND t.market NOT IN ({retried}) "
-                "AND (i.verify_attempts >= ? OR i.created_ts < ?)",
-                (cutoff, *LANE_RETRIED_MARKETS, min_verify_attempts, hard_cutoff),
+                "WHERE i.status IN ('pending', 'sent_unverified') AND ("
+                f"(t.market NOT IN ({retried}) AND i.created_ts < ? "
+                "AND (i.verify_attempts >= ? OR i.created_ts < ?)) "
+                f"OR (t.market IN ({retried}) AND i.created_ts < ?))",
+                (
+                    *LANE_RETRIED_MARKETS,
+                    cutoff,
+                    min_verify_attempts,
+                    hard_cutoff,
+                    *LANE_RETRIED_MARKETS,
+                    now - LANE_RETRY_GIVE_UP_SEC,
+                ),
             ).fetchall()
             for row in stale:
                 looked = row["verify_attempts"] >= min_verify_attempts
-                if looked:
+                options = UNCONFIRMED_SEND_OPTIONS
+                if row["market"] in LANE_RETRIED_MARKETS:
+                    ask, context = UNSETTLED_EMAIL_ASK, UNSETTLED_EMAIL_CONTEXT
+                    options = UNSETTLED_EMAIL_OPTIONS
+                elif looked:
                     ask, context = UNCONFIRMED_SEND_ASK, UNCONFIRMED_SEND_CONTEXT
                 else:
                     ask, context = UNCHECKED_SEND_ASK, UNCHECKED_SEND_CONTEXT
@@ -520,7 +544,7 @@ class SendMixin:
                     open_question=ask,
                     kind="unconfirmed_send",
                     context_summary=context,
-                    options=list(UNCONFIRMED_SEND_OPTIONS),
+                    options=list(options),
                 )
                 folded.append(
                     {

@@ -2,7 +2,8 @@
 
 bazaar stores one reply per `client_message_id` and answers once it is stored; its outbox sends
 it from there. The id is the send intent's own, written before the first call, so any failure
-short of a refusal is retried under it. A refusal on the first attempt stored nothing, so its
+short of a refusal is retried under it. bazaar naming the id as already used means an earlier
+attempt stored it, so the send counts as made. A refusal on the first attempt stored nothing, so its
 intent is dropped; after an attempt that may have stored the reply, the send is left unverified
 for the relay lane to settle once bazaar shows it stored, or to retry under the same id.
 """
@@ -23,12 +24,26 @@ _RETRY_DELAYS_SEC = (1.0, 2.0, 4.0)
 # HTTP 4xx answers that mean "try again", as a gateway in front of bazaar may send.
 _TRY_AGAIN = frozenset({408, 429})
 
-# The text bazaar's MCP transport gives a 5xx, which carries no client copy.
-_TRANSIENT_TEXT = ("internal server error", "service unavailable", "gateway timeout", "bad gateway")
+# How bazaar's reply tools start the answers that stored nothing and never will. Any other answer,
+# an unknown one included, may have stored the reply, so it is retried under the same id.
+_REFUSED_TEXT = (
+    "text is required",
+    "client_message_id is required",
+    "thread not found",
+    "the buyer is blocked",
+)
+
+# bazaar's answer to a reply whose id it already holds: an earlier attempt of ours stored it.
+_STORED_TEXT = "client_message_id already names"
 
 
 class SendRefused(SinkError):
     """bazaar refused the reply and stored nothing. Final; the intent is dropped."""
+
+
+def is_already_stored(exc: RailError) -> bool:
+    """Whether bazaar already holds a reply under this id, so it sends that one."""
+    return isinstance(exc, RailToolRefused) and str(exc).strip().lower().startswith(_STORED_TEXT)
 
 
 def is_refusal(exc: RailError) -> bool:
@@ -38,7 +53,7 @@ def is_refusal(exc: RailError) -> bool:
     if isinstance(exc, RailNetworkError):
         return exc.status is not None and exc.status < 500 and exc.status not in _TRY_AGAIN
     if isinstance(exc, RailToolRefused):
-        return not str(exc).strip().lower().startswith(_TRANSIENT_TEXT)
+        return str(exc).strip().lower().startswith(_REFUSED_TEXT)
     # A response we could not read is not a refusal: the call may have stored the reply.
     return False
 
@@ -71,6 +86,9 @@ class RelayReplySink:
             try:
                 result = self._call(thread, text, intent_id)
             except RailError as exc:
+                if is_already_stored(exc):
+                    self._publish(thread, "sent", None)
+                    return {}
                 if self._is_refusal(exc) and failure is None:
                     self._store.drop_refused_intent(intent_id)
                     self._publish(thread, "refused", str(exc))
