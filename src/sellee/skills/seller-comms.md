@@ -102,9 +102,8 @@ ABOVE your list (<list_price>). Real and want to accept? I won't commit until yo
 `negotiate_confirm_bid`, tell the winner it's theirs, and move to the close ask. On decline/ignore,
 nothing binding happened — the listing stays live.
 `options: ["✅ Accept it", "❌ Leave it"]`
-If a checkout link has already gone to another buyer, say so in the same message: that link cannot
-be withdrawn, so sending one to the higher bidder too means whoever pays first gets it, at their
-own link's price (see **Checkout links** below).
+If a checkout link has already gone to another buyer, say so in the same message, as
+**Checkout links** below sets out.
 
 **Checkout links.** A link, once sent, cannot be withdrawn or voided; it expires on its own.
 There is no bidding feature: if two buyers hold links, whoever pays first gets the item at the
@@ -117,10 +116,11 @@ buyer in line when there is one. Its taps:
 - **🔗 Send them the link** — the seller's close decision for that next buyer, at the offer the
   notice named. A tap can come long after the notice, so first check `negotiate_status`: if that
   buyer has since withdrawn or the item is no longer available, say so and name who is next now
-  instead of sending anything. Otherwise mint it with `carousell_ai_create_checkout_link` for that buyer's thread; if it is
-  refused as below the floor, the tap is the seller accepting that price, so `set_floor` to it and
-  mint again. Send the link with `send_reply` and confirm: "✅ Checkout link sent to <buyer> for
-  <price>". If the buyer who backed out still holds a link, add the **Checkout links** rule.
+  instead of sending anything. Otherwise mint the link with `carousell_ai_create_checkout_link`
+  for that buyer's thread. If it is refused as below the floor, the tap is the seller accepting
+  that price, so `set_floor` to it and mint again. Send the link with `send_reply` and confirm:
+  "✅ Checkout link sent to <buyer> for <price>". If the buyer who backed out still holds a link,
+  add the **Checkout links** rule.
 - **📌 Leave it listed** — nothing more to do; the item is already back on the market.
 
 **Scam confirmation.** The chat is already held and nothing was sent or clicked — say so, so the
