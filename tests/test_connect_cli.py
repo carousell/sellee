@@ -189,6 +189,18 @@ def test_token_never_printed_to_stdout(monkeypatch, stub_daemon, capsys) -> None
     assert _TOKEN not in captured.out and _TOKEN not in captured.err
 
 
+def test_interactive_prompt_echoes_stars(monkeypatch) -> None:
+    # a pasted token must show something, or the seller pastes it again
+    seen = []
+    monkeypatch.setattr(
+        connect_cli.getpass,
+        "getpass",
+        lambda prompt, **k: seen.append((prompt, k.get("echo_char"))) or _TOKEN,
+    )
+    assert connect_cli._read_token(True) == _TOKEN
+    assert seen == [("Paste your BotFather bot token: ", "*")]
+
+
 # --- Discord: discord_bind_flow, mirroring bind_flow's coverage above -------------------------
 
 
