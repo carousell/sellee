@@ -302,17 +302,13 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
     store.create_thread(
         thread_id=tid, side="sell", market="fb", counterpart_handle=tid, item_id=item["id"]
     )
-    offered = tid in store.negotiate_status(item["id"])["buyers"]
     store.negotiate_withdraw(item["id"], tid, notice=_text)
     sink = _Sink()
     ctx = make_ctx("attended", reply_sink=sink, config=_FAST)
 
-    if offered:
-        with pytest.raises(ToolError, match="backed out"):
-            dispatch(
-                "send_reply", {"thread_id": tid, "text": "still keen?", "kind": "followup"}, ctx
-            )
-        assert sink.sends == []
+    with pytest.raises(ToolError, match="backed out"):
+        dispatch("send_reply", {"thread_id": tid, "text": "still keen?", "kind": "followup"}, ctx)
+    assert sink.sends == []
     store.record_inbound(tid, msg_id="back", text="actually is it still available?", ts=200.0)
     sent = dispatch("send_reply", {"thread_id": tid, "text": "It is!", "in_msg_id": "back"}, ctx)
     # Paced rather than refused once the shared store's examples have spent fb's sends.
@@ -341,6 +337,18 @@ def test_a_returning_buyer_stands_at_their_new_offer_not_their_old_one(store) ->
     _offer(store, item["id"], "fb:a", 110)
     assert store.negotiate_status(item["id"])["buyers"]["fb:a"]["highest_offer"] == 110
     assert _offer(store, item["id"], "fb:b", 120)["decision"] == "bid_lead"
+
+
+@pytest.mark.parametrize("returns_at", [60, 80])
+def test_a_returning_buyer_is_back_in_before_the_seller_sets_a_floor(store, returns_at) -> None:
+    item = store.create_item(title="Scarf", list_price=100.0, currency="USD")  # no floor
+    _offer(store, item["id"], "fb:a", 80)
+    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+
+    assert _offer(store, item["id"], "fb:a", returns_at)["decision"] == "needs_floor"
+
+    buyer = store.negotiate_status(item["id"])["buyers"]["fb:a"]
+    assert buyer == {"status": "active", "highest_offer": returns_at}
 
 
 def test_a_returning_buyer_outbids_the_rival_again(store) -> None:

@@ -154,12 +154,8 @@ class NegotiationMixin:
             led = self._load_negotiation(conn, item_id)
             buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
             buyer["buyer_handle"] = handle
-            # A buyer who backed out and comes back stands at this offer, not the one they dropped,
-            # and is decided again even at their old price.
-            returning = buyer["status"] == "withdrew"
-            if returning:
-                buyer["status"] = "active"
-                buyer["highest_offer"] = int(offer)
+            # Decided again even at their old price: that offer was withdrawn.
+            returning = _readmit(buyer, offer)
             if not negotiate_engine.record_offer(buyer, offer) and not returning:
                 # The same offer, handed to us again — a retrying lane, not a moving buyer. Answer
                 # from what we already told them and change nothing: re-deciding would walk the
@@ -211,6 +207,7 @@ class NegotiationMixin:
             }
         buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
         buyer["buyer_handle"] = handle
+        _readmit(buyer, offer)
         negotiate_engine.record_offer(buyer, offer, held_for_floor=True)
         led["buyers"][thread_id] = buyer
         self._persist_negotiation(conn, item_id, led)
@@ -679,6 +676,16 @@ class NegotiationMixin:
                 (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
             )
         return self.get_checkout(sale_id)  # type: ignore[return-value]
+
+
+def _readmit(buyer: dict, offer) -> bool:
+    """Bring back a buyer who withdrew and now offers again, standing at this offer rather than
+    the one they dropped. Answers whether they were withdrawn."""
+    if buyer["status"] != "withdrew":
+        return False
+    buyer["status"] = "active"
+    buyer["highest_offer"] = int(offer)
+    return True
 
 
 def _thread_handle(conn, thread_id: str) -> str:
