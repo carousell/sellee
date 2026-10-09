@@ -68,13 +68,6 @@ def _refused(side: str, status: str, kind: str) -> bool:
     return kind == "followup" and status == "agreed"
 
 
-def _withdrawn(store, thread: dict) -> bool:
-    if thread["side"] != "sell" or not thread.get("item_id"):
-        return False
-    buyer = store.negotiate_status(thread["item_id"])["buyers"].get(thread["thread_id"])
-    return bool(buyer) and buyer["status"] == "withdrew"
-
-
 # The verdict that stops a send outright. "suspicious" deliberately does not: it is common enough
 # that refusing on it would mute ordinary haggling, and the prompt already carries it so the model
 # can be careful. "scam" is the one the seller should answer themselves.
@@ -139,7 +132,11 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             f"thread is {thread['status']!r} — not eligible for a {kind} "
             "(terminal/held/escalated threads are never re-engaged)"
         )
-    if kind == "followup" and _withdrawn(ctx.store, thread):
+    if (
+        kind == "followup"
+        and thread["side"] == "sell"
+        and ctx.store.has_withdrawn(thread["item_id"], thread["thread_id"])
+    ):
         raise ToolError("the buyer backed out — they are not followed up, only answered")
 
     # Acquire the send path before any reserve or intent, so "no browser" is refused with nothing
