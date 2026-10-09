@@ -418,3 +418,36 @@ def test_the_seller_rulebook_says_a_sent_link_cannot_be_taken_back() -> None:
         "pays first",
     ):
         assert phrase in text
+
+
+def test_an_old_tap_cannot_send_a_link_to_a_buyer_who_since_withdrew(make_ctx, store) -> None:
+    """A withdraws and the notice offers B; B withdraws too before the seller taps that notice."""
+    item = _scarf_thread(store, tid="fb:a", handle="a")
+    store.create_thread(
+        thread_id="fb:b", side="sell", market="fb", counterpart_handle="b", item_id=item["id"]
+    )
+    _offer(store, item["id"], "fb:b", 10)
+    _offer(store, item["id"], "fb:a", 20)
+    store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], "fb:b", notice=_withdrawal_text)
+
+    with pytest.raises(ToolError, match="backed out"):
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "fb:b", "agreed_price": 10},
+            make_ctx("pass:channel", config=_FAST),
+        )
+    assert store._db.query("SELECT 1 FROM checkouts WHERE thread_id = ?", ("fb:b",)) == []
+
+
+def test_a_buyer_still_standing_is_not_stopped_by_the_withdrawal_gate(make_ctx, store) -> None:
+    item = _scarf_thread(store, tid="fb:b", handle="b")
+    _offer(store, item["id"], "fb:b", 10)
+
+    with pytest.raises(ToolError) as refused:
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "fb:b", "agreed_price": 10},
+            make_ctx("pass:channel", config=_FAST),
+        )
+    assert "backed out" not in str(refused.value)  # stopped later, by the unpublished listing

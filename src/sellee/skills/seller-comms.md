@@ -115,7 +115,9 @@ never promise that the higher bidder will get it, only that they get it if they 
 **A buyer backed out.** The notice already told the seller who left and why, and named the next
 buyer in line when there is one. Its taps:
 - **🔗 Send them the link** — the seller's close decision for that next buyer, at the offer the
-  notice named. Mint it with `carousell_ai_create_checkout_link` for that buyer's thread; if it is
+  notice named. A tap can come long after the notice, so first check `negotiate_status`: if that
+  buyer has since withdrawn or the item is no longer available, say so and name who is next now
+  instead of sending anything. Otherwise mint it with `carousell_ai_create_checkout_link` for that buyer's thread; if it is
   refused as below the floor, the tap is the seller accepting that price, so `set_floor` to it and
   mint again. Send the link with `send_reply` and confirm: "✅ Checkout link sent to <buyer> for
   <price>". If the buyer who backed out still holds a link, add the **Checkout links** rule.
