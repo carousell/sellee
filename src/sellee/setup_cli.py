@@ -539,25 +539,56 @@ def _ask_country(ui: Ui) -> str:
             return code
 
 
-def _ask_timezone(ui: Ui, region: str) -> str:
-    """Ask for the timezone until the answer is one that can be stored, or until it is skipped.
+_SOMEWHERE_ELSE = "Somewhere else — type a city"
 
-    Checked against the same rule the write door applies, so a typo is re-asked here with the
-    reason and an example rather than failing later. An empty answer still skips: the zone is a
-    convenience, and a seller who cannot name theirs is better served by a finished install.
-    """
-    default = region_guess.default_zone(region)
-    example = (region_guess.zones_for(region) or ["Asia/Singapore"])[0]
-    hint = "" if default else f" (e.g. {example})"
+
+def _ask_timezone(ui: Ui, region: str) -> str:
+    """Ask for the seller's timezone as a place: a numbered list when the country has several
+    zones, else a city or zone name typed. Returns "" when skipped."""
+    machine = region_guess.system_timezone()
+    places = region_guess.place_zones(region)
+    if len(places) < 2:
+        return _ask_city(ui, machine or (places[0][1] if places else ""))
+    zones = [zone for _, zone in places]
+    # The stored zone is a claim about this machine, so it stays the default in any country.
+    if machine and machine not in zones:
+        places = [(f"{region_guess.city_label(machine)} (this computer)", machine), *places]
+        zones = [machine, *zones]
+    picked = ui.choose(
+        "Which of these is your timezone?",
+        [label for label, _ in places] + [_SOMEWHERE_ELSE],
+        default_index=zones.index(machine) if machine in zones else 0,
+        lead=False,
+    )
+    return zones[picked] if picked < len(zones) else _ask_city(ui, "")
+
+
+def _ask_city(ui: Ui, default: str) -> str:
+    """Ask for a city or zone name until it resolves to a storable zone, or "" when skipped. A
+    city is confirmed before it is stored, because the match is by spelling alone."""
+    question = "Timezone?" if default else "Which city are you in?"
     while True:
-        answer = ui.ask(f"Timezone?{hint}", default=default, lead=False).strip()
+        answer = ui.ask(question, default=default, lead=False).strip()
         if not answer:
             ui.note("no timezone recorded — ask Sellee to set one any time")
             return ""
-        reason = region_guess.zone_error(answer)
-        if not reason:
+        if answer == default or "/" in answer:
+            reason = region_guess.zone_error(answer)
+            if not reason:
+                return answer
+            example = default or "Asia/Singapore"
+            ui.say(f"{reason} — zone names look like {example}.")
+            continue
+        zones = region_guess.zones_for_city(answer)
+        if answer in zones:
             return answer
-        ui.say(f"{reason} — zone names look like {example}.")
+        if len(zones) == 1 and ui.confirm(f"{zones[0]}, correct?", default=True, lead=False):
+            return zones[0]
+        if len(zones) > 1:
+            return zones[ui.choose("Which of these?", zones, lead=False)]
+        if not zones:
+            ui.say(f"No timezone is named after {answer!r} — try the nearest big city.")
+        question = "Which city are you in?"
 
 
 # --- the rail ----------------------------------------------------------------------------------

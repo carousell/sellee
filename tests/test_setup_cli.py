@@ -11,7 +11,11 @@ gates in test_installer_preflight.py, the systemd mapping in test_supervisor_lin
 
 from __future__ import annotations
 
+import io
+
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from tests.test_supervisor import FakePlatform
 
 from sellee import (
@@ -30,6 +34,7 @@ from sellee import (
 from sellee.browser import markets as market_adapters
 from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
+from sellee.installer.ui import Abort
 
 # Captured before any fixture stubs it out, so a test about the rail phase can put it back.
 _PROVISION_RAIL = setup_cli._provision_rail
@@ -543,13 +548,13 @@ def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
     reason and the country's own zone."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     # country, a zone that does not exist, Enter for the proposed one, then the defaults.
-    _answer(monkeypatch, ["SG", "", "gmt8+", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "", "Asia/Singapur", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
     assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
     out = capsys.readouterr().out
-    assert "unknown timezone 'gmt8+'" in out
+    assert "unknown timezone 'Asia/Singapur'" in out
     assert "zone names look like Asia/Singapore" in out
 
 
@@ -565,6 +570,184 @@ def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
 
     assert world.calls["basics"]["timezone"] == "Asia/Singapore"
     assert "Timezone? [Asia/Singapore]" in capsys.readouterr().out
+
+
+def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
+    world, monkeypatch, capsys
+) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/New_York")
+    # no to the proposal, US again, yes, then the fourth place.
+    _answer(monkeypatch, ["n", "", "", "4", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"] == {"region": "US", "timezone": "America/Los_Angeles"}
+    out = capsys.readouterr().out
+    assert "1) New York\n2) Chicago\n3) Denver\n4) Los Angeles\n" in out
+    assert "13) Somewhere else — type a city" in out
+
+
+# --- the timezone question, at its seam ---------------------------------------------------------
+
+_ZONE_TAB = """\
+ES\t+4024-00341\tEurope/Madrid\tSpain (mainland)
+ES\t+3553-00519\tAfrica/Ceuta\tCeuta, Melilla
+ES\t+2806-01524\tAtlantic/Canary\tCanary Islands
+FR\t+4852+00220\tEurope/Paris
+US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
+US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+"""
+
+
+@pytest.fixture
+def zone_tab(monkeypatch, tmp_path):
+    path = tmp_path / "zone.tab"
+    path.write_text(_ZONE_TAB)
+    monkeypatch.setattr(region_guess, "ZONE_TAB", str(path))
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
+    return path
+
+
+def _ask_timezone(region, replies):
+    """Run the timezone question over a script; a script that runs out ends it as Ctrl-D would."""
+    answers = iter(replies)
+
+    def reply():
+        try:
+            return next(answers)
+        except StopIteration:
+            raise EOFError from None
+
+    out = io.StringIO()
+    ui = setup_cli.Ui(stream=out, interactive=True, color=False, input_fn=reply)
+    return setup_cli._ask_timezone(ui, region), out.getvalue()
+
+
+def test_a_country_outside_the_table_is_offered_its_zone_tab_places(zone_tab) -> None:
+    zone, out = _ask_timezone("ES", ["3"])
+    assert zone == "Atlantic/Canary"
+    assert "1) Spain (mainland)\n2) Ceuta, Melilla\n3) Canary Islands\n" in out
+    assert "4) Somewhere else — type a city" in out
+
+
+def test_somewhere_else_takes_a_city_and_confirms_its_zone(zone_tab) -> None:
+    zone, out = _ask_timezone("US", ["13", "los angeles", ""])
+    assert zone == "America/Los_Angeles"
+    assert "Which city are you in?" in out
+    assert "America/Los_Angeles, correct? [Y/n]" in out
+
+
+def test_a_city_confirmed_wrong_is_asked_again(zone_tab) -> None:
+    zone, _ = _ask_timezone("US", ["13", "los angeles", "n", "denver", "y"])
+    assert zone == "America/Denver"
+
+
+def test_a_city_with_no_zone_asks_for_the_nearest_big_city(zone_tab) -> None:
+    zone, out = _ask_timezone("ES", ["4", "Barcelona", "Asia/Singapore"])
+    assert zone == "Asia/Singapore"
+    assert "try the nearest big city" in out
+
+
+def test_a_city_several_zones_share_is_picked_from_a_list(zone_tab, monkeypatch, tmp_path) -> None:
+    # Without zone.tab nothing marks the legacy link as the lesser name, so both are offered.
+    monkeypatch.setattr(region_guess, "ZONE_TAB", str(tmp_path / "absent.tab"))
+    zone, out = _ask_timezone("BR", ["indianapolis", "1"])
+    assert zone == "America/Indiana/Indianapolis"
+    assert "1) America/Indiana/Indianapolis\n2) America/Indianapolis\n" in out
+
+
+def test_without_zone_tab_the_table_still_lists_and_others_get_the_city_question(
+    zone_tab, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(region_guess, "ZONE_TAB", str(tmp_path / "absent.tab"))
+    zone, out = _ask_timezone("US", ["2"])
+    assert zone == "America/Chicago"
+    zone, out = _ask_timezone("ES", ["madrid", ""])
+    assert zone == "Europe/Madrid"
+    assert out.startswith("Which city are you in?")
+
+
+def test_a_one_zone_country_is_proposed_as_before(zone_tab) -> None:
+    zone, out = _ask_timezone("FR", [""])
+    assert zone == "Europe/Paris"
+    assert "Timezone? [Europe/Paris]" in out
+
+
+def test_the_machines_zone_is_the_default_place(zone_tab, monkeypatch) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Denver")
+    zone, out = _ask_timezone("US", [""])
+    assert zone == "America/Denver"
+    assert "[default 3]" in out
+
+
+def test_a_machine_zone_the_list_lacks_is_offered_first(zone_tab, monkeypatch) -> None:
+    # The stored zone is a claim about this machine, so its own zone stays the default.
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Indiana/Indianapolis")
+    zone, out = _ask_timezone("US", [""])
+    assert zone == "America/Indiana/Indianapolis"
+    assert "1) Indianapolis (this computer)\n2) New York\n" in out
+
+
+@pytest.mark.parametrize("machine", ["UTC", "Asia/Singapore"])
+def test_a_machine_zone_outside_the_country_stays_the_default(
+    zone_tab, monkeypatch, machine
+) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: machine)
+    zone, out = _ask_timezone("US", [""])
+    assert zone == machine
+    assert f"1) {region_guess.city_label(machine)} (this computer)\n2) New York\n" in out
+
+
+def test_a_zone_name_without_a_slash_is_taken_as_typed(zone_tab) -> None:
+    zone, _ = _ask_timezone("ES", ["4", "UTC"])
+    assert zone == "UTC"
+
+
+def test_a_typed_zone_name_is_still_accepted(zone_tab) -> None:
+    zone, _ = _ask_timezone("US", ["13", "Asia/Singapore"])
+    assert zone == "Asia/Singapore"
+
+
+def test_an_empty_city_skips_with_the_note(zone_tab) -> None:
+    zone, out = _ask_timezone("ES", ["4", ""])
+    assert zone == ""
+    assert "no timezone recorded — ask Sellee to set one any time" in out
+
+
+@settings(max_examples=150, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@given(
+    region=st.sampled_from(["US", "ES", "FR", "SG", "BR"]),
+    replies=st.lists(
+        st.sampled_from(
+            [
+                "",
+                "1",
+                "4",
+                "13",
+                "99",
+                "y",
+                "n",
+                "los angeles",
+                "Barcelona",
+                "madrid",
+                "indianapolis",
+                "Asia/Singapore",
+                "Asia/Singapur",
+                "gmt8+",
+                "UTC",
+            ]
+        ),
+        max_size=8,
+    ),
+)
+def test_whatever_is_typed_only_a_storable_zone_or_nothing_is_returned(
+    zone_tab, region, replies
+) -> None:
+    try:
+        zone, _ = _ask_timezone(region, replies)
+    except Abort:
+        return
+    assert zone == "" or region_guess.zone_error(zone) == ""
 
 
 def test_the_country_question_takes_any_code_rather_than_offering_a_list(
