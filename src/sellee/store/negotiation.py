@@ -14,6 +14,7 @@ from sellee.store.helpers import (
     ItemNotFound,
     StoreError,
     WantNotFound,
+    _insert_ask,
     _insert_notice,
     _now,
 )
@@ -331,12 +332,12 @@ class NegotiationMixin:
             return {"item_state": led["state"]}
 
     def negotiate_withdraw(
-        self, item_id: str, thread_id: str, *, notice: Callable[[dict], str]
+        self, item_id: str, thread_id: str, *, notice: Callable[[dict], tuple[str, list | None]]
     ) -> dict:
         """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer or a
         checkout link, queue `notice(result)` in the same transaction. A repeat changes nothing."""
         with self._db.transaction() as conn:
-            self._item_for_negotiation(conn, item_id)
+            _list_price, currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
             if led["state"] == "sold":
                 raise StoreError("the item is already sold — escalate instead")
@@ -355,6 +356,7 @@ class NegotiationMixin:
                     "item_state": led["state"],
                     "notice_id": None,
                     "checkout_url": None,
+                    "next_buyer": None,
                 }
             offered = buyer is not None
             if buyer is None:
@@ -371,12 +373,17 @@ class NegotiationMixin:
                 "was_holder": was_holder,
                 "item_state": led["state"],
                 "checkout_url": checkout_url,
+                "next_buyer": _next_buyer(led, currency),
             }
-            result["notice_id"] = (
-                _insert_notice(conn, notice(result), ref=f"buyer-withdrew:{thread_id}")
-                if offered or checkout_url
-                else None
-            )
+            result["notice_id"] = None
+            if offered or checkout_url:
+                text, options = notice(result)
+                ref = f"buyer-withdrew:{thread_id}"
+                result["notice_id"] = (
+                    _insert_ask(conn, text, options=options, ref=ref)
+                    if options
+                    else _insert_notice(conn, text, ref=ref)
+                )
             return result
 
     # --- buy-side negotiation ---------------------------------------------------------------
@@ -685,6 +692,23 @@ class NegotiationMixin:
                 (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
             )
         return self.get_checkout(sale_id)  # type: ignore[return-value]
+
+
+def _next_buyer(led: dict, currency) -> dict | None:
+    """The standing buyer with the highest offer, for the seller to sell to instead."""
+    standing = [
+        (b["highest_offer"], t, b)
+        for t, b in led["buyers"].items()
+        if b["status"] not in negotiate_engine.NOT_STANDING and b["highest_offer"] > 0
+    ]
+    if not standing:
+        return None
+    offer, thread_id, buyer = max(standing, key=lambda s: (s[0], s[1]))
+    return {
+        "thread_id": thread_id,
+        "handle": buyer["buyer_handle"],
+        "price": _money(offer, currency),
+    }
 
 
 def _thread_handle(conn, thread_id: str) -> str:

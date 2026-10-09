@@ -3,6 +3,8 @@ notice for the seller in the same transaction."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
@@ -22,8 +24,8 @@ _PROPERTY = settings(
 BUYERS = ("fb:a", "fb:b", "fb:c")
 
 
-def _text(result: dict) -> str:
-    return "backed out"
+def _text(result: dict) -> tuple:
+    return "backed out", None
 
 
 def _item(store: Store, *, list_price=100.0):
@@ -129,6 +131,7 @@ def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_selle
     result = store.negotiate_withdraw(item["id"], "fb:only-asked", notice=_text)
 
     after = store.negotiate_status(item["id"])
+    result.pop("next_buyer")  # who is next is its own property, below
     assert result == {
         "withdrew": True,
         "was_holder": False,
@@ -144,7 +147,7 @@ def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_selle
 _LINK = "https://www.carousell.ai/checkout/c9e22772"
 
 
-def _withdrawal_text(result: dict) -> str:
+def _withdrawal_text(result: dict) -> tuple:
     return negotiate_tools.withdrawal_notice("Facebook · ks5qn · Scarf", "found another", result)
 
 
@@ -314,3 +317,104 @@ def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
     for thread_id in (*BUYERS, "fb:never-wrote"):
         expected = buyers.get(thread_id, {}).get("status") == "withdrew"
         assert store.has_withdrawn(item["id"], thread_id) is expected
+
+
+# --- the next buyer in line --------------------------------------------------------------------
+
+_NOT_STANDING = ("passed", "lost", "withdrew")
+
+
+@_PROPERTY
+@given(ledger=_LEDGERS)
+def test_the_next_buyer_is_the_highest_standing_offer(store, ledger) -> None:
+    offers, confirm, who = ledger
+    item = _build(store, offers, confirm)
+    standing = {
+        t: b["highest_offer"]
+        for t, b in store.negotiate_status(item["id"])["buyers"].items()
+        if t != BUYERS[who] and b["status"] not in _NOT_STANDING and b["highest_offer"] > 0
+    }
+
+    result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+
+    if standing:
+        assert result["next_buyer"]["thread_id"] in standing
+        assert standing[result["next_buyer"]["thread_id"]] == max(standing.values())
+    else:
+        assert result["next_buyer"] is None
+
+
+@_PROPERTY
+@given(ledger=_LEDGERS)
+def test_the_notice_offers_a_checkout_link_only_when_someone_is_next(store, ledger) -> None:
+    offers, confirm, who = ledger
+    item = _build(store, offers, confirm)
+    count = _notice_count(store)
+
+    result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+
+    for notice in store.list_queued_notices()[count:]:
+        labels = [label for label, _token in notice["controls"]]
+        assert ("🔗 Send them the link" in labels) is (result["next_buyer"] is not None)
+        assert "📌 Leave it listed" in labels
+
+
+def test_the_notice_names_the_next_buyer_and_their_offer(make_ctx, store) -> None:
+    item = _scarf_thread(store)
+    store.create_thread(
+        thread_id="fb:7laa", side="sell", market="fb", counterpart_handle="7laa", item_id=item["id"]
+    )
+    _offer(store, item["id"], "fb:7laa", 10)
+    _offer(store, item["id"], "fb:ks5qn", 20)
+
+    dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "reason": "shipping too high"},
+        _reply_ctx(make_ctx, item),
+    )
+
+    (notice,) = store.list_queued_notices()
+    assert "Next in line: fb:7laa at 10 USD." in notice["text"]
+
+
+def test_a_reply_pass_never_learns_who_is_next(make_ctx, store) -> None:
+    """The reply pass answers a stranger, so another buyer's handle or offer must not reach it."""
+    item = _scarf_thread(store)
+    store.create_thread(
+        thread_id="fb:rival",
+        side="sell",
+        market="fb",
+        counterpart_handle="rival",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "fb:rival", 11)
+    _offer(store, item["id"], "fb:ks5qn", 20)
+
+    result = dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "reason": "found another"},
+        _reply_ctx(make_ctx, item),
+    )
+
+    assert "next_buyer" not in result
+    assert "rival" not in json.dumps(result) and "11" not in json.dumps(result)
+
+
+def test_the_withdrawal_options_fit_a_phone_button() -> None:
+    from sellee.channel import asks
+
+    labels = [negotiate_tools.SEND_LINK_OPTION, negotiate_tools.LEAVE_LISTED_OPTION]
+    assert asks.validate_options(labels) == labels
+
+
+def test_the_seller_rulebook_says_a_sent_link_cannot_be_taken_back() -> None:
+    from sellee import skills
+
+    text = skills.load("seller-comms")
+    for phrase in (
+        "🔗 Send them the link",
+        "📌 Leave it listed",
+        "cannot be withdrawn",
+        "pays first",
+    ):
+        assert phrase in text

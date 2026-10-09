@@ -5,7 +5,7 @@ needs_floor result carries no number, and the below-floor assert in the engine i
 
 from __future__ import annotations
 
-from sellee import settings
+from sellee import prompt_data, settings
 from sellee.channel import refs
 from sellee.store import StoreError
 from sellee.tools import listing
@@ -97,13 +97,23 @@ BACK_ON_MARKET_TEXT = " It's back on the market."
 LINK_STILL_WORKS_TEXT = " Their checkout link still works, so I'll tell you if they pay anyway."
 
 
-def withdrawal_notice(reference: str, reason: str, result: dict) -> str:
+NEXT_IN_LINE_TEXT = " Next in line: {handle} at {price}."
+SEND_LINK_OPTION = "🔗 Send them the link"
+LEAVE_LISTED_OPTION = "📌 Leave it listed"
+
+
+def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, list]:
+    """The seller's notice text and its tap options."""
     text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
     if result["was_holder"]:
         text += BACK_ON_MARKET_TEXT
     if result["checkout_url"]:
         text += LINK_STILL_WORKS_TEXT
-    return text
+    nxt = result["next_buyer"]
+    if nxt is None:
+        return text, [LEAVE_LISTED_OPTION]
+    text += NEXT_IN_LINE_TEXT.format(handle=prompt_data.one_line(nxt["handle"]), price=nxt["price"])
+    return text, [SEND_LINK_OPTION, LEAVE_LISTED_OPTION]
 
 
 def _withdrew(ctx: ToolContext, params: dict) -> dict:
@@ -114,13 +124,16 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
     # The model paraphrases the buyer; a newline would split the notice into two messages.
     reason = " ".join(str(params["reason"]).split()).rstrip(". ")
     try:
-        return ctx.store.negotiate_withdraw(
+        result = ctx.store.negotiate_withdraw(
             thread["item_id"],
             thread["thread_id"],
             notice=lambda result: withdrawal_notice(reference, reason, result),
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+    # A reply pass answers a stranger: another buyer's handle and offer are for the seller only.
+    result.pop("next_buyer", None)
+    return result
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:
