@@ -686,17 +686,18 @@ def report_settled(deps: CrosslistDeps) -> int:
 MARKET_PLATFORMS = {
     "carousell": "EXTERNAL_PLATFORM_CAROUSELL",
     "fb": "EXTERNAL_PLATFORM_FACEBOOK_MARKETPLACE",
+    "craigslist": "EXTERNAL_PLATFORM_CRAIGSLIST",
 }
 
 
 def desired_external_urls(listing_urls: dict) -> list:
     """The external-URL set an item's rail listing should carry, platform-sorted: every recorded
-    listing URL whose market maps to a rail platform. The rail's own URL is not in the map, so it
-    can never point at itself."""
+    listing URL whose market maps to a rail platform and that is in the market's pinned shape, so a
+    Craigslist manage link, which carries the post's token, never goes public."""
     urls = [
         {"platform": MARKET_PLATFORMS[market], "url": url}
         for market, url in listing_urls.items()
-        if market in MARKET_PLATFORMS and url
+        if market in MARKET_PLATFORMS and url and marketplaces.is_canonical_listing_url(market, url)
     ]
     return sorted(urls, key=lambda entry: entry["platform"])
 
