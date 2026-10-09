@@ -1,5 +1,5 @@
-"""A buyer backing out: the ledger lets them go, an item they held goes back on the market, and the
-seller hears about it once — from the store, in the same transaction, not from the model's prose."""
+"""A buyer backing out is marked withdrawn, an item they held is released, and the store queues one
+notice for the seller in the same transaction."""
 
 from __future__ import annotations
 

@@ -324,13 +324,8 @@ class NegotiationMixin:
     def negotiate_withdraw(
         self, item_id: str, thread_id: str, *, notice: Callable[[dict], str]
     ) -> dict:
-        """A buyer backs out: mark them withdrawn, put the item back on the market if they held it,
-        and queue `notice(result)` for the seller in the same transaction.
-
-        Only a buyer with an offer on record is withdrawn or reported. One who only asked questions,
-        or who has already withdrawn, changes nothing, so a retried call never tells the seller
-        twice.
-        """
+        """Mark a buyer with an offer withdrawn, release the item if they held it, and queue
+        `notice(result)` in the same transaction. Anyone else, or a repeat call, changes nothing."""
         with self._db.transaction() as conn:
             self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)

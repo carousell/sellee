@@ -101,7 +101,7 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
     if thread is None or not thread.get("item_id"):
         raise ToolError(f"no sell thread with id {params['thread_id']!r}")
     reference = refs.thread_reference(ctx.store, thread["thread_id"])
-    # The model's paraphrase of a stranger's words: one line, or it stages a second message.
+    # The model paraphrases the buyer; a newline would split the notice into two messages.
     reason = " ".join(str(params["reason"]).split()).rstrip(". ")
 
     def notice(result: dict) -> str:
