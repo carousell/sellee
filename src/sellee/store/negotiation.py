@@ -324,8 +324,8 @@ class NegotiationMixin:
     def negotiate_withdraw(
         self, item_id: str, thread_id: str, *, notice: Callable[[dict], str]
     ) -> dict:
-        """Mark a buyer with an offer withdrawn, release the item if they held it, and queue
-        `notice(result)` in the same transaction. Anyone else, or a repeat call, changes nothing."""
+        """Mark a buyer withdrawn, release the item if they held it, and, if they had made an offer,
+        queue `notice(result)` in the same transaction. A repeat call changes nothing."""
         with self._db.transaction() as conn:
             self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
@@ -333,21 +333,28 @@ class NegotiationMixin:
                 raise StoreError("the item is already sold — escalate instead")
             buyer = led["buyers"].get(thread_id)
             was_holder = (led["front_runner"] or {}).get("thread_id") == thread_id
-            if buyer is None or buyer["status"] == "withdrew":
+            if buyer is not None and buyer["status"] == "withdrew":
                 return {
                     "withdrew": False,
                     "was_holder": False,
                     "item_state": led["state"],
                     "notice_id": None,
                 }
+            offered = buyer is not None
+            if buyer is None:
+                # Only asked questions: no offer to report, but follow-ups must still see them gone.
+                buyer = negotiate_engine.blank_buyer(_thread_handle(conn, thread_id))
+                led["buyers"][thread_id] = buyer
             buyer["status"] = "withdrew"
             if was_holder:
                 led["front_runner"] = None
                 led["state"] = "bidding" if led["is_bidding"] else "open"
             self._persist_negotiation(conn, item_id, led)
             result: dict = {"withdrew": True, "was_holder": was_holder, "item_state": led["state"]}
-            result["notice_id"] = _insert_notice(
-                conn, notice(result), ref=f"buyer-withdrew:{thread_id}"
+            result["notice_id"] = (
+                _insert_notice(conn, notice(result), ref=f"buyer-withdrew:{thread_id}")
+                if offered
+                else None
             )
             return result
 
@@ -657,6 +664,13 @@ class NegotiationMixin:
                 (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
             )
         return self.get_checkout(sale_id)  # type: ignore[return-value]
+
+
+def _thread_handle(conn, thread_id: str) -> str:
+    row = conn.execute(
+        "SELECT counterpart_handle FROM threads WHERE thread_id = ?", (thread_id,)
+    ).fetchone()
+    return row["counterpart_handle"] if row else thread_id
 
 
 def _money(amount, currency) -> str:

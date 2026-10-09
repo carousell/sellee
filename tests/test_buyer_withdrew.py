@@ -95,10 +95,7 @@ def test_a_withdrawal_touches_only_the_buyer_who_withdrew(store, ledger) -> None
     assert {t: b for t, b in after.items() if t != BUYERS[who]} == {
         t: b for t, b in before.items() if t != BUYERS[who]
     }
-    if BUYERS[who] in before:
-        assert after[BUYERS[who]]["status"] == "withdrew"
-    else:
-        assert BUYERS[who] not in after
+    assert after[BUYERS[who]]["status"] == "withdrew"
 
 
 @_PROPERTY
@@ -113,13 +110,16 @@ def test_the_seller_is_told_once_and_only_about_a_buyer_who_offered(store, ledge
     second = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
 
     assert _notice_count(store) == count + (1 if offered else 0)
-    assert first["withdrew"] is offered
+    assert first["withdrew"] is True
+    assert (first["notice_id"] is not None) is offered
     assert second["withdrew"] is False
 
 
 @_PROPERTY
 @given(ledger=_LEDGERS)
-def test_a_buyer_who_never_offered_withdraws_silently(store, ledger) -> None:
+def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_seller(
+    store, ledger
+) -> None:
     offers, confirm, _ = ledger
     item = _build(store, offers, confirm)
     before = store.negotiate_status(item["id"])
@@ -127,13 +127,15 @@ def test_a_buyer_who_never_offered_withdraws_silently(store, ledger) -> None:
 
     result = store.negotiate_withdraw(item["id"], "fb:only-asked", notice=_text)
 
+    after = store.negotiate_status(item["id"])
     assert result == {
-        "withdrew": False,
+        "withdrew": True,
         "was_holder": False,
         "item_state": before["item_state"],
         "notice_id": None,
     }
-    assert store.negotiate_status(item["id"]) == before
+    assert after["buyers"].pop("fb:only-asked") == {"status": "withdrew", "highest_offer": 0}
+    assert after == before
     assert _notice_count(store) == count
 
 
