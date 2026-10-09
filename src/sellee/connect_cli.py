@@ -13,7 +13,8 @@ Exit codes: 0 bound · 1 awaiting /start (timed out, re-runnable) · 2 bad token
 Interactive vs piped:
 
 - Interactive (stdin is a TTY): print short BotFather guidance, then read the token with
-  ``getpass`` — prompted and not echoed, so a credential never lands in the terminal scrollback.
+  ``getpass`` — each character echoes as ``*``, so a paste shows up but the credential never
+  lands in the terminal scrollback.
 - Piped / scripted / installer with a pipe (stdin is not a TTY): read one ``readline()`` with no
   prompt and no guidance, so a token can be fed in non-interactively.
 
@@ -59,11 +60,11 @@ _DEVELOPER_PORTAL_GUIDANCE = (
 
 
 def _read_token(interactive: bool, *, prompt: str = "Paste your BotFather bot token: ") -> str:
-    """Read the bot token. Interactive: a non-echoed getpass prompt (a credential must stay off
-    the scrollback). Piped: one readline, no prompt."""
+    """Read the bot token. Interactive: a getpass prompt echoing ``*`` per character (a credential
+    must stay off the scrollback, but a paste must show). Piped: one readline, no prompt."""
     if interactive:
         try:
-            return getpass.getpass(prompt).strip()
+            return getpass.getpass(prompt, echo_char="*").strip()
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)  # close the dangling prompt line
             return ""
