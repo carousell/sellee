@@ -278,7 +278,7 @@ def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
         assert store.has_withdrawn(item["id"], thread_id) is expected
 
 
-# --- after the withdrawal: the door stays open, but nobody chases them --------------------------
+# --- after the withdrawal: answered if they write, never followed up ----------------------------
 
 
 class _Sink:
@@ -295,7 +295,7 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
     make_ctx, store, ledger
 ) -> None:
     offers, confirm, who = ledger
-    # Threads outlive a Hypothesis example in the shared store, so each example has its own.
+    # The store is shared across Hypothesis examples, so each example uses its own thread ids.
     buyers = tuple(f"fb:{len(store.list_threads())}-{n}" for n in range(3))
     item = _build(store, offers, confirm, buyers)
     tid = buyers[who]
@@ -311,7 +311,7 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
     assert sink.sends == []
     store.record_inbound(tid, msg_id="back", text="actually is it still available?", ts=200.0)
     sent = dispatch("send_reply", {"thread_id": tid, "text": "It is!", "in_msg_id": "back"}, ctx)
-    # Paced rather than refused once the shared store's examples have spent fb's sends.
+    # Paced rather than refused once earlier examples have used up fb's send allowance.
     assert sent["status"] in ("sent", "wait")
 
 
