@@ -154,10 +154,12 @@ class NegotiationMixin:
             led = self._load_negotiation(conn, item_id)
             buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
             buyer["buyer_handle"] = handle
-            # A buyer who backed out and comes back is decided afresh, even at their old price.
+            # A buyer who backed out and comes back stands at this offer, not the one they dropped,
+            # and is decided again even at their old price.
             returning = buyer["status"] == "withdrew"
             if returning:
                 buyer["status"] = "active"
+                buyer["highest_offer"] = int(offer)
             if not negotiate_engine.record_offer(buyer, offer) and not returning:
                 # The same offer, handed to us again — a retrying lane, not a moving buyer. Answer
                 # from what we already told them and change nothing: re-deciding would walk the

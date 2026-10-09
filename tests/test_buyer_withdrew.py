@@ -334,6 +334,15 @@ def test_a_withdrawn_buyer_who_offers_again_is_back_in(store, ledger, price) -> 
     assert buyer["highest_offer"] >= price
 
 
+def test_a_returning_buyer_stands_at_their_new_offer_not_their_old_one(store) -> None:
+    item = _item(store)
+    _offer(store, item["id"], "fb:a", 150)
+    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+    _offer(store, item["id"], "fb:a", 110)
+    assert store.negotiate_status(item["id"])["buyers"]["fb:a"]["highest_offer"] == 110
+    assert _offer(store, item["id"], "fb:b", 120)["decision"] == "bid_lead"
+
+
 def test_a_returning_buyer_outbids_the_rival_again(store) -> None:
     item = _item(store)
     _offer(store, item["id"], "fb:a", 150)
