@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from sellee.installer import region
 
 
@@ -185,3 +192,104 @@ def test_zone_error_is_never_stricter_than_the_write_door() -> None:
         except BasicsError:
             refused_there = True
         assert refused_here == refused_there, name
+
+
+# --- the timezone as a place ---------------------------------------------------------------------
+
+_ZONE_TAB = """\
+# tz zone descriptions (fixture)
+ES\t+4024-00341\tEurope/Madrid\tSpain (mainland)
+ES\t+3553-00519\tAfrica/Ceuta\tCeuta, Melilla
+ES\t+2806-01524\tAtlantic/Canary\tCanary Islands
+FR\t+4852+00220\tEurope/Paris
+PT\t+3843-00908\tEurope/Lisbon\tPortugal (mainland)
+PT\t+3238-01654\tAtlantic/Madeira\tMadeira Islands
+PT\t+3744-02540\tAtlantic/Azores\tAzores
+US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
+US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+IN\t+2232+08822\tAsia/Kolkata
+XX\t+0000+00000\tNowhere/Atlantis\tA zone no database has
+"""
+
+
+@pytest.fixture
+def zone_tab(tmp_path):
+    path = tmp_path / "zone.tab"
+    path.write_text(_ZONE_TAB)
+    return str(path)
+
+
+def test_a_country_the_table_names_is_offered_as_its_cities_most_populous_first(zone_tab) -> None:
+    places = region.place_zones("US", zone_tab)
+    assert places[:4] == [
+        ("New York", "America/New_York"),
+        ("Chicago", "America/Chicago"),
+        ("Denver", "America/Denver"),
+        ("Los Angeles", "America/Los_Angeles"),
+    ]
+    assert len(places) == 12
+
+
+def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
+    assert region.place_zones("ES", zone_tab) == [
+        ("Spain (mainland)", "Europe/Madrid"),
+        ("Ceuta, Melilla", "Africa/Ceuta"),
+        ("Canary Islands", "Atlantic/Canary"),
+    ]
+
+
+def test_a_zone_tab_line_without_a_comment_is_labelled_by_its_city(zone_tab) -> None:
+    assert region.place_zones("FR", zone_tab) == [("Paris", "Europe/Paris")]
+
+
+def test_a_zone_the_database_does_not_have_is_never_offered(zone_tab) -> None:
+    assert region.place_zones("XX", zone_tab) == []
+
+
+def test_without_zone_tab_only_the_table_answers(tmp_path) -> None:
+    missing = str(tmp_path / "absent.tab")
+    assert region.place_zones("SG", missing) == [("Singapore", "Asia/Singapore")]
+    assert region.place_zones("ES", missing) == []
+
+
+@given(code=st.sampled_from(["US", "CA", "ID", "MY", "SG", "ES", "FR", "PT", "IN", "XX", "ZZ"]))
+def test_every_offered_place_is_a_zone_the_write_door_takes(code) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "zone.tab")
+        with open(path, "w") as handle:
+            handle.write(_ZONE_TAB)
+        for _label, zone in region.place_zones(code, path):
+            assert region.zone_error(zone) == "", zone
+
+
+def test_a_city_is_matched_ignoring_case_spaces_and_underscores(zone_tab) -> None:
+    assert region.zones_for_city("los angeles", zone_tab) == ["America/Los_Angeles"]
+    assert region.zones_for_city("LOS_ANGELES", zone_tab) == ["America/Los_Angeles"]
+    assert region.zones_for_city("  Madrid ", zone_tab) == ["Europe/Madrid"]
+
+
+def test_a_city_with_no_zone_of_its_own_matches_nothing(zone_tab) -> None:
+    assert region.zones_for_city("Barcelona", zone_tab) == []
+    assert region.zones_for_city("", zone_tab) == []
+
+
+def test_a_city_named_by_a_legacy_link_too_prefers_the_zone_tab_zone(zone_tab) -> None:
+    # America/Indianapolis is a legacy link to the zone.tab name; one city is one answer, not two.
+    assert region.zones_for_city("indianapolis", zone_tab) == ["America/Indiana/Indianapolis"]
+
+
+@settings(max_examples=60)
+@given(
+    zone=st.sampled_from(
+        ["America/Los_Angeles", "America/New_York", "Europe/Madrid", "Asia/Kolkata"]
+    ),
+    upper=st.booleans(),
+    spaced=st.booleans(),
+)
+def test_a_zones_own_city_always_finds_it(zone, upper, spaced) -> None:
+    city = zone.rsplit("/", 1)[-1]
+    typed = city.replace("_", " ") if spaced else city
+    typed = typed.upper() if upper else typed.lower()
+    found = region.zones_for_city(typed, "/nonexistent/zone.tab")
+    assert zone in found
+    assert all(region.zone_error(name) == "" for name in found)

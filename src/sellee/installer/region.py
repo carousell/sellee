@@ -47,18 +47,19 @@ _ZONE_REGIONS = {
     "America/Edmonton": "CA",
     "America/Winnipeg": "CA",
     "America/Halifax": "CA",
+    # Setup lists a country's zones in this order, so the most populous lead.
     "America/New_York": "US",
-    "America/Detroit": "US",
     "America/Chicago": "US",
     "America/Denver": "US",
-    "America/Phoenix": "US",
     "America/Los_Angeles": "US",
+    "America/Phoenix": "US",
     "America/Anchorage": "US",
+    "Pacific/Honolulu": "US",
+    "America/Detroit": "US",
     "America/Boise": "US",
     "America/Juneau": "US",
-    "America/Nome": "US",
     "America/Sitka": "US",
-    "Pacific/Honolulu": "US",
+    "America/Nome": "US",
 }
 
 # The legacy `US/Eastern`-style aliases, still what some machines report. `Australia/` is a
@@ -88,6 +89,72 @@ def region_for_zone(zone: str):
 def zones_for(region: str) -> list:
     """The zones this region is known by, in table order — the most populous first."""
     return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
+
+
+# The OS's list of zones by country, with a label per zone. Present on macOS and Debian; a
+# machine without it falls back to the table above, then to the seller typing a city.
+ZONE_TAB = "/usr/share/zoneinfo/zone.tab"
+
+
+def place_zones(region: str, zone_tab: str | None = None) -> list:
+    """The places a seller in this region picks a timezone by, as (label, zone) pairs.
+
+    The table above where it names the country, labelled by city; otherwise `zone.tab`, whose
+    labels ("Spain (mainland)", "Canary Islands") read better than the zone names they stand for.
+    """
+    zones = zones_for(region)
+    if zones:
+        return [(city_label(zone), zone) for zone in zones]
+    return [
+        (label or city_label(zone), zone)
+        for code, zone, label in _read_zone_tab(zone_tab)
+        if code == region and not zone_error(zone)
+    ]
+
+
+def zones_for_city(text: str, zone_tab: str | None = None) -> list:
+    """The zones whose city is `text`, ignoring case, spaces and underscores.
+
+    A city that a legacy link also names ("America/Indianapolis") counts once: when any match is
+    in `zone.tab`, only those are kept.
+    """
+    import zoneinfo
+
+    wanted = _city_key(text)
+    if not wanted:
+        return []
+    found = sorted(
+        zone
+        for zone in zoneinfo.available_timezones()
+        if _city_key(city_label(zone)) == wanted and not zone_error(zone)
+    )
+    listed = {zone for _, zone, _ in _read_zone_tab(zone_tab)}
+    return [zone for zone in found if zone in listed] or found
+
+
+def city_label(zone: str) -> str:
+    """A zone's city spelled as a place: "Los Angeles" for America/Los_Angeles."""
+    return zone.rsplit("/", 1)[-1].replace("_", " ")
+
+
+def _city_key(text: str) -> str:
+    return "".join(text.split()).replace("_", "").lower()
+
+
+def _read_zone_tab(path: str | None) -> list:
+    """(country, zone, label) per line of `zone.tab`, or none when it cannot be read."""
+    try:
+        with open(path or ZONE_TAB, encoding="utf-8") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        return []
+    rows = []
+    for line in lines:
+        fields = line.split("\t")
+        if line.startswith("#") or len(fields) < 3:
+            continue
+        rows.append((fields[0], fields[2], fields[3].strip() if len(fields) > 3 else ""))
+    return rows
 
 
 def default_zone(region: str, zone: str | None = None) -> str:
