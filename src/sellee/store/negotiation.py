@@ -266,6 +266,15 @@ class NegotiationMixin:
             },
         }
 
+    def has_withdrawn(self, item_id: str, thread_id: str) -> bool:
+        """Whether this thread's buyer backed out of this item and has not offered since."""
+        rows = self._db.query(
+            "SELECT 1 FROM negotiation_buyers "
+            "WHERE item_id = ? AND thread_id = ? AND status = 'withdrew'",
+            (item_id, thread_id),
+        )
+        return bool(rows)
+
     def negotiate_confirm_bid(self, item_id: str, thread_id: str) -> dict:
         with self._db.transaction() as conn:
             self._item_for_negotiation(conn, item_id)

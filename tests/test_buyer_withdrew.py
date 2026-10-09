@@ -263,3 +263,16 @@ def test_the_buyer_rulebook_names_withdrawal() -> None:
     assert "buyer_withdrew" in text
     for example in ("nvm i found another scarf", "I'll pass", "let me think about it"):
         assert example in text
+
+
+@_PROPERTY
+@given(ledger=_LEDGERS)
+def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
+    offers, confirm, who = ledger
+    item = _build(store, offers, confirm)
+    store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
+
+    buyers = store.negotiate_status(item["id"])["buyers"]
+    for thread_id in (*BUYERS, "fb:never-wrote"):
+        expected = buyers.get(thread_id, {}).get("status") == "withdrew"
+        assert store.has_withdrawn(item["id"], thread_id) is expected
