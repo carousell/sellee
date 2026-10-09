@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from sellee.db import Database
 from sellee.engines import buyer_negotiate as buyer_engine
@@ -14,6 +14,7 @@ from sellee.store.helpers import (
     ItemNotFound,
     StoreError,
     WantNotFound,
+    _insert_notice,
     _now,
 )
 
@@ -275,7 +276,7 @@ class NegotiationMixin:
             led["state"] = "reserved_provisional"
             led["buyers"][thread_id]["status"] = "won"
             for tid, b in led["buyers"].items():
-                if tid != thread_id and b.get("status") != "passed":
+                if tid != thread_id and b.get("status") not in negotiate_engine.NOT_STANDING:
                     b["status"] = "outbid"
             self._persist_negotiation(conn, item_id, led)
             return {
@@ -301,7 +302,7 @@ class NegotiationMixin:
             close = [
                 t
                 for t, b in led["buyers"].items()
-                if t != thread_id and b.get("status") not in ("lost", "passed")
+                if t != thread_id and b.get("status") not in negotiate_engine.NOT_STANDING
             ]
             for t in close:
                 led["buyers"][t]["status"] = "lost"
@@ -319,6 +320,41 @@ class NegotiationMixin:
                     b["status"] = "active"
             self._persist_negotiation(conn, item_id, led)
             return {"item_state": led["state"]}
+
+    def negotiate_withdraw(
+        self, item_id: str, thread_id: str, *, notice: Callable[[dict], str]
+    ) -> dict:
+        """A buyer backs out: mark them withdrawn, put the item back on the market if they held it,
+        and queue `notice(result)` for the seller in the same transaction.
+
+        Only a buyer with an offer on record is withdrawn or reported. One who only asked questions,
+        or who has already withdrawn, changes nothing, so a retried call never tells the seller
+        twice.
+        """
+        with self._db.transaction() as conn:
+            self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+            if led["state"] == "sold":
+                raise StoreError("the item is already sold — escalate instead")
+            buyer = led["buyers"].get(thread_id)
+            was_holder = (led["front_runner"] or {}).get("thread_id") == thread_id
+            if buyer is None or buyer["status"] == "withdrew":
+                return {
+                    "withdrew": False,
+                    "was_holder": False,
+                    "item_state": led["state"],
+                    "notice_id": None,
+                }
+            buyer["status"] = "withdrew"
+            if was_holder:
+                led["front_runner"] = None
+                led["state"] = "bidding" if led["is_bidding"] else "open"
+            self._persist_negotiation(conn, item_id, led)
+            result: dict = {"withdrew": True, "was_holder": was_holder, "item_state": led["state"]}
+            result["notice_id"] = _insert_notice(
+                conn, notice(result), ref=f"buyer-withdrew:{thread_id}"
+            )
+            return result
 
     # --- buy-side negotiation ---------------------------------------------------------------
 

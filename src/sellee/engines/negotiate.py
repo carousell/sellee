@@ -33,6 +33,8 @@ FIRMNESS_PRESETS = {
 # Its preset reproduces DEFAULTS exactly, so treating it as neutral changes no number — it only
 # avoids overwriting a tuned config with the values it already equals.
 NEUTRAL_FIRMNESS = "balanced"
+# Buyers whose offer no longer stands: sellee walked away, another buyer won, or they backed out.
+NOT_STANDING = ("passed", "lost", "withdrew")
 
 
 class BelowFloorError(AssertionError):
@@ -116,7 +118,7 @@ def record_offer(buyer: dict, offer, held_for_floor: bool = False) -> bool:
 def other_best(buyers: dict, thread_id: str) -> int:
     best = 0
     for tid, b in buyers.items():
-        if tid != thread_id and b.get("status") not in ("passed", "lost"):
+        if tid != thread_id and b.get("status") not in NOT_STANDING:
             best = max(best, b.get("highest_offer", 0))
     return best
 
