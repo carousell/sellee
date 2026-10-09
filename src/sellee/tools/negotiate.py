@@ -94,6 +94,16 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
 
 WITHDREW_TEXT = "A buyer backed out{about}: {reason}."
 BACK_ON_MARKET_TEXT = " It's back on the market."
+LINK_STILL_WORKS_TEXT = " Their checkout link still works, so I'll tell you if they pay anyway."
+
+
+def withdrawal_notice(reference: str, reason: str, result: dict) -> str:
+    text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
+    if result["was_holder"]:
+        text += BACK_ON_MARKET_TEXT
+    if result["checkout_url"]:
+        text += LINK_STILL_WORKS_TEXT
+    return text
 
 
 def _withdrew(ctx: ToolContext, params: dict) -> dict:
@@ -103,13 +113,12 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
     reference = refs.thread_reference(ctx.store, thread["thread_id"])
     # The model paraphrases the buyer; a newline would split the notice into two messages.
     reason = " ".join(str(params["reason"]).split()).rstrip(". ")
-
-    def notice(result: dict) -> str:
-        text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
-        return text + (BACK_ON_MARKET_TEXT if result["was_holder"] else "")
-
     try:
-        return ctx.store.negotiate_withdraw(thread["item_id"], thread["thread_id"], notice=notice)
+        return ctx.store.negotiate_withdraw(
+            thread["item_id"],
+            thread["thread_id"],
+            notice=lambda result: withdrawal_notice(reference, reason, result),
+        )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 

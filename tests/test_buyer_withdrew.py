@@ -9,6 +9,7 @@ from hypothesis import strategies as st
 
 from sellee.config import Config
 from sellee.store import Scope, Store, StoreError
+from sellee.tools import negotiate as negotiate_tools
 from sellee.tools.registry import ToolError, dispatch
 
 CFG = Config()
@@ -133,10 +134,47 @@ def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_selle
         "was_holder": False,
         "item_state": before["item_state"],
         "notice_id": None,
+        "checkout_url": None,
     }
     assert after["buyers"].pop("fb:only-asked") == {"status": "withdrew", "highest_offer": 0}
     assert after == before
     assert _notice_count(store) == count
+
+
+_LINK = "https://www.carousell.ai/checkout/c9e22772"
+
+
+def _withdrawal_text(result: dict) -> str:
+    return negotiate_tools.withdrawal_notice("Facebook · ks5qn · Scarf", "found another", result)
+
+
+@_PROPERTY
+@given(ledger=_LEDGERS, has_checkout=st.booleans())
+def test_a_buyer_with_a_checkout_link_is_told_about_once_with_a_warning(
+    store, ledger, has_checkout
+) -> None:
+    offers, confirm, who = ledger
+    item = _build(store, offers, confirm)
+    offered = BUYERS[who] in store.negotiate_status(item["id"])["buyers"]
+    if has_checkout:
+        store.record_checkout(
+            sale_id=f"sale-{item['id']}",
+            item_id=item["id"],
+            thread_id=BUYERS[who],
+            checkout_url=_LINK,
+            price=100.0,
+            currency="USD",
+        )
+    count = _notice_count(store)
+
+    first = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+
+    notices = store.list_queued_notices()[count:]
+    assert len(notices) == (1 if offered or has_checkout else 0)
+    assert first["checkout_url"] == (_LINK if has_checkout else None)
+    for notice in notices:
+        assert ("checkout link still works" in notice["text"]) is has_checkout
 
 
 # --- examples ----------------------------------------------------------------------------------

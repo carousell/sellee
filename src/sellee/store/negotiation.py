@@ -333,13 +333,19 @@ class NegotiationMixin:
     def negotiate_withdraw(
         self, item_id: str, thread_id: str, *, notice: Callable[[dict], str]
     ) -> dict:
-        """Mark a buyer withdrawn, release the item if they held it, and, if they had made an offer,
-        queue `notice(result)` in the same transaction. A repeat call changes nothing."""
+        """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer or a
+        checkout link, queue `notice(result)` in the same transaction. A repeat changes nothing."""
         with self._db.transaction() as conn:
             self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
             if led["state"] == "sold":
                 raise StoreError("the item is already sold — escalate instead")
+            checkout = conn.execute(
+                "SELECT checkout_url FROM checkouts WHERE item_id = ? AND thread_id = ? "
+                "ORDER BY issued_ts DESC LIMIT 1",
+                (item_id, thread_id),
+            ).fetchone()
+            checkout_url = checkout["checkout_url"] if checkout else None
             buyer = led["buyers"].get(thread_id)
             was_holder = (led["front_runner"] or {}).get("thread_id") == thread_id
             if buyer is not None and buyer["status"] == "withdrew":
@@ -348,6 +354,7 @@ class NegotiationMixin:
                     "was_holder": False,
                     "item_state": led["state"],
                     "notice_id": None,
+                    "checkout_url": None,
                 }
             offered = buyer is not None
             if buyer is None:
@@ -359,10 +366,15 @@ class NegotiationMixin:
                 led["front_runner"] = None
                 led["state"] = "bidding" if led["is_bidding"] else "open"
             self._persist_negotiation(conn, item_id, led)
-            result: dict = {"withdrew": True, "was_holder": was_holder, "item_state": led["state"]}
+            result: dict = {
+                "withdrew": True,
+                "was_holder": was_holder,
+                "item_state": led["state"],
+                "checkout_url": checkout_url,
+            }
             result["notice_id"] = (
                 _insert_notice(conn, notice(result), ref=f"buyer-withdrew:{thread_id}")
-                if offered
+                if offered or checkout_url
                 else None
             )
             return result
