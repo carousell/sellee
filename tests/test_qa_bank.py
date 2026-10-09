@@ -240,6 +240,36 @@ def test_the_sold_flow_reaches_the_take_down(make_ctx, store) -> None:
     assert res["status"] == "taken_down"
 
 
+def _sold_on(make_ctx, store, *, source):
+    item = _published(store)
+    store.create_thread(
+        thread_id="carousell-ai:sale",
+        side="sell",
+        market="carousell-ai",
+        counterpart_handle="friend",
+        item_id=item["id"],
+        source=source,
+    )
+    rail = FakeRail()
+    ctx = make_ctx("attended", rail_factory=lambda: rail)
+    dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "carousell-ai:sale"}, ctx
+    )
+    return rail
+
+
+def test_a_sale_the_seller_reports_archives_the_carousell_ai_listing(make_ctx, store) -> None:
+    """Sold to a friend, recorded under carousell.ai: no carousell.ai buyer bought it, so the
+    listing comes down rather than being spared as the winning marketplace's."""
+    rail = _sold_on(make_ctx, store, source="seller_reported_offline_sale")
+    assert rail.updates == [("abc", "archived")]
+
+
+def test_a_sale_to_a_carousell_ai_buyer_leaves_its_listing_to_carousell_ai(make_ctx, store) -> None:
+    rail = _sold_on(make_ctx, store, source="relay_read")
+    assert rail.updates == []
+
+
 def test_a_reply_pass_cannot_take_a_listing_down(store, bus) -> None:
     ctx = ToolContext(
         session=Session(tier="pass:reply", pass_id="p1", scope=Scope.of()),

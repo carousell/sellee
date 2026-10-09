@@ -285,6 +285,14 @@ class NegotiationMixin:
                 "tell_others": "outbid",
             }
 
+    @staticmethod
+    def _came_through_the_relay(conn, thread_id: str) -> bool:
+        """A carousell.ai buyer reaches sellee only through the relay, which imports the thread."""
+        row = conn.execute(
+            "SELECT source FROM threads WHERE thread_id = ?", (thread_id,)
+        ).fetchone()
+        return row is not None and row["source"] == "relay_read"
+
     def negotiate_confirm_sold(self, item_id: str, thread_id: str) -> dict:
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -295,6 +303,8 @@ class NegotiationMixin:
             led["sold_to"] = thread_id
             urls = json.loads(row["listing_urls"])
             won_platform = thread_id.split(":", 1)[0] if ":" in thread_id else None
+            if won_platform == "carousell-ai" and not self._came_through_the_relay(conn, thread_id):
+                won_platform = None  # a sale the seller reported, not a carousell.ai buyer's
             take_down = [
                 {"platform": p, "url": u} for p, u in urls.items() if u and p != won_platform
             ]
