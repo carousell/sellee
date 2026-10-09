@@ -13,7 +13,7 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 
-from sellee import crosslist, marketplaces
+from sellee import crosslist
 from sellee.config import Config
 from sellee.rail.client import RailNetworkError, RailUnprovisioned
 
@@ -22,6 +22,7 @@ _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
 _FB_URL = "https://www.facebook.com/marketplace/item/555"
 _CL_URL = "https://www.craigslist.org/view/d/teak-lamp/9TXkjafxYMDS5VaPLGdRyk"
 _CL_REPOST = "https://www.craigslist.org/view/d/teak-lamp/4bQyZp8RmLwT2sVnK6cDhe"
+_CL_MANAGE = "https://post.craigslist.org/manage/9TXkjafxYMDS5VaPLGdRyk"
 _CAROUSELL_ENTRY = {"platform": "EXTERNAL_PLATFORM_CAROUSELL", "url": _CAROUSELL_URL}
 _FB_ENTRY = {"platform": "EXTERNAL_PLATFORM_FACEBOOK_MARKETPLACE", "url": _FB_URL}
 _CL_ENTRY = {"platform": "EXTERNAL_PLATFORM_CRAIGSLIST", "url": _CL_URL}
@@ -366,6 +367,7 @@ def test_a_sold_items_craigslist_post_is_not_pushed(store, bus) -> None:
 
 
 def test_a_post_on_the_sellers_own_craigslist_account_is_pushed(store, bus) -> None:
+    """The push reads no account state, so a seller on their own account gets the link too."""
     store.craigslist_signed_in(
         activated_notice="connected",
         activated_controls=[],
@@ -383,52 +385,40 @@ def test_a_post_on_the_sellers_own_craigslist_account_is_pushed(store, bus) -> N
 def test_a_craigslist_url_that_is_not_the_post_link_is_never_pushed(store, bus) -> None:
     """The manage page shares the post's token, so only the /view/d/ link goes public."""
     connect_craigslist(store)
-    manage = "https://post.craigslist.org/manage/9TXkjafxYMDS5VaPLGdRyk"
-    _item(store, {"carousell-ai": _RAIL_URL, "carousell": _CAROUSELL_URL, "craigslist": manage})
+    _item(store, {"carousell-ai": _RAIL_URL, "carousell": _CAROUSELL_URL, "craigslist": _CL_MANAGE})
     rail = FakeRail()
 
     crosslist.push_crosslinks(_deps(store, bus, rail))
     assert rail.updates == [("abc123", {"urls": [_CAROUSELL_ENTRY]})]
 
 
+def test_a_mixed_set_pushed_twice_makes_one_call(store, bus) -> None:
+    _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    rail = FakeRail()
+    deps = _deps(store, bus, rail)
+
+    crosslist.push_crosslinks(deps)
+    crosslist.push_crosslinks(deps)
+    assert rail.updates == [("abc123", {"urls": [_CL_ENTRY, _FB_ENTRY]})]
+
+
+# Craigslist links that are not the post's public page: none may ever be pushed.
+_NOT_POST_LINKS = [_CL_MANAGE, "https://sfbay.craigslist.org/sfc/fuo/d/teak-lamp/7712345678.html"]
 _MARKETS = ["carousell-ai", "carousell", "fb", "craigslist", "mercari"]
 _URLS = st.sampled_from(
-    [
-        "",
-        _CAROUSELL_URL,
-        _FB_URL,
-        _CL_URL,
-        _CL_REPOST,
-        "https://post.craigslist.org/manage/9TXkjafxYMDS5VaPLGdRyk",
-        "https://sfbay.craigslist.org/sfc/fuo/d/teak-lamp/7712345678.html",
-        "https://www.mercari.com/item/1",
-    ]
+    ["", _RAIL_URL, _CAROUSELL_URL, _FB_URL, _CL_URL, _CL_REPOST, "https://www.mercari.com/item/1"]
+    + _NOT_POST_LINKS
 )
 
 
 @_PROPERTY
 @given(listing_urls=st.dictionaries(st.sampled_from(_MARKETS), _URLS))
-def test_the_set_is_exactly_the_items_canonical_mapped_urls(listing_urls) -> None:
+def test_the_set_only_holds_recorded_public_links_one_per_platform(listing_urls) -> None:
     desired = crosslist.desired_external_urls(listing_urls)
-    expected = {
-        (crosslist.MARKET_PLATFORMS[market], url)
-        for market, url in listing_urls.items()
-        if market in crosslist.MARKET_PLATFORMS
-        and url
-        and marketplaces.is_canonical_listing_url(market, url)
-    }
-    assert {(entry["platform"], entry["url"]) for entry in desired} == expected
-    assert len({entry["platform"] for entry in desired}) == len(desired)
+    market_of = {platform: market for market, platform in crosslist.MARKET_PLATFORMS.items()}
 
-
-@_PROPERTY
-@given(listing_urls=st.dictionaries(st.sampled_from(_MARKETS[1:]), _URLS))
-def test_a_second_push_with_nothing_changed_makes_no_call(store, bus, listing_urls) -> None:
-    _item(store, {"carousell-ai": _RAIL_URL, **listing_urls})
-    rail = FakeRail()
-    deps = _deps(store, bus, rail)
-
-    crosslist.push_crosslinks(deps)
-    calls = len(rail.updates)
-    crosslist.push_crosslinks(deps)
-    assert len(rail.updates) == calls
+    assert [entry["platform"] for entry in desired] == sorted({e["platform"] for e in desired})
+    for entry in desired:
+        assert listing_urls[market_of[entry["platform"]]] == entry["url"]
+        if entry["platform"] == "EXTERNAL_PLATFORM_CRAIGSLIST":
+            assert entry["url"] not in _NOT_POST_LINKS

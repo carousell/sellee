@@ -691,9 +691,8 @@ MARKET_PLATFORMS = {
 
 
 def desired_external_urls(listing_urls: dict) -> list:
-    """The external-URL set an item's rail listing should carry, platform-sorted: every recorded
-    listing URL whose market maps to a rail platform and that is in the market's pinned shape, so a
-    Craigslist manage link, which carries the post's token, never goes public."""
+    """The external-URL set for an item's rail listing, platform-sorted: each mapped market's URL in
+    its pinned shape, so a Craigslist manage link, which carries the post's token, stays out."""
     urls = [
         {"platform": MARKET_PLATFORMS[market], "url": url}
         for market, url in listing_urls.items()
