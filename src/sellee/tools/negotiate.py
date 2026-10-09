@@ -5,7 +5,8 @@ needs_floor result carries no number, and the below-floor assert in the engine i
 
 from __future__ import annotations
 
-from sellee import settings
+from sellee import prompt_data, settings
+from sellee.channel import refs
 from sellee.store import StoreError
 from sellee.tools import listing
 from sellee.tools.registry import (
@@ -91,6 +92,50 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     return result
 
 
+WITHDREW_TEXT = "A buyer backed out{about}: {reason}."
+BACK_ON_MARKET_TEXT = " It's back on the market."
+LINK_STILL_WORKS_TEXT = " Their checkout link still works, so I'll tell you if they pay anyway."
+
+
+NEXT_IN_LINE_TEXT = " Next in line: {handle} at {price}."
+SEND_LINK_OPTION = "🔗 Send them the link"
+LEAVE_LISTED_OPTION = "📌 Leave it listed"
+
+
+def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, list]:
+    """The seller's notice text and its tap options."""
+    text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
+    if result["was_holder"]:
+        text += BACK_ON_MARKET_TEXT
+    if result["checkout_url"]:
+        text += LINK_STILL_WORKS_TEXT
+    nxt = result["next_buyer"]
+    if nxt is None:
+        return text, [LEAVE_LISTED_OPTION]
+    text += NEXT_IN_LINE_TEXT.format(handle=prompt_data.one_line(nxt["handle"]), price=nxt["price"])
+    return text, [SEND_LINK_OPTION, LEAVE_LISTED_OPTION]
+
+
+def _withdrew(ctx: ToolContext, params: dict) -> dict:
+    thread = ctx.store.get_thread(params["thread_id"])
+    if thread is None or not thread.get("item_id"):
+        raise ToolError(f"no sell thread with id {params['thread_id']!r}")
+    reference = refs.thread_reference(ctx.store, thread["thread_id"])
+    # The model paraphrases the buyer; a newline would split the notice into two messages.
+    reason = " ".join(str(params["reason"]).split()).rstrip(". ")
+    try:
+        result = ctx.store.negotiate_withdraw(
+            thread["item_id"],
+            thread["thread_id"],
+            notice=lambda result: withdrawal_notice(reference, reason, result),
+        )
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    # A reply pass answers a stranger: another buyer's handle and offer are for the seller only.
+    result.pop("next_buyer", None)
+    return result
+
+
 def _release(ctx: ToolContext, params: dict) -> dict:
     try:
         return ctx.store.negotiate_release(params["item_id"])
@@ -167,5 +212,22 @@ register(
         input_schema=_ITEM_ONLY_SCHEMA,
         handler=_release,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="buyer_withdrew",
+        description="The buyer on this thread no longer wants the item. Marks them withdrawn, puts "
+        "the item back on the market if they held it, and tells the seller, so do not tell the "
+        "seller yourself. `reason` is a few words on why, in your words. Not for a buyer who is "
+        "only hesitating.",
+        input_schema={
+            "type": "object",
+            "properties": {"thread_id": {"type": "string"}, "reason": {"type": "string"}},
+            "required": ["thread_id", "reason"],
+            "additionalProperties": False,
+        },
+        handler=_withdrew,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
     )
 )

@@ -114,6 +114,10 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     if existing:
         return {"checkout_url": existing["checkout_url"], "already_issued": True}
 
+    # A link cannot be voided once sent, so an old tap must not reach a buyer who has since left.
+    if ctx.store.has_withdrawn(item_id, thread_id):
+        raise ToolError("this buyer backed out — tell the seller and offer who is next instead")
+
     # floor gate — the store returns only a status, never the floor value
     try:
         gate = ctx.store.checkout_floor_gate(item_id, price)

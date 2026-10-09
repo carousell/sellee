@@ -1,6 +1,7 @@
 {
   "pass:channel": [
     "add_qa_entry",
+    "buyer_withdrew",
     "carousell_ai_create_checkout_link",
     "carousell_ai_create_signin_link",
     "carousell_ai_publish_listing",
@@ -62,6 +63,7 @@
     "ui_cache_record"
   ],
   "pass:reply": [
+    "buyer_withdrew",
     "carousell_ai_create_checkout_link",
     "escalate",
     "get_item",
