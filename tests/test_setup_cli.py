@@ -685,7 +685,17 @@ def test_a_machine_zone_the_list_lacks_is_offered_first(zone_tab, monkeypatch) -
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Indiana/Indianapolis")
     zone, out = _ask_timezone("US", [""])
     assert zone == "America/Indiana/Indianapolis"
-    assert "1) Indianapolis\n2) New York\n" in out
+    assert "1) Indianapolis (this computer)\n2) New York\n" in out
+
+
+@pytest.mark.parametrize("machine", ["UTC", "Asia/Singapore"])
+def test_a_machine_zone_outside_the_country_stays_the_default(
+    zone_tab, monkeypatch, machine
+) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: machine)
+    zone, out = _ask_timezone("US", [""])
+    assert zone == machine
+    assert f"1) {region_guess.city_label(machine)} (this computer)\n2) New York\n" in out
 
 
 def test_a_zone_name_without_a_slash_is_taken_as_typed(zone_tab) -> None:

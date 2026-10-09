@@ -91,17 +91,14 @@ def zones_for(region: str) -> list:
     return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
 
 
-# The OS's list of zones by country, with a label per zone. Present on macOS and Debian; a
-# machine without it falls back to the table above, then to the seller typing a city.
+# The OS's zones by country, with labels. macOS and Debian ship it; without it setup uses the
+# table above, then asks for a city.
 ZONE_TAB = "/usr/share/zoneinfo/zone.tab"
 
 
 def place_zones(region: str, zone_tab: str | None = None) -> list:
-    """The places a seller in this region picks a timezone by, as (label, zone) pairs.
-
-    The table above where it names the country, labelled by city; otherwise `zone.tab`, whose
-    labels ("Spain (mainland)", "Canary Islands") read better than the zone names they stand for.
-    """
+    """(label, zone) pairs to offer for this region: the table above labelled by city, else
+    `zone.tab` with its own labels ("Spain (mainland)")."""
     zones = zones_for(region)
     if zones:
         return [(city_label(zone), zone) for zone in zones]
@@ -113,11 +110,8 @@ def place_zones(region: str, zone_tab: str | None = None) -> list:
 
 
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:
-    """The zones whose city is `text`, ignoring case, spaces and underscores.
-
-    A city that a legacy link also names ("America/Indianapolis") counts once: when any match is
-    in `zone.tab`, only those are kept.
-    """
+    """The zones whose city is `text`, ignoring case, spaces and underscores. When any match is
+    in `zone.tab`, only those are kept, so a legacy link does not count twice."""
     import zoneinfo
 
     wanted = _city_key(text)

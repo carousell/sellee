@@ -543,19 +543,16 @@ _SOMEWHERE_ELSE = "Somewhere else — type a city"
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:
-    """Ask where the seller is, and answer with a zone that can be stored, or "" when skipped.
-
-    Sellers know their city, not its zone name, so a country with several zones is a numbered
-    list of places and anything else is a city to type. A zone name typed is still taken. An
-    empty answer still skips: the zone is a convenience, and a finished install matters more.
-    """
+    """Ask for the seller's timezone as a place: a numbered list when the country has several
+    zones, else a city or zone name typed. Returns "" when skipped."""
     machine = region_guess.system_timezone()
     places = region_guess.place_zones(region)
     if len(places) < 2:
         return _ask_city(ui, machine or (places[0][1] if places else ""))
     zones = [zone for _, zone in places]
-    if machine and machine not in zones and region_guess.region_for_zone(machine) == region:
-        places = [(region_guess.city_label(machine), machine), *places]
+    # The stored zone is a claim about this machine, so it stays the default in any country.
+    if machine and machine not in zones:
+        places = [(f"{region_guess.city_label(machine)} (this computer)", machine), *places]
         zones = [machine, *zones]
     picked = ui.choose(
         "Which of these is your timezone?",
@@ -567,11 +564,8 @@ def _ask_timezone(ui: Ui, region: str) -> str:
 
 
 def _ask_city(ui: Ui, default: str) -> str:
-    """Ask for a city or a zone name until it resolves to a zone, or until it is skipped.
-
-    A city is named back before it is stored, because the match is by spelling alone.
-    A zone name is checked against the same rule the write door applies, so a typo re-asks here.
-    """
+    """Ask for a city or zone name until it resolves to a storable zone, or "" when skipped. A
+    city is confirmed before it is stored, because the match is by spelling alone."""
     question = "Timezone?" if default else "Which city are you in?"
     while True:
         answer = ui.ask(question, default=default, lead=False).strip()
