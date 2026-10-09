@@ -132,6 +132,12 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             f"thread is {thread['status']!r} — not eligible for a {kind} "
             "(terminal/held/escalated threads are never re-engaged)"
         )
+    if (
+        kind == "followup"
+        and thread["side"] == "sell"
+        and ctx.store.has_withdrawn(thread["item_id"], thread["thread_id"])
+    ):
+        raise ToolError("the buyer backed out — they are not followed up, only answered")
 
     # Acquire the send path before any reserve or intent, so "no browser" is refused with nothing
     # recorded: no pacing slot spent, and no pending intent for the sweep to escalate as a send
