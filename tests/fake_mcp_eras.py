@@ -38,6 +38,8 @@ class EraLog:
         # Modern only: reject an unsupported version header with JSON -32022, as the spec asks,
         # rather than go-sdk's plain-text 400.
         self.json_rejections = False
+        # Modern only: compare Mcp-Name without decoding it, as go-sdk v1.8.0 does.
+        self.literal_names = False
         # A tool list to serve, in either era; None passes tools/list on to the fake's own handler.
         # A modern server checks each call's Mcp-Param-* headers against these schemas.
         self.tools: list | None = None
@@ -58,6 +60,10 @@ def answer(handler, body: dict, log: EraLog) -> bool:
     """Write the server's answer when the protocol layer settles the request; False when the request
     reaches the tool handler."""
     settled = _answer(handler, body, log)
+    if not settled and body.get("method") == "tools/list" and log.tools is not None:
+        result = {"tools": log.tools}
+        _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
+        return True
     if not settled and body.get("method") == "tools/call":
         log.executed += 1
     return settled
@@ -105,10 +111,6 @@ def _answer(handler, body: dict, log: EraLog) -> bool:
         }
         _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result}, extra)
         return True
-    if method == "tools/list" and log.tools is not None:
-        result = {"tools": log.tools}
-        _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
-        return True
     if method == "notifications/initialized" and "id" not in body:
         log.ready.add(session)
         _empty(handler, 202)
@@ -126,15 +128,14 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
     if headers.get("mcp-method") != method:
         _error(handler, 400, body, -32020, "header mismatch: Mcp-Method")
         return True
-    if method in _NAMED_METHODS and decode(headers.get("mcp-name", "")) != params.get("name"):
+    named = headers.get("mcp-name", "")
+    if method in _NAMED_METHODS and (named if log.literal_names else decode(named)) != params.get(
+        "name"
+    ):
         _error(handler, 400, body, -32020, "header mismatch: Mcp-Name")
         return True
     if method == "tools/call" and log.tools is not None and not _params_match(headers, params, log):
         _error(handler, 400, body, -32020, "header mismatch: Mcp-Param")
-        return True
-    if method == "tools/list" and log.tools is not None:
-        result = {"tools": log.tools}
-        _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
         return True
     meta = params.get("_meta") or {}
     if meta.get(META_VERSION) != MODERN or not isinstance(meta.get(META_CAPABILITIES), dict):

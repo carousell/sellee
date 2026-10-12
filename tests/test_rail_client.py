@@ -790,6 +790,7 @@ def test_a_modern_error_on_a_modern_call_is_not_an_era_change() -> None:
         server.eras.refuse_calls = -32020
         with pytest.raises(RailToolRefused, match="-32020"):
             _client(base).call_tool("get_thread", {"id": "t1"})
+        assert server.eras.count("tools/list") == 1
         assert server.eras.count("server/discover") == 1
         assert server.eras.executed == 1
 
@@ -946,6 +947,55 @@ def test_a_tool_with_an_invalid_header_annotation_is_left_out(schema) -> None:
         client = _client(base)
         assert client.offers_tool("fine")
         assert not client.offers_tool("broken")
+
+
+@pytest.mark.parametrize(
+    ("value", "sent"),
+    [
+        ("us-west1", "us-west1"),
+        ("Hello, 世界", "=?base64?SGVsbG8sIOS4lueVjA==?="),
+        (" padded ", "=?base64?IHBhZGRlZCA=?="),
+        ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
+        ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
+        ("a\tb", "=?base64?YQli?="),
+    ],
+)
+def test_param_values_are_encoded_as_the_spec_shows(value, sent) -> None:
+    """The spec's own encoding table, plus an inner tab, which is a control character."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool()]
+        client = _client(base)
+        client.offers_tool("execute")
+        client.call_tool("execute", {"region": value})
+        assert _headers(server.eras.calls()[-1])["mcp-param-region"] == sent
+
+
+@pytest.mark.parametrize(("value", "sent"), [(5.0, "5"), (True, "true"), (42, "42")])
+def test_param_values_take_their_header_form(value, sent) -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool(kind="integer")]
+        client = _client(base)
+        client.offers_tool("execute")
+        try:
+            client.call_tool("execute", {"region": value})
+        except RailToolRefused:
+            pass
+        assert _headers(server.eras.calls()[0])["mcp-param-region"] == sent
+
+
+def test_a_non_ascii_tool_name_against_go_sdk_fails_after_one_refresh() -> None:
+    """go-sdk v1.8.0 compares Mcp-Name undecoded, so the Base64 name the spec requires is refused;
+    the client reads the tool list once, sends once more, then raises."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.literal_names = True
+        with pytest.raises(RailToolRefused, match="-32020"):
+            _client(base).call_tool("café", {})
+        assert len(server.eras.calls()) == 2
+        assert server.eras.count("tools/list") == 1
+        assert server.eras.executed == 0
 
 
 @pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])

@@ -174,7 +174,12 @@ class RailClient:
                 self._renew_session(era)
                 raise _http_error(exc) from exc
             code = _rpc_error_code(exc.body)
-            if era.modern and method == "tools/call" and code == _HEADER_MISMATCH:
+            if (
+                era.modern
+                and method == "tools/call"
+                and exc.status == 400
+                and code == _HEADER_MISMATCH
+            ):
                 return self._resend_with_fresh_headers(params, era)
             modern_refusal = era.modern and code in _MODERN_REFUSALS
             if exc.status != 400 or modern_refusal:
@@ -194,6 +199,7 @@ class RailClient:
         """A modern server refused the call's headers before running it. Its tool annotations may
         have changed: read them again and send the call once more."""
         self._remember_tools(self._rpc("tools/list").get("tools") or [])
+        _TOOL_LISTS.pop(self._era_key, None)
         try:
             return self._request("tools/call", params, era)[0]
         except _HTTPAnswer as exc:
@@ -222,10 +228,9 @@ class RailClient:
             value = arguments
             for key in path:
                 value = value.get(key) if isinstance(value, dict) else None
-            if value is None:
-                continue
-            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
-            headers["Mcp-Param-" + header] = _header_value(text)
+            text = _param_text(value)
+            if text is not None:
+                headers["Mcp-Param-" + header] = _header_value(text)
         return headers
 
     def _era(self) -> _Era:
@@ -313,12 +318,12 @@ class RailClient:
         if era.modern:
             params["_meta"] = {**params.get("_meta", {}), **_MODERN_META}
         message = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        named = {}
+        call_headers = {}
         if era.modern and method == "tools/call":
             name = str(params.get("name", ""))
-            named = {"Mcp-Name": _header_value(name)}
-            named.update(self._param_headers(name, params.get("arguments")))
-        raw, session_id = self._post(message, named, era)
+            call_headers = {"Mcp-Name": _header_value(name)}
+            call_headers.update(self._param_headers(name, params.get("arguments")))
+        raw, session_id = self._post(message, call_headers, era)
         try:
             envelope = json.loads(raw)
         except ValueError as exc:
@@ -337,7 +342,7 @@ class RailClient:
             raise RailNetworkError("rail response has no result object")
         return result, session_id
 
-    def _post(self, message: dict, named: dict, era: _Era) -> tuple[str, str]:
+    def _post(self, message: dict, call_headers: dict, era: _Era) -> tuple[str, str]:
         """POST one JSON-RPC message with `era`'s headers; returns the body and any session id."""
         headers = {
             "Content-Type": "application/json",
@@ -350,7 +355,7 @@ class RailClient:
         if era.modern:
             headers["MCP-Protocol-Version"] = _MODERN
             headers["Mcp-Method"] = message["method"]
-            headers.update(named)
+            headers.update(call_headers)
         elif era.version:
             headers["MCP-Protocol-Version"] = era.version
             if era.session_id:
@@ -643,16 +648,29 @@ def _left(stale: _Era, fresh: _Era) -> bool:
 
 _TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789" + string.ascii_letters)
 _HEADER_TYPES = ("string", "integer", "boolean")
-_SENTINEL = ("=?base64?", "?=")
+_SENTINEL_START = "=?base64?"
+_SENTINEL_END = "?="
 
 
 def _header_value(text: str) -> str:
-    """A header value as sent: plain when it is visible ASCII with no edge whitespace and no
-    sentinel shape, otherwise the UTF-8 bytes in the Base64 sentinel."""
-    plain = all(" " <= c <= "~" or c == "\t" for c in text) and text == text.strip(" \t")
-    if plain and not (text.startswith(_SENTINEL[0]) and text.endswith(_SENTINEL[1])):
+    """A header value as sent: plain when it is visible ASCII or inner spaces with no sentinel
+    shape, otherwise the UTF-8 bytes in the Base64 sentinel."""
+    plain = all(" " <= c <= "~" for c in text) and text == text.strip(" ")
+    if plain and not (text.startswith(_SENTINEL_START) and text.endswith(_SENTINEL_END)):
         return text
-    return _SENTINEL[0] + base64.b64encode(text.encode("utf-8")).decode("ascii") + _SENTINEL[1]
+    return _SENTINEL_START + base64.b64encode(text.encode("utf-8")).decode("ascii") + _SENTINEL_END
+
+
+def _param_text(value) -> str | None:
+    """An argument as header text, or None to omit the header: null and values with no header
+    form, which the server then refuses rather than sellee guessing a form."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return value if isinstance(value, str) else None
 
 
 def _header_params(schema) -> list | None:
