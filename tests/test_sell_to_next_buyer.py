@@ -273,20 +273,62 @@ def test_a_failed_mint_releases_the_reservation(make_ctx, store) -> None:
     assert sink.sends == []
 
 
-def test_a_link_that_could_not_be_sent_yet_goes_out_on_a_later_call(make_ctx, store) -> None:
+def test_a_link_that_could_not_be_sent_holds_nothing_and_goes_out_later(make_ctx, store) -> None:
+    """Holding the item for a buyer who never got the link would keep it from everyone else."""
     item, notice_id = _holder_backs_out(store)
+    before = store.negotiate_status(item["id"])
     rail = FakeRail()
 
     first = dispatch(
         "sell_to_next_buyer", {"notice_id": notice_id}, _ctx(make_ctx, rail, sink=None)
     )
-    sink = Sink()
-    second = _sell(make_ctx, notice_id, rail, sink)
 
     assert first["delivered"] == "no"
-    assert store.negotiate_status(item["id"])["front_runner"]["thread_id"] == "fb:b"
+    assert store.negotiate_status(item["id"]) == before
+    sink = Sink()
+    second = _sell(make_ctx, notice_id, rail, sink)
     assert second["status"] == "sent" and len(sink.sends) == 1
+    assert store.negotiate_status(item["id"])["front_runner"]["thread_id"] == "fb:b"
     assert len(rail.minted) == 1  # the link minted the first time is the one sent
+
+
+def test_another_send_in_flight_is_not_taken_for_ours(make_ctx, store) -> None:
+    """`in_flight` is some other message being typed on that thread; ours never left."""
+    from sellee.tools import reply
+
+    item, notice_id = _holder_backs_out(store)
+    before = store.negotiate_status(item["id"])
+    sink = Sink()
+    reply._SENDING.add("fb:b")
+    try:
+        first = _sell(make_ctx, notice_id, FakeRail(), sink)
+    finally:
+        reply._SENDING.discard("fb:b")
+
+    assert first["status"] == "in_flight" and sink.sends == []
+    assert store.negotiate_status(item["id"]) == before
+    assert _sell(make_ctx, notice_id, FakeRail(), sink)["status"] == "sent"
+
+
+def test_a_send_that_may_have_landed_is_never_repeated(make_ctx, store) -> None:
+    class UnverifiedSink:
+        def __init__(self):
+            self.sends = 0
+
+        def send(self, thread, text, kind, intent_id):
+            self.sends += 1
+            store.mark_intent_sent_unverified(intent_id)
+            raise RuntimeError("could not read the message back")
+
+    item, notice_id = _holder_backs_out(store)
+    sink = UnverifiedSink()
+
+    first = _sell(make_ctx, notice_id, FakeRail(), sink)
+    again = _sell(make_ctx, notice_id, FakeRail(), sink)
+
+    assert first["status"] == "send_unverified" and again["status"] == "already_sent"
+    assert sink.sends == 1
+    assert store.negotiate_status(item["id"])["front_runner"]["thread_id"] == "fb:b"
 
 
 def test_a_second_link_out_is_flagged(make_ctx, store) -> None:

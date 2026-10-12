@@ -153,9 +153,14 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
 
 
 BUYER_LINK_TEXT = "Good news: it's yours for {price} if you still want it. Checkout here: {url}"
-# A send that may have reached the buyer counts as sent: the one thing worse than an unconfirmed
-# link is the same link twice.
-_REACHED = ("yes", "unknown")
+# The send statuses after which our link may be with the buyer: sent, or typed and not read back.
+# Never sent twice, since the one thing worse than an unconfirmed link is the same link twice.
+# `in_flight` is not one of them: that is another message on the thread, and ours never left.
+_REACHED = ("sent", "send_unverified")
+_NOT_SENT = (
+    "the link did not go out, so the item is not held for them; acting on this notice again "
+    "sends it"
+)
 
 
 def _sell_to_next_buyer(ctx: ToolContext, params: dict) -> dict:
@@ -173,14 +178,16 @@ def _sell_to_next_buyer(ctx: ToolContext, params: dict) -> dict:
     if held["already_sent"]:
         return {"status": "already_sent", **summary}
     url = _mint_or_let_go(ctx, held)
-    retry = "the item is held for them and the link is ready; act on this notice again to send it"
     text = BUYER_LINK_TEXT.format(price=held["price"], url=url)
     try:
         sent = reply._send_reply(ctx, {"thread_id": held["thread_id"], "text": text})
     except ToolError as exc:
-        return {"status": "not_sent", "delivered": "no", "detail": f"{exc}; {retry}", **summary}
-    if sent["delivered"] not in _REACHED:
-        return {**sent, "detail": retry, **summary}
+        sent = {"status": "refused", "delivered": "no", "reason": str(exc)}
+    if sent["status"] not in _REACHED:
+        # A hold stands only once the link may be with the buyer; otherwise it keeps the item from
+        # everyone else for a link nobody has.
+        _let_go(ctx, held)
+        return {**sent, "detail": _NOT_SENT, **summary}
     ctx.store.mark_next_buyer_sent(notice_id)
     return {
         "status": sent["status"],
@@ -208,6 +215,12 @@ def _check_sendable(ctx: ToolContext, notice_id: int) -> None:
         )
 
 
+def _let_go(ctx: ToolContext, held: dict) -> None:
+    """Undo the hold this call made; one the buyer already had stands."""
+    if held["reserved_now"]:
+        ctx.store.negotiate_unreserve(held["item_id"], held["thread_id"])
+
+
 def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
     """The checkout link at the held price. A link that cannot be minted lets go of a hold this
     call made, so a failed tap never leaves the item reserved for nobody's link."""
@@ -216,8 +229,7 @@ def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
             ctx, held["item_id"], held["thread_id"], held["amount"], seller_named_price=True
         )
     except Exception as exc:
-        if held["reserved_now"]:
-            ctx.store.negotiate_unreserve(held["item_id"], held["thread_id"])
+        _let_go(ctx, held)
         if not isinstance(exc, ToolError):
             raise
         raise ToolError(
