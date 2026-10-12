@@ -672,15 +672,16 @@ def _relay(era: str, ttl_ms):
 
 
 @contextmanager
-def _clock(monkeypatch_target):
-    """A clock the test moves by hand, in seconds."""
+def _clock(module):
+    """A clock the test moves by hand, in seconds. Not `monkeypatch`: Hypothesis rejects a
+    function-scoped fixture under @given."""
     now = [1000.0]
-    original = monkeypatch_target._monotonic
-    monkeypatch_target._monotonic = lambda: now[0]
+    original = module._monotonic
+    module._monotonic = lambda: now[0]
     try:
         yield now
     finally:
-        monkeypatch_target._monotonic = original
+        module._monotonic = original
 
 
 @settings(max_examples=30, deadline=None)
@@ -709,6 +710,19 @@ def test_the_tool_list_is_fetched_every_time_without_a_usable_ttl(era, ttl_ms) -
             assert _client(base).offers_tool("list_threads")
             assert not _client(base).offers_tool("create_photo_upload_url")
         assert state.eras.count("tools/list") == 6
+
+
+def test_concurrent_misses_fetch_the_tool_list_once() -> None:
+    with _relay("modern", 60_000) as (state, base):
+        workers = [
+            threading.Thread(target=lambda: _client(base).offers_tool("list_threads"))
+            for _ in range(6)
+        ]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        assert state.eras.count("tools/list") == 1
 
 
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.

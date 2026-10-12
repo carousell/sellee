@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from tests.fake_mcp_eras import MODERN, EraLog, answer
+from tests.fake_mcp_eras import EraLog, answer
 
 
 def rfc3339(ts: float) -> str:
@@ -51,7 +51,7 @@ class FakeRelay:
         self.registration_email = "seller-token@inbox.carousell.ai"
         # The protocol era the server speaks, and every MCP request it saw.
         self.eras = EraLog()
-        # The ttlMs a modern server puts on tools/list; None leaves the field out.
+        # The ttlMs the server puts on tools/list in either era; None leaves the field out.
         self.tools_ttl_ms = None
 
     def tick(self) -> float:
@@ -258,9 +258,8 @@ class _Handler(BaseHTTPRequestHandler):
             return
         if body.get("method") == "tools/list":
             result: dict = {"tools": [{"name": n} for n in _TOOLS]}
-            modern = self.headers.get("MCP-Protocol-Version") == MODERN
-            if modern and relay.tools_ttl_ms is not None:
-                result.update(ttlMs=relay.tools_ttl_ms, cacheScope="private")
+            if relay.tools_ttl_ms is not None:
+                result["ttlMs"] = relay.tools_ttl_ms
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
             return
         if body.get("method") != "tools/call":
