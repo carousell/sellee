@@ -106,9 +106,9 @@ If a checkout link has already gone to another buyer, say so in the same message
 **Checkout links** below sets out.
 
 **Checkout links.** A link, once sent, cannot be withdrawn or voided; it expires on its own.
-There is no bidding feature: if two buyers hold links, whoever pays first gets the item at the
-price on their link, and carousell.ai refunds the other automatically, so there are never two
-paid orders. Tell the seller this whenever a second link is about to go out for the same item;
+Links don't auction: if two buyers hold links, whoever pays first gets the item at the price on
+their link, and carousell.ai refunds the other automatically, so there are never two paid
+orders. Tell the seller this whenever a second link is about to go out for the same item;
 never promise that the higher bidder will get it, only that they get it if they pay first.
 
 **A buyer backed out.** The notice already told the seller who left and why, and named the next
