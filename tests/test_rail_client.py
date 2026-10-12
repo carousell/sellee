@@ -11,13 +11,14 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from tests.fake_mcp_eras import MODERN, EraLog, answer
+from tests.fake_mcp_eras import MODERN, EraLog, answer, decode
 
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
     RailNetworkError,
     RailToolError,
+    RailToolRefused,
     _forget_eras,
     _text_content,
     listing_id_from_url,
@@ -573,7 +574,13 @@ def test_call_tool_returns_the_structured_content_in_either_era(era, structured)
         assert _client(base).call_tool("get_thread", {"id": "t1"}) == structured
 
 
-_tool_names = st.text(alphabet=string.ascii_letters + string.digits + "_-", min_size=1, max_size=40)
+# Any name a server could list, including non-ASCII, padded and sentinel-shaped ones.
+_tool_names = st.one_of(
+    st.text(alphabet=string.ascii_letters + string.digits + "_-", min_size=1, max_size=40),
+    st.text(min_size=1, max_size=20).filter(lambda n: "\x00" not in n),
+    st.builds(lambda inner: f"=?base64?{inner}?=", st.text(string.ascii_letters, max_size=8)),
+    st.builds(lambda inner: f" {inner} ", st.text(string.ascii_letters, max_size=8)),
+)
 
 
 @settings(max_examples=40, deadline=None)
@@ -589,7 +596,7 @@ def test_modern_headers_match_the_body(name, arguments) -> None:
             meta = request["params"]["_meta"]
             assert meta["io.modelcontextprotocol/protocolVersion"] == MODERN
         (call,) = server.eras.calls()
-        assert _headers(call)["mcp-name"] == call["params"]["name"] == name
+        assert decode(_headers(call)["mcp-name"]) == call["params"]["name"] == name
         assert call["params"]["arguments"] == arguments
 
 
@@ -781,7 +788,7 @@ def test_a_modern_error_on_a_modern_call_is_not_an_era_change() -> None:
         server.tool_result = {"structuredContent": {}}
         _client(base).call_tool("get_thread", {"id": "t1"})
         server.eras.refuse_calls = -32020
-        with pytest.raises(RailNetworkError):
+        with pytest.raises(RailToolRefused, match="-32020"):
             _client(base).call_tool("get_thread", {"id": "t1"})
         assert server.eras.count("server/discover") == 1
         assert server.eras.executed == 1
@@ -837,6 +844,108 @@ def test_a_legacy_400_from_a_dual_era_server_is_raised_and_never_resent() -> Non
         with pytest.raises(RailNetworkError):
             client.create_listing({"title": "y"})
         assert len(server.eras.calls()) == 2
+
+
+# --- Mcp-Param-* headers mirror a tool's x-mcp-header arguments ---------------------------------
+
+
+def _annotated_tool(header="Region", kind="string", nested=False) -> dict:
+    prop = {"type": kind, "x-mcp-header": header}
+    properties = (
+        {"where": {"type": "object", "properties": {"region": prop}}}
+        if nested
+        else {"region": prop}
+    )
+    return {
+        "name": "execute",
+        "inputSchema": {
+            "type": "object",
+            "properties": {**properties, "query": {"type": "string"}},
+        },
+    }
+
+
+def _region(arguments: dict, nested: bool):
+    return (arguments.get("where") or {}).get("region") if nested else arguments.get("region")
+
+
+_header_values = st.one_of(
+    st.none(),
+    st.booleans(),
+    st.integers(min_value=-(2**53) + 1, max_value=2**53 - 1),
+    st.text(max_size=20).filter(lambda t: "\x00" not in t),
+)
+
+
+@settings(max_examples=50, deadline=None)
+@given(value=_header_values, nested=st.booleans())
+def test_mcp_param_headers_carry_every_annotated_argument(value, nested) -> None:
+    """The modern fake refuses a call whose Mcp-Param-* headers do not decode to the body, so a
+    served call is the proof; the header is also read back here."""
+    kind = (
+        "boolean" if isinstance(value, bool) else "integer" if isinstance(value, int) else "string"
+    )
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool(kind=kind, nested=nested)]
+        client = _client(base)
+        client.offers_tool("execute")
+        args = {"where": {"region": value}} if nested else {"region": value}
+        assert client.call_tool("execute", {**args, "query": "q"}) == {"ok": True}
+        (call,) = server.eras.calls()
+        header = _headers(call).get("mcp-param-region")
+        if _region(call["params"]["arguments"], nested) is None:
+            assert header is None
+        else:
+            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            assert decode(header) == text
+
+
+def test_a_header_mismatch_refreshes_the_tool_list_and_retries_once() -> None:
+    """The server added an annotation after the client cached its tool list."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [{"name": "execute", "inputSchema": {"type": "object"}}]
+        client = _client(base)
+        client.offers_tool("execute")
+        server.eras.tools = [_annotated_tool()]
+        assert client.call_tool("execute", {"region": "us-west1"}) == {"ok": True}
+        assert server.eras.count("tools/list") == 2
+        assert len(server.eras.calls()) == 2
+        assert server.eras.executed == 1
+        assert _headers(server.eras.calls()[-1])["mcp-param-region"] == "us-west1"
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "properties": {"r": {"type": "number", "x-mcp-header": "R"}}},
+        {"type": "object", "properties": {"r": {"type": "string", "x-mcp-header": ""}}},
+        {"type": "object", "properties": {"r": {"type": "string", "x-mcp-header": "Bad Name"}}},
+        {
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "x-mcp-header": "Same"},
+                "b": {"type": "string", "x-mcp-header": "same"},
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "l": {"type": "array", "items": {"type": "string", "x-mcp-header": "Item"}}
+            },
+        },
+    ],
+)
+def test_a_tool_with_an_invalid_header_annotation_is_left_out(schema) -> None:
+    with _serving("modern") as (server, base):
+        server.eras.tools = [
+            {"name": "broken", "inputSchema": schema},
+            {"name": "fine", "inputSchema": {"type": "object"}},
+        ]
+        client = _client(base)
+        assert client.offers_tool("fine")
+        assert not client.offers_tool("broken")
 
 
 @pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])

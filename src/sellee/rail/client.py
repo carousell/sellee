@@ -10,10 +10,12 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import functools
 import hashlib
 import json
+import string
 import threading
 import time
 import urllib.error
@@ -37,7 +39,8 @@ _MODERN = "2026-07-28"
 _LEGACY = "2025-06-18"
 _LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # JSON-RPC errors only a 2026-07-28 server sends, so a probe answered with one met a modern server.
-_MODERN_ERRORS = (-32020, -32021)
+_HEADER_MISMATCH = -32020
+_MODERN_ERRORS = (_HEADER_MISMATCH, -32021)
 _UNSUPPORTED_VERSION = -32022
 # go-sdk v1.6.1 and v1.8.0 refuse a version header with this text, before dispatching anything.
 _GO_SDK_VERSION_REFUSAL = "Bad Request: Unsupported protocol version"
@@ -117,6 +120,9 @@ class _ToolList:
 # Modern tools/list results, by the same key. The lock is apart from the probe's, which a fetch's
 # own request may take, so concurrent misses fetch once without deadlocking.
 _TOOL_LISTS: dict[str, _ToolList] = {}
+# The last tool list seen in either era, by the same key: each tool's input schema, for mirroring
+# annotated arguments into Mcp-Param-* headers.
+_TOOL_SCHEMAS: dict[str, dict[str, dict]] = {}
 _TOOL_LIST_LOCK = threading.Lock()
 _monotonic = time.monotonic
 
@@ -127,6 +133,7 @@ def _forget_eras() -> None:
         _ERAS.clear()
         _ERA_LOCKS.clear()
         _TOOL_LISTS.clear()
+        _TOOL_SCHEMAS.clear()
 
 
 class _HTTPAnswer(Exception):
@@ -166,7 +173,10 @@ class RailClient:
                 # this one: the 404 cannot prove the call did not run.
                 self._renew_session(era)
                 raise _http_error(exc) from exc
-            modern_refusal = era.modern and _rpc_error_code(exc.body) in _MODERN_REFUSALS
+            code = _rpc_error_code(exc.body)
+            if era.modern and method == "tools/call" and code == _HEADER_MISMATCH:
+                return self._resend_with_fresh_headers(params, era)
+            modern_refusal = era.modern and code in _MODERN_REFUSALS
             if exc.status != 400 or modern_refusal:
                 raise _http_error(exc) from exc
             refused = exc
@@ -179,6 +189,44 @@ class RailClient:
             return self._request(method, params, fresh)[0]
         except _HTTPAnswer as exc:
             raise _http_error(exc) from exc
+
+    def _resend_with_fresh_headers(self, params: dict | None, era: _Era) -> dict:
+        """A modern server refused the call's headers before running it. Its tool annotations may
+        have changed: read them again and send the call once more."""
+        self._remember_tools(self._rpc("tools/list").get("tools") or [])
+        try:
+            return self._request("tools/call", params, era)[0]
+        except _HTTPAnswer as exc:
+            if _rpc_error_code(exc.body) == _HEADER_MISMATCH:
+                raise RailToolRefused(
+                    f"rail refused the call's headers ({_HEADER_MISMATCH})", code=_HEADER_MISMATCH
+                ) from exc
+            raise _http_error(exc) from exc
+
+    def _remember_tools(self, tools: list) -> list:
+        """Keep the tools whose header annotations are valid, and their schemas for mirroring."""
+        kept = [
+            t
+            for t in tools
+            if isinstance(t, dict) and _header_params(t.get("inputSchema")) is not None
+        ]
+        _TOOL_SCHEMAS[self._era_key] = {
+            str(t.get("name")): t.get("inputSchema") or {} for t in kept
+        }
+        return kept
+
+    def _param_headers(self, name: str, arguments: object) -> dict:
+        schema = (_TOOL_SCHEMAS.get(self._era_key) or {}).get(name)
+        headers = {}
+        for path, header in _header_params(schema) or []:
+            value = arguments
+            for key in path:
+                value = value.get(key) if isinstance(value, dict) else None
+            if value is None:
+                continue
+            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            headers["Mcp-Param-" + header] = _header_value(text)
+        return headers
 
     def _era(self) -> _Era:
         era = _ERAS.get(self._era_key)
@@ -223,6 +271,7 @@ class RailClient:
                 return current
             _ERAS.pop(self._era_key, None)
             _TOOL_LISTS.pop(self._era_key, None)
+            _TOOL_SCHEMAS.pop(self._era_key, None)
             return self._probe()
 
     def _renew_session(self, stale: _Era) -> None:
@@ -264,8 +313,12 @@ class RailClient:
         if era.modern:
             params["_meta"] = {**params.get("_meta", {}), **_MODERN_META}
         message = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        name = str(params.get("name", "")) if method == "tools/call" else ""
-        raw, session_id = self._post(message, name, era)
+        named = {}
+        if era.modern and method == "tools/call":
+            name = str(params.get("name", ""))
+            named = {"Mcp-Name": _header_value(name)}
+            named.update(self._param_headers(name, params.get("arguments")))
+        raw, session_id = self._post(message, named, era)
         try:
             envelope = json.loads(raw)
         except ValueError as exc:
@@ -284,7 +337,7 @@ class RailClient:
             raise RailNetworkError("rail response has no result object")
         return result, session_id
 
-    def _post(self, message: dict, tool_name: str, era: _Era) -> tuple[str, str]:
+    def _post(self, message: dict, named: dict, era: _Era) -> tuple[str, str]:
         """POST one JSON-RPC message with `era`'s headers; returns the body and any session id."""
         headers = {
             "Content-Type": "application/json",
@@ -297,8 +350,7 @@ class RailClient:
         if era.modern:
             headers["MCP-Protocol-Version"] = _MODERN
             headers["Mcp-Method"] = message["method"]
-            if tool_name:
-                headers["Mcp-Name"] = tool_name
+            headers.update(named)
         elif era.version:
             headers["MCP-Protocol-Version"] = era.version
             if era.session_id:
@@ -334,7 +386,7 @@ class RailClient:
             if cached is not None and _monotonic() < cached.stale_at:
                 return list(cached.tools)
             result = self._rpc("tools/list")
-            tools = result.get("tools") or []
+            tools = self._remember_tools(result.get("tools") or [])
             ttl_ms = result.get("ttlMs")
             if self._era().modern and isinstance(ttl_ms, int) and ttl_ms > 0:
                 _TOOL_LISTS[self._era_key] = _ToolList(_monotonic() + ttl_ms / 1000, list(tools))
@@ -587,6 +639,58 @@ def _left(stale: _Era, fresh: _Era) -> bool:
     if stale.modern:
         return not fresh.modern
     return fresh.modern and bool(fresh.supported) and stale.version not in fresh.supported
+
+
+_TCHAR = frozenset("!#$%&'*+-.^_`|~0123456789" + string.ascii_letters)
+_HEADER_TYPES = ("string", "integer", "boolean")
+_SENTINEL = ("=?base64?", "?=")
+
+
+def _header_value(text: str) -> str:
+    """A header value as sent: plain when it is visible ASCII with no edge whitespace and no
+    sentinel shape, otherwise the UTF-8 bytes in the Base64 sentinel."""
+    plain = all(" " <= c <= "~" or c == "\t" for c in text) and text == text.strip(" \t")
+    if plain and not (text.startswith(_SENTINEL[0]) and text.endswith(_SENTINEL[1])):
+        return text
+    return _SENTINEL[0] + base64.b64encode(text.encode("utf-8")).decode("ascii") + _SENTINEL[1]
+
+
+def _header_params(schema) -> list | None:
+    """Each annotated argument's path and header name, or None when an annotation breaks the
+    spec's rules, which leaves the whole tool out. A schema with no annotations gives []."""
+    found: list = []
+
+    def walk(node, path, on_chain: bool) -> bool:
+        if isinstance(node, list):
+            return all(walk(child, (), False) for child in node)
+        if not isinstance(node, dict):
+            return True
+        if "x-mcp-header" in node:
+            name = node["x-mcp-header"]
+            if not (
+                on_chain
+                and path
+                and node.get("type") in _HEADER_TYPES
+                and isinstance(name, str)
+                and name
+                and set(name) <= _TCHAR
+            ):
+                return False
+            found.append((path, name))
+        for key, child in node.items():
+            if key == "properties" and on_chain and isinstance(child, dict):
+                if not all(walk(sub, path + (prop,), True) for prop, sub in child.items()):
+                    return False
+            elif key != "x-mcp-header" and not walk(child, (), False):
+                return False
+        return True
+
+    if schema is None:
+        return []
+    if not walk(schema, (), True):
+        return None
+    names = [name.lower() for _, name in found]
+    return found if len(names) == len(set(names)) else None
 
 
 def _http_error(answer: _HTTPAnswer) -> RailNetworkError:

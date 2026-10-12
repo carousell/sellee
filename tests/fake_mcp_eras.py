@@ -3,6 +3,7 @@ stateless (bazaar today), `modern` as a dual-era go-sdk v1.8.0 server with State
 
 from __future__ import annotations
 
+import base64
 import json
 
 MODERN = "2026-07-28"
@@ -37,6 +38,9 @@ class EraLog:
         # Modern only: reject an unsupported version header with JSON -32022, as the spec asks,
         # rather than go-sdk's plain-text 400.
         self.json_rejections = False
+        # A tool list to serve, in either era; None passes tools/list on to the fake's own handler.
+        # A modern server checks each call's Mcp-Param-* headers against these schemas.
+        self.tools: list | None = None
         # The tools/call requests that reached a tool, as opposed to ones refused before it.
         self.executed = 0
         # Modern only: a JSON-RPC error code to answer server/discover with, at HTTP 200.
@@ -101,6 +105,10 @@ def _answer(handler, body: dict, log: EraLog) -> bool:
         }
         _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result}, extra)
         return True
+    if method == "tools/list" and log.tools is not None:
+        result = {"tools": log.tools}
+        _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
+        return True
     if method == "notifications/initialized" and "id" not in body:
         log.ready.add(session)
         _empty(handler, 202)
@@ -118,8 +126,15 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
     if headers.get("mcp-method") != method:
         _error(handler, 400, body, -32020, "header mismatch: Mcp-Method")
         return True
-    if method in _NAMED_METHODS and headers.get("mcp-name") != params.get("name"):
+    if method in _NAMED_METHODS and decode(headers.get("mcp-name", "")) != params.get("name"):
         _error(handler, 400, body, -32020, "header mismatch: Mcp-Name")
+        return True
+    if method == "tools/call" and log.tools is not None and not _params_match(headers, params, log):
+        _error(handler, 400, body, -32020, "header mismatch: Mcp-Param")
+        return True
+    if method == "tools/list" and log.tools is not None:
+        result = {"tools": log.tools}
+        _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
         return True
     meta = params.get("_meta") or {}
     if meta.get(META_VERSION) != MODERN or not isinstance(meta.get(META_CAPABILITIES), dict):
@@ -142,6 +157,37 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
         _error(handler, 200, body, -32601, "initialize is not supported in the new protocol")
         return True
     return False
+
+
+def decode(value: str) -> str:
+    """A header value as the server reads it: Base64 sentinel values decoded, others as sent."""
+    if value.startswith("=?base64?") and value.endswith("?="):
+        return base64.b64decode(value[len("=?base64?") : -2]).decode("utf-8")
+    return value
+
+
+def _params_match(headers: dict, params: dict, log: EraLog) -> bool:
+    """Whether every annotated argument travels in its Mcp-Param-* header, and only those do."""
+    tool = next((t for t in log.tools or [] if t.get("name") == params.get("name")), None)
+    expected = {}
+    for path, header in _annotated(((tool or {}).get("inputSchema") or {}), ()):
+        value = params.get("arguments") or {}
+        for key in path:
+            value = value.get(key) if isinstance(value, dict) else None
+        if value is None:
+            continue
+        text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+        expected["mcp-param-" + header.lower()] = text
+    sent = {k: decode(v) for k, v in headers.items() if k.startswith("mcp-param-")}
+    return sent == expected
+
+
+def _annotated(schema: dict, path: tuple):
+    for name, child in (schema.get("properties") or {}).items():
+        if isinstance(child, dict):
+            if "x-mcp-header" in child:
+                yield path + (name,), child["x-mcp-header"]
+            yield from _annotated(child, path + (name,))
 
 
 def _error(handler, status, body, code, message):
