@@ -28,7 +28,7 @@ def parse_stream_line(line: str) -> list:
         return []
     try:
         obj = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return [("pass.raw", {"line": _truncate(line)})]
     if not isinstance(obj, dict):
         return [("pass.raw", {"line": _truncate(line)})]
@@ -63,8 +63,8 @@ def _assistant_events(obj: dict) -> list:
     for block in _message_content(obj):
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "text":
-            texts.append(block.get("text", ""))
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            texts.append(block["text"])
         elif block.get("type") == "tool_use":
             events.append(("pass.tool_use", {"name": block.get("name"), "id": block.get("id")}))
     joined = "".join(texts).strip()
@@ -136,7 +136,10 @@ def _elide_images(value: object) -> object:
 def _stringify(value: object) -> str:
     if isinstance(value, str):
         return value
-    return json.dumps(_elide_images(value), default=str)
+    try:
+        return json.dumps(_elide_images(value), default=str)
+    except RecursionError:
+        return "(content nested too deeply to show)"
 
 
 def is_cap_hit(result_payload: dict | None) -> bool:
