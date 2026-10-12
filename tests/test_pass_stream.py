@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import json
 
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from sellee.pass_stream import is_cap_hit, parse_stream_line
 
 
@@ -180,3 +183,27 @@ def test_is_cap_hit_reads_result_subtype() -> None:
     assert is_cap_hit({"subtype": "error_max_turns"}) is True
     assert is_cap_hit({"subtype": "success"}) is False
     assert is_cap_hit(None) is False
+
+
+# Arbitrary text plus well-formed JSON, so generation spends some of its budget past the
+# json.loads guard rather than only on garbage that fails to parse.
+json_values = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    lambda children: st.lists(children) | st.dictionaries(st.text(), children),
+    max_leaves=8,
+)
+typed = st.fixed_dictionaries({"type": st.sampled_from(["system", "assistant", "user", "result"])})
+lines = st.one_of(st.text(), json_values.map(json.dumps), typed.map(json.dumps))
+
+
+@settings(max_examples=200, deadline=None)
+@given(lines)
+def test_it_never_raises_and_always_returns_pairs(line: str) -> None:
+    """The line is another process's stdout, and the reader thread depends on "Never raises":
+    anything unrecognised must degrade to an event, never to an exception that kills it."""
+    events = parse_stream_line(line)
+    assert isinstance(events, list)
+    for event in events:
+        kind, payload = event
+        assert isinstance(kind, str)
+        assert isinstance(payload, dict)
