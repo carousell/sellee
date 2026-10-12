@@ -11,7 +11,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from tests.fake_mcp_eras import MODERN, EraLog, answer, decode
+from tests.fake_mcp_eras import MODERN, EraLog, answer, decode, write_rpc
 
 from sellee.rail.client import (
     RailAuthError,
@@ -66,6 +66,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"ok" if status == 200 else b"no")
 
     def _send(self, status, obj):
+        if "jsonrpc" in obj:
+            write_rpc(self, status, obj, self.server.eras.sse)
+            return
         payload = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -996,6 +999,121 @@ def test_a_non_ascii_tool_name_against_go_sdk_fails_after_one_refresh() -> None:
         assert len(server.eras.calls()) == 2
         assert server.eras.count("tools/list") == 1
         assert server.eras.executed == 0
+
+
+# --- results and errors read the same in either era ----------------------------------------------
+
+_ERAS_AND_STREAMS = [("legacy", False), ("legacy", True), ("modern", False), ("modern", True)]
+
+_results = st.one_of(
+    st.builds(
+        lambda d: ("ok", {"structuredContent": d}),
+        st.dictionaries(st.text(max_size=6), _json_values, max_size=3),
+    ),
+    st.builds(
+        lambda d: ("ok", {"content": [{"type": "text", "text": json.dumps(d)}]}),
+        st.dictionaries(st.text(max_size=6), _json_values, min_size=1, max_size=3),
+    ),
+    st.just(("tool_error", {"content": [{"type": "text", "text": "not json"}]})),
+    st.just(("refused", {"isError": True, "content": [{"type": "text", "text": "over quota"}]})),
+    st.just(("refused", {"resultType": "input_required", "inputRequests": {}})),
+    st.just(("tool_error", {})),
+)
+
+
+@settings(max_examples=60, deadline=None)
+@given(era_stream=st.sampled_from(_ERAS_AND_STREAMS), case=_results)
+def test_call_tool_answers_the_same_in_either_era(era_stream, case) -> None:
+    era, sse = era_stream
+    outcome, result = case
+    with _serving(era) as (server, base):
+        server.eras.sse = sse
+        server.tool_result = result
+        if outcome == "ok":
+            expected = result.get("structuredContent")
+            if expected is None:
+                expected = json.loads(result["content"][0]["text"])
+            assert _client(base).call_tool("get_thread", {"id": "t1"}) == expected
+        else:
+            kind = RailToolRefused if outcome == "refused" else RailToolError
+            with pytest.raises(kind) as raised:
+                _client(base).call_tool("get_thread", {"id": "t1"})
+            if outcome == "tool_error":
+                assert not isinstance(raised.value, RailToolRefused)
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    era=st.sampled_from(["legacy", "modern"]),
+    status=st.sampled_from([401, 403, 404, 405, 409, 429, 500, 502, 503]),
+)
+def test_call_tool_fails_the_same_in_either_era(era, status) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.call_status = status
+        kind = RailAuthError if status in (401, 403) else RailNetworkError
+        with pytest.raises(kind) as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        if kind is RailNetworkError:
+            assert raised.value.status == status
+
+
+@pytest.mark.parametrize("era", ["legacy", "modern"])
+def test_a_stalled_server_is_a_network_error(era) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.stall = 0.5
+        stalled = RailClient(api_base=base, api_key="guest-key", web_base_url=base, timeout_sec=0.1)
+        with pytest.raises(RailNetworkError) as raised:
+            stalled.call_tool("get_thread", {"id": "t1"})
+        assert raised.value.status is None
+
+
+def test_a_refused_connection_is_a_network_error() -> None:
+    with _serving("legacy") as (_server, base):
+        pass
+    with pytest.raises(RailNetworkError) as raised:
+        _client(base).call_tool("get_thread", {"id": "t1"})
+    assert raised.value.status is None
+
+
+def test_a_json_rpc_error_names_its_code() -> None:
+    with _serving("legacy") as (server, base):
+
+        class _Erroring(_Handler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                if answer(self, body, self.server.eras):
+                    return
+                error = {"code": -32603, "message": "internal error"}
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "error": error})
+
+        server.RequestHandlerClass = _Erroring
+        with pytest.raises(RailToolRefused, match=r"^internal error .*-32603") as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert raised.value.code == -32603
+
+
+def test_a_server_speaking_no_version_sellee_speaks_is_a_network_error() -> None:
+    with _serving("modern") as (server, base):
+        server.eras.only_versions = ("2099-01-01",)
+        server.eras.json_rejections = True
+        with pytest.raises(RailNetworkError) as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert raised.value.status == 400
+        assert server.eras.count("initialize") == 0
+
+
+def test_an_unsupported_modern_version_with_a_legacy_one_listed_initializes() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.only_versions = ("2099-01-01", "2025-06-18")
+        server.eras.json_rejections = True
+        assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
+        assert server.eras.count("initialize") == 1
 
 
 @pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])

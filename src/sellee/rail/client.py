@@ -100,8 +100,8 @@ class _Era:
     supported: tuple = ()
 
 
-# The legacy era before initialize: its first request carries no version header.
-_UNNEGOTIATED = _Era(modern=False, version="")
+# The legacy era while initialize asks for its version, which the request also carries as a header.
+_ASKING = _Era(modern=False, version=_LEGACY)
 _MODERN_ERA = _Era(modern=True, version=_MODERN)
 
 # One era per endpoint and key for the life of the process: the daemon builds a RailClient per use,
@@ -258,6 +258,10 @@ class RailClient:
             code = _rpc_error_code(exc.body)
             if code in _MODERN_ERRORS or (exc.status == 404 and code == _METHOD_NOT_FOUND):
                 return self._cache(_MODERN_ERA)
+            if code == _UNSUPPORTED_VERSION and not _lists_a_legacy_version(exc.body):
+                raise RailNetworkError(
+                    "rail speaks no protocol version sellee speaks", status=exc.status
+                ) from exc
         except RailToolRefused as exc:
             if exc.code in _MODERN_ERRORS:
                 return self._cache(_MODERN_ERA)
@@ -290,7 +294,7 @@ class RailClient:
         carries. Called with the endpoint's lock held."""
         params = {"protocolVersion": _LEGACY, "capabilities": {}, "clientInfo": _CLIENT_INFO}
         try:
-            result, session_id = self._request("initialize", params, _UNNEGOTIATED)
+            result, session_id = self._request("initialize", params, _ASKING)
         except _HTTPAnswer as exc:
             raise _http_error(exc) from exc
         version = result.get("protocolVersion")
@@ -323,27 +327,26 @@ class RailClient:
             name = str(params.get("name", ""))
             call_headers = {"Mcp-Name": _header_value(name)}
             call_headers.update(self._param_headers(name, params.get("arguments")))
-        raw, session_id = self._post(message, call_headers, era)
-        try:
-            envelope = json.loads(raw)
-        except ValueError as exc:
-            raise RailNetworkError("rail returned an unparseable response") from exc
+        raw, session_id, streamed = self._post(message, call_headers, era)
+        envelope = _event_response(raw, self._next_id) if streamed else _parse_json(raw)
         if not isinstance(envelope, dict):
             raise RailNetworkError("rail response is not a JSON-RPC object")
         error = envelope.get("error")
         if error:
             code = error.get("code") if isinstance(error, dict) else None
-            message = (
+            code = code if isinstance(code, int) else None
+            text = (
                 str(error.get("message", "rail error")) if isinstance(error, dict) else "rail error"
             )
-            raise RailToolRefused(message, code=code if isinstance(code, int) else None)
+            raise RailToolRefused(text if code is None else f"{text} (JSON-RPC {code})", code=code)
         result = envelope.get("result")
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result, session_id
 
-    def _post(self, message: dict, call_headers: dict, era: _Era) -> tuple[str, str]:
-        """POST one JSON-RPC message with `era`'s headers; returns the body and any session id."""
+    def _post(self, message: dict, call_headers: dict, era: _Era) -> tuple[str, str, bool]:
+        """POST one JSON-RPC message with `era`'s headers; returns the body, any session id, and
+        whether the body is an event stream."""
         headers = {
             "Content-Type": "application/json",
             # Both are required even though the server answers with plain JSON; it rejects the
@@ -364,7 +367,9 @@ class RailClient:
         req = urllib.request.Request(self._endpoint, data=body, method="POST", headers=headers)
         try:
             with _no_redirects().open(req, timeout=self._timeout) as resp:
-                return resp.read().decode("utf-8"), resp.headers.get("Mcp-Session-Id") or ""
+                streamed = (resp.headers.get("Content-Type") or "").startswith("text/event-stream")
+                session_id = resp.headers.get("Mcp-Session-Id") or ""
+                return resp.read().decode("utf-8"), session_id, streamed
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RailAuthError("carousell.ai rejected the guest key") from exc
@@ -399,6 +404,9 @@ class RailClient:
 
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+        if result.get("resultType", "complete") != "complete":
+            # The server wants input sellee never offers to give, having declared no capabilities.
+            raise RailToolRefused(f"{name} asked for input sellee cannot give")
         if result.get("isError"):
             raise RailToolRefused(_text_content(result) or f"{name} failed")
         structured = result.get("structuredContent")
@@ -709,6 +717,40 @@ def _header_params(schema) -> list | None:
         return None
     names = [name.lower() for _, name in found]
     return found if len(names) == len(set(names)) else None
+
+
+def _parse_json(raw: str):
+    try:
+        return json.loads(raw)
+    except ValueError as exc:
+        raise RailNetworkError("rail returned an unparseable response") from exc
+
+
+def _event_response(raw: str, request_id: int):
+    """The JSON-RPC response to `request_id` in an event stream; notifications before it are
+    skipped."""
+    for event in raw.replace("\r\n", "\n").split("\n\n"):
+        data = "\n".join(
+            line[5:].lstrip(" ") for line in event.split("\n") if line.startswith("data:")
+        )
+        if not data:
+            continue
+        message = _parse_json(data)
+        if isinstance(message, dict) and message.get("id") == request_id:
+            return message
+    raise RailNetworkError("rail's event stream ended without a response")
+
+
+def _lists_a_legacy_version(body: str) -> bool:
+    """Whether an UnsupportedProtocolVersionError body lists a legacy version sellee speaks."""
+    try:
+        envelope = json.loads(body)
+    except ValueError:
+        return False
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    data = error.get("data") if isinstance(error, dict) else None
+    supported = data.get("supported") if isinstance(data, dict) else None
+    return isinstance(supported, list) and any(v in _LEGACY_VERSIONS for v in supported)
 
 
 def _http_error(answer: _HTTPAnswer) -> RailNetworkError:
