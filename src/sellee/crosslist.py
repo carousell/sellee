@@ -737,9 +737,11 @@ def push_crosslinks(deps: CrosslistDeps) -> int:
         if not rail_id:
             continue
         desired = desired_external_urls(item["listing_urls"])
-        if _craigslist_held(deps):
+        marker = markers.get(item["id"])
+        # A link the rail already took stays: holding it back would take it off the listing.
+        if _craigslist_held(deps) and not (marker and _has_craigslist(json.loads(marker))):
             desired = _without_craigslist(desired)
-        pushed += _push(deps, rail, item["id"], rail_id, desired, markers.get(item["id"]))
+        pushed += _push(deps, rail, item["id"], rail_id, desired, marker)
     return pushed
 
 

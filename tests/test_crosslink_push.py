@@ -540,6 +540,29 @@ def test_craigslist_is_offered_again_after_the_hold_and_goes_up_once_taken(store
     assert rails[0].updates == [("abc123", {"urls": [_CL_ENTRY, _FB_ENTRY]})]
 
 
+def test_a_craigslist_link_the_rail_already_took_stays_up_while_held(store, bus) -> None:
+    """Mid-deploy, one bazaar can take the platform and the next refuse it; the refusal must not
+    pull links the rail already holds."""
+    _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    rails = [FakeRail()]
+    deps = crosslist.CrosslistDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        browser_factory=lambda: object(),
+        rail_factory=lambda: rails[0],
+    )
+    crosslist.push_crosslinks(deps)
+
+    rails[0] = RailWithoutCraigslist()
+    _item(store, {"carousell-ai": "https://www.carousell.ai/listing/def456", "craigslist": _CL_URL})
+    for _ in range(3):
+        crosslist.push_crosslinks(deps)
+
+    assert rails[0].refused == 1
+    assert rails[0].updates == []
+
+
 @pytest.mark.parametrize(
     "error",
     [

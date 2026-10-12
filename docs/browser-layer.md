@@ -953,9 +953,10 @@ fan-out earns the link too. Failure is silent-retry — `crosslink.push_failed` 
 eligible again next tick, no needs-me notice (an unlinked listing costs
 discoverability, not a sale, and the seller cannot act on it). One refusal is not a
 failure: a rail that has not learned the Craigslist platform refuses any set naming it,
-so the push sends the set again without Craigslist and leaves Craigslist out of every
-set for an hour before offering it again. The other links keep syncing, and Craigslist
-links go up on their own once the rail takes them. Unlike the enqueue
+so the push sends the set again without Craigslist and, for an hour, holds back every
+Craigslist link the rail has not already taken before offering them again. The other
+links keep syncing, and Craigslist links go up on their own once the rail takes them.
+Unlike the enqueue
 phase, the push is *not* held by quiet hours and takes no pacing reserve: it is one
 API call on our own rail, not visible activity on the seller's marketplace account.
 
@@ -967,7 +968,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslist.reported` | a settled fan-out publish was reported to the seller, with the URL and whether it worked |
 | `crosslink.pushed` | an item's cross-listing URLs were written onto its rail listing, with the platforms in the set |
 | `crosslink.push_failed` | a push the rail refused or never received; retried next tick |
-| `crosslink.craigslist_refused` | the rail refused the Craigslist platform after taking it (or since the daemon started), so pushes go without it for now |
+| `crosslink.craigslist_refused` | the rail started refusing the Craigslist platform, so new Craigslist links are held back; once per spell of refusals, not per push |
 | `survey.requested` | a market was lined up for a look at what the seller already has listed |
 | `survey.read` | one market's listings read: how many, how many are new, the page's own active tally, how many rows it dropped, whether it was truncated |
 | `survey.asked` | the seller was asked whether to take a market's listings over |
