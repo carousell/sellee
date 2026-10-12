@@ -8,7 +8,7 @@ from __future__ import annotations
 from sellee import prompt_data, settings
 from sellee.channel import refs
 from sellee.store import StoreError
-from sellee.tools import listing
+from sellee.tools import checkout, listing, reply
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -152,6 +152,80 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
     return {key: value for key, value in result.items() if key != "next_buyer"}
 
 
+BUYER_LINK_TEXT = "Good news: it's yours for {price} if you still want it. Checkout here: {url}"
+# A send that may have reached the buyer counts as sent: the one thing worse than an unconfirmed
+# link is the same link twice.
+_REACHED = ("yes", "unknown")
+
+
+def _sell_to_next_buyer(ctx: ToolContext, params: dict) -> dict:
+    notice_id = params["notice_id"]
+    _check_sendable(ctx, notice_id)
+    try:
+        held = ctx.store.reserve_for_next_buyer(notice_id)
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    summary = {
+        "buyer": held["handle"],
+        "price": held["price"],
+        "another_link_out": held["another_link_out"],
+    }
+    if held["already_sent"]:
+        return {"status": "already_sent", **summary}
+    url = _mint_or_let_go(ctx, held)
+    retry = "the item is held for them and the link is ready; act on this notice again to send it"
+    text = BUYER_LINK_TEXT.format(price=held["price"], url=url)
+    try:
+        sent = reply._send_reply(ctx, {"thread_id": held["thread_id"], "text": text})
+    except ToolError as exc:
+        return {"status": "not_sent", "delivered": "no", "detail": f"{exc}; {retry}", **summary}
+    if sent["delivered"] not in _REACHED:
+        return {**sent, "detail": retry, **summary}
+    ctx.store.mark_next_buyer_sent(notice_id)
+    return {
+        "status": sent["status"],
+        "delivered": sent["delivered"],
+        "checkout_url": url,
+        **summary,
+    }
+
+
+def _check_sendable(ctx: ToolContext, notice_id: int) -> None:
+    """Refuse before anything is held when the link could not reach that buyer anyway: holding the
+    item for someone who never gets the link keeps it from everyone else for nothing."""
+    ask = ctx.store.next_buyer_ask(notice_id)
+    if ask is None:
+        raise ToolError(f"notice {notice_id} named no buyer to sell to")
+    if ctx.store.is_paused():
+        raise ToolError("sellee is paused, so nothing was held or sent")
+    thread = ctx.store.get_thread(ask["thread_id"])
+    if thread is None:
+        raise ToolError(f"no thread with id {ask['thread_id']!r}")
+    if ask["sent_ts"] is None and reply._refused(thread["side"], thread["status"], "reply"):
+        raise ToolError(
+            f"that buyer's conversation is {thread['status']!r}, so nothing was held or sent; once "
+            "it is settled this notice can be acted on again"
+        )
+
+
+def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
+    """The checkout link at the held price. A link that cannot be minted lets go of a hold this
+    call made, so a failed tap never leaves the item reserved for nobody's link."""
+    try:
+        minted = checkout.mint_checkout_link(
+            ctx, held["item_id"], held["thread_id"], held["amount"], seller_named_price=True
+        )
+    except Exception as exc:
+        if held["reserved_now"]:
+            ctx.store.negotiate_unreserve(held["item_id"], held["thread_id"])
+        if not isinstance(exc, ToolError):
+            raise
+        raise ToolError(
+            f"no link went to {held['handle']} and the item is not held for them: {exc}"
+        ) from exc
+    return minted["checkout_url"]
+
+
 def _release(ctx: ToolContext, params: dict) -> dict:
     try:
         return ctx.store.negotiate_release(params["item_id"])
@@ -250,5 +324,25 @@ register(
         },
         handler=_withdrew,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
+    )
+)
+register(
+    ToolSpec(
+        name="sell_to_next_buyer",
+        description="The seller tapped 🔗 Send them the link on a buyer-backed-out notice: sell "
+        "to the buyer that notice named, at the offer it named. `notice_id` is the notice the tap "
+        "answered. Re-checks that buyer, holds the item for them, mints the checkout link and "
+        "sends it to them; the tap is the seller's decision on that price, so the floor is left as "
+        "it is. Refuses, changing nothing, if the item sold, someone else holds it, or that buyer "
+        "is out. `delivered` reads as for send_reply; `another_link_out` means another buyer also "
+        "holds a link for this item.",
+        input_schema={
+            "type": "object",
+            "properties": {"notice_id": {"type": "integer"}},
+            "required": ["notice_id"],
+            "additionalProperties": False,
+        },
+        handler=_sell_to_next_buyer,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

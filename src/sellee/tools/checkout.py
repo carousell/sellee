@@ -112,10 +112,34 @@ def _withdrawn_guidance(ctx: ToolContext) -> str:
 
 
 def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
-    item_id = params["item_id"]
-    thread_id = params["thread_id"]
-    price = params["agreed_price"]
+    return mint_checkout_link(ctx, params["item_id"], params["thread_id"], params["agreed_price"])
 
+
+def _floor_gate(ctx: ToolContext, item_id: str, price) -> str | None:
+    """Refuse a price the floor does not allow; answers the item's currency. The store returns only
+    a status, never the floor value."""
+    try:
+        gate = ctx.store.checkout_floor_gate(item_id, price)
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    if gate["status"] == "below_floor":
+        raise ToolError("agreed price is not acceptable for this item")
+    if gate["status"] == "no_floor":
+        raise ToolError(
+            "no floor is set and the price is below list — ask the seller for their floor first"
+        )
+    return gate["currency"]
+
+
+def mint_checkout_link(
+    ctx: ToolContext, item_id: str, thread_id: str, price, *, seller_named_price: bool = False
+) -> dict:
+    """The checkout close behind the tool, shared with the seller's send-link tap.
+
+    `seller_named_price` is only for that tap: the seller chose this buyer at this price themselves,
+    which is the decision the floor gate otherwise stands in for. The gate is skipped for that one
+    link and the floor is neither read nor changed, so later buyers still meet it.
+    """
     item = ctx.store.get_item(item_id)
     if item is None:
         raise ToolError(f"no item with id {item_id!r}")
@@ -132,17 +156,7 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     if ctx.store.has_withdrawn(item_id, thread_id):
         raise ToolError(_withdrawn_guidance(ctx))
 
-    # floor gate — the store returns only a status, never the floor value
-    try:
-        gate = ctx.store.checkout_floor_gate(item_id, price)
-    except StoreError as exc:
-        raise ToolError(str(exc)) from exc
-    if gate["status"] == "below_floor":
-        raise ToolError("agreed price is not acceptable for this item")
-    if gate["status"] == "no_floor":
-        raise ToolError(
-            "no floor is set and the price is below list — ask the seller for their floor first"
-        )
+    currency = item["currency"] if seller_named_price else _floor_gate(ctx, item_id, price)
 
     listing_id = _listing_id(item)
     if not listing_id:
@@ -179,7 +193,7 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
         thread_id=thread_id,
         checkout_url=url,
         price=price,
-        currency=gate["currency"],
+        currency=currency,
     )
     return {"checkout_url": recorded["checkout_url"]}
 

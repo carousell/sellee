@@ -412,7 +412,33 @@ class NextBuyer(TypedDict):
 
     thread_id: str
     handle: str
+    offer: float
     price: str
+
+
+class NextBuyerAsk(TypedDict):
+    """The buyer a withdrawal notice's send-link tap means (see `next_buyer_ask`)."""
+
+    notice_id: int
+    item_id: str
+    thread_id: str
+    offer: float
+    sent_ts: float | None
+
+
+class NextBuyerHold(TypedDict):
+    """The item held for the buyer a withdrawal notice offered (see `reserve_for_next_buyer`).
+    `reserved_now` says this call made the hold, so only this call's caller undoes it."""
+
+    item_id: str
+    thread_id: str
+    handle: str
+    amount: float
+    currency: str | None
+    price: str
+    reserved_now: bool
+    already_sent: bool
+    another_link_out: bool
 
 
 class WithdrawResult(TypedDict):

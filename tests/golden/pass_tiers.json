@@ -35,6 +35,7 @@
     "resolve_escalation",
     "scam_scan",
     "search_qa_bank",
+    "sell_to_next_buyer",
     "send_message",
     "send_reply",
     "set_floor",

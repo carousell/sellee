@@ -211,7 +211,7 @@ def test_prompt_names_the_ask_a_tap_answered() -> None:
 
     assert "1. 🤝 I'll handle it" in prompt
     # Fenced: an escalation's question is composed while reading a buyer.
-    assert "(tapped, answering: <<Needs your call: meet, or checkout?>>)" in prompt
+    assert "(tapped, answering notice 7: <<Needs your call: meet, or checkout?>>)" in prompt
 
 
 def test_a_label_cannot_forge_a_second_turn() -> None:
@@ -393,7 +393,7 @@ def test_the_pass_prompt_shows_a_tap_as_the_seller_answering(store, bus, xdg_tmp
 
     to_handle = prompt.split("Messages to handle now:")[1]
     assert "🤝 I'll handle it" in to_handle
-    assert f"(tapped, answering: <<{_CLOSE_ASK}>>)" in to_handle
+    assert f"(tapped, answering notice {notice_id}: <<{_CLOSE_ASK}>>)" in to_handle
     assert "a1" not in to_handle  # the raw token never reaches the model
 
 

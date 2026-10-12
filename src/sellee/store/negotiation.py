@@ -13,6 +13,8 @@ from sellee.store.helpers import (
     CheckoutRecord,
     ItemNotFound,
     NextBuyer,
+    NextBuyerAsk,
+    NextBuyerHold,
     StoreError,
     WantNotFound,
     WithdrawResult,
@@ -415,12 +417,106 @@ class NegotiationMixin:
             if offered or checkout_url:
                 text, options = notice(result)
                 ref = f"buyer-withdrew:{thread_id}"
-                result["notice_id"] = (
+                notice_id = (
                     _insert_ask(conn, text, options=options, ref=ref)
                     if options
                     else _insert_notice(conn, text, ref=ref)
                 )
+                result["notice_id"] = notice_id
+                nxt = result["next_buyer"]
+                if options and nxt is not None:
+                    # What the send-link tap means, kept with the ask that carries it.
+                    conn.execute(
+                        "INSERT INTO next_buyer_asks "
+                        "(notice_id, item_id, thread_id, offer, created_ts) VALUES (?, ?, ?, ?, ?)",
+                        (notice_id, item_id, nxt["thread_id"], nxt["offer"], _now()),
+                    )
             return result
+
+    def next_buyer_ask(self, notice_id: int) -> NextBuyerAsk | None:
+        """The buyer a withdrawal notice offered the seller instead; None for any other notice."""
+        rows = self._db.query("SELECT * FROM next_buyer_asks WHERE notice_id = ?", (notice_id,))
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "notice_id": row["notice_id"],
+            "item_id": row["item_id"],
+            "thread_id": row["thread_id"],
+            "offer": row["offer"],
+            "sent_ts": row["sent_ts"],
+        }
+
+    def reserve_for_next_buyer(self, notice_id: int) -> NextBuyerHold:
+        """Hold the item for the buyer a withdrawal notice offered, at their offer: the seller's tap
+        is the decision. That buyer is re-read first, in the same transaction, because a tap can
+        come long after the notice — this refuses, changing nothing, once the item has sold,
+        another buyer holds it or leads the bidding, that buyer is out, or their offer has dropped
+        below the one the notice named."""
+        with self._db.transaction() as conn:
+            ask = conn.execute(
+                "SELECT * FROM next_buyer_asks WHERE notice_id = ?", (notice_id,)
+            ).fetchone()
+            if ask is None:
+                raise StoreError(f"notice {notice_id} named no buyer to sell to")
+            item_id, thread_id = ask["item_id"], ask["thread_id"]
+            list_price, currency = self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+            buyer = led["buyers"].get(thread_id)
+            handle = buyer["buyer_handle"] if buyer else _thread_handle(conn, thread_id)
+            front = led["front_runner"] or {}
+            theirs = front.get("thread_id") == thread_id
+            held = theirs and led["state"] == "reserved_provisional"
+            amount = front["amount"] if theirs else ask["offer"]
+            if ask["sent_ts"] is None:
+                stale = _stale_tap(led, thread_id, handle, ask["offer"])
+                if stale:
+                    raise StoreError(
+                        f"{stale}, so nothing was held or sent — negotiate_status shows where the "
+                        "item stands now"
+                    )
+                if not held:
+                    amount = led["buyers"][thread_id]["highest_offer"]
+                    _reserve(led, thread_id, amount, list_price)
+                    self._persist_negotiation(conn, item_id, led)
+            another = conn.execute(
+                "SELECT 1 FROM checkouts WHERE item_id = ? AND thread_id != ? LIMIT 1",
+                (item_id, thread_id),
+            ).fetchone()
+            return {
+                "item_id": item_id,
+                "thread_id": thread_id,
+                "handle": handle,
+                "amount": amount,
+                "currency": currency,
+                "price": _money(amount, currency),
+                "reserved_now": ask["sent_ts"] is None and not held,
+                "already_sent": ask["sent_ts"] is not None,
+                "another_link_out": another is not None,
+            }
+
+    def mark_next_buyer_sent(self, notice_id: int) -> None:
+        """Record that the link a withdrawal notice's tap asked for has gone to that buyer."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "UPDATE next_buyer_asks SET sent_ts = ? WHERE notice_id = ? AND sent_ts IS NULL",
+                (_now(), notice_id),
+            )
+
+    def negotiate_unreserve(self, item_id: str, thread_id: str) -> dict:
+        """Undo a hold for `thread_id` that never became a sale, if the item is still held for
+        them; anything that has replaced it since is left alone."""
+        with self._db.transaction() as conn:
+            list_price, _currency = self._item_for_negotiation(conn, item_id)
+            led = self._load_negotiation(conn, item_id)
+            front = led["front_runner"] or {}
+            if front.get("thread_id") == thread_id and led["state"] == "reserved_provisional":
+                buyer = led["buyers"].get(thread_id)
+                if buyer is not None and buyer["status"] in ("front_runner", "won"):
+                    buyer["status"] = "active"
+                _reopen(led, list_price)
+                self._persist_negotiation(conn, item_id, led)
+            return {"item_state": led["state"]}
 
     # --- buy-side negotiation ---------------------------------------------------------------
 
@@ -730,6 +826,39 @@ class NegotiationMixin:
         return self.get_checkout(sale_id)  # type: ignore[return-value]
 
 
+def _stale_tap(led: dict, thread_id: str, handle: str, offer) -> str | None:
+    """Why the buyer a withdrawal notice named can no longer have the item at the offer it named,
+    or None when they still can."""
+    buyer = led["buyers"].get(thread_id)
+    front = led["front_runner"] or {}
+    if led["state"] == "sold":
+        return "the item has sold since"
+    if buyer is None or buyer["status"] in negotiate_engine.NOT_STANDING:
+        return f"{handle} is no longer in the running"
+    if front and front.get("thread_id") != thread_id:
+        return "another buyer holds the item or leads the bidding now"
+    if buyer["highest_offer"] < offer:
+        return f"{handle}'s offer is now below what the notice named"
+    return None
+
+
+def _reserve(led: dict, thread_id: str, amount, list_price) -> None:
+    """Hold the item for one buyer at `amount`: as a confirmed bid when it is a bid, first come
+    first served otherwise."""
+    is_bid = led["is_bidding"] and amount > list_price
+    led["state"] = "reserved_provisional"
+    led["front_runner"] = {
+        "thread_id": thread_id,
+        "amount": amount,
+        "kind": "bid" if is_bid else "fcfs",
+    }
+    led["buyers"][thread_id]["status"] = "won" if is_bid else "front_runner"
+    if is_bid:
+        for tid, b in led["buyers"].items():
+            if tid != thread_id and b.get("status") not in negotiate_engine.NOT_STANDING:
+                b["status"] = "outbid"
+
+
 def _reopen(led: dict, list_price) -> None:
     """Put an item back on the market. A bidding item stays in bidding under the best bid still
     standing, so the bar a new bid has to clear is never below a bid nobody withdrew."""
@@ -749,6 +878,7 @@ def _next_buyer(led: dict, currency) -> NextBuyer | None:
     return {
         "thread_id": thread_id,
         "handle": led["buyers"][thread_id]["buyer_handle"],
+        "offer": offer,
         "price": _money(offer, currency),
     }
 
