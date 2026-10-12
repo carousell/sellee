@@ -319,11 +319,10 @@ def test_a_us_guest_is_offered_the_signin_as_their_listing_goes_live(make_ctx, s
     result, _ = _publish_as(make_ctx, store, GuestRail())
 
     assert result["url"] == "https://www.carousell.ai/listing/1-lamp"
-    assert result["signin_offer"] == {
-        "url": _SIGNIN_URL,
-        "say": f"Add your ZIP now so buyers can pay you right away: {_SIGNIN_URL} It takes a "
-        "minute: confirm your email, then the ZIP code you ship from.",
-    }
+    assert result["signin_offer"] == (
+        f"Add your ZIP now so buyers can pay you right away: {_SIGNIN_URL} It takes a "
+        "minute: confirm your email, then the ZIP code you ship from."
+    )
 
 
 def test_the_offer_names_buy_now_once_buyers_can_check_out_alone(make_ctx, store, monkeypatch):
@@ -331,7 +330,7 @@ def test_the_offer_names_buy_now_once_buyers_can_check_out_alone(make_ctx, store
 
     result, _ = _publish_as(make_ctx, store, GuestRail())
 
-    assert result["signin_offer"]["say"].startswith(
+    assert result["signin_offer"].startswith(
         f"Add your ZIP now to enable Buy now on your listing: {_SIGNIN_URL}"
     )
 
@@ -339,7 +338,7 @@ def test_the_offer_names_buy_now_once_buyers_can_check_out_alone(make_ctx, store
 def test_the_attended_session_is_offered_it_too(make_ctx, store) -> None:
     result, _ = _publish_as(make_ctx, store, GuestRail(), tier=TIER_ATTENDED)
 
-    assert result["signin_offer"]["url"] == _SIGNIN_URL
+    assert _SIGNIN_URL in result["signin_offer"]
 
 
 def test_a_signed_in_seller_is_offered_nothing(make_ctx, store) -> None:
@@ -383,16 +382,20 @@ def test_a_failed_offer_still_publishes(make_ctx, store) -> None:
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
 
 
-def test_a_signin_link_off_the_sign_in_base_is_never_offered(make_ctx, store) -> None:
+def test_a_signin_link_off_the_sign_in_base_is_never_offered(make_ctx, store, caplog) -> None:
     rail = GuestRail(signin_url="https://evil.example/signin?promote=tok")
 
     result, _ = _publish_as(make_ctx, store, rail)
 
     assert "signin_offer" not in result
+    # The refusal is logged, never the link: it hands over whoever's account it names.
+    assert "could not mint" in caplog.text
+    assert "promote=tok" not in caplog.text
 
 
-def test_a_repeated_publish_offers_it_again_while_still_a_guest(make_ctx, store) -> None:
-    """The shape follows where the seller stands, not which attempt this is."""
+def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
+    """The offer went out with the publish; a retry repeating it would be a second ask, and the
+    already-published read stays a no-op that touches nothing, paused or not."""
     rail = GuestRail()
     _sells_in(store, "US", "USD")
     item = _item(store, currency="USD")
@@ -401,5 +404,5 @@ def test_a_repeated_publish_offers_it_again_while_still_a_guest(make_ctx, store)
 
     again = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
-    assert again["already_published"] is True
-    assert again["signin_offer"]["url"] == _SIGNIN_URL
+    assert again == {"listing_id": None, "url": rail.url, "already_published": True}
+    assert rail.signin_calls == 1

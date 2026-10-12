@@ -19,7 +19,7 @@ from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail import signin
-from sellee.rail.client import RailUnprovisioned
+from sellee.rail.client import RailError, RailUnprovisioned
 from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.checkout import SIGNIN_TIERS, _rail
 from sellee.tools.registry import (
@@ -72,28 +72,24 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
         )
 
 
-def _signin_offer(ctx: ToolContext) -> dict | None:
-    """The setup that lets a buyer pay, offered while a listing has just gone live: the moment
+def _signin_offer(ctx: ToolContext) -> str | None:
+    """The line offering the setup that lets a buyer pay, sent as a listing goes live: the moment
     there is something to pay for, rather than once a buyer is already waiting. None when the
-    seller has done it, cannot take payments, or this session does not talk to them."""
+    seller has done it, cannot take payments, or this session does not talk to them. The link
+    rides only inside the line, so the result holds one copy of it."""
     if ctx.session.tier not in SIGNIN_TIERS or ctx.store.seller_region() != _CHECKOUT_REGION:
         return None
     try:
         url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
-    except Exception:
+    except (RailError, ToolError) as exc:
         # The listing is live and recorded by now. A failed offer must not read as a failed
         # publish and send the model round again; the first checkout asks instead.
-        log.warning("could not mint the sign-in offered at publish", exc_info=True)
+        log.warning("could not mint the sign-in offered at publish: %s", exc)
         return None
     if url is None:
         return None
     template = _SIGNIN_OFFER_BUY_NOW if BUY_NOW_LIVE else _SIGNIN_OFFER
-    return {"url": url, "say": template.format(url=url)}
-
-
-def _with_signin_offer(ctx: ToolContext, result: dict) -> dict:
-    offer = _signin_offer(ctx)
-    return {**result, "signin_offer": offer} if offer else result
+    return template.format(url=url)
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -104,10 +100,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
-        # Same keys a fresh publish returns: the shape must not depend on the attempt.
-        return _with_signin_offer(
-            ctx, {"listing_id": None, "url": existing, "already_published": True}
-        )
+        # Same keys a fresh publish returns: the shape must not depend on the attempt. No offer
+        # here: it went out with the publish, and a retry repeating it would be a second ask.
+        return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
     # no-op and stays allowed; a real publish is refused until resume.
@@ -195,7 +190,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    return _with_signin_offer(ctx, {"listing_id": listing.get("listing_id"), "url": listing["url"]})
+    result = {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+    offer = _signin_offer(ctx)
+    return {**result, "signin_offer": offer} if offer else result
 
 
 register(

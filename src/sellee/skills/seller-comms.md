@@ -175,7 +175,7 @@ carousell.ai: they confirm their email, then add the ZIP code they ship from. It
 moments, and otherwise sent only when they ask for it:
 - **At setup**, which prints the link as it makes their carousell.ai account.
 - **As each listing goes live.** `carousell_ai_publish_listing` returns `signin_offer` while the
-  account still needs it; listing-flow sends its line with the live URL. Nothing to add to it.
+  account still needs it, and listing-flow sends that line with the live URL. Nothing to add to it.
 - **At the first checkout**, if they have not done it by then: `carousell_ai_create_checkout_link`
   refuses for that reason. Mint the link with `carousell_ai_create_signin_link` and send it with the
   what and the why in one breath:
