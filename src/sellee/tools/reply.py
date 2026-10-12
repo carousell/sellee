@@ -91,6 +91,17 @@ def _answering_a_scam(store, params: dict) -> bool:
     return (answering.get("scam_verdict") or "") == _SCAM_VERDICT
 
 
+def _chasing_a_withdrawn_buyer(store, thread: dict, in_msg_id) -> bool:
+    """Whether this send would reach a buyer who backed out without answering anything they said.
+
+    Keyed on the message rather than the send's `kind`, because the model picks the kind: a nudge
+    or a reply that names nothing is the same unprompted message as a follow-up.
+    """
+    if thread["side"] != "sell" or not store.has_withdrawn(thread["item_id"], thread["thread_id"]):
+        return False
+    return not store.answers_since_withdrawal(thread["item_id"], thread["thread_id"], in_msg_id)
+
+
 def _send_reply(ctx: ToolContext, params: dict) -> dict:
     # A paused agent acts on nothing — even an attended session's send respects the pause. Refuse
     # before any thread load or reserve so nothing is recorded.
@@ -132,12 +143,11 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             f"thread is {thread['status']!r} — not eligible for a {kind} "
             "(terminal/held/escalated threads are never re-engaged)"
         )
-    if (
-        kind == "followup"
-        and thread["side"] == "sell"
-        and ctx.store.has_withdrawn(thread["item_id"], thread["thread_id"])
-    ):
-        raise ToolError("the buyer backed out — they are not followed up, only answered")
+    if _chasing_a_withdrawn_buyer(ctx.store, thread, params.get("in_msg_id")):
+        raise ToolError(
+            "the buyer backed out, so they are answered, never chased: in_msg_id has to name the "
+            "message they backed out with or one they wrote since"
+        )
 
     # Acquire the send path before any reserve or intent, so "no browser" is refused with nothing
     # recorded: no pacing slot spent, and no pending intent for the sweep to escalate as a send

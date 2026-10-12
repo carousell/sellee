@@ -72,6 +72,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 28),
         ("data", 29),
         ("data", 30),
+        ("data", 31),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -102,6 +103,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "registration_cursor")
     assert _table_exists(data_db, "registration_seen")
     assert _table_exists(data_db, "craigslist_account")
+    assert _table_exists(data_db, "buyer_withdrawals")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -132,6 +134,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         28,
         29,
         30,
+        31,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

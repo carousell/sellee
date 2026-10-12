@@ -283,6 +283,21 @@ class NegotiationMixin:
         )
         return bool(rows)
 
+    def answers_since_withdrawal(self, item_id: str, thread_id: str, in_msg_id) -> bool:
+        """Whether `in_msg_id` is the message this thread's buyer backed out with, or one they
+        wrote after it: the only messages a withdrawn buyer is still answered on."""
+        if not in_msg_id:
+            return False
+        rows = self._db.query(
+            "SELECT 1 FROM buyer_withdrawals w "
+            "JOIN thread_messages said ON said.thread_id = w.thread_id AND said.msg_id = w.msg_id "
+            "JOIN thread_messages m ON m.thread_id = w.thread_id AND m.msg_id = ? "
+            "WHERE w.item_id = ? AND w.thread_id = ? AND m.dir = 'in' "
+            "AND (m.ts > said.ts OR (m.ts = said.ts AND m.rowid >= said.rowid))",
+            (in_msg_id, item_id, thread_id),
+        )
+        return bool(rows)
+
     def negotiate_confirm_bid(self, item_id: str, thread_id: str) -> dict:
         with self._db.transaction() as conn:
             self._item_for_negotiation(conn, item_id)
@@ -342,11 +357,12 @@ class NegotiationMixin:
         item_id: str,
         thread_id: str,
         *,
+        msg_id: str,
         notice: Callable[[WithdrawResult], tuple[str, list | None]],
     ) -> WithdrawResult:
-        """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer still
-        standing or a checkout link, queue `notice(result)` in the same transaction. A repeat
-        changes nothing."""
+        """Mark a buyer withdrawn on their message `msg_id`, release the item if they held it, and,
+        if they had an offer still standing or a checkout link, queue `notice(result)` in the same
+        transaction. A repeat changes nothing."""
         with self._db.transaction() as conn:
             list_price, currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
@@ -380,6 +396,12 @@ class NegotiationMixin:
             if was_holder:
                 _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
+            conn.execute(
+                "INSERT INTO buyer_withdrawals (item_id, thread_id, msg_id, ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (item_id, thread_id) DO UPDATE SET "
+                "msg_id = excluded.msg_id, ts = excluded.ts",
+                (item_id, thread_id, msg_id, _now()),
+            )
             result: WithdrawResult = {
                 "withdrew": True,
                 "was_holder": was_holder,

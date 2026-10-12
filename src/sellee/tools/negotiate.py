@@ -143,6 +143,7 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
         result = ctx.store.negotiate_withdraw(
             thread["item_id"],
             thread["thread_id"],
+            msg_id=params["in_msg_id"],
             notice=lambda result: withdrawal_notice(reference, reason, result),
         )
     except StoreError as exc:

@@ -79,7 +79,7 @@ def test_a_holder_who_withdraws_puts_the_item_back_on_the_market(store, ledger) 
     before = store.negotiate_status(item["id"])
     held = (before["front_runner"] or {}).get("thread_id") == BUYERS[who]
 
-    result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
+    result = store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_text)
 
     after = store.negotiate_status(item["id"])
     assert result["was_holder"] is held
@@ -100,7 +100,7 @@ def test_a_withdrawal_touches_only_the_buyer_who_withdrew(store, ledger) -> None
     item = _build(store, offers, confirm)
     before = store.negotiate_status(item["id"])["buyers"]
 
-    store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
+    store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_text)
 
     after = store.negotiate_status(item["id"])["buyers"]
     assert {t: b for t, b in after.items() if t != BUYERS[who]} == {
@@ -117,8 +117,8 @@ def test_the_seller_is_told_once_and_only_about_a_buyer_who_offered(store, ledge
     offered = _still_offering(store, item["id"], BUYERS[who])
     count = _notice_count(store)
 
-    first = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
-    second = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
+    first = store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_text)
+    second = store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_text)
 
     assert _notice_count(store) == count + (1 if offered else 0)
     assert first["withdrew"] is True
@@ -136,7 +136,7 @@ def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_selle
     before = store.negotiate_status(item["id"])
     count = _notice_count(store)
 
-    result = store.negotiate_withdraw(item["id"], "fb:only-asked", notice=_text)
+    result = store.negotiate_withdraw(item["id"], "fb:only-asked", msg_id="out", notice=_text)
 
     after = store.negotiate_status(item["id"])
     result.pop("next_buyer")  # who is next is its own property, below
@@ -179,8 +179,8 @@ def test_a_buyer_with_a_checkout_link_is_told_about_once_with_a_warning(
         )
     count = _notice_count(store)
 
-    first = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
-    store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+    first = store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_withdrawal_text)
 
     notices = store.list_queued_notices()[count:]
     assert len(notices) == (1 if offered or has_checkout else 0)
@@ -203,7 +203,7 @@ def test_a_new_bid_leads_only_by_beating_every_bid_still_standing(
     if action == "release":
         store.negotiate_release(item["id"])
     else:
-        store.negotiate_withdraw(item["id"], BUYERS[action], notice=_text)
+        store.negotiate_withdraw(item["id"], BUYERS[action], msg_id="out", notice=_text)
     standing = [
         b["highest_offer"]
         for b in store.negotiate_status(item["id"])["buyers"].values()
@@ -232,7 +232,7 @@ def _bidding_war(store) -> dict:
 def test_when_the_leading_bidder_withdraws_the_next_bid_leads(store) -> None:
     item = _bidding_war(store)
 
-    result = store.negotiate_withdraw(item["id"], "fb:c", notice=_withdrawal_text)
+    result = store.negotiate_withdraw(item["id"], "fb:c", msg_id="out", notice=_withdrawal_text)
 
     front = store.negotiate_status(item["id"])["front_runner"]
     assert front == {"thread_id": "fb:b", "amount": 120, "kind": "bid"}
@@ -265,7 +265,7 @@ def test_a_released_item_keeps_its_best_bid_as_the_bar(store) -> None:
 def test_a_withdrawn_offer_no_longer_outbids_anyone(store) -> None:
     item = _item(store)
     _offer(store, item["id"], "fb:a", 150)
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_text)
     assert _offer(store, item["id"], "fb:b", 120)["decision"] == "bid_lead"
 
 
@@ -274,7 +274,7 @@ def test_a_sold_item_cannot_be_withdrawn_from(store) -> None:
     _offer(store, item["id"], "fb:a", 100)
     store.negotiate_confirm_sold(item["id"], "fb:a")
     with pytest.raises(StoreError, match="sold"):
-        store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+        store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_text)
 
 
 def _scarf_thread(store, tid="fb:ks5qn", handle="ks5qn"):
@@ -435,7 +435,7 @@ def test_the_buyer_rulebook_names_withdrawal() -> None:
 def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
     offers, confirm, who = ledger
     item = _build(store, offers, confirm)
-    store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
+    store.negotiate_withdraw(item["id"], BUYERS[who], msg_id="out", notice=_text)
 
     buyers = store.negotiate_status(item["id"])["buyers"]
     for thread_id in (*BUYERS, "fb:never-wrote"):
@@ -459,7 +459,9 @@ def test_the_next_buyer_is_the_highest_standing_offer(store, ledger) -> None:
         if t != BUYERS[who] and b["status"] not in _NOT_STANDING and b["highest_offer"] > 0
     }
 
-    result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+    result = store.negotiate_withdraw(
+        item["id"], BUYERS[who], msg_id="out", notice=_withdrawal_text
+    )
 
     # Only a holder leaving frees the item for someone else.
     if held and standing:
@@ -476,7 +478,9 @@ def test_the_notice_offers_a_checkout_link_only_when_someone_is_next(store, ledg
     item = _build(store, offers, confirm)
     count = _notice_count(store)
 
-    result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
+    result = store.negotiate_withdraw(
+        item["id"], BUYERS[who], msg_id="out", notice=_withdrawal_text
+    )
 
     for notice in store.list_queued_notices()[count:]:
         labels = [label for label, _token in notice["controls"] or []]
@@ -510,7 +514,7 @@ def test_a_buyer_who_held_nothing_names_no_one_next(store) -> None:
     _offer(store, item["id"], "fb:a", 70)
     _offer(store, item["id"], "fb:b", 100)
 
-    result = store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+    result = store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_withdrawal_text)
 
     assert result["next_buyer"] is None
     (notice,) = store.list_queued_notices()
@@ -522,7 +526,7 @@ def test_a_leading_bidder_leaving_is_not_called_back_on_the_market(store) -> Non
     """An unconfirmed top bid never took the item off the market."""
     item = _bidding_war(store)
 
-    store.negotiate_withdraw(item["id"], "fb:c", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], "fb:c", msg_id="out", notice=_withdrawal_text)
 
     (notice,) = store.list_queued_notices()
     assert "back on the market" not in notice["text"]
@@ -536,7 +540,7 @@ def test_a_buyer_sellee_already_walked_away_from_is_not_reported(store) -> None:
         _offer(store, item["id"], "fb:a", 10 + _)  # lowballs until sellee disengages
     assert store.negotiate_status(item["id"])["buyers"]["fb:a"]["status"] == "passed"
 
-    result = store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+    result = store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_withdrawal_text)
 
     assert result["withdrew"] is True and result["notice_id"] is None
     assert store.list_queued_notices() == []
@@ -554,7 +558,7 @@ def test_a_live_link_is_flagged_without_promising_a_payment_alert(store) -> None
         currency="USD",
     )
 
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_withdrawal_text)
 
     (notice,) = store.list_queued_notices()
     assert "checkout link still works" in notice["text"]
@@ -635,8 +639,8 @@ def test_an_old_tap_cannot_send_a_link_to_a_buyer_who_since_withdrew(make_ctx, s
     )
     _offer(store, item["id"], "fb:b", 10)
     _offer(store, item["id"], "fb:a", 20)
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
-    store.negotiate_withdraw(item["id"], "fb:b", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_withdrawal_text)
+    store.negotiate_withdraw(item["id"], "fb:b", msg_id="out", notice=_withdrawal_text)
 
     with pytest.raises(ToolError, match="backed out"):
         dispatch(
@@ -684,7 +688,8 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
     store.create_thread(
         thread_id=tid, side="sell", market="fb", counterpart_handle=tid, item_id=item["id"]
     )
-    store.negotiate_withdraw(item["id"], tid, notice=_text)
+    store.record_inbound(tid, msg_id="out", text="nvm", ts=150.0)
+    store.negotiate_withdraw(item["id"], tid, msg_id="out", notice=_text)
     sink = _Sink()
     ctx = make_ctx("attended", reply_sink=sink, config=_FAST)
 
@@ -697,13 +702,66 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
     assert sent["status"] in ("sent", "wait")
 
 
+@pytest.mark.parametrize(
+    "send",
+    [
+        {"kind": "nudge"},
+        {"kind": "reply"},
+        {"kind": "holding"},
+        {"kind": "reply", "in_msg_id": "before"},
+        {"kind": "reply", "in_msg_id": "nonexistent"},
+    ],
+)
+def test_a_withdrawn_buyer_is_not_written_to_unprompted(make_ctx, store, send) -> None:
+    item = _scarf_thread(store)
+    _offer(store, item["id"], "fb:ks5qn", 10)
+    store.record_inbound("fb:ks5qn", msg_id="before", text="would you take 10?", ts=90.0)
+    dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "found another"},
+        _reply_ctx(make_ctx, item),
+    )
+    sink = _Sink()
+
+    with pytest.raises(ToolError, match="backed out"):
+        dispatch(
+            "send_reply",
+            {"thread_id": "fb:ks5qn", "text": "still there?", **send},
+            make_ctx("attended", reply_sink=sink, config=_FAST),
+        )
+    assert sink.sends == []
+
+
+@pytest.mark.parametrize("answering", ["out", "later"])
+def test_a_withdrawn_buyer_is_answered_on_their_own_words(make_ctx, store, answering) -> None:
+    """The sign-off answers the message they backed out with; anything they write after is
+    answered too."""
+    item = _scarf_thread(store)
+    _offer(store, item["id"], "fb:ks5qn", 10)
+    dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "found another"},
+        _reply_ctx(make_ctx, item),
+    )
+    store.record_inbound("fb:ks5qn", msg_id="later", text="what colour was it again?", ts=300.0)
+    sink = _Sink()
+
+    sent = dispatch(
+        "send_reply",
+        {"thread_id": "fb:ks5qn", "text": "Navy!", "kind": "followup", "in_msg_id": answering},
+        make_ctx("attended", reply_sink=sink, config=_FAST),
+    )
+
+    assert sent["status"] == "sent" and sink.sends
+
+
 @_PROPERTY
 @given(ledger=_LEDGERS, price=st.sampled_from([60, 80, 100, 120, 150, 200]))
 def test_a_withdrawn_buyer_who_offers_again_is_back_in(store, ledger, price) -> None:
     offers, confirm, who = ledger
     item = _build(store, offers, confirm)
     tid = BUYERS[who]
-    store.negotiate_withdraw(item["id"], tid, notice=_text)
+    store.negotiate_withdraw(item["id"], tid, msg_id="out", notice=_text)
 
     _offer(store, item["id"], tid, price)
 
@@ -715,7 +773,7 @@ def test_a_withdrawn_buyer_who_offers_again_is_back_in(store, ledger, price) -> 
 def test_a_returning_buyer_stands_at_their_new_offer_not_their_old_one(store) -> None:
     item = _item(store)
     _offer(store, item["id"], "fb:a", 150)
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_text)
     _offer(store, item["id"], "fb:a", 110)
     assert store.negotiate_status(item["id"])["buyers"]["fb:a"]["highest_offer"] == 110
     assert _offer(store, item["id"], "fb:b", 120)["decision"] == "bid_lead"
@@ -725,7 +783,7 @@ def test_a_returning_buyer_stands_at_their_new_offer_not_their_old_one(store) ->
 def test_a_returning_buyer_is_back_in_before_the_seller_sets_a_floor(store, returns_at) -> None:
     item = store.create_item(title="Scarf", list_price=100.0, currency="USD")  # no floor
     _offer(store, item["id"], "fb:a", 80)
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_text)
 
     assert _offer(store, item["id"], "fb:a", returns_at)["decision"] == "needs_floor"
 
@@ -736,7 +794,7 @@ def test_a_returning_buyer_is_back_in_before_the_seller_sets_a_floor(store, retu
 def test_a_returning_buyer_outbids_the_rival_again(store) -> None:
     item = _item(store)
     _offer(store, item["id"], "fb:a", 150)
-    store.negotiate_withdraw(item["id"], "fb:a", notice=_text)
+    store.negotiate_withdraw(item["id"], "fb:a", msg_id="out", notice=_text)
     _offer(store, item["id"], "fb:b", 120)
     assert _offer(store, item["id"], "fb:a", 180)["decision"] == "bid_lead"
     assert _offer(store, item["id"], "fb:b", 130)["decision"] == "bid_outbid"
