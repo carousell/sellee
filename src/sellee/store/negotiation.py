@@ -9,6 +9,7 @@ from sellee.db import Database
 from sellee.engines import buyer_negotiate as buyer_engine
 from sellee.engines import negotiate as negotiate_engine
 from sellee.store.helpers import (
+    IMPORTED_THREAD_SOURCES,
     BudgetRecord,
     CheckoutRecord,
     ItemNotFound,
@@ -285,6 +286,14 @@ class NegotiationMixin:
                 "tell_others": "outbid",
             }
 
+    @staticmethod
+    def _read_from_a_marketplace(conn, thread_id: str) -> bool:
+        """A buyer came through a marketplace only if its inbox imported the thread."""
+        row = conn.execute(
+            "SELECT source FROM threads WHERE thread_id = ?", (thread_id,)
+        ).fetchone()
+        return row is not None and row["source"] in IMPORTED_THREAD_SOURCES
+
     def negotiate_confirm_sold(self, item_id: str, thread_id: str) -> dict:
         with self._db.transaction() as conn:
             row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -295,6 +304,8 @@ class NegotiationMixin:
             led["sold_to"] = thread_id
             urls = json.loads(row["listing_urls"])
             won_platform = thread_id.split(":", 1)[0] if ":" in thread_id else None
+            if not self._read_from_a_marketplace(conn, thread_id):
+                won_platform = None  # a sale the seller reported, not a marketplace buyer's
             take_down = [
                 {"platform": p, "url": u} for p, u in urls.items() if u and p != won_platform
             ]

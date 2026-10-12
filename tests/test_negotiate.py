@@ -213,6 +213,14 @@ def test_confirm_sold_take_down_and_close_lists(store: Store) -> None:
     item = _item(store, list_price=100.0, floor=50.0)
     store.record_listing_url(item["id"], "fb", "https://www.facebook.com/marketplace/item/1")
     store.record_listing_url(item["id"], "carousell", "https://www.carousell.sg/p/1")
+    store.create_thread(
+        thread_id="fb:winner",
+        side="sell",
+        market="fb",
+        counterpart_handle="buyer",
+        item_id=item["id"],
+        source="browser_read",
+    )
     _offer(store, item["id"], "fb:winner", 100)
     _offer(store, item["id"], "cl:loser", 80)  # a below-list haggler on the other market
     sold = store.negotiate_confirm_sold(item["id"], "fb:winner")
@@ -221,6 +229,25 @@ def test_confirm_sold_take_down_and_close_lists(store: Store) -> None:
     platforms = {t["platform"] for t in sold["take_down"]}
     assert platforms == {"carousell"}
     assert "cl:loser" in sold["close_threads"]
+
+
+@pytest.mark.parametrize("source", [None, "seller_reported_offline_sale"])
+def test_a_sale_on_a_thread_no_inbox_read_spares_no_listing(store: Store, source) -> None:
+    """Sold to a friend and filed under fb: no Facebook buyer bought it, so its listing comes
+    down with the rest rather than being spared as the winning marketplace's."""
+    item = _item(store, list_price=100.0, floor=50.0)
+    store.record_listing_url(item["id"], "fb", "https://www.facebook.com/marketplace/item/1")
+    store.record_listing_url(item["id"], "carousell", "https://www.carousell.sg/p/1")
+    store.create_thread(
+        thread_id="fb:friend",
+        side="sell",
+        market="fb",
+        counterpart_handle="friend",
+        item_id=item["id"],
+        source=source,
+    )
+    sold = store.negotiate_confirm_sold(item["id"], "fb:friend")
+    assert {t["platform"] for t in sold["take_down"]} == {"fb", "carousell"}
 
 
 def test_release_returns_bidding_item_to_bidding(store: Store) -> None:

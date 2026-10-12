@@ -38,6 +38,7 @@ from sellee.store.channel import ChannelMixin
 from sellee.store.escalations import EscalationsMixin
 from sellee.store.helpers import (
     BIND_NONCE_TTL_SEC,
+    IMPORTED_THREAD_SOURCES,
     KNOWN_ADAPTERS,
     MAX_PHOTOS,
     QA_GLOBAL_ITEM,
@@ -76,6 +77,7 @@ __all__ = [
     "HOLD_SIGNIN",
     "CONNECT_MODE_OPEN",
     "CONNECT_MODE_PROBE",
+    "IMPORTED_THREAD_SOURCES",
     "KNOWN_ADAPTERS",
     "MAX_PHOTOS",
     "QA_GLOBAL_ITEM",
