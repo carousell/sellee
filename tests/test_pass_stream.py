@@ -118,6 +118,18 @@ def test_text_is_truncated_to_cap() -> None:
     assert len(payload["text"]) < 5000 and payload["text"].endswith("chars)")
 
 
+def test_a_text_block_whose_text_is_not_a_string_is_skipped() -> None:
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": None}, {"type": "text", "text": "ok"}]
+            },
+        }
+    )
+    assert parse_stream_line(line) == [("pass.message", {"text": "ok"})]
+
+
 def _tool_result_line(content) -> str:
     return json.dumps({"type": "user", "message": {"content": content}})
 
@@ -221,7 +233,21 @@ json_values = st.recursive(
     lambda children: st.lists(children) | st.dictionaries(st.text(), children),
     max_leaves=8,
 )
-typed = st.fixed_dictionaries({"type": st.sampled_from(["system", "assistant", "user", "result"])})
+# Typed lines carry message content too, so generation reaches the per-block handling rather
+# than stopping at the dispatch on type.
+blocks = st.fixed_dictionaries(
+    {"type": st.sampled_from(["text", "tool_use", "tool_result", "image"])},
+    optional={
+        key: json_values for key in ("text", "name", "id", "tool_use_id", "content", "source")
+    },
+)
+messages = st.fixed_dictionaries(
+    {}, optional={"content": st.lists(blocks | json_values, max_size=4)}
+)
+typed = st.fixed_dictionaries(
+    {"type": st.sampled_from(["system", "assistant", "user", "result"])},
+    optional={"subtype": json_values, "message": messages | json_values},
+)
 lines = st.one_of(st.text(), json_values.map(json.dumps), typed.map(json.dumps))
 
 

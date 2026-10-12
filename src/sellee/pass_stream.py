@@ -63,8 +63,8 @@ def _assistant_events(obj: dict) -> list:
     for block in _message_content(obj):
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "text":
-            texts.append(block.get("text", ""))
+        if block.get("type") == "text" and isinstance(block.get("text"), str):
+            texts.append(block["text"])
         elif block.get("type") == "tool_use":
             events.append(("pass.tool_use", {"name": block.get("name"), "id": block.get("id")}))
     joined = "".join(texts).strip()
