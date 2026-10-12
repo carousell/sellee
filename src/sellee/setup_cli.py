@@ -37,7 +37,7 @@ from sellee import (
 )
 from sellee.browser import foreground
 from sellee.browser import markets as market_adapters
-from sellee.installer import basics_prompt, checks, materialize, preflight
+from sellee.installer import basics_prompt, checks, materialize, preflight, runtime
 from sellee.installer import region as region_guess
 from sellee.installer import update as update_mod
 from sellee.installer.ui import Abort, Ui
@@ -60,6 +60,9 @@ def run(args) -> int:
         return 1
     except materialize.LayoutError as exc:
         ui.fatal(Abort(exc.message, exc.fix))
+        return 1
+    except runtime.RuntimeSetupError as exc:
+        ui.fatal(Abort(str(exc), "Check the network and disk space, then run setup again."))
         return 1
     except control.DaemonUnreachable as exc:
         ui.fatal(

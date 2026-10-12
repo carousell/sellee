@@ -20,7 +20,7 @@ from tests.test_supervisor import FakePlatform
 
 from sellee import __version__, healthcheck, heartbeat, paths, supervisor
 from sellee.config import Config
-from sellee.installer import checks, materialize
+from sellee.installer import checks, materialize, runtime
 from sellee.installer import update as update_mod
 from sellee.installer.update import Release, UpdateError
 
@@ -588,3 +588,18 @@ def test_a_successful_update_clears_the_download_cache(installed, served) -> Non
     assert not (stale / "sellee-0.0.9.tar.gz").exists()
     assert not (stale / "unpacked").exists()
     assert (stale / f"sellee-{NEWER}.tar.gz").exists()
+
+
+def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(
+    xdg_tmp, monkeypatch, capsys
+) -> None:
+    """Provisioning fails several frames down, before the swap, so the running version is
+    untouched and all that is left is to say so the way every other refusal does."""
+
+    def fail(*_args, **_kwargs):
+        raise runtime.RuntimeSetupError("uv could not install Python 3.14: no network")
+
+    monkeypatch.setattr(update_mod, "perform", fail)
+
+    assert update_mod.run(Args(url="https://example.test")) == 1
+    assert capsys.readouterr().err.startswith("sellee: uv could not install Python 3.14")
