@@ -262,7 +262,12 @@ def test_a_trickled_body_runs_out_of_deadline_not_patience(server, monkeypatch) 
                 break  # the server already hung up — the deadline worked
             time.sleep(0.1)
         conn.settimeout(2)
-        assert conn.recv(4096) == b""  # closed by the deadline, not still waiting on the body
+        try:
+            received = conn.recv(4096)
+        except ConnectionResetError:
+            # Closing with drip bytes still unread makes the kernel reset rather than close.
+            received = b""
+        assert received == b""  # closed by the deadline, not still waiting on the body
     finally:
         conn.close()
 
