@@ -696,6 +696,8 @@ MARKET_PLATFORMS = {
 def desired_external_urls(listing_urls: dict) -> list:
     """The external-URL set for an item's rail listing, platform-sorted: each mapped market's URL in
     its pinned shape, so a Craigslist manage link, which carries the post's token, stays out."""
+    # The public /view/d/ link ends in that same token, so pushing it makes the token crawlable.
+    # That is safe only while Craigslist asks for sign-in at /manage/<token>.
     urls = [
         {"platform": MARKET_PLATFORMS[market], "url": url}
         for market, url in listing_urls.items()
