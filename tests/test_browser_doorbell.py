@@ -13,6 +13,8 @@ import json
 import random
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from tests.conftest import seed_setting
 
 from sellee import paths
@@ -131,6 +133,49 @@ def test_a_wake_from_sleep_is_settled_before_anything_moves(store, bus) -> None:
     assert store.ring_owed(
         "fb", now=clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
     )
+
+
+def test_a_ring_shown_while_the_laptop_slept_is_still_owed_a_visit(store, bus) -> None:
+    """Chrome takes a push while the laptop sleeps, and the doorbell first hears it on wake, older
+    than a replay would be. It rang while the doorbell was listening, so it is a buyer to answer."""
+    clock = _Clock()
+    chrome = _Chrome()
+    deps = _deps(store, bus, chrome, clock)
+    doorbell.doorbell_lane(deps)
+
+    clock.t += 4913  # 82 minutes asleep, as run12 was at 03:34 on 11 October
+    chrome.heard = [_ring("mid.$night", shown=clock.t - 2044)]  # shown 34 minutes before wake
+    doorbell.doorbell_lane(deps)
+
+    assert store.ring_owed(
+        "fb", now=clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
+    )
+
+
+@settings(
+    max_examples=60,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture],
+)
+@given(
+    asleep=st.floats(doorbell.SLEPT_AFTER_SEC + 1, 7 * 86400),
+    into_sleep=st.floats(0.01, 0.99),
+)
+def test_any_ring_shown_after_the_first_look_is_owed_a_visit(store, bus, asleep, into_sleep):
+    clock = _Clock(1_790_000_000.0 + asleep * 10)  # apart per example in the shared store
+    chrome = _Chrome()
+    deps = _deps(store, bus, chrome, clock)
+    doorbell.doorbell_lane(deps)
+    looked_at = clock.t
+
+    clock.t += asleep
+    tag = f"mid.${looked_at}-{into_sleep}"
+    chrome.heard = [_ring(tag, shown=looked_at + asleep * into_sleep)]
+    doorbell.doorbell_lane(deps)
+
+    owed_by = clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
+    assert store.ring_owed("fb", now=owed_by)
+    store.answer_rings("fb", heard_before=clock.t + 1, now=owed_by)
 
 
 def test_nothing_is_listened_for_when_no_market_rings(store, bus) -> None:

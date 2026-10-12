@@ -98,6 +98,8 @@ class DoorbellDeps:
     # Lane state, in process like the read lane's: a restart re-arming it errs toward telling the
     # seller again.
     last_tick: float | None = None
+    # When Chrome first answered this process. Only what rang before it can have rung unheard.
+    first_heard: float | None = None
     settle_until: float = 0.0
     deaf: dict = field(default_factory=dict)
     listening_since: dict = field(default_factory=dict)
@@ -129,6 +131,8 @@ def doorbell_lane(deps: DoorbellDeps) -> None:
         return
     port = deps.port()
     heard = deps.listen(port) if port is not None else None
+    if heard is not None and deps.first_heard is None:
+        deps.first_heard = now
     for market in markets:
         deps.listening_since.setdefault(market, now)
         if heard is None:
@@ -162,7 +166,9 @@ def _hear(deps: DoorbellDeps, market: str, heard: list, now: float) -> None:
         shown = float(ring["shown_ts"])
         key = f"{ring.get('tag') or ''}|{shown:.3f}"
         kind = adapter.ring_kind(ring.get("title") or "", ring.get("body") or "")
-        (stale if now - shown > STALE_RING_SEC else fresh).append((key, kind, shown))
+        # A ring shown while this process was listening is a buyer, however long the laptop slept.
+        unheard = deps.first_heard is None or shown < deps.first_heard
+        (stale if unheard and now - shown > STALE_RING_SEC else fresh).append((key, kind, shown))
     if stale:
         deps.store.record_rings(market, stale, due_ts=now, now=now, answered=True)
     if not fresh:
