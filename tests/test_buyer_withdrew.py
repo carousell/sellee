@@ -651,6 +651,28 @@ def test_an_old_tap_cannot_send_a_link_to_a_buyer_who_since_withdrew(make_ctx, s
     assert store._db.query("SELECT 1 FROM checkouts WHERE thread_id = ?", ("fb:b",)) == []
 
 
+def test_the_reply_pass_is_told_how_a_withdrawn_buyer_gets_back_in(make_ctx, store) -> None:
+    """The reply pass is talking to the buyer who left and cannot see who is next, so its refusal
+    points back through negotiate_offer, never at the seller or a rival."""
+    item = _scarf_thread(store)
+    _offer(store, item["id"], "fb:ks5qn", 12)
+    dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "found another"},
+        _reply_ctx(make_ctx, item),
+    )
+
+    with pytest.raises(ToolError) as refused:
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "fb:ks5qn", "agreed_price": 12},
+            _reply_ctx(make_ctx, item),
+        )
+
+    assert "negotiate_offer" in str(refused.value)
+    assert "seller" not in str(refused.value) and "next" not in str(refused.value)
+
+
 def test_a_buyer_still_standing_is_not_stopped_by_the_withdrawal_gate(make_ctx, store) -> None:
     item = _scarf_thread(store, tid="fb:b", handle="b")
     _offer(store, item["id"], "fb:b", 10)

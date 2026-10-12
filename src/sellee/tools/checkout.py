@@ -59,6 +59,12 @@ _GUEST_GATE_REPLY_GUIDANCE = (
     "handles the link"
 )
 
+_WITHDRAWN_SELLER_GUIDANCE = "this buyer backed out — tell the seller and offer who is next instead"
+_WITHDRAWN_REPLY_GUIDANCE = (
+    "this buyer backed out, so no checkout link goes to them. If they want it after all, put the "
+    "offer they make now through negotiate_offer first; that brings them back in"
+)
+
 
 def _sale_id(item_id: str, thread_id: str, price) -> str:
     seed = f"{item_id}|{thread_id}|{price}".encode()
@@ -97,6 +103,14 @@ def _guest_gate_guidance(ctx: ToolContext) -> str:
     return _GUEST_GATE_SELLER_GUIDANCE
 
 
+def _withdrawn_guidance(ctx: ToolContext) -> str:
+    """Worded per tier too: the reply pass is talking to the buyer who left and cannot see who is
+    next, so it gets their own way back in rather than the seller's options."""
+    if ctx.session.tier == TIER_PASS_REPLY:
+        return _WITHDRAWN_REPLY_GUIDANCE
+    return _WITHDRAWN_SELLER_GUIDANCE
+
+
 def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
     item_id = params["item_id"]
     thread_id = params["thread_id"]
@@ -116,7 +130,7 @@ def _create_checkout_link(ctx: ToolContext, params: dict) -> dict:
 
     # A link cannot be voided once sent, so an old tap must not reach a buyer who has since left.
     if ctx.store.has_withdrawn(item_id, thread_id):
-        raise ToolError("this buyer backed out — tell the seller and offer who is next instead")
+        raise ToolError(_withdrawn_guidance(ctx))
 
     # floor gate — the store returns only a status, never the floor value
     try:
