@@ -94,7 +94,9 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
 
 WITHDREW_TEXT = "A buyer backed out{about}: {reason}."
 BACK_ON_MARKET_TEXT = " It's back on the market."
-LINK_STILL_WORKS_TEXT = " Their checkout link still works, so I'll tell you if they pay anyway."
+# A leading bid that was never confirmed never took the item off the market.
+TOP_BID_TEXT = " Theirs was the top bid."
+LINK_STILL_WORKS_TEXT = " Their checkout link still works, so they could still pay with it."
 
 
 NEXT_IN_LINE_TEXT = " Next in line: {handle} at {price}."
@@ -102,16 +104,19 @@ SEND_LINK_OPTION = "🔗 Send them the link"
 LEAVE_LISTED_OPTION = "📌 Leave it listed"
 
 
-def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, list]:
-    """The seller's notice text and its tap options."""
+def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, list | None]:
+    """The seller's notice text and its tap options — none when there is no one to sell to
+    instead, since a lone button decides nothing."""
     text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
-    if result["was_holder"]:
+    if result["released"]:
         text += BACK_ON_MARKET_TEXT
+    elif result["was_holder"]:
+        text += TOP_BID_TEXT
     if result["checkout_url"]:
         text += LINK_STILL_WORKS_TEXT
     nxt = result["next_buyer"]
     if nxt is None:
-        return text, [LEAVE_LISTED_OPTION]
+        return text, None
     text += NEXT_IN_LINE_TEXT.format(handle=prompt_data.one_line(nxt["handle"]), price=nxt["price"])
     return text, [SEND_LINK_OPTION, LEAVE_LISTED_OPTION]
 
@@ -143,8 +148,7 @@ def _withdrew(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     # A reply pass answers a stranger: another buyer's handle and offer are for the seller only.
-    result.pop("next_buyer", None)
-    return result
+    return {key: value for key, value in result.items() if key != "next_buyer"}
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:

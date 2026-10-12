@@ -63,6 +63,11 @@ def _notice_count(store: Store) -> int:
     return len(store.list_queued_notices())
 
 
+def _still_offering(store: Store, item_id: str, thread_id: str) -> bool:
+    buyer = store.negotiate_status(item_id)["buyers"].get(thread_id)
+    return buyer is not None and buyer["status"] not in _NOT_STANDING
+
+
 # --- properties --------------------------------------------------------------------------------
 
 
@@ -109,7 +114,7 @@ def test_a_withdrawal_touches_only_the_buyer_who_withdrew(store, ledger) -> None
 def test_the_seller_is_told_once_and_only_about_a_buyer_who_offered(store, ledger) -> None:
     offers, confirm, who = ledger
     item = _build(store, offers, confirm)
-    offered = BUYERS[who] in store.negotiate_status(item["id"])["buyers"]
+    offered = _still_offering(store, item["id"], BUYERS[who])
     count = _notice_count(store)
 
     first = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_text)
@@ -138,6 +143,7 @@ def test_a_buyer_who_never_offered_is_marked_withdrawn_without_telling_the_selle
     assert result == {
         "withdrew": True,
         "was_holder": False,
+        "released": False,
         "item_state": before["item_state"],
         "notice_id": None,
         "checkout_url": None,
@@ -161,7 +167,7 @@ def test_a_buyer_with_a_checkout_link_is_told_about_once_with_a_warning(
 ) -> None:
     offers, confirm, who = ledger
     item = _build(store, offers, confirm)
-    offered = BUYERS[who] in store.negotiate_status(item["id"])["buyers"]
+    offered = _still_offering(store, item["id"], BUYERS[who])
     if has_checkout:
         store.record_checkout(
             sale_id=f"sale-{item['id']}",
@@ -445,15 +451,18 @@ def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
 def test_the_next_buyer_is_the_highest_standing_offer(store, ledger) -> None:
     offers, confirm, who = ledger
     item = _build(store, offers, confirm)
+    before = store.negotiate_status(item["id"])
+    held = (before["front_runner"] or {}).get("thread_id") == BUYERS[who]
     standing = {
         t: b["highest_offer"]
-        for t, b in store.negotiate_status(item["id"])["buyers"].items()
+        for t, b in before["buyers"].items()
         if t != BUYERS[who] and b["status"] not in _NOT_STANDING and b["highest_offer"] > 0
     }
 
     result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
 
-    if standing:
+    # Only a holder leaving frees the item for someone else.
+    if held and standing:
         assert result["next_buyer"]["thread_id"] in standing
         assert standing[result["next_buyer"]["thread_id"]] == max(standing.values())
     else:
@@ -470,9 +479,11 @@ def test_the_notice_offers_a_checkout_link_only_when_someone_is_next(store, ledg
     result = store.negotiate_withdraw(item["id"], BUYERS[who], notice=_withdrawal_text)
 
     for notice in store.list_queued_notices()[count:]:
-        labels = [label for label, _token in notice["controls"]]
-        assert ("🔗 Send them the link" in labels) is (result["next_buyer"] is not None)
-        assert "📌 Leave it listed" in labels
+        labels = [label for label, _token in notice["controls"] or []]
+        if result["next_buyer"] is None:
+            assert labels == []  # nothing to decide, so no lone button
+        else:
+            assert labels == ["🔗 Send them the link", "📌 Leave it listed"]
 
 
 def test_the_notice_names_the_next_buyer_and_their_offer(make_ctx, store) -> None:
@@ -491,6 +502,63 @@ def test_the_notice_names_the_next_buyer_and_their_offer(make_ctx, store) -> Non
 
     (notice,) = store.list_queued_notices()
     assert "Next in line: fb:7laa at 10 USD." in notice["text"]
+
+
+def test_a_buyer_who_held_nothing_names_no_one_next(store) -> None:
+    """a backs out while b holds the item first-come-first-served: b is not "next", they have it."""
+    item = _item(store)
+    _offer(store, item["id"], "fb:a", 70)
+    _offer(store, item["id"], "fb:b", 100)
+
+    result = store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+
+    assert result["next_buyer"] is None
+    (notice,) = store.list_queued_notices()
+    assert "Next in line" not in notice["text"] and "back on the market" not in notice["text"]
+    assert notice["controls"] is None
+
+
+def test_a_leading_bidder_leaving_is_not_called_back_on_the_market(store) -> None:
+    """An unconfirmed top bid never took the item off the market."""
+    item = _bidding_war(store)
+
+    store.negotiate_withdraw(item["id"], "fb:c", notice=_withdrawal_text)
+
+    (notice,) = store.list_queued_notices()
+    assert "back on the market" not in notice["text"]
+    assert "Theirs was the top bid." in notice["text"]
+    assert "Next in line: fb:b at 120 USD." in notice["text"]
+
+
+def test_a_buyer_sellee_already_walked_away_from_is_not_reported(store) -> None:
+    item = _item(store)
+    for _ in range(3):
+        _offer(store, item["id"], "fb:a", 10 + _)  # lowballs until sellee disengages
+    assert store.negotiate_status(item["id"])["buyers"]["fb:a"]["status"] == "passed"
+
+    result = store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+
+    assert result["withdrew"] is True and result["notice_id"] is None
+    assert store.list_queued_notices() == []
+
+
+def test_a_live_link_is_flagged_without_promising_a_payment_alert(store) -> None:
+    item = _item(store)
+    _offer(store, item["id"], "fb:a", 100)
+    store.record_checkout(
+        sale_id="s1",
+        item_id=item["id"],
+        thread_id="fb:a",
+        checkout_url=_LINK,
+        price=100,
+        currency="USD",
+    )
+
+    store.negotiate_withdraw(item["id"], "fb:a", notice=_withdrawal_text)
+
+    (notice,) = store.list_queued_notices()
+    assert "checkout link still works" in notice["text"]
+    assert "I'll tell you" not in notice["text"]
 
 
 def test_an_offer_without_a_buyer_name_keeps_the_threads_handle(make_ctx, store) -> None:

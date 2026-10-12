@@ -12,8 +12,10 @@ from sellee.store.helpers import (
     BudgetRecord,
     CheckoutRecord,
     ItemNotFound,
+    NextBuyer,
     StoreError,
     WantNotFound,
+    WithdrawResult,
     _insert_ask,
     _insert_notice,
     _now,
@@ -336,10 +338,15 @@ class NegotiationMixin:
             return {"item_state": led["state"]}
 
     def negotiate_withdraw(
-        self, item_id: str, thread_id: str, *, notice: Callable[[dict], tuple[str, list | None]]
-    ) -> dict:
-        """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer or a
-        checkout link, queue `notice(result)` in the same transaction. A repeat changes nothing."""
+        self,
+        item_id: str,
+        thread_id: str,
+        *,
+        notice: Callable[[WithdrawResult], tuple[str, list | None]],
+    ) -> WithdrawResult:
+        """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer still
+        standing or a checkout link, queue `notice(result)` in the same transaction. A repeat
+        changes nothing."""
         with self._db.transaction() as conn:
             list_price, currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
@@ -353,16 +360,18 @@ class NegotiationMixin:
             checkout_url = checkout["checkout_url"] if checkout else None
             buyer = led["buyers"].get(thread_id)
             was_holder = (led["front_runner"] or {}).get("thread_id") == thread_id
+            released = was_holder and led["state"] == "reserved_provisional"
             if buyer is not None and buyer["status"] == "withdrew":
                 return {
                     "withdrew": False,
                     "was_holder": False,
+                    "released": False,
                     "item_state": led["state"],
-                    "notice_id": None,
                     "checkout_url": None,
                     "next_buyer": None,
+                    "notice_id": None,
                 }
-            offered = buyer is not None
+            offered = buyer is not None and buyer["status"] not in negotiate_engine.NOT_STANDING
             if buyer is None:
                 # Only asked questions: no offer to report, but follow-ups must still see them gone.
                 buyer = negotiate_engine.blank_buyer(_thread_handle(conn, thread_id))
@@ -371,14 +380,16 @@ class NegotiationMixin:
             if was_holder:
                 _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
-            result: dict = {
+            result: WithdrawResult = {
                 "withdrew": True,
                 "was_holder": was_holder,
+                "released": released,
                 "item_state": led["state"],
                 "checkout_url": checkout_url,
-                "next_buyer": _next_buyer(led, currency),
+                # Someone else is only "next" when the item was this buyer's to give up.
+                "next_buyer": _next_buyer(led, currency) if was_holder else None,
+                "notice_id": None,
             }
-            result["notice_id"] = None
             if offered or checkout_url:
                 text, options = notice(result)
                 ref = f"buyer-withdrew:{thread_id}"
@@ -707,7 +718,7 @@ def _reopen(led: dict, list_price) -> None:
         led["front_runner"] = {"thread_id": best[0], "amount": best[1], "kind": "bid"}
 
 
-def _next_buyer(led: dict, currency) -> dict | None:
+def _next_buyer(led: dict, currency) -> NextBuyer | None:
     """The standing buyer with the highest offer, for the seller to sell to instead."""
     best = negotiate_engine.best_standing(led["buyers"])
     if best is None:

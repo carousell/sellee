@@ -121,7 +121,7 @@ buyer in line when there is one. Its taps:
   that price, so `set_floor` to it and mint again. Send the link with `send_reply` and confirm:
   "✅ Checkout link sent to <buyer> for <price>". If the buyer who backed out still holds a link,
   add the **Checkout links** rule.
-- **📌 Leave it listed** — nothing more to do; the item is already back on the market.
+- **📌 Leave it listed** — nothing more to do; the listing stays up as it is.
 
 **Scam confirmation.** The chat is already held and nothing was sent or clicked — say so, so the
 seller knows there's no fire. The one decision left is theirs: is this a scam? Describe the move in

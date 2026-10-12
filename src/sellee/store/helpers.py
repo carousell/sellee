@@ -407,6 +407,27 @@ class CheckoutRecord(TypedDict):
     issued_ts: float
 
 
+class NextBuyer(TypedDict):
+    """The standing buyer a withdrawal notice offers the seller instead."""
+
+    thread_id: str
+    handle: str
+    price: str
+
+
+class WithdrawResult(TypedDict):
+    """What `negotiate_withdraw` did. `was_holder`: they held the item or led the bidding;
+    `released`: it was reserved for them and is available again."""
+
+    withdrew: bool
+    was_holder: bool
+    released: bool
+    item_state: str
+    checkout_url: str | None
+    next_buyer: NextBuyer | None
+    notice_id: int | None
+
+
 # `class` is a reserved word, so PassRecord needs the functional syntax — where `from __future__
 # import annotations` does not apply, because the annotations are values in a call rather than
 # annotations the compiler sees. They are written as strings for that reason; the checker still
