@@ -362,6 +362,41 @@ def test_a_city_named_by_a_legacy_link_too_prefers_the_zone_tab_zone(zone_tab) -
     assert region.zones_for_city("indianapolis", zone_tab) == ["America/Indiana/Indianapolis"]
 
 
+@pytest.mark.parametrize(
+    ("typed", "canonical", "alias"),
+    [
+        ("utc", "Etc/UTC", "UTC"),
+        ("gmt", "Etc/GMT", "GMT"),
+        ("singapore", "Asia/Singapore", "Singapore"),
+        ("hong kong", "Asia/Hong_Kong", "Hongkong"),
+        ("indianapolis", "America/Indiana/Indianapolis", "America/Indianapolis"),
+        ("buenos aires", "America/Argentina/Buenos_Aires", "America/Buenos_Aires"),
+    ],
+)
+def test_names_for_one_clock_are_offered_once_as_the_canonical_one(
+    tmp_path, typed, canonical, alias
+) -> None:
+    # Without zone.tab nothing lists the canonical name, so it is told apart by its shape.
+    import zoneinfo
+
+    if alias not in zoneinfo.available_timezones():
+        pytest.skip(f"this zone database has no {alias} link")
+    assert region.zones_for_city(typed, str(tmp_path / "absent.tab")) == [canonical]
+
+
+def test_a_zone_name_typed_exactly_is_the_one_offered(tmp_path) -> None:
+    assert region.zones_for_city("UTC", str(tmp_path / "absent.tab")) == ["UTC"]
+
+
+def test_names_for_different_clocks_are_all_offered(tmp_path) -> None:
+    import zoneinfo
+
+    if not {"Australia/West", "Brazil/West"} <= zoneinfo.available_timezones():
+        pytest.skip("this zone database has no legacy West links")
+    found = region.zones_for_city("west", str(tmp_path / "absent.tab"))
+    assert found == ["Australia/West", "Brazil/West"]
+
+
 def test_the_zone_database_is_listed_once_however_many_cities_are_asked(
     monkeypatch, zone_tab
 ) -> None:

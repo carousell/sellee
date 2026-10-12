@@ -666,11 +666,20 @@ def test_a_city_with_no_zone_in_a_country_with_no_places_asks_for_a_big_city(
 
 
 def test_a_city_several_zones_share_is_picked_from_a_list(zone_tab, monkeypatch, tmp_path) -> None:
-    # Without zone.tab nothing marks the legacy link as the lesser name, so both are offered.
+    import zoneinfo
+
+    if not {"Australia/West", "Brazil/West"} <= zoneinfo.available_timezones():
+        pytest.skip("this zone database has no legacy West links")
     monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(tmp_path / "absent.tab"))
-    zone, out = _ask_timezone("BR", ["indianapolis", "1"])
-    assert zone == "America/Indiana/Indianapolis"
-    assert "1) America/Indiana/Indianapolis\n2) America/Indianapolis\n" in out
+    zone, out = _ask_timezone("BR", ["west", "2"])
+    assert zone == "Brazil/West"
+    assert "1) Australia/West\n2) Brazil/West\n" in out
+
+
+def test_typing_utc_is_not_asked_to_choose_between_its_names(zone_tab) -> None:
+    zone, out = _ask_timezone("ES", ["4", "utc", ""])
+    assert zone == "Etc/UTC"
+    assert "Which of these?" not in out
 
 
 def test_without_zone_tab_the_table_still_lists_and_others_get_the_city_question(

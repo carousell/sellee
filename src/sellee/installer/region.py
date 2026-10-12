@@ -10,6 +10,7 @@ import functools
 import os
 import re
 import unicodedata
+from datetime import datetime, timedelta, timezone
 
 from sellee import countries
 
@@ -140,14 +141,55 @@ def _place_label(zone: str, description: str) -> str:
 
 
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:
-    """The zones whose city is `text`, ignoring accents, case and punctuation. When any match is
-    in `zone.tab`, only those are kept, so a legacy link does not count twice."""
+    """The zones whose city is `text`, ignoring accents, case and punctuation. Names that keep the
+    same time are one answer, not a choice, so only the likeliest-canonical of them is kept."""
     wanted = _city_key(text)
     if not wanted:
         return []
-    found = [zone for zone in _zones_by_city().get(wanted, ()) if not zone_error(zone)]
     listed = {zone for _, zone, _ in _read_zone_tab(zone_tab)}
-    return [zone for zone in found if zone in listed] or found
+    found = sorted(
+        (zone for zone in _zones_by_city().get(wanted, ()) if not zone_error(zone)),
+        key=lambda zone: _canonical_first(zone, listed, text.strip()),
+    )
+    return _one_per_clock(found)
+
+
+# The areas canonical zone names sit under. A name outside them ("Singapore", "US/Pacific") is a
+# link kept for old systems.
+_ZONE_AREAS = frozenset(
+    "Africa America Antarctica Arctic Asia Atlantic Australia Europe Indian Pacific".split()
+)
+
+
+def _canonical_first(zone: str, listed: set, typed: str) -> tuple:
+    """Sorts first the name to offer: one `zone.tab` lists, else one under a continent or ocean
+    (Asia/Singapore over Singapore), else exactly what was typed (UTC), else the deepest, because
+    a city moved under its state left a shorter link behind (America/Indianapolis)."""
+    in_area = zone.split("/", 1)[0] in _ZONE_AREAS
+    return (zone not in listed, not in_area, zone != typed, -zone.count("/"), zone)
+
+
+# Offsets are compared weekly from 1970, where the database's history is complete, for 70 years.
+_CLOCK_SINCE = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_CLOCK_WEEKS = 52 * 70
+
+
+def _one_per_clock(zones: list) -> list:
+    """`zones` less any that keep the same time as one before it."""
+    if len(zones) < 2:
+        return zones
+    clocks = [_clock(zone) for zone in zones]
+    return [zone for index, zone in enumerate(zones) if clocks[index] not in clocks[:index]]
+
+
+def _clock(zone: str) -> tuple:
+    import zoneinfo
+
+    tz = zoneinfo.ZoneInfo(zone)
+    return tuple(
+        (_CLOCK_SINCE + timedelta(weeks=week)).astimezone(tz).utcoffset()
+        for week in range(_CLOCK_WEEKS)
+    )
 
 
 @functools.lru_cache(maxsize=1)
