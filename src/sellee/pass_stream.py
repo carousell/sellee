@@ -28,7 +28,7 @@ def parse_stream_line(line: str) -> list:
         return []
     try:
         obj = json.loads(line)
-    except ValueError:
+    except (ValueError, RecursionError):
         return [("pass.raw", {"line": _truncate(line)})]
     if not isinstance(obj, dict):
         return [("pass.raw", {"line": _truncate(line)})]
@@ -136,7 +136,10 @@ def _elide_images(value: object) -> object:
 def _stringify(value: object) -> str:
     if isinstance(value, str):
         return value
-    return json.dumps(_elide_images(value), default=str)
+    try:
+        return json.dumps(_elide_images(value), default=str)
+    except RecursionError:
+        return "(content nested too deeply to show)"
 
 
 def is_cap_hit(result_payload: dict | None) -> bool:

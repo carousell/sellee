@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
@@ -177,6 +178,34 @@ def test_a_tool_result_is_capped_per_block() -> None:
     )
     ((_, payload),) = parse_stream_line(line)
     assert len(payload["content"]) < 5000 and payload["content"].endswith("chars)")
+
+
+def _nested(depth: int) -> str:
+    return "[" * depth + "]" * depth
+
+
+def test_a_line_nested_too_deep_to_parse_becomes_pass_raw() -> None:
+    """json.loads gives up on deep nesting with RecursionError, not ValueError."""
+    ((kind, _),) = parse_stream_line(_nested(1_000_000))
+    assert kind == "pass.raw"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[{"type":"tool_result","tool_use_id":"t1","content":' + _nested(5_000) + "}]",
+        "[" + _nested(5_000) + "]",
+    ],
+    ids=["tool_result", "plain"],
+)
+def test_user_content_nested_past_the_recursion_limit_is_elided(content: str) -> None:
+    """The line parses, but summarizing its images and re-serializing it recursed until
+    RecursionError, which the reader thread does not catch: it died, stdout went unread, and the
+    pass's result was never recorded."""
+    line = '{"type":"user","message":{"content":' + content + "}}"
+    ((kind, payload),) = parse_stream_line(line)
+    assert kind == "pass.tool_result"
+    assert len(payload["content"]) < 200
 
 
 def test_is_cap_hit_reads_result_subtype() -> None:
