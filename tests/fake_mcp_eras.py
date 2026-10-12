@@ -29,6 +29,12 @@ class EraLog:
         self.lenient = False
         # Modern only: no server/discover, answered as the spec says: HTTP 404 with -32601.
         self.no_discover = False
+        # Modern only: refuse every legacy version, as a server that dropped the legacy era does.
+        self.modern_only = False
+        # Modern only: a JSON-RPC error code to refuse every tools/call with, at HTTP 400.
+        self.refuse_calls = 0
+        # The tools/call requests that reached a tool, as opposed to ones refused before it.
+        self.executed = 0
         # Modern only: a JSON-RPC error code to answer server/discover with, at HTTP 200.
         self.discover_error = 0
         self.requests: list = []
@@ -43,15 +49,28 @@ class EraLog:
 def answer(handler, body: dict, log: EraLog) -> bool:
     """Write the server's answer when the protocol layer settles the request; False when the request
     reaches the tool handler."""
+    settled = _answer(handler, body, log)
+    if not settled and body.get("method") == "tools/call":
+        log.executed += 1
+    return settled
+
+
+def _answer(handler, body: dict, log: EraLog) -> bool:
     headers = {key.lower(): value for key, value in handler.headers.items()}
     method = body.get("method")
     params = body.get("params") or {}
     log.requests.append({"method": method, "headers": headers, "params": params})
-    supported = ((MODERN,) if log.era == "modern" else ()) + LEGACY_VERSIONS
+    legacy = () if (log.era == "modern" and log.modern_only) else LEGACY_VERSIONS
+    supported = ((MODERN,) if log.era == "modern" else ()) + legacy
     version = headers.get("mcp-protocol-version", "")
     if (version or "2025-03-26") not in supported and not (log.lenient and log.era == "legacy"):
-        # go-sdk rejects an unknown version header in plain text, before reading the body.
-        _plain(handler, 400, "Bad Request: Unsupported protocol version")
+        if log.era == "modern":
+            data = {"supported": list(supported), "requested": version or "2025-03-26"}
+            error = {"code": -32022, "message": "unsupported protocol version", "data": data}
+            _json(handler, 400, {"jsonrpc": "2.0", "id": body.get("id"), "error": error})
+        else:
+            # go-sdk v1.6.1 rejects an unknown version header in plain text, before the body.
+            _plain(handler, 400, "Bad Request: Unsupported protocol version")
         return True
     if version == MODERN and log.era == "modern":
         return _modern(handler, body, headers, method, params, supported, log)
@@ -93,6 +112,9 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
     meta = params.get("_meta") or {}
     if meta.get(META_VERSION) != MODERN or not isinstance(meta.get(META_CAPABILITIES), dict):
         _error(handler, 200, body, -32602, "missing or invalid _meta")
+        return True
+    if method == "tools/call" and log.refuse_calls:
+        _error(handler, 400, body, log.refuse_calls, "header mismatch")
         return True
     if method == "server/discover" and log.no_discover:
         _error(handler, 404, body, -32601, "method not found")

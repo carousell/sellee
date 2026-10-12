@@ -39,6 +39,8 @@ _LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 _MODERN_ERRORS = (-32020, -32021)
 # A modern server answers a method it lacks with HTTP 404 and this code; a legacy one uses 200.
 _METHOD_NOT_FOUND = -32601
+# Errors a modern server returns before dispatching a request, so a call refused with one never ran.
+_REFUSED_BEFORE_DISPATCH = (-32020, -32021, -32022)
 _MODERN_META = {
     "io.modelcontextprotocol/protocolVersion": _MODERN,
     "io.modelcontextprotocol/clientCapabilities": {},
@@ -157,6 +159,13 @@ class RailClient:
                 # The server dropped our session. Open a new one for the next call, but never resend
                 # this one: the 404 cannot prove the call did not run.
                 self._renew_session(era)
+            if not _contradicts(era, exc):
+                raise _http_error(exc) from exc
+        # The server changed era and refused the call before running it: find its era, send once.
+        era = self._reprobe(era)
+        try:
+            return self._request(method, params, era)[0]
+        except _HTTPAnswer as exc:
             raise _http_error(exc) from exc
 
     def _era(self) -> _Era:
@@ -192,6 +201,16 @@ class RailClient:
             if isinstance(versions, list) and _MODERN in versions:
                 return self._cache(_MODERN_ERA)
         return self._initialize()
+
+    def _reprobe(self, stale: _Era) -> _Era:
+        """Probe again after a refusal that contradicts `stale`, unless another thread has."""
+        with self._era_lock():
+            current = _ERAS.get(self._era_key)
+            if current is not None and current is not stale:
+                return current
+            _ERAS.pop(self._era_key, None)
+            _TOOL_LISTS.pop(self._era_key, None)
+            return self._probe()
 
     def _renew_session(self, stale: _Era) -> None:
         """Re-initialize once for a dropped session, unless another thread already has."""
@@ -538,6 +557,15 @@ def _text_content(result: dict) -> str:
         if isinstance(block, dict) and block.get("type") == "text":
             parts.append(block.get("text", ""))
     return "".join(parts)
+
+
+def _contradicts(era: _Era, answer: _HTTPAnswer) -> bool:
+    """Whether a refusal shows the server left `era` before running the request: a modern request
+    met a 400 with no modern error, or a legacy request met a modern error."""
+    code = _rpc_error_code(answer.body)
+    if era.modern:
+        return answer.status == 400 and code not in _REFUSED_BEFORE_DISPATCH
+    return code in _REFUSED_BEFORE_DISPATCH
 
 
 def _http_error(answer: _HTTPAnswer) -> RailNetworkError:

@@ -725,6 +725,86 @@ def test_concurrent_misses_fetch_the_tool_list_once() -> None:
         assert state.eras.count("tools/list") == 1
 
 
+# --- a server that changes era under a running client --------------------------------------------
+
+
+def _switch(log, era: str) -> None:
+    log.era = "modern" if era in ("modern", "modern_only") else "legacy"
+    log.modern_only = era == "modern_only"
+
+
+def test_a_server_that_drops_the_new_era_is_reprobed_and_the_call_runs_once() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "legacy")
+        client.create_listing({"title": "y"})
+        assert server.eras.executed == 2
+        assert server.eras.count("server/discover") == 2
+        assert server.eras.count("initialize") == 1
+
+
+def test_a_server_that_drops_the_legacy_era_is_reprobed_and_the_call_runs_once() -> None:
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "modern_only")
+        client.create_listing({"title": "y"})
+        assert server.eras.executed == 2
+        assert server.eras.count("server/discover") == 2
+        assert _headers(server.eras.calls()[-1])["mcp-protocol-version"] == MODERN
+
+
+def test_a_failure_that_is_not_an_era_change_is_raised_and_never_resent() -> None:
+    with _relay("modern", None) as (state, base):
+        client = _client(base)
+        client.list_threads("", 10)
+        state.down = True
+        with pytest.raises(RailNetworkError):
+            client.list_threads("", 10)
+        state.down = False
+        client.list_threads("", 10)
+        assert state.eras.count("server/discover") == 1
+
+
+def test_a_modern_error_on_a_modern_call_is_not_an_era_change() -> None:
+    """A header mismatch is the server speaking the new era; it is never cause to re-probe."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.refuse_calls = -32020
+        with pytest.raises(RailNetworkError):
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert server.eras.count("server/discover") == 1
+        assert server.eras.executed == 1
+
+
+@settings(max_examples=40, deadline=None)
+@given(steps=st.lists(st.sampled_from(["legacy", "modern", "modern_only"]), min_size=1, max_size=6))
+def test_every_call_runs_once_whatever_the_era_switches(steps) -> None:
+    """Each era switch the server makes is either compatible or refused before any tool runs, so
+    every call runs exactly once and each refusal costs exactly one re-probe."""
+    with _serving(steps[0] if steps[0] != "modern_only" else "modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client_modern = None
+        contradictions = 0
+        for step in steps:
+            _switch(server.eras, step)
+            if client_modern is not None:
+                if (client_modern and step == "legacy") or (
+                    not client_modern and step == "modern_only"
+                ):
+                    contradictions += 1
+                    client_modern = step != "legacy"
+            else:
+                client_modern = step != "legacy"
+            _client(base).create_listing({"title": "x"})
+        assert server.eras.executed == len(steps)
+        assert server.eras.count("server/discover") == 1 + contradictions
+
+
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
 _REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 
