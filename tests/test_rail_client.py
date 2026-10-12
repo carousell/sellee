@@ -456,6 +456,7 @@ def test_a_legacy_server_is_initialized_once_and_spoken_to_in_2025_06_18() -> No
         assert [r["method"] for r in log.requests] == [
             "server/discover",
             "initialize",
+            "notifications/initialized",
             "tools/call",
             "tools/call",
         ]
@@ -602,6 +603,27 @@ def test_each_key_on_an_endpoint_finds_its_own_era() -> None:
         _client(base, key="new").create_listing({"title": "y"})
         assert server.eras.count("initialize") == 2
         assert [_headers(c).get("mcp-session-id") for c in server.eras.calls()] == ["s1", "s2"]
+
+
+def test_a_strict_legacy_server_gets_the_ready_notification_before_any_call() -> None:
+    """A server that refuses calls until `notifications/initialized` serves every call, including
+    on a session renewed after the server dropped the first one."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.sessions = ["s1", "s2"]
+        server.eras.require_ready = True
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        server.eras.dropped.add("s1")
+        with pytest.raises(RailNetworkError):
+            client.create_listing({"title": "y"})
+        client.create_listing({"title": "z"})
+        assert server.eras.ready == {"s1", "s2"}
+        (ready,) = [r for r in server.eras.requests if r["method"] == "notifications/initialized"][
+            :1
+        ]
+        assert _headers(ready)["mcp-protocol-version"] == "2025-06-18"
+        assert _headers(ready)["mcp-session-id"] == "s1"
 
 
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.

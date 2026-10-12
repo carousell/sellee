@@ -192,7 +192,13 @@ class RailClient:
         version = result.get("protocolVersion")
         if version not in _LEGACY_VERSIONS:
             raise RailNetworkError(f"rail answered initialize with version {version!r}")
-        return self._cache(_Era(modern=False, version=version, session_id=session_id))
+        era = _Era(modern=False, version=version, session_id=session_id)
+        # The handshake ends with this notification; a strict server refuses calls until it arrives.
+        try:
+            self._post({"jsonrpc": "2.0", "method": "notifications/initialized"}, "", era)
+        except _HTTPAnswer as exc:
+            raise _http_error(exc) from exc
+        return self._cache(era)
 
     def _cache(self, era: _Era) -> _Era:
         _ERAS[self._era_key] = era
@@ -203,38 +209,11 @@ class RailClient:
         An HTTP error other than 401/403 raises _HTTPAnswer, for the caller to read or type."""
         self._next_id += 1
         params = dict(params or {})
-        headers = {
-            "Content-Type": "application/json",
-            # Both are required even though the server answers with plain JSON; it rejects the
-            # request otherwise, and the rejection lands after auth so a bad key masks it.
-            "Accept": "application/json, text/event-stream",
-            "Authorization": f"Bearer {self._api_key}",
-            "User-Agent": _CLIENT_UA,
-        }
         if era.modern:
             params["_meta"] = {**params.get("_meta", {}), **_MODERN_META}
-            headers["MCP-Protocol-Version"] = _MODERN
-            headers["Mcp-Method"] = method
-            if method == "tools/call":
-                headers["Mcp-Name"] = str(params.get("name", ""))
-        elif era.version:
-            headers["MCP-Protocol-Version"] = era.version
-            if era.session_id:
-                headers["Mcp-Session-Id"] = era.session_id
-        body = json.dumps(
-            {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
-        ).encode("utf-8")
-        req = urllib.request.Request(self._endpoint, data=body, method="POST", headers=headers)
-        try:
-            with _no_redirects().open(req, timeout=self._timeout) as resp:
-                raw = resp.read().decode("utf-8")
-                session_id = resp.headers.get("Mcp-Session-Id") or ""
-        except urllib.error.HTTPError as exc:
-            if exc.code in (401, 403):
-                raise RailAuthError("carousell.ai rejected the guest key") from exc
-            raise _HTTPAnswer(exc.code, _read_error_body(exc)) from exc
-        except (urllib.error.URLError, OSError) as exc:
-            raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
+        message = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
+        name = str(params.get("name", "")) if method == "tools/call" else ""
+        raw, session_id = self._post(message, name, era)
         try:
             envelope = json.loads(raw)
         except ValueError as exc:
@@ -252,6 +231,37 @@ class RailClient:
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result, session_id
+
+    def _post(self, message: dict, tool_name: str, era: _Era) -> tuple[str, str]:
+        """POST one JSON-RPC message with `era`'s headers; returns the body and any session id."""
+        headers = {
+            "Content-Type": "application/json",
+            # Both are required even though the server answers with plain JSON; it rejects the
+            # request otherwise, and the rejection lands after auth so a bad key masks it.
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": _CLIENT_UA,
+        }
+        if era.modern:
+            headers["MCP-Protocol-Version"] = _MODERN
+            headers["Mcp-Method"] = message["method"]
+            if tool_name:
+                headers["Mcp-Name"] = tool_name
+        elif era.version:
+            headers["MCP-Protocol-Version"] = era.version
+            if era.session_id:
+                headers["Mcp-Session-Id"] = era.session_id
+        body = json.dumps(message).encode("utf-8")
+        req = urllib.request.Request(self._endpoint, data=body, method="POST", headers=headers)
+        try:
+            with _no_redirects().open(req, timeout=self._timeout) as resp:
+                return resp.read().decode("utf-8"), resp.headers.get("Mcp-Session-Id") or ""
+        except urllib.error.HTTPError as exc:
+            if exc.code in (401, 403):
+                raise RailAuthError("carousell.ai rejected the guest key") from exc
+            raise _HTTPAnswer(exc.code, _read_error_body(exc)) from exc
+        except (urllib.error.URLError, OSError) as exc:
+            raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
 
     def open_mail_stream(self) -> MailStreamConnection:
         """bazaar's mail stream for this key; nothing is sent until its events are read."""

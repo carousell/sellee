@@ -20,6 +20,10 @@ class EraLog:
         # Legacy only: session ids `initialize` hands out in turn, and ids the server has dropped.
         self.sessions: list = []
         self.dropped: set = set()
+        # Legacy only: refuse calls on a session until `notifications/initialized`, as a strict
+        # server does; go-sdk does not check. The empty-string session stands for "no session id".
+        self.require_ready = False
+        self.ready: set = set()
         # Modern only: a JSON-RPC error code to answer server/discover with, at HTTP 200.
         self.discover_error = 0
         self.requests: list = []
@@ -61,8 +65,15 @@ def answer(handler, body: dict, log: EraLog) -> bool:
         }
         _json(handler, 200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result}, extra)
         return True
+    if method == "notifications/initialized" and "id" not in body:
+        log.ready.add(session)
+        _empty(handler, 202)
+        return True
     if method == "server/discover":
         _error(handler, 200, body, -32601, "method not found")
+        return True
+    if log.require_ready and session not in log.ready:
+        _error(handler, 200, body, -32600, "method invalid during session initialization")
         return True
     return False
 
@@ -105,6 +116,12 @@ def _json(handler, status, obj, extra=None):
         handler.send_header(name, value)
     handler.end_headers()
     handler.wfile.write(payload)
+
+
+def _empty(handler, status):
+    handler.send_response(status)
+    handler.send_header("Content-Length", "0")
+    handler.end_headers()
 
 
 def _plain(handler, status, text):
