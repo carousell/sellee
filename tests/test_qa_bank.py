@@ -229,6 +229,7 @@ def test_the_sold_flow_reaches_the_take_down(make_ctx, store) -> None:
         market="carousell",
         counterpart_handle="bob",
         item_id=item["id"],
+        source="browser_read",
     )
     sold = store.negotiate_confirm_sold(item["id"], "carousell:1")
     assert {row["platform"] for row in sold["take_down"]} == {"carousell-ai"}

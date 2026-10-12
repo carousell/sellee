@@ -10,7 +10,7 @@ their own tools, never this generic writer.
 
 from __future__ import annotations
 
-from sellee.store import StoreError
+from sellee.store import IMPORTED_THREAD_SOURCES, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -24,6 +24,8 @@ from sellee.tools.verify import verify_market_url
 
 
 def _create_thread(ctx: ToolContext, params: dict) -> dict:
+    if params.get("source") in IMPORTED_THREAD_SOURCES:
+        raise ToolError(f"source {params['source']!r} is only for threads an inbox imports")
     listing_url = params.get("listing_url")
     if listing_url:
         result = verify_market_url(ctx, params["market"], listing_url, params.get("region"))
