@@ -278,7 +278,30 @@ def test_a_city_named_by_a_legacy_link_too_prefers_the_zone_tab_zone(zone_tab) -
     assert region.zones_for_city("indianapolis", zone_tab) == ["America/Indiana/Indianapolis"]
 
 
-@settings(max_examples=60)
+def test_the_zone_database_is_listed_once_however_many_cities_are_asked(
+    monkeypatch, zone_tab
+) -> None:
+    # Listing it opens every file in it, which is too slow to repeat on each typed answer.
+    import zoneinfo
+
+    listed = []
+    available = zoneinfo.available_timezones
+
+    def counting():
+        listed.append(1)
+        return available()
+
+    monkeypatch.setattr(zoneinfo, "available_timezones", counting)
+    region._zones_by_city.cache_clear()
+    try:
+        for city in ("los angeles", "Madrid", "Barcelona", "kolkata"):
+            region.zones_for_city(city, zone_tab)
+    finally:
+        region._zones_by_city.cache_clear()
+    assert len(listed) == 1
+
+
+@settings(max_examples=60, deadline=None)
 @given(
     zone=st.sampled_from(
         ["America/Los_Angeles", "America/New_York", "Europe/Madrid", "Asia/Kolkata"]

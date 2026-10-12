@@ -6,6 +6,7 @@ not name produces no guess at all, so setup asks rather than proposing a wrong d
 
 from __future__ import annotations
 
+import functools
 import os
 
 from sellee import countries
@@ -112,18 +113,24 @@ def place_zones(region: str, zone_tab: str | None = None) -> list:
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:
     """The zones whose city is `text`, ignoring case, spaces and underscores. When any match is
     in `zone.tab`, only those are kept, so a legacy link does not count twice."""
-    import zoneinfo
-
     wanted = _city_key(text)
     if not wanted:
         return []
-    found = sorted(
-        zone
-        for zone in zoneinfo.available_timezones()
-        if _city_key(city_label(zone)) == wanted and not zone_error(zone)
-    )
+    found = [zone for zone in _zones_by_city().get(wanted, ()) if not zone_error(zone)]
     listed = {zone for _, zone, _ in _read_zone_tab(zone_tab)}
     return [zone for zone in found if zone in listed] or found
+
+
+@functools.lru_cache(maxsize=1)
+def _zones_by_city() -> dict:
+    """Every zone the database has, by its city's spelling. Built once: listing the database opens
+    every file in it."""
+    import zoneinfo
+
+    index: dict = {}
+    for zone in sorted(zoneinfo.available_timezones()):
+        index.setdefault(_city_key(city_label(zone)), []).append(zone)
+    return {key: tuple(zones) for key, zones in index.items()}
 
 
 def city_label(zone: str) -> str:

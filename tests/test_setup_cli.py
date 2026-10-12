@@ -714,7 +714,9 @@ def test_an_empty_city_skips_with_the_note(zone_tab) -> None:
     assert "no timezone recorded — ask Sellee to set one any time" in out
 
 
-@settings(max_examples=150, suppress_health_check=[HealthCheck.function_scoped_fixture])
+@settings(
+    max_examples=150, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
 @given(
     region=st.sampled_from(["US", "ES", "FR", "SG", "BR"]),
     replies=st.lists(
