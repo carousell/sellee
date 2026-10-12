@@ -54,7 +54,7 @@ def _ask_timezone(region, replies):
 def test_a_country_outside_the_table_is_offered_its_zone_tab_places(zone_tab) -> None:
     zone, out = _ask_timezone("ES", ["2"])
     assert zone == "Atlantic/Canary"
-    assert "1) Spain (mainland) — Madrid\n2) Canary Islands\n3) Somewhere else" in out
+    assert "1) Spain — Madrid\n2) Canary Islands\n3) Somewhere else" in out
 
 
 def test_somewhere_else_takes_a_city_and_confirms_its_zone(zone_tab) -> None:

@@ -251,10 +251,10 @@ def test_a_country_the_table_names_is_offered_by_zone_most_populous_first(zone_t
         ("Central — Chicago", "America/Chicago"),
         ("Mountain — Denver", "America/Denver"),
         ("Pacific — Los Angeles", "America/Los_Angeles"),
-        ("MST - AZ (except Navajo) — Phoenix", "America/Phoenix"),
+        ("Arizona — Phoenix", "America/Phoenix"),
         ("Anchorage", "America/Anchorage"),
         ("Hawaii — Honolulu", "Pacific/Honolulu"),
-        ("Alaska - western Aleutians — Adak", "America/Adak"),
+        ("Aleutian Islands — Adak", "America/Adak"),
     ]
 
 
@@ -307,18 +307,49 @@ def test_clocks_are_compared_over_the_coming_year_not_their_history(zone_tab) ->
 def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
     # Ceuta keeps mainland time, so it is not offered beside it.
     assert region.place_zones("ES", zone_tab) == [
-        ("Spain (mainland) — Madrid", "Europe/Madrid"),
+        ("Spain — Madrid", "Europe/Madrid"),
         ("Canary Islands", "Atlantic/Canary"),
     ]
 
 
 def test_a_label_drops_zone_tabs_main_area_marker(zone_tab) -> None:
-    assert [label for label, _ in region.place_zones("AU", zone_tab)][:3] == [
+    assert [label for label, _ in region.place_zones("AU", zone_tab)] == [
         "New South Wales — Sydney",
         "Lord Howe Island",
         "Queensland — Brisbane",
+        "South Australia — Adelaide",
+        "Northern Territory — Darwin",
+        "Western Australia — Perth",
+        "Western Australia — Eucla",
     ]
     assert region.place_zones("DE", zone_tab) == [("Germany — Berlin", "Europe/Berlin")]
+
+
+@pytest.mark.parametrize(
+    ("zone", "description", "label"),
+    [
+        ("America/Toronto", "Eastern - ON & QC (most areas)", "Eastern — Toronto"),
+        ("America/Halifax", "Atlantic - NS (most areas), PE", "Atlantic — Halifax"),
+        ("America/Atikokan", "EST - ON (Atikokan), NU (Coral H)", "EST — Atikokan"),
+        ("America/Ciudad_Juarez", "Chihuahua (US border - west)", "Chihuahua — Ciudad Juarez"),
+        ("Asia/Kuala_Lumpur", "Malaysia (peninsula)", "Malaysia — Kuala Lumpur"),
+        ("Asia/Pontianak", "Borneo (west, central)", "Borneo — Pontianak"),
+        (
+            "Asia/Makassar",
+            "Borneo (east, south), Sulawesi/Celebes, Bali",
+            "Borneo, Sulawesi/Celebes, Bali — Makassar",
+        ),
+        ("America/St_Johns", "Newfoundland, Labrador (SE)", "Newfoundland, Labrador — St Johns"),
+        ("Atlantic/Canary", "Canary Islands", "Canary Islands"),
+        ("America/Phoenix", "MST - AZ (except Navajo)", "Arizona — Phoenix"),
+    ],
+)
+def test_a_label_says_where_a_zone_applies_and_leaves_out_the_rest(
+    zone, description, label
+) -> None:
+    # Abbreviated states after " - " and parenthetical carve-outs read as noise to a seller; the
+    # city beside the area says where the zone is.
+    assert region._place_label(zone, description) == label
 
 
 def test_a_zone_tab_line_without_a_comment_is_labelled_by_its_city(zone_tab) -> None:

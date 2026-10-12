@@ -151,10 +151,20 @@ def _area(description: str) -> str:
     return description.split("(", 1)[0].strip()
 
 
+# Where a zone applies, for the few whose `zone.tab` description is an abbreviation no rule can
+# spell out ("MST - AZ (except Navajo)", "Alaska - western Aleutians").
+_PLACE_NAMES = {"America/Phoenix": "Arizona", "America/Adak": "Aleutian Islands"}
+
+# A parenthetical carve-out in a description ("(except Navajo)"): the city beside it says more.
+_CARVE_OUT = re.compile(r"\s*\([^)]*\)")
+
+
 def _place_label(zone: str, description: str) -> str:
-    """The description and the city, or whichever alone says it all: "Hawaii — Honolulu",
-    "Canary Islands", "Paris"."""
-    area = _MAIN_AREA.sub("", description).strip()
+    """Where the zone applies and its city, or whichever alone says it all: "Hawaii — Honolulu",
+    "Canary Islands", "Paris". What follows a " - " in a description is the states it covers, in
+    abbreviations ("Eastern - ON & QC"), which the city says better."""
+    area = _PLACE_NAMES.get(zone) or _MAIN_AREA.sub("", description)
+    area = _CARVE_OUT.sub("", area).split(" - ", 1)[0].strip()
     city = city_label(zone)
     if not area:
         return city
