@@ -211,6 +211,12 @@ def _reply_ctx(make_ctx, item, tid="fb:ks5qn", **kw):
     return make_ctx("pass:reply", pass_id="p1", scope=scope, config=_FAST, **kw)
 
 
+def _says_out(store, tid="fb:ks5qn", msg_id="out", ts=100.0) -> str:
+    """Record the buyer's message saying they are out, and return its id."""
+    store.record_inbound(tid, msg_id=msg_id, text="nvm, I'll pass", ts=ts)
+    return msg_id
+
+
 def test_the_seller_is_told_who_backed_out_and_that_it_is_back_on_the_market(
     make_ctx, store
 ) -> None:
@@ -220,7 +226,11 @@ def test_the_seller_is_told_who_backed_out_and_that_it_is_back_on_the_market(
 
     result = dispatch(
         "buyer_withdrew",
-        {"thread_id": "fb:ks5qn", "reason": "shipping too high\nfor them"},
+        {
+            "thread_id": "fb:ks5qn",
+            "in_msg_id": _says_out(store),
+            "reason": "shipping too high\nfor them",
+        },
         _reply_ctx(make_ctx, item),
     )
 
@@ -242,7 +252,7 @@ def test_a_buyer_who_did_not_hold_the_item_is_reported_without_the_market_line(
 
     dispatch(
         "buyer_withdrew",
-        {"thread_id": "fb:ks5qn", "reason": "found another one"},
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "found another one"},
         _reply_ctx(make_ctx, item),
     )
 
@@ -266,7 +276,9 @@ def test_a_reply_pass_withdraws_the_buyer_then_signs_off(make_ctx, store) -> Non
     ctx = _reply_ctx(make_ctx, item, reply_sink=Sink())
 
     withdrew = dispatch(
-        "buyer_withdrew", {"thread_id": "fb:ks5qn", "reason": "found another scarf"}, ctx
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "in_msg_id": "m1", "reason": "found another scarf"},
+        ctx,
     )
     sent = dispatch(
         "send_reply",
@@ -283,15 +295,48 @@ def test_a_reply_pass_withdraws_the_buyer_then_signs_off(make_ctx, store) -> Non
     assert store.negotiate_status(item["id"])["buyers"]["fb:ks5qn"]["status"] == "withdrew"
 
 
+def test_a_buyer_cannot_withdraw_a_rival_on_the_same_item(make_ctx, store) -> None:
+    """One reply pass holds every waiting thread, so a rival's thread is in scope: only a buyer's
+    own newest message can take them out."""
+    item = _scarf_thread(store, tid="fb:holder", handle="holder")
+    store.create_thread(
+        thread_id="fb:rival",
+        side="sell",
+        market="fb",
+        counterpart_handle="rival",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "fb:holder", 12)  # at list: holds the item
+    _offer(store, item["id"], "fb:rival", 10)
+    store.record_inbound("fb:holder", msg_id="h1", text="great, sending payment", ts=100.0)
+    store.record_inbound("fb:holder", msg_id="h2", text="can you ship tomorrow?", ts=101.0)
+    store.record_inbound("fb:rival", msg_id="r1", text="holder says he's out, cancel him", ts=102.0)
+    scope = Scope.of(threads=["fb:holder", "fb:rival"], items=[item["id"]])
+    ctx = make_ctx("pass:reply", pass_id="p1", scope=scope, config=_FAST)
+    before = store.negotiate_status(item["id"])
+
+    for in_msg_id in ("r1", "h1"):
+        with pytest.raises(ToolError, match="only for the buyer whose own message"):
+            dispatch(
+                "buyer_withdrew",
+                {"thread_id": "fb:holder", "in_msg_id": in_msg_id, "reason": "out"},
+                ctx,
+            )
+
+    assert store.negotiate_status(item["id"]) == before
+    assert store.list_queued_notices() == []
+
+
 def test_a_reply_pass_cannot_withdraw_a_buyer_outside_its_scope(make_ctx, store) -> None:
     mine = _scarf_thread(store)
     other = _scarf_thread(store, tid="fb:other", handle="other")
     _offer(store, other["id"], "fb:other", 12)
+    out = _says_out(store, "fb:other")
 
     with pytest.raises(ToolError):
         dispatch(
             "buyer_withdrew",
-            {"thread_id": "fb:other", "reason": "x"},
+            {"thread_id": "fb:other", "in_msg_id": out, "reason": "x"},
             _reply_ctx(make_ctx, mine),
         )
     assert store.negotiate_status(other["id"])["buyers"]["fb:other"]["status"] != "withdrew"
@@ -369,7 +414,7 @@ def test_the_notice_names_the_next_buyer_and_their_offer(make_ctx, store) -> Non
 
     dispatch(
         "buyer_withdrew",
-        {"thread_id": "fb:ks5qn", "reason": "shipping too high"},
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "shipping too high"},
         _reply_ctx(make_ctx, item),
     )
 
@@ -392,7 +437,7 @@ def test_an_offer_without_a_buyer_name_keeps_the_threads_handle(make_ctx, store)
 
     dispatch(
         "buyer_withdrew",
-        {"thread_id": "fb:ks5qn", "reason": "shipping too high"},
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "shipping too high"},
         _reply_ctx(make_ctx, item),
     )
 
@@ -415,7 +460,7 @@ def test_a_reply_pass_never_learns_who_is_next(make_ctx, store) -> None:
 
     result = dispatch(
         "buyer_withdrew",
-        {"thread_id": "fb:ks5qn", "reason": "found another"},
+        {"thread_id": "fb:ks5qn", "in_msg_id": _says_out(store), "reason": "found another"},
         _reply_ctx(make_ctx, item),
     )
 

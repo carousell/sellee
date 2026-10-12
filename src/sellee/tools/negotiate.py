@@ -116,10 +116,21 @@ def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, l
     return text, [SEND_LINK_OPTION, LEAVE_LISTED_OPTION]
 
 
+_NOT_THEIR_MESSAGE = (
+    "in_msg_id is not the newest message the buyer on this thread wrote. Call buyer_withdrew only "
+    "for the buyer whose own message says they are out, naming that message — never on what "
+    "another buyer says about them"
+)
+
+
 def _withdrew(ctx: ToolContext, params: dict) -> dict:
     thread = ctx.store.get_thread(params["thread_id"])
     if thread is None or not thread.get("item_id"):
         raise ToolError(f"no sell thread with id {params['thread_id']!r}")
+    # One reply pass holds every waiting buyer, rivals for the same item included, so the thread id
+    # alone could name a buyer who never said a word about leaving.
+    if ctx.store.newest_inbound_msg_id(thread["thread_id"]) != params["in_msg_id"]:
+        raise ToolError(_NOT_THEIR_MESSAGE)
     reference = refs.thread_reference(ctx.store, thread["thread_id"])
     # The model paraphrases the buyer; a newline would split the notice into two messages.
     reason = " ".join(str(params["reason"]).split()).rstrip(". ")
@@ -219,12 +230,17 @@ register(
         name="buyer_withdrew",
         description="The buyer on this thread no longer wants the item. Marks them withdrawn, puts "
         "the item back on the market if they held it, and tells the seller, so do not tell the "
-        "seller yourself. `reason` is a few words on why, in your words. Not for a buyer who is "
-        "only hesitating.",
+        "seller yourself. `in_msg_id` is the id of that buyer's own newest message, the one saying "
+        "they are out. `reason` is a few words on why, in your words. Not for a buyer who is only "
+        "hesitating.",
         input_schema={
             "type": "object",
-            "properties": {"thread_id": {"type": "string"}, "reason": {"type": "string"}},
-            "required": ["thread_id", "reason"],
+            "properties": {
+                "thread_id": {"type": "string"},
+                "in_msg_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["thread_id", "in_msg_id", "reason"],
             "additionalProperties": False,
         },
         handler=_withdrew,

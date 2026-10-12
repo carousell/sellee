@@ -215,6 +215,15 @@ class ThreadsMixin:
             for r in rows
         ]
 
+    def newest_inbound_msg_id(self, thread_id: str) -> str | None:
+        """The id of the last message the counterpart wrote on this thread, or None."""
+        rows = self._db.query(
+            "SELECT msg_id FROM thread_messages WHERE thread_id = ? AND dir = 'in' "
+            "ORDER BY ts DESC, rowid DESC LIMIT 1",
+            (thread_id,),
+        )
+        return rows[0]["msg_id"] if rows else None
+
     _THREAD_WRITABLE = ("buyer_location", "agent_note", "listed_price", "listing_url")
     # The only status flips this generic writer owns. held is owned by hold/release, escalated by
     # escalate, and the sale states by the confirm-sold / buyer-accept flows.

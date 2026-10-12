@@ -195,6 +195,7 @@ _SCOPE_GUARDED = {
     "mark_relay_answered": (("thread_id", "thread"),),
     "close_blocked_relay_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
+    "newest_inbound_msg_id": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "record_inbound": (("thread_id", "thread"),),
     "qa_add": (("item_id", "item"),),
@@ -229,7 +230,9 @@ _SCOPE_GUARDED = {
 # missing-row behavior so the two are indistinguishable. Reads that return None on a missing
 # row return None; the transcript read returns []; a counting delete returns 0; row-required
 # writers raise the same NotFound.
-_SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want", "get_floor", "get_budget"})
+_SCOPE_MISS_NONE = frozenset(
+    {"get_item", "get_thread", "get_want", "get_floor", "get_budget", "newest_inbound_msg_id"}
+)
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
