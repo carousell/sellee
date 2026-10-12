@@ -37,7 +37,7 @@ from sellee import (
 )
 from sellee.browser import foreground
 from sellee.browser import markets as market_adapters
-from sellee.installer import checks, materialize, preflight, runtime
+from sellee.installer import basics_prompt, checks, materialize, preflight, runtime
 from sellee.installer import region as region_guess
 from sellee.installer import update as update_mod
 from sellee.installer.ui import Abort, Ui
@@ -479,7 +479,7 @@ def _seller_region(ui: Ui, args, port: int, token: str):
     ):
         basics = None
     if basics is None:
-        basics = _ask_basics(ui)
+        basics = basics_prompt.ask_basics(ui)
     if not basics:
         ui.warn("No region recorded — carousell.ai setup and the marketplace list are skipped.")
         ui.note("both are completed once a region is set")
@@ -506,61 +506,6 @@ def _basics_from_flag(args) -> dict:
     code = countries.code_for_name(args.region) or str(args.region).strip().upper()
     zone = region_guess.default_zone(code)
     return {"region": code, "timezone": zone} if zone else {"region": code}
-
-
-def _ask_basics(ui: Ui):
-    """Ask which country outright, taking any of them: what carousell.ai can pay out is the
-    backend's answer, so a list here would be the agent deciding something it does not know."""
-    if not ui.interactive:
-        return None
-    region = _ask_country(ui)
-    zone = _ask_timezone(ui, region)
-    return {"region": region, "timezone": zone} if zone else {"region": region}
-
-
-def _ask_country(ui: Ui) -> str:
-    """Ask for a country code until the answer is one the write door will take, and confirm it.
-
-    The confirm is the point. A code of the right shape is always accepted, so the error no check
-    can catch is a real country that is not theirs — "SA" typed for "SG" is two letters, is a
-    country, provisions, and then prices every listing in the wrong currency. Naming it back is
-    the only thing standing between that typo and a live mislabelled listing.
-
-    A typed country *name* is resolved rather than rejected: the seller has already told us what
-    they meant, and spelling it as a code for them is not the agent deciding where they may sell.
-    """
-    default = (region_guess.guess() or {}).get("region", "")
-    while True:
-        answer = ui.ask("Which country do you sell in?", default=default, lead=False).strip()
-        # Spelled before the shape check: "UK" is two letters but not a code, and resolves to GB.
-        # A real code is left alone by code_for_name, so "AU" is never read as a name.
-        code = countries.code_for_name(answer) or answer.upper()
-        if len(code) != 2 or not code.isalpha():
-            ui.say("A country is its two-letter code, like US or CA.")
-            continue
-        if ui.confirm(f"You sell in {countries.label(code)}, correct?", default=True):
-            return code
-
-
-def _ask_timezone(ui: Ui, region: str) -> str:
-    """Ask for the timezone until the answer is one that can be stored, or until it is skipped.
-
-    Checked against the same rule the write door applies, so a typo is re-asked here with the
-    reason and an example rather than failing later. An empty answer still skips: the zone is a
-    convenience, and a seller who cannot name theirs is better served by a finished install.
-    """
-    default = region_guess.default_zone(region)
-    example = (region_guess.zones_for(region) or ["Asia/Singapore"])[0]
-    hint = "" if default else f" (e.g. {example})"
-    while True:
-        answer = ui.ask(f"Timezone?{hint}", default=default, lead=False).strip()
-        if not answer:
-            ui.note("no timezone recorded — ask Sellee to set one any time")
-            return ""
-        reason = region_guess.zone_error(answer)
-        if not reason:
-            return answer
-        ui.say(f"{reason} — zone names look like {example}.")
 
 
 # --- the rail ----------------------------------------------------------------------------------

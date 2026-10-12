@@ -110,7 +110,8 @@ def _import_thread(deps: RelayDeps, summary: dict, messages: list, items) -> tup
             thread_id=thread_id,
             side="sell",
             market=MARKET,
-            counterpart_handle=summary["thread_email"],
+            # The buyer's own name reads better to the seller than the masked address.
+            counterpart_handle=summary.get("buyer_name") or summary["thread_email"],
             item_id=item_id,
             source="relay_read",
         )

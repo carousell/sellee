@@ -87,7 +87,7 @@ stays out of `ps`/shell history — and sends it to the running daemon, which:
 3. binds the first chat whose `/start` carries that nonce — and no other.
 
 Run interactively (stdin is a TTY), it prints short BotFather guidance and prompts
-for the token with `getpass` (not echoed); run with a pipe (scripted / installer),
+for the token with `getpass` (one `*` per character); run with a pipe (scripted / installer),
 it reads one line of stdin with no prompt. Either way it then prints the deep link
 as a terminal QR (colorless half-blocks in the terminal's own colors — correct
 polarity on a dark theme, inverted on a light one, and most scanners read both)

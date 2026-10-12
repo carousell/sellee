@@ -38,6 +38,7 @@ from sellee.store.channel import ChannelMixin
 from sellee.store.escalations import EscalationsMixin
 from sellee.store.helpers import (
     BIND_NONCE_TTL_SEC,
+    IMPORTED_THREAD_SOURCES,
     KNOWN_ADAPTERS,
     MAX_PHOTOS,
     QA_GLOBAL_ITEM,
@@ -76,6 +77,7 @@ __all__ = [
     "HOLD_SIGNIN",
     "CONNECT_MODE_OPEN",
     "CONNECT_MODE_PROBE",
+    "IMPORTED_THREAD_SOURCES",
     "KNOWN_ADAPTERS",
     "MAX_PHOTOS",
     "QA_GLOBAL_ITEM",
@@ -195,6 +197,7 @@ _SCOPE_GUARDED = {
     "mark_relay_answered": (("thread_id", "thread"),),
     "close_blocked_relay_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
+    "newest_inbound_msg_id": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "record_inbound": (("thread_id", "thread"),),
     "qa_add": (("item_id", "item"),),
@@ -215,6 +218,10 @@ _SCOPE_GUARDED = {
     "negotiate_confirm_bid": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_confirm_sold": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_release": (("item_id", "item"),),
+    "negotiate_withdraw": (("item_id", "item"), ("thread_id", "thread")),
+    "has_withdrawn": (("item_id", "item"), ("thread_id", "thread")),
+    "answers_since_withdrawal": (("item_id", "item"), ("thread_id", "thread")),
+    "negotiate_unreserve": (("item_id", "item"), ("thread_id", "thread")),
     "set_budget": (("want_id", "want"),),
     "buyer_negotiate_seed": (("want_id", "want"), ("thread_id", "thread")),
     "buyer_negotiate_open": (("want_id", "want"), ("thread_id", "thread")),
@@ -227,7 +234,9 @@ _SCOPE_GUARDED = {
 # missing-row behavior so the two are indistinguishable. Reads that return None on a missing
 # row return None; the transcript read returns []; a counting delete returns 0; row-required
 # writers raise the same NotFound.
-_SCOPE_MISS_NONE = frozenset({"get_item", "get_thread", "get_want", "get_floor", "get_budget"})
+_SCOPE_MISS_NONE = frozenset(
+    {"get_item", "get_thread", "get_want", "get_floor", "get_budget", "newest_inbound_msg_id"}
+)
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
@@ -261,6 +270,10 @@ _SCOPE_MISS_NOTFOUND = {
     "negotiate_confirm_bid": ("item", ItemNotFound),
     "negotiate_confirm_sold": ("item", ItemNotFound),
     "negotiate_release": ("item", ItemNotFound),
+    "negotiate_withdraw": ("item", ItemNotFound),
+    "has_withdrawn": ("item", ItemNotFound),
+    "answers_since_withdrawal": ("item", ItemNotFound),
+    "negotiate_unreserve": ("item", ItemNotFound),
     "set_budget": ("want", WantNotFound),
     "buyer_negotiate_seed": ("want", WantNotFound),
     "buyer_negotiate_open": ("want", WantNotFound),

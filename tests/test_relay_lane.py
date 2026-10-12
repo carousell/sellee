@@ -44,6 +44,15 @@ def _waiting(store) -> set:
     return {row["thread_id"] for row in store.threads_with_unhandled_inbound()}
 
 
+def test_a_buyer_without_a_name_is_known_by_the_thread_address(store, bus, fake, item):
+    fake.add_thread("t1", listing_id="L1", name="")
+    fake.add_message("t1", "m1", "buyer", "Is the lamp still available?")
+
+    relay.relay_lane(_deps(store, bus, fake))
+
+    assert store.get_thread("carousell-ai:t1")["counterpart_handle"] == "t1@reply.carousell.ai"
+
+
 def test_a_buyer_message_imports_as_a_waiting_thread_on_the_item(store, bus, fake, item):
     fake.add_thread("t1", listing_id="L1")
     fake.add_message("t1", "m1", "buyer", "Is the lamp still available?")
@@ -57,7 +66,7 @@ def test_a_buyer_message_imports_as_a_waiting_thread_on_the_item(store, bus, fak
         "carousell-ai",
         item["id"],
     )
-    assert thread["counterpart_handle"] == "t1@reply.carousell.ai"
+    assert thread["counterpart_handle"] == "Alice"
     assert [(m["msg_id"], m["dir"]) for m in thread["messages"]] == [("m1", "in")]
     assert _waiting(store) == {"carousell-ai:t1"}
 

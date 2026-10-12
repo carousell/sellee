@@ -44,6 +44,46 @@ def test_create_thread_requires_identity(make_ctx, store) -> None:
         )
 
 
+@pytest.mark.parametrize("source", ["browser_read", "registration_read", "relay_read"])
+def test_create_thread_refuses_a_source_only_an_inbox_files(make_ctx, store, source) -> None:
+    """Those sources say a marketplace's inbox read the buyer, which decides the listing a sale
+    spares, so a thread the model files cannot claim one."""
+    ctx = make_ctx("attended")
+    item = _item(store)
+    with pytest.raises(ToolError, match="source"):
+        dispatch(
+            "create_thread",
+            {
+                "thread_id": "fb:1",
+                "side": "sell",
+                "market": "fb",
+                "counterpart_handle": "friend",
+                "item_id": item["id"],
+                "source": source,
+            },
+            ctx,
+        )
+    assert store.get_thread("fb:1") is None
+
+
+def test_create_thread_keeps_a_source_the_model_names(make_ctx, store) -> None:
+    ctx = make_ctx("attended")
+    item = _item(store)
+    thread = dispatch(
+        "create_thread",
+        {
+            "thread_id": "fb:1",
+            "side": "sell",
+            "market": "fb",
+            "counterpart_handle": "friend",
+            "item_id": item["id"],
+            "source": "seller_reported_offline_sale",
+        },
+        ctx,
+    )
+    assert thread["source"] == "seller_reported_offline_sale"
+
+
 def test_create_thread_verifies_listing_url(make_ctx, store) -> None:
     ctx = make_ctx("attended")
     item = _item(store)

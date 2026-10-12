@@ -13,7 +13,8 @@ Exit codes: 0 bound · 1 awaiting /start (timed out, re-runnable) · 2 bad token
 Interactive vs piped:
 
 - Interactive (stdin is a TTY): print short BotFather guidance, then read the token with
-  ``getpass`` — prompted and not echoed, so a credential never lands in the terminal scrollback.
+  ``getpass`` — each character echoes as ``*``, so a paste shows up but the credential never
+  lands in the terminal scrollback.
 - Piped / scripted / installer with a pipe (stdin is not a TTY): read one ``readline()`` with no
   prompt and no guidance, so a token can be fed in non-interactively.
 
@@ -43,6 +44,7 @@ _INTERACTIVE_TIMEOUT_SEC = 300
 _PIPED_TIMEOUT_SEC = 120
 # While polling interactively, remind the operator of the remaining wait at this cadence.
 _REMAINING_NOTICE_SEC = 30
+_LINE_KILL = "\x15"  # Ctrl-U
 
 _BOTFATHER_GUIDANCE = (
     "To connect Telegram you need a bot token from BotFather:\n"
@@ -59,14 +61,17 @@ _DEVELOPER_PORTAL_GUIDANCE = (
 
 
 def _read_token(interactive: bool, *, prompt: str = "Paste your BotFather bot token: ") -> str:
-    """Read the bot token. Interactive: a non-echoed getpass prompt (a credential must stay off
-    the scrollback). Piped: one readline, no prompt."""
+    """Read the bot token. Interactive: a getpass prompt echoing ``*`` per character (a credential
+    must stay off the scrollback, but a paste must show). Piped: one readline, no prompt."""
     if interactive:
         try:
-            return getpass.getpass(prompt).strip()
+            typed = getpass.getpass(prompt, echo_char="*")
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)  # close the dangling prompt line
             return ""
+        # Echoing stars takes the tty out of line mode, so Ctrl-U arrives as a character instead of
+        # clearing the line; honour it, or a seller who re-pastes after one sends both tokens.
+        return typed.rpartition(_LINE_KILL)[2].strip()
     return sys.stdin.readline().strip()
 
 

@@ -72,6 +72,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 28),
         ("data", 29),
         ("data", 30),
+        ("data", 31),
+        ("data", 32),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -102,6 +104,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "registration_cursor")
     assert _table_exists(data_db, "registration_seen")
     assert _table_exists(data_db, "craigslist_account")
+    assert _table_exists(data_db, "buyer_withdrawals")
+    assert _table_exists(data_db, "next_buyer_asks")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -132,6 +136,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         28,
         29,
         30,
+        31,
+        32,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -488,3 +494,38 @@ def test_snapshot_pruning_keeps_newest(tmp_path) -> None:
         "sellee-1000000005-pre-0005.db",
         "sellee-1000000004-pre-0004.db",
     }
+
+
+def test_0031_anchors_a_buyer_already_withdrawn_on_their_newest_message(
+    tmp_path, monkeypatch
+) -> None:
+    """A buyer marked withdrawn before the table existed is still answered on what they write."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0031")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        _seed_read_thread(conn, thread_id="fb:gone", market="fb")
+        _seed_read_thread(conn, thread_id="fb:silent", market="fb")
+        for msg_id, direction, ts in (("m1", "in", 10.0), ("m2", "in", 20.0), ("o1", "out", 30.0)):
+            conn.execute(
+                "INSERT INTO thread_messages (thread_id, msg_id, dir, text, ts)"
+                " VALUES ('fb:gone', ?, ?, 'hi', ?)",
+                (msg_id, direction, ts),
+            )
+        conn.execute(
+            "INSERT INTO negotiations (item_id, state, is_bidding, updated_ts)"
+            " VALUES ('item_x', 'open', 0, 100.0)"
+        )
+        for tid in ("fb:gone", "fb:silent"):
+            conn.execute(
+                "INSERT INTO negotiation_buyers (item_id, thread_id, buyer_handle, offers,"
+                " highest_offer, rounds_used, lowball_count, status)"
+                " VALUES ('item_x', ?, 'bob', '[]', 0, 0, 0, 'withdrew')",
+                (tid,),
+            )
+
+    shutil.copy(real_data / "0031_buyer_withdrawals.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    rows = data_db.query("SELECT thread_id, msg_id FROM buyer_withdrawals")
+    assert [(r["thread_id"], r["msg_id"]) for r in rows] == [("fb:gone", "m2")]

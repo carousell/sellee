@@ -79,6 +79,9 @@ _UI_CACHE_STRATEGIES = ("css", "aria", "role", "text")
 _PASS_TERMINAL = ("done", "error")
 
 _THREAD_SIDES = ("sell", "buy")
+# The sources the inboxes file a thread they read off a marketplace under. Only such a thread shows
+# a buyer came through that marketplace, so nothing else may file one.
+IMPORTED_THREAD_SOURCES = frozenset({"browser_read", "registration_read", "relay_read"})
 # Thread transcript reads are capped so a huge thread can't blow a pass's context.
 _TRANSCRIPT_DEFAULT_CAP = 100
 
@@ -405,6 +408,53 @@ class CheckoutRecord(TypedDict):
     price: float | None
     currency: str | None
     issued_ts: float
+
+
+class NextBuyer(TypedDict):
+    """The standing buyer a withdrawal notice offers the seller instead."""
+
+    thread_id: str
+    handle: str
+    offer: float
+    price: str
+
+
+class NextBuyerAsk(TypedDict):
+    """The buyer a withdrawal notice's send-link tap means (see `next_buyer_ask`)."""
+
+    notice_id: int
+    item_id: str
+    thread_id: str
+    offer: float
+    sent_ts: float | None
+
+
+class NextBuyerHold(TypedDict):
+    """The item held for the buyer a withdrawal notice offered (see `reserve_for_next_buyer`).
+    `reserved_now` says this call made the hold, so only this call's caller undoes it."""
+
+    item_id: str
+    thread_id: str
+    handle: str
+    amount: float
+    currency: str | None
+    price: str
+    reserved_now: bool
+    already_sent: bool
+    another_link_out: bool
+
+
+class WithdrawResult(TypedDict):
+    """What `negotiate_withdraw` did. `was_holder`: they held the item or led the bidding;
+    `released`: it was reserved for them and is available again."""
+
+    withdrew: bool
+    was_holder: bool
+    released: bool
+    item_state: str
+    checkout_url: str | None
+    next_buyer: NextBuyer | None
+    notice_id: int | None
 
 
 # `class` is a reserved word, so PassRecord needs the functional syntax — where `from __future__

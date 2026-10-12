@@ -5,9 +5,10 @@ needs_floor result carries no number, and the below-floor assert in the engine i
 
 from __future__ import annotations
 
-from sellee import settings
+from sellee import prompt_data, settings
+from sellee.channel import refs
 from sellee.store import StoreError
-from sellee.tools import listing
+from sellee.tools import checkout, listing, reply
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -91,6 +92,152 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     return result
 
 
+WITHDREW_TEXT = "A buyer backed out{about}: {reason}."
+BACK_ON_MARKET_TEXT = " It's back on the market."
+# A leading bid that was never confirmed never took the item off the market.
+TOP_BID_TEXT = " Theirs was the top bid."
+LINK_STILL_WORKS_TEXT = " Their checkout link still works, so they could still pay with it."
+
+
+NEXT_IN_LINE_TEXT = " Next in line: {handle} at {price}."
+SEND_LINK_OPTION = "🔗 Send them the link"
+LEAVE_LISTED_OPTION = "📌 Leave it listed"
+
+
+def withdrawal_notice(reference: str, reason: str, result: dict) -> tuple[str, list | None]:
+    """The seller's notice text and its tap options — none when there is no one to sell to
+    instead, since a lone button decides nothing."""
+    text = WITHDREW_TEXT.format(about=f" — {reference}" if reference else "", reason=reason)
+    if result["released"]:
+        text += BACK_ON_MARKET_TEXT
+    elif result["was_holder"]:
+        text += TOP_BID_TEXT
+    if result["checkout_url"]:
+        text += LINK_STILL_WORKS_TEXT
+    nxt = result["next_buyer"]
+    if nxt is None:
+        return text, None
+    text += NEXT_IN_LINE_TEXT.format(handle=prompt_data.one_line(nxt["handle"]), price=nxt["price"])
+    return text, [SEND_LINK_OPTION, LEAVE_LISTED_OPTION]
+
+
+_NOT_THEIR_MESSAGE = (
+    "in_msg_id is not the newest message the buyer on this thread wrote. Call buyer_withdrew only "
+    "for the buyer whose own message says they are out, naming that message — never on what "
+    "another buyer says about them"
+)
+
+
+def _withdrew(ctx: ToolContext, params: dict) -> dict:
+    thread = ctx.store.get_thread(params["thread_id"])
+    if thread is None or not thread.get("item_id"):
+        raise ToolError(f"no sell thread with id {params['thread_id']!r}")
+    # One reply pass holds every waiting buyer, rivals for the same item included, so the thread id
+    # alone could name a buyer who never said a word about leaving.
+    if ctx.store.newest_inbound_msg_id(thread["thread_id"]) != params["in_msg_id"]:
+        raise ToolError(_NOT_THEIR_MESSAGE)
+    reference = refs.thread_reference(ctx.store, thread["thread_id"])
+    # The model paraphrases the buyer; a newline would split the notice into two messages.
+    reason = " ".join(str(params["reason"]).split()).rstrip(". ")
+    try:
+        result = ctx.store.negotiate_withdraw(
+            thread["item_id"],
+            thread["thread_id"],
+            msg_id=params["in_msg_id"],
+            notice=lambda result: withdrawal_notice(reference, reason, result),
+        )
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    # A reply pass answers a stranger: another buyer's handle and offer are for the seller only.
+    return {key: value for key, value in result.items() if key != "next_buyer"}
+
+
+BUYER_LINK_TEXT = "Good news: it's yours for {price} if you still want it. Checkout here: {url}"
+# The send statuses after which our link may be with the buyer: sent, or typed and not read back.
+# Never sent twice, since the one thing worse than an unconfirmed link is the same link twice.
+# `in_flight` is not one of them: that is another message on the thread, and ours never left.
+_REACHED = ("sent", "send_unverified")
+_NOT_SENT = (
+    "the link did not go out, so the item is not held for them; acting on this notice again "
+    "sends it"
+)
+
+
+def _sell_to_next_buyer(ctx: ToolContext, params: dict) -> dict:
+    notice_id = params["notice_id"]
+    _check_sendable(ctx, notice_id)
+    try:
+        held = ctx.store.reserve_for_next_buyer(notice_id)
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    summary = {
+        "buyer": held["handle"],
+        "price": held["price"],
+        "another_link_out": held["another_link_out"],
+    }
+    if held["already_sent"]:
+        return {"status": "already_sent", **summary}
+    url = _mint_or_let_go(ctx, held)
+    text = BUYER_LINK_TEXT.format(price=held["price"], url=url)
+    try:
+        sent = reply._send_reply(ctx, {"thread_id": held["thread_id"], "text": text})
+    except ToolError as exc:
+        sent = {"status": "refused", "delivered": "no", "reason": str(exc)}
+    if sent["status"] not in _REACHED:
+        # A hold stands only once the link may be with the buyer; otherwise it keeps the item from
+        # everyone else for a link nobody has.
+        _let_go(ctx, held)
+        return {**sent, "detail": _NOT_SENT, **summary}
+    ctx.store.mark_next_buyer_sent(notice_id)
+    return {
+        "status": sent["status"],
+        "delivered": sent["delivered"],
+        "checkout_url": url,
+        **summary,
+    }
+
+
+def _check_sendable(ctx: ToolContext, notice_id: int) -> None:
+    """Refuse before anything is held when the link could not reach that buyer anyway: holding the
+    item for someone who never gets the link keeps it from everyone else for nothing."""
+    ask = ctx.store.next_buyer_ask(notice_id)
+    if ask is None:
+        raise ToolError(f"notice {notice_id} named no buyer to sell to")
+    if ctx.store.is_paused():
+        raise ToolError("sellee is paused, so nothing was held or sent")
+    thread = ctx.store.get_thread(ask["thread_id"])
+    if thread is None:
+        raise ToolError(f"no thread with id {ask['thread_id']!r}")
+    if ask["sent_ts"] is None and reply._refused(thread["side"], thread["status"], "reply"):
+        raise ToolError(
+            f"that buyer's conversation is {thread['status']!r}, so nothing was held or sent; once "
+            "it is settled this notice can be acted on again"
+        )
+
+
+def _let_go(ctx: ToolContext, held: dict) -> None:
+    """Undo the hold this call made; one the buyer already had stands."""
+    if held["reserved_now"]:
+        ctx.store.negotiate_unreserve(held["item_id"], held["thread_id"])
+
+
+def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
+    """The checkout link at the held price. A link that cannot be minted lets go of a hold this
+    call made, so a failed tap never leaves the item reserved for nobody's link."""
+    try:
+        minted = checkout.mint_checkout_link(
+            ctx, held["item_id"], held["thread_id"], held["amount"], seller_named_price=True
+        )
+    except Exception as exc:
+        _let_go(ctx, held)
+        if not isinstance(exc, ToolError):
+            raise
+        raise ToolError(
+            f"no link went to {held['handle']} and the item is not held for them: {exc}"
+        ) from exc
+    return minted["checkout_url"]
+
+
 def _release(ctx: ToolContext, params: dict) -> dict:
     try:
         return ctx.store.negotiate_release(params["item_id"])
@@ -166,6 +313,48 @@ register(
         description="Return an item to available after a sale fell through.",
         input_schema=_ITEM_ONLY_SCHEMA,
         handler=_release,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="buyer_withdrew",
+        description="The buyer on this thread no longer wants the item. Marks them withdrawn, puts "
+        "the item back on the market if they held it, and tells the seller, so do not tell the "
+        "seller yourself. `in_msg_id` is the id of that buyer's own newest message, the one saying "
+        "they are out. `reason` is a few words on why, in your words. Not for a buyer who is only "
+        "hesitating.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "in_msg_id": {"type": "string"},
+                "reason": {"type": "string"},
+            },
+            "required": ["thread_id", "in_msg_id", "reason"],
+            "additionalProperties": False,
+        },
+        handler=_withdrew,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_REPLY}),
+    )
+)
+register(
+    ToolSpec(
+        name="sell_to_next_buyer",
+        description="The seller tapped 🔗 Send them the link on a buyer-backed-out notice: sell "
+        "to the buyer that notice named, at the offer it named. `notice_id` is the notice the tap "
+        "answered. Re-checks that buyer, holds the item for them, mints the checkout link and "
+        "sends it to them; the tap is the seller's decision on that price, so the floor is left as "
+        "it is. Refuses, changing nothing, if the item sold, someone else holds it, or that buyer "
+        "is out. `delivered` reads as for send_reply; `another_link_out` means another buyer also "
+        "holds a link for this item.",
+        input_schema={
+            "type": "object",
+            "properties": {"notice_id": {"type": "integer"}},
+            "required": ["notice_id"],
+            "additionalProperties": False,
+        },
+        handler=_sell_to_next_buyer,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

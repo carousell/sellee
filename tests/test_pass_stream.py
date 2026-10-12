@@ -4,6 +4,10 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from sellee.pass_stream import is_cap_hit, parse_stream_line
 
 
@@ -114,6 +118,18 @@ def test_text_is_truncated_to_cap() -> None:
     assert len(payload["text"]) < 5000 and payload["text"].endswith("chars)")
 
 
+def test_a_text_block_whose_text_is_not_a_string_is_skipped() -> None:
+    line = json.dumps(
+        {
+            "type": "assistant",
+            "message": {
+                "content": [{"type": "text", "text": None}, {"type": "text", "text": "ok"}]
+            },
+        }
+    )
+    assert parse_stream_line(line) == [("pass.message", {"text": "ok"})]
+
+
 def _tool_result_line(content) -> str:
     return json.dumps({"type": "user", "message": {"content": content}})
 
@@ -176,7 +192,73 @@ def test_a_tool_result_is_capped_per_block() -> None:
     assert len(payload["content"]) < 5000 and payload["content"].endswith("chars)")
 
 
+def _nested(depth: int) -> str:
+    return "[" * depth + "]" * depth
+
+
+def test_a_line_nested_too_deep_to_parse_becomes_pass_raw() -> None:
+    """json.loads gives up on deep nesting with RecursionError, not ValueError."""
+    ((kind, _),) = parse_stream_line(_nested(1_000_000))
+    assert kind == "pass.raw"
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        '[{"type":"tool_result","tool_use_id":"t1","content":' + _nested(5_000) + "}]",
+        "[" + _nested(5_000) + "]",
+    ],
+    ids=["tool_result", "plain"],
+)
+def test_user_content_nested_past_the_recursion_limit_is_elided(content: str) -> None:
+    """The line parses, but summarizing its images and re-serializing it recursed until
+    RecursionError, which the reader thread does not catch: it died, stdout went unread, and the
+    pass's result was never recorded."""
+    line = '{"type":"user","message":{"content":' + content + "}}"
+    ((kind, payload),) = parse_stream_line(line)
+    assert kind == "pass.tool_result"
+    assert len(payload["content"]) < 200
+
+
 def test_is_cap_hit_reads_result_subtype() -> None:
     assert is_cap_hit({"subtype": "error_max_turns"}) is True
     assert is_cap_hit({"subtype": "success"}) is False
     assert is_cap_hit(None) is False
+
+
+# Arbitrary text plus well-formed JSON, so generation spends some of its budget past the
+# json.loads guard rather than only on garbage that fails to parse.
+json_values = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.floats(allow_nan=False) | st.text(),
+    lambda children: st.lists(children) | st.dictionaries(st.text(), children),
+    max_leaves=8,
+)
+# Typed lines carry message content too, so generation reaches the per-block handling rather
+# than stopping at the dispatch on type.
+blocks = st.fixed_dictionaries(
+    {"type": st.sampled_from(["text", "tool_use", "tool_result", "image"])},
+    optional={
+        key: json_values for key in ("text", "name", "id", "tool_use_id", "content", "source")
+    },
+)
+messages = st.fixed_dictionaries(
+    {}, optional={"content": st.lists(blocks | json_values, max_size=4)}
+)
+typed = st.fixed_dictionaries(
+    {"type": st.sampled_from(["system", "assistant", "user", "result"])},
+    optional={"subtype": json_values, "message": messages | json_values},
+)
+lines = st.one_of(st.text(), json_values.map(json.dumps), typed.map(json.dumps))
+
+
+@settings(max_examples=200, deadline=None)
+@given(lines)
+def test_it_never_raises_and_always_returns_pairs(line: str) -> None:
+    """The line is another process's stdout, and the reader thread depends on "Never raises":
+    anything unrecognised must degrade to an event, never to an exception that kills it."""
+    events = parse_stream_line(line)
+    assert isinstance(events, list)
+    for event in events:
+        kind, payload = event
+        assert isinstance(kind, str)
+        assert isinstance(payload, dict)

@@ -12,6 +12,7 @@ gates in test_installer_preflight.py, the systemd mapping in test_supervisor_lin
 from __future__ import annotations
 
 import pytest
+from tests.test_installer_basics_prompt import ZONE_TAB
 from tests.test_supervisor import FakePlatform
 
 from sellee import (
@@ -559,13 +560,13 @@ def test_a_mistyped_timezone_re_asks_instead_of_ending_the_install(
     reason and the country's own zone."""
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     # country, a zone that does not exist, Enter for the proposed one, then the defaults.
-    _answer(monkeypatch, ["SG", "", "gmt8+", "", "", "", ""])
+    _answer(monkeypatch, ["SG", "", "Asia/Singapur", "", "", "", ""])
 
     assert setup_main("--manual", "--skip-discord") == 0
 
     assert world.calls["basics"] == {"region": "SG", "timezone": "Asia/Singapore"}
     out = capsys.readouterr().out
-    assert "unknown timezone 'gmt8+'" in out
+    assert "unknown timezone 'Asia/Singapur'" in out
     assert "zone names look like Asia/Singapore" in out
 
 
@@ -581,6 +582,27 @@ def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
 
     assert world.calls["basics"]["timezone"] == "Asia/Singapore"
     assert "Timezone? [Asia/Singapore]" in capsys.readouterr().out
+
+
+def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
+    world, monkeypatch, tmp_path, capsys
+) -> None:
+    zone_tab = tmp_path / "zone.tab"
+    zone_tab.write_text(ZONE_TAB)
+    monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(zone_tab))
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/New_York")
+    # no to the proposal, US again, yes, then the fourth place.
+    _answer(monkeypatch, ["n", "", "", "4", "", "", "", ""])
+
+    assert setup_main("--manual", "--skip-discord") == 0
+
+    assert world.calls["basics"] == {"region": "US", "timezone": "America/Los_Angeles"}
+    out = capsys.readouterr().out
+    assert (
+        "1) Eastern — New York\n2) Central — Chicago\n3) Mountain — Denver\n"
+        "4) Pacific — Los Angeles\n"
+    ) in out
+    assert "9) Somewhere else — type a city" in out
 
 
 def test_the_country_question_takes_any_code_rather_than_offering_a_list(
