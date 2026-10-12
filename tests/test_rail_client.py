@@ -653,6 +653,64 @@ def test_a_method_not_found_at_404_means_modern() -> None:
         assert _headers(call)["mcp-protocol-version"] == MODERN
 
 
+# --- the modern tool list is cached for the server's ttlMs ---------------------------------------
+
+
+@contextmanager
+def _relay(era: str, ttl_ms):
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    _forget_eras()
+    state = FakeRelay()
+    state.eras.era = era
+    state.tools_ttl_ms = ttl_ms
+    base, shutdown = serve(state)
+    try:
+        yield state, base
+    finally:
+        shutdown()
+
+
+@contextmanager
+def _clock(monkeypatch_target):
+    """A clock the test moves by hand, in seconds."""
+    now = [1000.0]
+    original = monkeypatch_target._monotonic
+    monkeypatch_target._monotonic = lambda: now[0]
+    try:
+        yield now
+    finally:
+        monkeypatch_target._monotonic = original
+
+
+@settings(max_examples=30, deadline=None)
+@given(
+    ttl_ms=st.integers(min_value=1, max_value=60_000),
+    calls=st.integers(min_value=1, max_value=5),
+    clients=st.integers(min_value=1, max_value=3),
+)
+def test_the_tool_list_is_fetched_once_per_ttl(ttl_ms, calls, clients) -> None:
+    from sellee.rail import client as client_module
+
+    with _relay("modern", ttl_ms) as (state, base), _clock(client_module) as now:
+        for _ in range(clients):
+            for _ in range(calls):
+                assert _client(base).offers_tool("list_threads")
+        assert state.eras.count("tools/list") == 1
+        now[0] += ttl_ms / 1000
+        assert _client(base).offers_tool("list_threads")
+        assert state.eras.count("tools/list") == 2
+
+
+@pytest.mark.parametrize(("era", "ttl_ms"), [("modern", 0), ("modern", None), ("legacy", 60_000)])
+def test_the_tool_list_is_fetched_every_time_without_a_usable_ttl(era, ttl_ms) -> None:
+    with _relay(era, ttl_ms) as (state, base):
+        for _ in range(3):
+            assert _client(base).offers_tool("list_threads")
+            assert not _client(base).offers_tool("create_photo_upload_url")
+        assert state.eras.count("tools/list") == 6
+
+
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
 _REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 

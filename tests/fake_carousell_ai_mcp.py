@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-from tests.fake_mcp_eras import EraLog, answer
+from tests.fake_mcp_eras import MODERN, EraLog, answer
 
 
 def rfc3339(ts: float) -> str:
@@ -51,6 +51,8 @@ class FakeRelay:
         self.registration_email = "seller-token@inbox.carousell.ai"
         # The protocol era the server speaks, and every MCP request it saw.
         self.eras = EraLog()
+        # The ttlMs a modern server puts on tools/list; None leaves the field out.
+        self.tools_ttl_ms = None
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -255,8 +257,11 @@ class _Handler(BaseHTTPRequestHandler):
         if answer(self, body, relay.eras):
             return
         if body.get("method") == "tools/list":
-            tools = [{"name": n} for n in _TOOLS]
-            self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {"tools": tools}})
+            result: dict = {"tools": [{"name": n} for n in _TOOLS]}
+            modern = self.headers.get("MCP-Protocol-Version") == MODERN
+            if modern and relay.tools_ttl_ms is not None:
+                result.update(ttlMs=relay.tools_ttl_ms, cacheScope="private")
+            self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
             return
         if body.get("method") != "tools/call":
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {}})
@@ -309,7 +314,8 @@ def serve(relay: FakeRelay):
     """Start the fake on a free port; returns (base_url, shutdown)."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.relay = relay  # type: ignore[attr-defined]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll: shutdown() waits for the next wake, which a test starting many servers pays.
+    thread = threading.Thread(target=server.serve_forever, args=(0.02,), daemon=True)
     thread.start()
 
     def shutdown():

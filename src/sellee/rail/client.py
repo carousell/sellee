@@ -14,6 +14,7 @@ import functools
 import hashlib
 import json
 import threading
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -95,6 +96,9 @@ _MODERN_ERA = _Era(modern=True, version=_MODERN)
 # One era per endpoint and key for the life of the process: the daemon builds a RailClient per use,
 # so an instance cache would probe every time. Each entry's lock makes its probe run once.
 _ERAS: dict[str, _Era] = {}
+# Modern tools/list results, by the same key, with the monotonic time each one goes stale.
+_TOOL_LISTS: dict[str, tuple[float, list]] = {}
+_monotonic = time.monotonic
 _ERA_LOCKS: dict[str, threading.Lock] = {}
 _ERAS_GUARD = threading.Lock()
 
@@ -104,6 +108,7 @@ def _forget_eras() -> None:
     with _ERAS_GUARD:
         _ERAS.clear()
         _ERA_LOCKS.clear()
+        _TOOL_LISTS.clear()
 
 
 class _HTTPAnswer(Exception):
@@ -275,8 +280,20 @@ class RailClient:
     def offers_tool(self, name: str) -> bool:
         """Whether the server lists this tool. bazaar registers some tools only when a feature is
         on, such as photo upload when media is enabled."""
-        tools = self._rpc("tools/list").get("tools") or []
-        return any(isinstance(t, dict) and t.get("name") == name for t in tools)
+        return any(isinstance(t, dict) and t.get("name") == name for t in self._tools())
+
+    def _tools(self) -> list:
+        """The server's tool list. A modern server's list is reused for its ttlMs; 0 or no ttlMs
+        means fetch every time, as the legacy era always does."""
+        cached = _TOOL_LISTS.get(self._era_key)
+        if cached is not None and _monotonic() < cached[0]:
+            return cached[1]
+        result = self._rpc("tools/list")
+        tools = result.get("tools") or []
+        ttl_ms = result.get("ttlMs")
+        if self._era().modern and isinstance(ttl_ms, int) and ttl_ms > 0:
+            _TOOL_LISTS[self._era_key] = (_monotonic() + ttl_ms / 1000, tools)
+        return tools
 
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
