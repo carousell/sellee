@@ -115,6 +115,21 @@ def record_offer(buyer: dict, offer, held_for_floor: bool = False) -> bool:
     return True
 
 
+def best_standing(buyers: dict) -> tuple | None:
+    """The standing buyer with the highest offer, as (thread_id, offer), or None when no one has
+    a standing offer. A tie goes to the later thread id, so the answer never depends on load order.
+    """
+    standing = [
+        (b["highest_offer"], tid)
+        for tid, b in buyers.items()
+        if b.get("status") not in NOT_STANDING and b.get("highest_offer", 0) > 0
+    ]
+    if not standing:
+        return None
+    offer, thread_id = max(standing)
+    return thread_id, offer
+
+
 def other_best(buyers: dict, thread_id: str) -> int:
     best = 0
     for tid, b in buyers.items():

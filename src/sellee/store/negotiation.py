@@ -326,13 +326,12 @@ class NegotiationMixin:
 
     def negotiate_release(self, item_id: str) -> dict:
         with self._db.transaction() as conn:
-            self._item_for_negotiation(conn, item_id)
+            list_price, _currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
-            led["state"] = "bidding" if led["is_bidding"] else "open"
-            led["front_runner"] = None
             for b in led["buyers"].values():
                 if b.get("status") in ("front_runner", "won"):
                     b["status"] = "active"
+            _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
             return {"item_state": led["state"]}
 
@@ -342,7 +341,7 @@ class NegotiationMixin:
         """Mark a buyer withdrawn, release the item if they held it, and, if they had an offer or a
         checkout link, queue `notice(result)` in the same transaction. A repeat changes nothing."""
         with self._db.transaction() as conn:
-            _list_price, currency = self._item_for_negotiation(conn, item_id)
+            list_price, currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
             if led["state"] == "sold":
                 raise StoreError("the item is already sold — escalate instead")
@@ -370,8 +369,7 @@ class NegotiationMixin:
                 led["buyers"][thread_id] = buyer
             buyer["status"] = "withdrew"
             if was_holder:
-                led["front_runner"] = None
-                led["state"] = "bidding" if led["is_bidding"] else "open"
+                _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
             result: dict = {
                 "withdrew": True,
@@ -699,19 +697,25 @@ class NegotiationMixin:
         return self.get_checkout(sale_id)  # type: ignore[return-value]
 
 
+def _reopen(led: dict, list_price) -> None:
+    """Put an item back on the market. A bidding item stays in bidding under the best bid still
+    standing, so the bar a new bid has to clear is never below a bid nobody withdrew."""
+    led["state"] = "bidding" if led["is_bidding"] else "open"
+    led["front_runner"] = None
+    best = negotiate_engine.best_standing(led["buyers"]) if led["is_bidding"] else None
+    if best is not None and best[1] > list_price:
+        led["front_runner"] = {"thread_id": best[0], "amount": best[1], "kind": "bid"}
+
+
 def _next_buyer(led: dict, currency) -> dict | None:
     """The standing buyer with the highest offer, for the seller to sell to instead."""
-    standing = [
-        (b["highest_offer"], t, b)
-        for t, b in led["buyers"].items()
-        if b["status"] not in negotiate_engine.NOT_STANDING and b["highest_offer"] > 0
-    ]
-    if not standing:
+    best = negotiate_engine.best_standing(led["buyers"])
+    if best is None:
         return None
-    offer, thread_id, buyer = max(standing, key=lambda s: (s[0], s[1]))
+    thread_id, offer = best
     return {
         "thread_id": thread_id,
-        "handle": buyer["buyer_handle"],
+        "handle": led["buyers"][thread_id]["buyer_handle"],
         "price": _money(offer, currency),
     }
 

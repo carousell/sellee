@@ -22,6 +22,7 @@ _PROPERTY = settings(
     suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
 )
 BUYERS = ("fb:a", "fb:b", "fb:c")
+_NOT_STANDING = ("passed", "lost", "withdrew")
 
 
 def _text(result: dict) -> tuple:
@@ -79,7 +80,9 @@ def test_a_holder_who_withdraws_puts_the_item_back_on_the_market(store, ledger) 
     assert result["was_holder"] is held
     if held:
         assert after["item_state"] in ("open", "bidding")
-        assert after["front_runner"] is None
+        # Bidding goes on under the best bid still standing, if any.
+        assert (after["front_runner"] or {}).get("thread_id") != BUYERS[who]
+        assert (after["front_runner"] or {"kind": "bid"})["kind"] == "bid"
     else:
         assert after["item_state"] == before["item_state"]
         assert after["front_runner"] == before["front_runner"]
@@ -180,7 +183,77 @@ def test_a_buyer_with_a_checkout_link_is_told_about_once_with_a_warning(
         assert ("checkout link still works" in notice["text"]) is has_checkout
 
 
+_ACTIONS = st.one_of(st.integers(0, 2), st.just("release"))
+_NEW_OFFERS = st.sampled_from([60, 80, 100, 101, 110, 119, 120, 121, 125, 130, 151, 200])
+
+
+@_PROPERTY
+@given(ledger=_LEDGERS, action=_ACTIONS, offer=_NEW_OFFERS)
+def test_a_new_bid_leads_only_by_beating_every_bid_still_standing(
+    store, ledger, action, offer
+) -> None:
+    offers, confirm, _ = ledger
+    item = _build(store, offers, confirm)
+    if action == "release":
+        store.negotiate_release(item["id"])
+    else:
+        store.negotiate_withdraw(item["id"], BUYERS[action], notice=_text)
+    standing = [
+        b["highest_offer"]
+        for b in store.negotiate_status(item["id"])["buyers"].values()
+        if b["status"] not in _NOT_STANDING
+    ]
+
+    result = _offer(store, item["id"], "fb:new", offer)
+
+    if result["decision"] == "bid_lead":
+        assert result["leading_amount"] > max(standing, default=0)
+    if result["decision"] in ("bid_lead", "bid_outbid"):
+        assert result["bar_to_beat"] >= max(standing, default=0)
+
+
 # --- examples ----------------------------------------------------------------------------------
+
+
+def _bidding_war(store) -> dict:
+    """List 100, floor 50: b bids 120, then c leads at 130."""
+    item = _item(store)
+    _offer(store, item["id"], "fb:b", 120)
+    _offer(store, item["id"], "fb:c", 130)
+    return item
+
+
+def test_when_the_leading_bidder_withdraws_the_next_bid_leads(store) -> None:
+    item = _bidding_war(store)
+
+    result = store.negotiate_withdraw(item["id"], "fb:c", notice=_withdrawal_text)
+
+    front = store.negotiate_status(item["id"])["front_runner"]
+    assert front == {"thread_id": "fb:b", "amount": 120, "kind": "bid"}
+    assert result["next_buyer"]["thread_id"] == "fb:b"
+    assert _offer(store, item["id"], "fb:d", 101) == {
+        "decision": "bid_outbid",
+        "bar_to_beat": 120,
+        "needs_seller_confirm": False,
+        "message_intent": "beat_bar:120",
+        "item_state": "bidding",
+        "currency": "USD",
+    }
+    assert _offer(store, item["id"], "fb:e", 100)["bar_to_beat"] == 120
+
+
+def test_a_released_item_keeps_its_best_bid_as_the_bar(store) -> None:
+    item = _bidding_war(store)
+    store.negotiate_confirm_bid(item["id"], "fb:c")
+
+    store.negotiate_release(item["id"])
+
+    assert store.negotiate_status(item["id"])["front_runner"] == {
+        "thread_id": "fb:c",
+        "amount": 130,
+        "kind": "bid",
+    }
+    assert _offer(store, item["id"], "fb:d", 125)["decision"] == "bid_outbid"
 
 
 def test_a_withdrawn_offer_no_longer_outbids_anyone(store) -> None:
@@ -365,8 +438,6 @@ def test_has_withdrawn_agrees_with_the_ledger(store, ledger) -> None:
 
 
 # --- the next buyer in line --------------------------------------------------------------------
-
-_NOT_STANDING = ("passed", "lost", "withdrew")
 
 
 @_PROPERTY
