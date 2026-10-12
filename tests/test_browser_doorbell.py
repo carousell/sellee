@@ -166,8 +166,8 @@ def test_a_ring_shown_while_the_laptop_slept_is_still_owed_a_visit(store, bus) -
     deps = _deps(store, bus, chrome, clock)
     doorbell.doorbell_lane(deps)
 
-    clock.t += 4913  # 82 minutes asleep, as run12 was at 03:34 on 11 October
-    chrome.heard = [_ring("mid.$night", shown=clock.t - 2044)]  # shown 34 minutes before wake
+    clock.t += 4913  # 82 minutes asleep
+    chrome.heard = [_ring("mid.$night", shown=clock.t - 2044)]  # 34 minutes old when first heard
     doorbell.doorbell_lane(deps)
 
     assert store.ring_owed(

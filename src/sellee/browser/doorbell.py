@@ -44,7 +44,8 @@ from sellee.store.browser import RING_KEPT_SEC
 
 log = logging.getLogger(__name__)
 
-# A ring older than this when first heard rang while nobody was listening. Recorded answered.
+# A ring shown before the doorbell's first look, and older than this when heard, rang while
+# nobody was listening. Recorded answered.
 STALE_RING_SEC = 1800.0
 # A gap between ticks this long means the machine slept rather than a tick ran late.
 SLEPT_AFTER_SEC = 180.0
