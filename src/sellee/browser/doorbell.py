@@ -40,6 +40,7 @@ from sellee.browser import chrome, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
+from sellee.store.browser import RING_KEPT_SEC
 
 log = logging.getLogger(__name__)
 
@@ -167,8 +168,11 @@ def _hear(deps: DoorbellDeps, market: str, heard: list, now: float) -> None:
         key = f"{ring.get('tag') or ''}|{shown:.3f}"
         kind = adapter.ring_kind(ring.get("title") or "", ring.get("body") or "")
         # A ring shown while this process was listening is a buyer, however long the laptop slept.
+        # One older than an answered ring is kept may be one already answered and since let go.
         unheard = deps.first_heard is None or shown < deps.first_heard
-        (stale if unheard and now - shown > STALE_RING_SEC else fresh).append((key, kind, shown))
+        age = now - shown
+        old = (unheard and age > STALE_RING_SEC) or age > RING_KEPT_SEC
+        (stale if old else fresh).append((key, kind, shown))
     if stale:
         deps.store.record_rings(market, stale, due_ts=now, now=now, answered=True)
     if not fresh:

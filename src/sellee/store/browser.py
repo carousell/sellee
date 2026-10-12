@@ -14,7 +14,7 @@ from sellee.db import Database
 from sellee.store.helpers import UNPLACEABLE_REPORTED_META, _insert_notice, _now
 
 # How long an answered ring is kept, as the record of when the marketplace last rang.
-_RING_KEPT_SEC = 30 * 86400.0
+RING_KEPT_SEC = 30 * 86400.0
 
 # What the lane should do for a request. `open` is the seller asking to be signed in: navigate,
 # pull the tab forward, and raise the window. `probe` is them saying they already have — re-read
@@ -258,7 +258,7 @@ class BrowserMixin:
                 added += cur.rowcount
             conn.execute(
                 "DELETE FROM market_rings WHERE handled_ts IS NOT NULL AND heard_ts < ?",
-                (now - _RING_KEPT_SEC,),
+                (now - RING_KEPT_SEC,),
             )
         return added
 

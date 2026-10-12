@@ -25,6 +25,7 @@ from sellee.db import Database
 from sellee.engines import pacing
 from sellee.events import EventBus, EventStore
 from sellee.store import Store
+from sellee.store.browser import RING_KEPT_SEC
 
 _FB = "https://www.facebook.com/"
 
@@ -172,6 +173,26 @@ def test_a_ring_shown_while_the_laptop_slept_is_still_owed_a_visit(store, bus) -
     assert store.ring_owed(
         "fb", now=clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
     )
+
+
+def test_an_answered_ring_let_go_of_is_not_owed_again(store, bus) -> None:
+    """Chrome may replay a notification for longer than an answered ring is kept. Once let go it is
+    no longer recognised, but it is still the ring that was answered, not a buyer to visit."""
+    clock = _Clock()
+    chrome = _Chrome()
+    deps = _deps(store, bus, chrome, clock)
+    doorbell.doorbell_lane(deps)
+    clock.t += 20
+    chrome.heard = [_ring("mid.$month", shown=clock.t - 2)]
+    doorbell.doorbell_lane(deps)
+    store.answer_rings("fb", heard_before=clock.t, now=clock.t + pacing.REACTION_CEILING_SEC)
+
+    clock.t += RING_KEPT_SEC + 86400
+    doorbell.doorbell_lane(deps)
+    clock.t += 20
+    doorbell.doorbell_lane(deps)
+
+    assert not store.ring_owed("fb", now=clock.t + 10 * doorbell.WAKE_SETTLE_SEC)
 
 
 @settings(
