@@ -328,9 +328,33 @@ def test_a_city_is_matched_ignoring_case_spaces_and_underscores(zone_tab) -> Non
     assert region.zones_for_city("  Madrid ", zone_tab) == ["Europe/Madrid"]
 
 
+@pytest.mark.parametrize(
+    ("typed", "zone"),
+    [
+        ("São Paulo", "America/Sao_Paulo"),
+        ("Zürich", "Europe/Zurich"),
+        ("St. John's", "America/St_Johns"),
+        ("port au prince", "America/Port-au-Prince"),
+        ("Los Angeles, CA", "America/Los_Angeles"),
+        ("Paris, France", "Europe/Paris"),
+    ],
+)
+def test_a_city_is_matched_through_accents_punctuation_and_a_trailing_region(
+    zone_tab, typed, zone
+) -> None:
+    assert region.zones_for_city(typed, zone_tab) == [zone]
+
+
+def test_an_offsets_sign_still_tells_two_zones_apart(zone_tab) -> None:
+    assert region.zones_for_city("GMT+8", zone_tab) == ["Etc/GMT+8"]
+    assert region.zones_for_city("GMT-8", zone_tab) == ["Etc/GMT-8"]
+
+
 def test_a_city_with_no_zone_of_its_own_matches_nothing(zone_tab) -> None:
     assert region.zones_for_city("Barcelona", zone_tab) == []
+    assert region.zones_for_city("Austin, TX", zone_tab) == []
     assert region.zones_for_city("", zone_tab) == []
+    assert region.zones_for_city(", CA", zone_tab) == []
 
 
 def test_a_city_named_by_a_legacy_link_too_prefers_the_zone_tab_zone(zone_tab) -> None:
@@ -368,11 +392,12 @@ def test_the_zone_database_is_listed_once_however_many_cities_are_asked(
     ),
     upper=st.booleans(),
     spaced=st.booleans(),
+    suffix=st.sampled_from(["", ", CA", ",ES", ", India", "."]),
 )
-def test_a_zones_own_city_always_finds_it(zone, upper, spaced) -> None:
+def test_a_zones_own_city_always_finds_it(zone, upper, spaced, suffix) -> None:
     city = zone.rsplit("/", 1)[-1]
     typed = city.replace("_", " ") if spaced else city
-    typed = typed.upper() if upper else typed.lower()
+    typed = (typed.upper() if upper else typed.lower()) + suffix
     found = region.zones_for_city(typed, "/nonexistent/zone.tab")
     assert zone in found
     assert all(region.zone_error(name) == "" for name in found)

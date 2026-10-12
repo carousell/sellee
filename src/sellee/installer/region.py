@@ -9,6 +9,7 @@ from __future__ import annotations
 import functools
 import os
 import re
+import unicodedata
 
 from sellee import countries
 
@@ -135,11 +136,11 @@ def _place_label(zone: str, description: str) -> str:
     city = city_label(zone)
     if not area:
         return city
-    return area if _city_key(city) in _city_key(area) else f"{area} — {city}"
+    return area if _spelling(city) in _spelling(area) else f"{area} — {city}"
 
 
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:
-    """The zones whose city is `text`, ignoring case, spaces and underscores. When any match is
+    """The zones whose city is `text`, ignoring accents, case and punctuation. When any match is
     in `zone.tab`, only those are kept, so a legacy link does not count twice."""
     wanted = _city_key(text)
     if not wanted:
@@ -167,7 +168,20 @@ def city_label(zone: str) -> str:
 
 
 def _city_key(text: str) -> str:
-    return "".join(text.split()).replace("_", "").lower()
+    """How a typed city is compared with a zone's: the part before any comma, so "Austin, TX" is
+    Austin, spelled as `_spelling` reduces it."""
+    return _spelling(text.split(",", 1)[0])
+
+
+# Dropped from a spelling: everything but letters and digits, except the sign of an offset, which
+# is all that tells GMT+8 from GMT-8.
+_NOT_SPELLING = re.compile(r"[^0-9a-z+-]|[+-](?![0-9])")
+
+
+def _spelling(text: str) -> str:
+    """`text` without accents, case, spaces or punctuation: "St. John's" and "St_Johns" agree."""
+    folded = "".join(unicodedata.normalize("NFKD", text).casefold().split())
+    return _NOT_SPELLING.sub("", folded)
 
 
 def _read_zone_tab(path: str | None) -> list:
