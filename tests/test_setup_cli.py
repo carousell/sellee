@@ -573,7 +573,7 @@ def test_a_country_with_one_zone_proposes_it_rather_than_an_empty_field(
 
 
 def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
-    world, monkeypatch, capsys
+    world, zone_tab, monkeypatch, capsys
 ) -> None:
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/New_York")
     # no to the proposal, US again, yes, then the fourth place.
@@ -584,7 +584,7 @@ def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
     assert world.calls["basics"] == {"region": "US", "timezone": "America/Los_Angeles"}
     out = capsys.readouterr().out
     assert "1) New York\n2) Chicago\n3) Denver\n4) Los Angeles\n" in out
-    assert "13) Somewhere else — type a city" in out
+    assert "14) Somewhere else — type a city" in out
 
 
 # --- the timezone question, at its seam ---------------------------------------------------------
@@ -631,14 +631,14 @@ def test_a_country_outside_the_table_is_offered_its_zone_tab_places(zone_tab) ->
 
 
 def test_somewhere_else_takes_a_city_and_confirms_its_zone(zone_tab) -> None:
-    zone, out = _ask_timezone("US", ["13", "los angeles", ""])
+    zone, out = _ask_timezone("US", ["14", "los angeles", ""])
     assert zone == "America/Los_Angeles"
     assert "Which city are you in?" in out
     assert "America/Los_Angeles, correct? [Y/n]" in out
 
 
 def test_a_city_confirmed_wrong_is_asked_again(zone_tab) -> None:
-    zone, _ = _ask_timezone("US", ["13", "los angeles", "n", "denver", "y"])
+    zone, _ = _ask_timezone("US", ["14", "los angeles", "n", "denver", "y"])
     assert zone == "America/Denver"
 
 
@@ -680,12 +680,12 @@ def test_the_machines_zone_is_the_default_place(zone_tab, monkeypatch) -> None:
     assert "[default 3]" in out
 
 
-def test_a_machine_zone_the_list_lacks_is_offered_first(zone_tab, monkeypatch) -> None:
-    # The stored zone is a claim about this machine, so its own zone stays the default.
+def test_a_zone_only_zone_tab_lists_follows_the_tables_own(zone_tab, monkeypatch) -> None:
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Indiana/Indianapolis")
     zone, out = _ask_timezone("US", [""])
     assert zone == "America/Indiana/Indianapolis"
-    assert "1) Indianapolis (this computer)\n2) New York\n" in out
+    assert "(this computer)" not in out
+    assert "[default 13]" in out
 
 
 @pytest.mark.parametrize("machine", ["UTC", "Asia/Singapore"])
@@ -704,7 +704,7 @@ def test_a_zone_name_without_a_slash_is_taken_as_typed(zone_tab) -> None:
 
 
 def test_a_typed_zone_name_is_still_accepted(zone_tab) -> None:
-    zone, _ = _ask_timezone("US", ["13", "Asia/Singapore"])
+    zone, _ = _ask_timezone("US", ["14", "Asia/Singapore"])
     assert zone == "Asia/Singapore"
 
 

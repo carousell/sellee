@@ -207,6 +207,9 @@ PT\t+3238-01654\tAtlantic/Madeira\tMadeira Islands
 PT\t+3744-02540\tAtlantic/Azores\tAzores
 US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
 US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)
+AU\t-2728+15302\tAustralia/Brisbane\tQueensland (most areas)
+AU\t-3157+11551\tAustralia/Perth\tWestern Australia (most areas)
 IN\t+2232+08822\tAsia/Kolkata
 XX\t+0000+00000\tNowhere/Atlantis\tA zone no database has
 """
@@ -227,7 +230,17 @@ def test_a_country_the_table_names_is_offered_as_its_cities_most_populous_first(
         ("Denver", "America/Denver"),
         ("Los Angeles", "America/Los_Angeles"),
     ]
-    assert len(places) == 12
+    assert len(places) == 13
+
+
+def test_zones_only_zone_tab_lists_follow_the_tables_own(zone_tab) -> None:
+    # The table names one Australian zone; a seller in Perth or Brisbane still needs theirs.
+    assert [zone for _, zone in region.place_zones("AU", zone_tab)] == [
+        "Australia/Sydney",
+        "Australia/Brisbane",
+        "Australia/Perth",
+    ]
+    assert region.place_zones("US", zone_tab)[-1][1] == "America/Indiana/Indianapolis"
 
 
 def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
@@ -274,7 +287,9 @@ def test_without_zone_tab_only_the_table_answers(tmp_path) -> None:
     assert region.place_zones("ES", missing) == []
 
 
-@given(code=st.sampled_from(["US", "CA", "ID", "MY", "SG", "ES", "FR", "PT", "IN", "XX", "ZZ"]))
+@given(
+    code=st.sampled_from(["US", "CA", "AU", "ID", "MY", "SG", "ES", "FR", "PT", "IN", "XX", "ZZ"])
+)
 def test_every_offered_place_is_a_zone_the_write_door_takes(code) -> None:
     with tempfile.TemporaryDirectory() as directory:
         path = os.path.join(directory, "zone.tab")

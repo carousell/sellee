@@ -109,16 +109,17 @@ def zone_tab_path() -> str:
 
 
 def place_zones(region: str, zone_tab: str | None = None) -> list:
-    """(label, zone) pairs to offer for this region: the table above labelled by city, else
-    `zone.tab` with its own labels ("Spain (mainland)")."""
-    zones = zones_for(region)
-    if zones:
-        return [(city_label(zone), zone) for zone in zones]
-    return [
+    """(label, zone) pairs to offer for this region: the table above's zones in its order,
+    labelled by city, then any others `zone.tab` lists for it with its own labels ("Spain
+    (mainland)")."""
+    table = zones_for(region)
+    places = [(city_label(zone), zone) for zone in table]
+    places += [
         (label or city_label(zone), zone)
         for code, zone, label in _read_zone_tab(zone_tab)
-        if code == region and not zone_error(zone)
+        if code == region and zone not in table
     ]
+    return [(label, zone) for label, zone in places if not zone_error(zone)]
 
 
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:
