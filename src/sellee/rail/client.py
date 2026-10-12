@@ -14,12 +14,14 @@ import base64
 import dataclasses
 import functools
 import hashlib
+import itertools
 import json
 import string
 import threading
 import time
 import urllib.error
 import urllib.request
+from collections.abc import Iterable
 from dataclasses import dataclass
 
 from sellee.rail.mail_stream import MailStreamConnection
@@ -44,6 +46,8 @@ _MODERN_ERRORS = (_HEADER_MISMATCH, -32021)
 _UNSUPPORTED_VERSION = -32022
 # go-sdk v1.6.1 and v1.8.0 refuse a version header with this text, before dispatching anything.
 _GO_SDK_VERSION_REFUSAL = "Bad Request: Unsupported protocol version"
+# One event's data past this is refused rather than held in memory.
+_MAX_EVENT_CHARS = 8 * 1024 * 1024
 # A modern server's own refusals, so a modern call refused with one met a server still modern.
 _MODERN_REFUSALS = (*_MODERN_ERRORS, _UNSUPPORTED_VERSION)
 # A modern server answers a method it lacks with HTTP 404 and this code; a legacy one uses 200.
@@ -83,10 +87,11 @@ class RailToolError(RailError):
 class RailToolRefused(RailToolError):
     """The rail itself answered the call with an error, rather than an answer we could not read."""
 
-    def __init__(self, message: str, *, code: int | None = None):
+    def __init__(self, message: str, *, code: int | None = None, data: object = None):
         super().__init__(message)
         # The JSON-RPC error code, when the rail answered with a JSON-RPC error.
         self.code = code
+        self.data = data
 
 
 @dataclass
@@ -159,7 +164,7 @@ class RailClient:
         self._api_key = api_key
         self._web_base_url = web_base_url.rstrip("/")
         self._timeout = timeout_sec
-        self._next_id = 0
+        self._ids = itertools.count(1)
         # A legacy session belongs to the key that opened it, so a rotated key probes again.
         self._era_key = self._endpoint + "#" + hashlib.sha256(api_key.encode()).hexdigest()
 
@@ -173,7 +178,7 @@ class RailClient:
                 # this one: the 404 cannot prove the call did not run.
                 self._renew_session(era)
                 raise _http_error(exc) from exc
-            code = _rpc_error_code(exc.body)
+            code = _rpc_error(exc.body)[0]
             if (
                 era.modern
                 and method == "tools/call"
@@ -203,7 +208,7 @@ class RailClient:
         try:
             return self._request("tools/call", params, era)[0]
         except _HTTPAnswer as exc:
-            if _rpc_error_code(exc.body) == _HEADER_MISMATCH:
+            if _rpc_error(exc.body)[0] == _HEADER_MISMATCH:
                 raise RailToolRefused(
                     f"rail refused the call's headers ({_HEADER_MISMATCH})", code=_HEADER_MISMATCH
                 ) from exc
@@ -255,16 +260,18 @@ class RailClient:
         except _HTTPAnswer as exc:
             if exc.status not in (400, 404, 405):
                 raise _http_error(exc) from exc
-            code = _rpc_error_code(exc.body)
+            code, data = _rpc_error(exc.body)
             if code in _MODERN_ERRORS or (exc.status == 404 and code == _METHOD_NOT_FOUND):
                 return self._cache(_MODERN_ERA)
-            if code == _UNSUPPORTED_VERSION and not _lists_a_legacy_version(exc.body):
+            if code == _UNSUPPORTED_VERSION and not _lists_a_legacy_version(data):
                 raise RailNetworkError(
                     "rail speaks no protocol version sellee speaks", status=exc.status
                 ) from exc
         except RailToolRefused as exc:
             if exc.code in _MODERN_ERRORS:
                 return self._cache(_MODERN_ERA)
+            if exc.code == _UNSUPPORTED_VERSION and not _lists_a_legacy_version(exc.data):
+                raise RailNetworkError("rail speaks no protocol version sellee speaks") from exc
         else:
             versions = result.get("supportedVersions")
             if isinstance(versions, list) and _MODERN in versions:
@@ -317,36 +324,35 @@ class RailClient:
     def _request(self, method: str, params: dict | None, era: _Era) -> tuple[dict, str]:
         """One JSON-RPC request in `era`; returns its result and any session id the server set.
         An HTTP error other than 401/403 raises _HTTPAnswer, for the caller to read or type."""
-        self._next_id += 1
+        request_id = next(self._ids)
         params = dict(params or {})
         if era.modern:
             params["_meta"] = {**params.get("_meta", {}), **_MODERN_META}
-        message = {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
+        message = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": params}
         call_headers = {}
         if era.modern and method == "tools/call":
             name = str(params.get("name", ""))
             call_headers = {"Mcp-Name": _header_value(name)}
             call_headers.update(self._param_headers(name, params.get("arguments")))
-        raw, session_id, streamed = self._post(message, call_headers, era)
-        envelope = _event_response(raw, self._next_id) if streamed else _parse_json(raw)
+        envelope, session_id = self._post(message, call_headers, era)
         if not isinstance(envelope, dict):
             raise RailNetworkError("rail response is not a JSON-RPC object")
         error = envelope.get("error")
         if error:
-            code = error.get("code") if isinstance(error, dict) else None
-            code = code if isinstance(code, int) else None
+            code, data = _error_fields(error)
             text = (
                 str(error.get("message", "rail error")) if isinstance(error, dict) else "rail error"
             )
-            raise RailToolRefused(text if code is None else f"{text} (JSON-RPC {code})", code=code)
+            message_text = text if code is None else f"{text} (JSON-RPC {code})"
+            raise RailToolRefused(message_text, code=code, data=data)
         result = envelope.get("result")
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result, session_id
 
-    def _post(self, message: dict, call_headers: dict, era: _Era) -> tuple[str, str, bool]:
-        """POST one JSON-RPC message with `era`'s headers; returns the body, any session id, and
-        whether the body is an event stream."""
+    def _post(self, message: dict, call_headers: dict, era: _Era) -> tuple[object, str]:
+        """POST one JSON-RPC message with `era`'s headers; returns the parsed response (None for a
+        notification) and any session id."""
         headers = {
             "Content-Type": "application/json",
             # Both are required even though the server answers with plain JSON; it rejects the
@@ -367,9 +373,13 @@ class RailClient:
         req = urllib.request.Request(self._endpoint, data=body, method="POST", headers=headers)
         try:
             with _no_redirects().open(req, timeout=self._timeout) as resp:
-                streamed = (resp.headers.get("Content-Type") or "").startswith("text/event-stream")
                 session_id = resp.headers.get("Mcp-Session-Id") or ""
-                return resp.read().decode("utf-8"), session_id, streamed
+                if "id" not in message:
+                    return None, session_id
+                if (resp.headers.get("Content-Type") or "").startswith("text/event-stream"):
+                    # Read only up to the response: the server may hold the stream open after it.
+                    return _event_response(resp, message["id"]), session_id
+                return _parse_json(resp.read().decode("utf-8")), session_id
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RailAuthError("carousell.ai rejected the guest key") from exc
@@ -404,7 +414,7 @@ class RailClient:
 
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
-        if result.get("resultType", "complete") != "complete":
+        if result.get("resultType") not in (None, "complete"):
             # The server wants input sellee never offers to give, having declared no capabilities.
             raise RailToolRefused(f"{name} asked for input sellee cannot give")
         if result.get("isError"):
@@ -641,7 +651,7 @@ def _text_content(result: dict) -> str:
 
 def _refused_the_version(answer: _HTTPAnswer) -> bool:
     """Whether a 400 refused the request's protocol version: JSON -32022, or go-sdk's plain text."""
-    if _rpc_error_code(answer.body) == _UNSUPPORTED_VERSION:
+    if _rpc_error(answer.body)[0] == _UNSUPPORTED_VERSION:
         return True
     return answer.body.startswith(_GO_SDK_VERSION_REFUSAL)
 
@@ -726,29 +736,47 @@ def _parse_json(raw: str):
         raise RailNetworkError("rail returned an unparseable response") from exc
 
 
-def _event_response(raw: str, request_id: int):
-    """The JSON-RPC response to `request_id` in an event stream; notifications before it are
-    skipped."""
-    for event in raw.replace("\r\n", "\n").split("\n\n"):
-        data = "\n".join(
-            line[5:].lstrip(" ") for line in event.split("\n") if line.startswith("data:")
-        )
-        if not data:
-            continue
-        message = _parse_json(data)
-        if isinstance(message, dict) and message.get("id") == request_id:
-            return message
+def _event_response(stream: Iterable[bytes], request_id: int) -> dict:
+    """The JSON-RPC response to `request_id`, read event by event; other events are skipped."""
+    data: list[str] = []
+    size = 0
+    for raw in stream:
+        line = raw.decode("utf-8", "replace").removesuffix("\n").removesuffix("\r")
+        # A bare CR also ends a line in an event stream.
+        for part in line.split("\r"):
+            if part:
+                if part.startswith("data:"):
+                    value = part[5:].removeprefix(" ")
+                    size += len(value)
+                    if size > _MAX_EVENT_CHARS:
+                        raise RailNetworkError(
+                            "rail's event stream sent an event too large to read"
+                        )
+                    data.append(value)
+                continue
+            message = _event_message("\n".join(data))
+            data, size = [], 0
+            if message is not None and message.get("id") in (request_id, str(request_id)):
+                return message
+    message = _event_message("\n".join(data))
+    if message is not None and message.get("id") in (request_id, str(request_id)):
+        return message
     raise RailNetworkError("rail's event stream ended without a response")
 
 
-def _lists_a_legacy_version(body: str) -> bool:
-    """Whether an UnsupportedProtocolVersionError body lists a legacy version sellee speaks."""
+def _event_message(data: str) -> dict | None:
+    """One event's data as a JSON-RPC message, or None for no data or data that is not JSON."""
+    if not data:
+        return None
     try:
-        envelope = json.loads(body)
+        message = json.loads(data)
     except ValueError:
-        return False
-    error = envelope.get("error") if isinstance(envelope, dict) else None
-    data = error.get("data") if isinstance(error, dict) else None
+        return None
+    return message if isinstance(message, dict) else None
+
+
+def _lists_a_legacy_version(data: object) -> bool:
+    """Whether an UnsupportedProtocolVersionError's data lists a legacy version sellee speaks."""
     supported = data.get("supported") if isinstance(data, dict) else None
     return isinstance(supported, list) and any(v in _LEGACY_VERSIONS for v in supported)
 
@@ -765,12 +793,18 @@ def _read_error_body(exc: urllib.error.HTTPError) -> str:
         return ""
 
 
-def _rpc_error_code(body: str) -> int | None:
-    """The JSON-RPC error code in an HTTP error body, or None when the body is not one."""
+def _rpc_error(body: str) -> tuple[int | None, object]:
+    """The JSON-RPC error code and data in an HTTP error body; (None, None) when it is not one."""
     try:
         envelope = json.loads(body)
     except ValueError:
-        return None
-    error = envelope.get("error") if isinstance(envelope, dict) else None
-    code = error.get("code") if isinstance(error, dict) else None
-    return code if isinstance(code, int) else None
+        return None, None
+    return _error_fields(envelope.get("error") if isinstance(envelope, dict) else None)
+
+
+def _error_fields(error: object) -> tuple[int | None, object]:
+    if not isinstance(error, dict):
+        return None, None
+    code = error.get("code")
+    is_code = isinstance(code, int) and not isinstance(code, bool)
+    return (code if is_code else None), error.get("data")

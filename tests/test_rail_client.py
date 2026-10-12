@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import io
 import json
 import string
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -19,6 +21,7 @@ from sellee.rail.client import (
     RailNetworkError,
     RailToolError,
     RailToolRefused,
+    _event_response,
     _forget_eras,
     _text_content,
     listing_id_from_url,
@@ -1114,6 +1117,111 @@ def test_an_unsupported_modern_version_with_a_legacy_one_listed_initializes() ->
         server.eras.json_rejections = True
         assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
         assert server.eras.count("initialize") == 1
+
+
+def _stream(text: str) -> io.BytesIO:
+    return io.BytesIO(text.encode())
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_an_event_stream_is_read_whatever_its_line_endings(newline) -> None:
+    note = '{"jsonrpc": "2.0", "method": "notifications/progress"}'
+    reply = '{"jsonrpc": "2.0", "id": 7, "result": {"ok": true}}'
+    text = newline.join(
+        [": a comment", f"data: {note}", "", "event: message", f"data: {reply}", ""]
+    )
+    assert _event_response(_stream(text + newline), 7) == json.loads(reply)
+
+
+def test_an_event_stream_joins_multi_line_data_and_strips_one_space() -> None:
+    text = 'data: {"jsonrpc": "2.0", "id": 3,\ndata:  "result": {"v": " x"}}\n\n'
+    assert _event_response(_stream(text), 3) == {"jsonrpc": "2.0", "id": 3, "result": {"v": " x"}}
+
+
+def test_an_event_stream_skips_data_that_is_not_json_and_events_without_data() -> None:
+    reply = '{"jsonrpc": "2.0", "id": 1, "result": {}}'
+    text = f"data: not json\n\nevent: ping\n\nid: 4\n\ndata: {reply}\n\n"
+    assert _event_response(_stream(text), 1) == json.loads(reply)
+
+
+def test_an_event_stream_matches_a_string_echo_of_the_request_id() -> None:
+    text = 'data: {"jsonrpc": "2.0", "id": "5", "result": {"ok": 1}}\n\n'
+    assert _event_response(_stream(text), 5)["result"] == {"ok": 1}
+
+
+def test_an_event_stream_skips_responses_to_other_requests() -> None:
+    other = '{"jsonrpc": "2.0", "id": 8, "result": {"other": 1}}'
+    text = f"data: {other}\n\n"
+    with pytest.raises(RailNetworkError, match="ended without a response"):
+        _event_response(_stream(text), 9)
+
+
+def test_an_event_stream_with_an_oversized_event_is_a_network_error() -> None:
+    text = "data: " + "x" * (9 * 1024 * 1024) + "\n\n"
+    with pytest.raises(RailNetworkError, match="too large"):
+        _event_response(_stream(text), 1)
+
+
+def test_a_stream_kept_open_after_its_response_is_answered_without_waiting() -> None:
+    release = threading.Event()
+
+    class _Open(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            if body.get("method") != "tools/call" and answer(self, body, self.server.eras):
+                return
+            reply = {"jsonrpc": "2.0", "id": body["id"], "result": {"structuredContent": {"a": 1}}}
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(f"data: {json.dumps(reply)}\n\n".encode())
+            self.wfile.flush()
+            release.wait(5)
+
+    with _serving("modern") as (server, base):
+        server.RequestHandlerClass = _Open
+        client = RailClient(api_base=base, api_key="guest-key", web_base_url=base, timeout_sec=3)
+        started = time.monotonic()
+        try:
+            assert client.call_tool("get_thread", {"id": "t1"}) == {"a": 1}
+        finally:
+            release.set()
+        assert time.monotonic() - started < 1
+
+
+@pytest.mark.parametrize(
+    ("listed", "initializes"), [(["2099-01-01"], False), (["2025-06-18"], True)]
+)
+def test_an_unsupported_version_at_http_200_is_read_like_one_at_400(listed, initializes) -> None:
+    class _At200(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            if body.get("method") == "server/discover":
+                data = {"supported": listed, "requested": MODERN}
+                error = {"code": -32022, "message": "unsupported protocol version", "data": data}
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "error": error})
+            elif not answer(self, body, self.server.eras):
+                result = self.server.tool_result
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    with _serving("legacy") as (server, base):
+        server.RequestHandlerClass = _At200
+        server.eras.lenient = True
+        server.tool_result = {"structuredContent": {"ok": True}}
+        if initializes:
+            assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
+        else:
+            with pytest.raises(RailNetworkError):
+                _client(base).call_tool("get_thread", {"id": "t1"})
+        assert (server.eras.count("initialize") == 1) is initializes
+
+
+def test_a_null_result_type_is_a_complete_result() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"resultType": None, "structuredContent": {"ok": True}}
+        assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
 
 
 @pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])
