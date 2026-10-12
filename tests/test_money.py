@@ -29,6 +29,14 @@ def test_non_positive_input_is_rejected() -> None:
         to_price_cents(-5)
 
 
+def test_a_price_that_rounds_to_zero_cents_is_rejected() -> None:
+    with pytest.raises(ValueError):
+        to_price_cents("0.001")
+    with pytest.raises(ValueError):
+        to_price_cents("0.004")
+    assert to_price_cents("0.005") == 1
+
+
 def test_non_numeric_input_is_rejected() -> None:
     with pytest.raises(ValueError):
         to_price_cents("not a number")
@@ -89,7 +97,7 @@ def test_it_returns_an_int_or_raises_value_error_and_nothing_else(value: object)
     except ValueError:
         return
     assert isinstance(result, int)
-    assert result >= 0
+    assert result > 0
 
 
 @_PROPERTY
@@ -111,15 +119,13 @@ def test_a_higher_price_never_costs_fewer_cents(a: Decimal, b: Decimal) -> None:
     assert to_price_cents(a) <= to_price_cents(b)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known hole: a positive sub-cent price converts to 0 cents, i.e. a free item. "
-    "Remove this marker when to_price_cents rejects or floors it deliberately.",
-)
 @_PROPERTY
-@given(st.decimals(min_value=Decimal("0.000001"), max_value=Decimal("0.004"), places=6))
-def test_a_positive_price_never_becomes_free(dollars: Decimal) -> None:
-    assert to_price_cents(dollars) > 0
+@given(st.decimals(min_value=Decimal("0.000001"), max_value=Decimal("0.004999"), places=6))
+def test_a_positive_price_under_half_a_cent_is_rejected_not_made_free(dollars: Decimal) -> None:
+    """It passes the positivity check but rounds to 0 cents, which would publish or check out as
+    a free item."""
+    with pytest.raises(ValueError):
+        to_price_cents(dollars)
 
 
 @pytest.mark.xfail(

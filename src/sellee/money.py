@@ -12,7 +12,8 @@ from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 def to_price_cents(list_price: object) -> int:
     """Dollars (int/float/str) -> integer cents, half-up. Rejects non-positive, non-finite
-    (Infinity/NaN), or non-numeric input — always as ValueError."""
+    (Infinity/NaN), or non-numeric input, and a price that rounds to zero cents — always as
+    ValueError."""
     try:
         dollars = Decimal(str(list_price))
     except (InvalidOperation, TypeError, ValueError) as exc:
@@ -22,4 +23,6 @@ def to_price_cents(list_price: object) -> int:
     if dollars <= 0:
         raise ValueError(f"list_price must be positive, got {dollars}")
     cents = (dollars * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP)
+    if cents <= 0:
+        raise ValueError(f"list_price rounds to zero cents, got {dollars}")
     return int(cents)
