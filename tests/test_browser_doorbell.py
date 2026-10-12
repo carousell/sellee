@@ -11,16 +11,20 @@ from __future__ import annotations
 
 import json
 import random
+from contextlib import contextmanager
 
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import seed_setting
 
-from sellee import paths
+from sellee import migrations, paths
 from sellee.browser import doorbell
 from sellee.config import Config
+from sellee.db import Database
 from sellee.engines import pacing
+from sellee.events import EventBus, EventStore
+from sellee.store import Store
 
 _FB = "https://www.facebook.com/"
 
@@ -64,6 +68,24 @@ def _deps(store, bus, chrome, clock, port=9222):
         now=clock,
         rng=random.Random(3),
     )
+
+
+@contextmanager
+def _a_store_of_its_own(root):
+    """A freshly migrated store and bus, so one Hypothesis example never hears another's rings.
+    Closed when the example ends rather than the test, so their files are not all held open."""
+    data_db = Database(root / "sellee.db")
+    events_db = Database(root / "events.db")
+    try:
+        migrations.run_startup_migrations(
+            data_db=data_db, events_db=events_db, backups_dir=root / "backups", backups_keep=5
+        )
+        store = Store(data_db)
+        seed_setting(store, "connected_markets", ["fb"])
+        yield store, EventBus(EventStore(events_db))
+    finally:
+        data_db.close()
+        events_db.close()
 
 
 def _texts(store):
@@ -161,21 +183,21 @@ def test_a_ring_shown_while_the_laptop_slept_is_still_owed_a_visit(store, bus) -
     asleep=st.floats(doorbell.SLEPT_AFTER_SEC + 1, 7 * 86400),
     into_sleep=st.floats(0.01, 0.99),
 )
-def test_any_ring_shown_after_the_first_look_is_owed_a_visit(store, bus, asleep, into_sleep):
-    clock = _Clock(1_790_000_000.0 + asleep * 10)  # apart per example in the shared store
-    chrome = _Chrome()
-    deps = _deps(store, bus, chrome, clock)
-    doorbell.doorbell_lane(deps)
-    looked_at = clock.t
+def test_any_ring_shown_after_the_first_look_is_owed_a_visit(tmp_path_factory, asleep, into_sleep):
+    with _a_store_of_its_own(tmp_path_factory.mktemp("example")) as (store, bus):
+        clock = _Clock()
+        chrome = _Chrome()
+        deps = _deps(store, bus, chrome, clock)
+        doorbell.doorbell_lane(deps)
+        looked_at = clock.t
 
-    clock.t += asleep
-    tag = f"mid.${looked_at}-{into_sleep}"
-    chrome.heard = [_ring(tag, shown=looked_at + asleep * into_sleep)]
-    doorbell.doorbell_lane(deps)
+        clock.t += asleep
+        chrome.heard = [_ring(shown=looked_at + asleep * into_sleep)]
+        doorbell.doorbell_lane(deps)
 
-    owed_by = clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
-    assert store.ring_owed("fb", now=owed_by)
-    store.answer_rings("fb", heard_before=clock.t + 1, now=owed_by)
+        assert store.ring_owed(
+            "fb", now=clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
+        )
 
 
 def test_nothing_is_listened_for_when_no_market_rings(store, bus) -> None:
