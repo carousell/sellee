@@ -3,17 +3,22 @@
 from __future__ import annotations
 
 import json
+import string
 import threading
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+from tests.fake_mcp_eras import MODERN, EraLog, answer
 
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
     RailNetworkError,
     RailToolError,
+    _forget_eras,
     _text_content,
     listing_id_from_url,
 )
@@ -44,10 +49,10 @@ class _Handler(BaseHTTPRequestHandler):
         if self.server.require_auth and auth != f"Bearer {self.server.expected_key}":
             self._send(401, {"error": "bad key"})
             return
+        if answer(self, body, self.server.eras):
+            return
         method = body.get("method")
-        if method == "initialize":
-            self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": {"capabilities": {}}})
-        elif method == "tools/call":
+        if method == "tools/call":
             self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": self.server.tool_result})
         else:
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {}})
@@ -69,7 +74,16 @@ class _Handler(BaseHTTPRequestHandler):
 
 @pytest.fixture
 def fake_rail():
+    with _serving() as served:
+        yield served
+
+
+@contextmanager
+def _serving(era: str = "legacy"):
+    # A new server can reuse an earlier one's port, and so inherit its cached era.
+    _forget_eras()
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    server.eras = EraLog(era)
     server.require_auth = True
     server.expected_key = "guest-key"
     server.tool_result = {"structuredContent": {}}
@@ -94,13 +108,11 @@ def _client(base, key="guest-key"):
     return RailClient(api_base=base, api_key=key, web_base_url=base)
 
 
-def test_initialize_and_create_listing(fake_rail) -> None:
+def test_create_listing(fake_rail) -> None:
     server, base = fake_rail
     url = f"{base}/listing/1-lamp"
     server.tool_result = {"structuredContent": {"listing_id": "L1", "url": url}}
-    client = _client(base)
-    client.initialize()
-    listing = client.create_listing({"title": "Lamp", "price_cents": 8000})
+    listing = _client(base).create_listing({"title": "Lamp", "price_cents": 8000})
     assert listing == {"listing_id": "L1", "url": url}
 
 
@@ -239,6 +251,8 @@ class _ArgRecorder(_Handler):
     def do_POST(self):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length))
+        if answer(self, body, self.server.eras):
+            return
         if body.get("method") == "tools/call":
             self.server.calls.append(body["params"])
         self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": self.server.tool_result})
@@ -397,6 +411,197 @@ def test_offers_tool_reads_the_servers_tool_list():
         assert not client.offers_tool("create_photo_upload_url")
     finally:
         shutdown()
+
+
+# --- protocol eras: probe once, then speak the era the server speaks -----------------------------
+
+
+def _headers(request) -> dict:
+    return request["headers"]
+
+
+@pytest.mark.parametrize("era", ["legacy", "modern"])
+def test_create_listing_returns_the_same_listing_in_either_era(era) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        assert _client(base).create_listing({"title": "x"}) == {
+            "listing_id": "L1",
+            "url": f"{base}/listing/L1",
+        }
+
+
+def test_a_modern_server_is_probed_once_and_spoken_to_in_the_new_era() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        _client(base).create_listing({"title": "x"})
+        log = server.eras
+        assert [r["method"] for r in log.requests] == ["server/discover", "tools/call"]
+        (call,) = log.calls()
+        assert _headers(call)["mcp-protocol-version"] == MODERN
+        assert _headers(call)["mcp-method"] == "tools/call"
+        assert _headers(call)["mcp-name"] == "create_listing"
+        meta = call["params"]["_meta"]
+        assert meta["io.modelcontextprotocol/protocolVersion"] == MODERN
+        assert meta["io.modelcontextprotocol/clientCapabilities"] == {}
+        assert meta["io.modelcontextprotocol/clientInfo"]["name"] == "sellee"
+
+
+def test_a_legacy_server_is_initialized_once_and_spoken_to_in_2025_06_18() -> None:
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        client.create_listing({"title": "y"})
+        log = server.eras
+        assert [r["method"] for r in log.requests] == [
+            "server/discover",
+            "initialize",
+            "tools/call",
+            "tools/call",
+        ]
+        assert log.requests[1]["params"]["protocolVersion"] == "2025-06-18"
+        for call in log.calls():
+            assert _headers(call)["mcp-protocol-version"] == "2025-06-18"
+            assert "_meta" not in call["params"]
+
+
+def test_a_rejected_key_raises_and_leaves_the_era_unknown() -> None:
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        with pytest.raises(RailAuthError):
+            _client(base, key="wrong").create_listing({"title": "x"})
+        _client(base).create_listing({"title": "x"})
+        assert server.eras.count("server/discover") == 1
+
+
+def test_a_dropped_legacy_session_fails_that_call_and_renews_for_the_next() -> None:
+    """The 404 cannot prove the call did not run, so it is never resent."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.sessions = ["s1", "s2"]
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        server.eras.dropped.add("s1")
+        with pytest.raises(RailNetworkError) as raised:
+            client.create_listing({"title": "y"})
+        assert raised.value.status == 404
+        client.create_listing({"title": "z"})
+        calls = server.eras.calls()
+        assert [_headers(c).get("mcp-session-id") for c in calls] == ["s1", "s1", "s2"]
+        assert server.eras.count("initialize") == 2
+
+
+def test_concurrent_calls_on_a_dropped_session_renew_it_once() -> None:
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.sessions = ["s1", "s2", "s3", "s4"]
+        _client(base).create_listing({"title": "x"})
+        server.eras.dropped.add("s1")
+
+        def call():
+            try:
+                _client(base).create_listing({"title": "y"})
+            except RailNetworkError:
+                pass
+
+        workers = [threading.Thread(target=call) for _ in range(4)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        assert server.eras.count("initialize") == 2
+
+
+def test_a_modern_error_on_a_successful_probe_means_modern() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.discover_error = -32021
+        _client(base).create_listing({"title": "x"})
+        assert server.eras.count("initialize") == 0
+        (call,) = server.eras.calls()
+        assert _headers(call)["mcp-protocol-version"] == MODERN
+
+
+@settings(max_examples=25, deadline=None)
+@given(
+    era=st.sampled_from(["legacy", "modern"]),
+    clients=st.integers(min_value=1, max_value=4),
+    threads=st.integers(min_value=1, max_value=4),
+)
+def test_the_era_is_found_once_per_endpoint(era, clients, threads) -> None:
+    """However many clients and threads share an endpoint, it is probed once."""
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        failures = []
+
+        def work():
+            try:
+                for _ in range(clients):
+                    _client(base).create_listing({"title": "x"})
+            except Exception as exc:  # noqa: BLE001 - surfaced through the assertion below
+                failures.append(exc)
+
+        workers = [threading.Thread(target=work) for _ in range(threads)]
+        for worker in workers:
+            worker.start()
+        for worker in workers:
+            worker.join()
+        assert failures == []
+        assert server.eras.count("server/discover") == 1
+        assert server.eras.count("initialize") == (1 if era == "legacy" else 0)
+        assert len(server.eras.calls()) == clients * threads
+
+
+_json_values = st.recursive(
+    st.none() | st.booleans() | st.integers() | st.text(max_size=20),
+    lambda inner: (
+        st.lists(inner, max_size=3) | st.dictionaries(st.text(max_size=8), inner, max_size=3)
+    ),
+    max_leaves=10,
+)
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    era=st.sampled_from(["legacy", "modern"]),
+    structured=st.dictionaries(st.text(max_size=8), _json_values, max_size=4),
+)
+def test_call_tool_returns_the_structured_content_in_either_era(era, structured) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": structured}
+        assert _client(base).call_tool("get_thread", {"id": "t1"}) == structured
+
+
+_tool_names = st.text(alphabet=string.ascii_letters + string.digits + "_-", min_size=1, max_size=40)
+
+
+@settings(max_examples=40, deadline=None)
+@given(name=_tool_names, arguments=st.dictionaries(st.text(max_size=8), _json_values, max_size=4))
+def test_modern_headers_match_the_body(name, arguments) -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool(name, arguments)
+        for request in server.eras.requests:
+            headers = _headers(request)
+            assert headers["mcp-protocol-version"] == MODERN
+            assert headers["mcp-method"] == request["method"]
+            meta = request["params"]["_meta"]
+            assert meta["io.modelcontextprotocol/protocolVersion"] == MODERN
+        (call,) = server.eras.calls()
+        assert _headers(call)["mcp-name"] == call["params"]["name"] == name
+        assert call["params"]["arguments"] == arguments
+
+
+def test_each_key_on_an_endpoint_finds_its_own_era() -> None:
+    """A legacy session belongs to the key that opened it, so a rotated key never reuses it."""
+    with _serving("legacy") as (server, base):
+        server.require_auth = False
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.sessions = ["s1", "s2"]
+        _client(base, key="old").create_listing({"title": "x"})
+        _client(base, key="new").create_listing({"title": "y"})
+        assert server.eras.count("initialize") == 2
+        assert [_headers(c).get("mcp-session-id") for c in server.eras.calls()] == ["s1", "s2"]
 
 
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.

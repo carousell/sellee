@@ -1,7 +1,8 @@
 """Minimal stdlib MCP client for the carousell.ai rail, plus the live listing-URL verify.
 
 We are the client here (unidirectional): POST JSON-RPC to <api_base>/mcp with the guest key as a
-bearer token, initialize, then tools/call. The API key travels only in the Authorization header —
+bearer token, after probing once whether the endpoint speaks MCP 2026-07-28 or the legacy era.
+The API key travels only in the Authorization header —
 never in argv, never logged. Failures are typed (auth / network / tool) so callers can respond
 precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit under
 <web_base_url>/listing/ and return HTTP 200 right now, or nothing is recorded.
@@ -10,9 +11,12 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 from __future__ import annotations
 
 import functools
+import hashlib
 import json
+import threading
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 
 from sellee.rail.mail_stream import MailStreamConnection
 
@@ -26,6 +30,17 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 _CLIENT_UA = "SELLEE-rail/1"
+_CLIENT_INFO = {"name": "sellee", "version": "1"}
+_MODERN = "2026-07-28"
+_LEGACY = "2025-06-18"
+_LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
+# JSON-RPC errors only a 2026-07-28 server sends, so a probe answered with one met a modern server.
+_MODERN_ERRORS = (-32020, -32021)
+_MODERN_META = {
+    "io.modelcontextprotocol/protocolVersion": _MODERN,
+    "io.modelcontextprotocol/clientCapabilities": {},
+    "io.modelcontextprotocol/clientInfo": _CLIENT_INFO,
+}
 
 
 class RailError(Exception):
@@ -56,6 +71,47 @@ class RailToolError(RailError):
 class RailToolRefused(RailToolError):
     """The rail itself answered the call with an error, rather than an answer we could not read."""
 
+    def __init__(self, message: str, *, code: int | None = None):
+        super().__init__(message)
+        # The JSON-RPC error code, when the rail answered with a JSON-RPC error.
+        self.code = code
+
+
+@dataclass
+class _Era:
+    """What one endpoint speaks: modern, or legacy at a negotiated version and maybe a session."""
+
+    modern: bool
+    version: str
+    session_id: str = ""
+
+
+# The legacy era before initialize: its first request carries no version header.
+_UNNEGOTIATED = _Era(modern=False, version="")
+_MODERN_ERA = _Era(modern=True, version=_MODERN)
+
+# One era per endpoint and key for the life of the process: the daemon builds a RailClient per use,
+# so an instance cache would probe every time. Each entry's lock makes its probe run once.
+_ERAS: dict[str, _Era] = {}
+_ERA_LOCKS: dict[str, threading.Lock] = {}
+_ERAS_GUARD = threading.Lock()
+
+
+def _forget_eras() -> None:
+    """Drop every cached era, so the next request to each endpoint and key probes again."""
+    with _ERAS_GUARD:
+        _ERAS.clear()
+        _ERA_LOCKS.clear()
+
+
+class _HTTPAnswer(Exception):
+    """An HTTP error status with its body, for the probe to read."""
+
+    def __init__(self, status: int, body: str):
+        super().__init__(status)
+        self.status = status
+        self.body = body
+
 
 class RailClient:
     def __init__(
@@ -72,32 +128,111 @@ class RailClient:
         self._web_base_url = web_base_url.rstrip("/")
         self._timeout = timeout_sec
         self._next_id = 0
+        # A legacy session belongs to the key that opened it, so a rotated key probes again.
+        self._era_key = self._endpoint + "#" + hashlib.sha256(api_key.encode()).hexdigest()
 
     def _rpc(self, method: str, params: dict | None = None) -> dict:
+        era = self._era()
+        try:
+            return self._request(method, params, era)[0]
+        except _HTTPAnswer as exc:
+            if era.session_id and exc.status == 404:
+                # The server dropped our session. Open a new one for the next call, but never resend
+                # this one: the 404 cannot prove the call did not run.
+                self._renew_session(era)
+            raise _http_error(exc) from exc
+
+    def _era(self) -> _Era:
+        era = _ERAS.get(self._era_key)
+        if era is not None:
+            return era
+        with self._era_lock():
+            era = _ERAS.get(self._era_key)
+            if era is None:
+                era = self._probe()
+            return era
+
+    def _era_lock(self) -> threading.Lock:
+        with _ERAS_GUARD:
+            return _ERA_LOCKS.setdefault(self._era_key, threading.Lock())
+
+    def _probe(self) -> _Era:
+        """Ask with server/discover, which only reads, so working out the era never repeats a write.
+        Called with the endpoint's lock held."""
+        try:
+            result = self._request("server/discover", None, _MODERN_ERA)[0]
+        except _HTTPAnswer as exc:
+            if exc.status not in (400, 404, 405):
+                raise _http_error(exc) from exc
+            if _rpc_error_code(exc.body) in _MODERN_ERRORS:
+                return self._cache(_MODERN_ERA)
+        except RailToolRefused as exc:
+            if exc.code in _MODERN_ERRORS:
+                return self._cache(_MODERN_ERA)
+        else:
+            versions = result.get("supportedVersions")
+            if isinstance(versions, list) and _MODERN in versions:
+                return self._cache(_MODERN_ERA)
+        return self._initialize()
+
+    def _renew_session(self, stale: _Era) -> None:
+        """Re-initialize once for a dropped session, unless another thread already has."""
+        with self._era_lock():
+            if _ERAS.get(self._era_key) is stale:
+                self._initialize()
+
+    def _initialize(self) -> _Era:
+        """Open the legacy era: one initialize, whose version and session every later request
+        carries. Called with the endpoint's lock held."""
+        params = {"protocolVersion": _LEGACY, "capabilities": {}, "clientInfo": _CLIENT_INFO}
+        try:
+            result, session_id = self._request("initialize", params, _UNNEGOTIATED)
+        except _HTTPAnswer as exc:
+            raise _http_error(exc) from exc
+        version = result.get("protocolVersion")
+        if version not in _LEGACY_VERSIONS:
+            raise RailNetworkError(f"rail answered initialize with version {version!r}")
+        return self._cache(_Era(modern=False, version=version, session_id=session_id))
+
+    def _cache(self, era: _Era) -> _Era:
+        _ERAS[self._era_key] = era
+        return era
+
+    def _request(self, method: str, params: dict | None, era: _Era) -> tuple[dict, str]:
+        """One JSON-RPC request in `era`; returns its result and any session id the server set.
+        An HTTP error other than 401/403 raises _HTTPAnswer, for the caller to read or type."""
         self._next_id += 1
+        params = dict(params or {})
+        headers = {
+            "Content-Type": "application/json",
+            # Both are required even though the server answers with plain JSON; it rejects the
+            # request otherwise, and the rejection lands after auth so a bad key masks it.
+            "Accept": "application/json, text/event-stream",
+            "Authorization": f"Bearer {self._api_key}",
+            "User-Agent": _CLIENT_UA,
+        }
+        if era.modern:
+            params["_meta"] = {**params.get("_meta", {}), **_MODERN_META}
+            headers["MCP-Protocol-Version"] = _MODERN
+            headers["Mcp-Method"] = method
+            if method == "tools/call":
+                headers["Mcp-Name"] = str(params.get("name", ""))
+        elif era.version:
+            headers["MCP-Protocol-Version"] = era.version
+            if era.session_id:
+                headers["Mcp-Session-Id"] = era.session_id
         body = json.dumps(
-            {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params or {}}
+            {"jsonrpc": "2.0", "id": self._next_id, "method": method, "params": params}
         ).encode("utf-8")
-        req = urllib.request.Request(
-            self._endpoint,
-            data=body,
-            method="POST",
-            headers={
-                "Content-Type": "application/json",
-                # Both are required even though the server answers with plain JSON; it rejects the
-                # request otherwise, and the rejection lands after auth so a bad key masks it.
-                "Accept": "application/json, text/event-stream",
-                "Authorization": f"Bearer {self._api_key}",
-                "User-Agent": _CLIENT_UA,
-            },
-        )
+        req = urllib.request.Request(self._endpoint, data=body, method="POST", headers=headers)
         try:
             with _no_redirects().open(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
+                session_id = resp.headers.get("Mcp-Session-Id") or ""
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RailAuthError("carousell.ai rejected the guest key") from exc
-            raise RailNetworkError(f"rail returned HTTP {exc.code}", status=exc.code) from exc
+            raise _HTTPAnswer(exc.code, _read_error_body(exc)) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
         try:
@@ -106,28 +241,22 @@ class RailClient:
             raise RailNetworkError("rail returned an unparseable response") from exc
         if not isinstance(envelope, dict):
             raise RailNetworkError("rail response is not a JSON-RPC object")
-        if envelope.get("error"):
-            message = str(envelope["error"].get("message", "rail error"))
-            raise RailToolRefused(message)
+        error = envelope.get("error")
+        if error:
+            code = error.get("code") if isinstance(error, dict) else None
+            message = (
+                str(error.get("message", "rail error")) if isinstance(error, dict) else "rail error"
+            )
+            raise RailToolRefused(message, code=code if isinstance(code, int) else None)
         result = envelope.get("result")
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
-        return result
+        return result, session_id
 
     def open_mail_stream(self) -> MailStreamConnection:
         """bazaar's mail stream for this key; nothing is sent until its events are read."""
         return MailStreamConnection(
             url=self._api_base + "/api/v1/me/mail-stream", api_key=self._api_key
-        )
-
-    def initialize(self) -> dict:
-        return self._rpc(
-            "initialize",
-            {
-                "protocolVersion": "2025-06-18",
-                "capabilities": {},
-                "clientInfo": {"name": "sellee", "version": "1"},
-            },
         )
 
     def offers_tool(self, name: str) -> bool:
@@ -368,3 +497,26 @@ def _text_content(result: dict) -> str:
         if isinstance(block, dict) and block.get("type") == "text":
             parts.append(block.get("text", ""))
     return "".join(parts)
+
+
+def _http_error(answer: _HTTPAnswer) -> RailNetworkError:
+    return RailNetworkError(f"rail returned HTTP {answer.status}", status=answer.status)
+
+
+def _read_error_body(exc: urllib.error.HTTPError) -> str:
+    try:
+        # Enough for a JSON-RPC error, so an oversized body is never read whole.
+        return exc.read(65536).decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
+def _rpc_error_code(body: str) -> int | None:
+    """The JSON-RPC error code in an HTTP error body, or None when the body is not one."""
+    try:
+        envelope = json.loads(body)
+    except ValueError:
+        return None
+    error = envelope.get("error") if isinstance(envelope, dict) else None
+    code = error.get("code") if isinstance(error, dict) else None
+    return code if isinstance(code, int) else None

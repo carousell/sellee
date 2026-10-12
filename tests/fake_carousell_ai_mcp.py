@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from tests.fake_mcp_eras import EraLog, answer
+
 
 def rfc3339(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -47,6 +49,8 @@ class FakeRelay:
         self.registration_script: list = []
         # The seller's registration address, as get_registration_address mints it.
         self.registration_email = "seller-token@inbox.carousell.ai"
+        # The protocol era the server speaks, and every MCP request it saw.
+        self.eras = EraLog()
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -247,6 +251,8 @@ class _Handler(BaseHTTPRequestHandler):
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
         if relay.down:
             self._send(503, {"error": "unavailable"})
+            return
+        if answer(self, body, relay.eras):
             return
         if body.get("method") == "tools/list":
             tools = [{"name": n} for n in _TOOLS]
