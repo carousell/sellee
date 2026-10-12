@@ -8,7 +8,7 @@ from __future__ import annotations
 from decimal import Decimal
 
 import pytest
-from hypothesis import assume, given, settings
+from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from sellee.money import to_price_cents
@@ -102,8 +102,8 @@ def test_a_two_decimal_price_converts_exactly(dollars: Decimal) -> None:
 )
 def test_a_higher_price_never_costs_fewer_cents(a: Decimal, b: Decimal) -> None:
     """Monotonicity. A pricing rule that can invert under rounding is a pricing bug."""
-    assume(a <= b)
-    assert to_price_cents(a) <= to_price_cents(b)
+    low, high = sorted((a, b))
+    assert to_price_cents(low) <= to_price_cents(high)
 
 
 @_PROPERTY
