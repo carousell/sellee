@@ -18,6 +18,7 @@ from sellee.store.helpers import (
     _now,
     _unhandled_inbound_rows,
 )
+from sellee.store.items import record_listing_url_in_txn
 
 
 class PassesMixin:
@@ -36,7 +37,19 @@ class PassesMixin:
             )
         return pass_id
 
-    def record_driven_publish(self, item_id: str, market: str, *, status: str, origin: str) -> str:
+    def record_driven_publish(
+        self,
+        item_id: str,
+        market: str,
+        *,
+        status: str,
+        origin: str,
+        unverified: bool = False,
+        category: str | None = None,
+        retired: bool = False,
+        url: str | None = None,
+        in_review: bool = False,
+    ) -> str:
         """Ledger one publish that a driver did itself, without a pass ever being queued.
 
         A driven market spawns no model pass, so it would otherwise leave no trace — and the
@@ -51,11 +64,22 @@ class PassesMixin:
         a pass row does. Written as `reported=1` it was invisible to `unreported_crosslist_passes` —
         a Facebook listing went live with nobody told, which is the one failure the fan-out's
         reporting exists to prevent.
+
+        `category` is the one the post was made in; `retired` ends the pair for good. `url`, for
+        a verified publish, is recorded in the same transaction as the row.
         """
         if status not in _PASS_TERMINAL:
             raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
         pass_id = _new_id("pass")
-        payload = {"item_id": item_id, "market": market, "origin": origin}
+        payload: dict = {"item_id": item_id, "market": market, "origin": origin}
+        if unverified:
+            payload["unverified"] = True  # a listing may exist: the pair is never driven again
+        if category:
+            payload["category"] = category
+        if retired:
+            payload["retired"] = True
+        if in_review:
+            payload["in_review"] = True  # up, but the marketplace has not given it a link yet
         now = _now()
         with self._db.transaction() as conn:
             conn.execute(
@@ -63,7 +87,97 @@ class PassesMixin:
                 "finished_ts, reported) VALUES (?, 'publish', ?, ?, ?, ?, ?, 0)",
                 (pass_id, json.dumps(payload, sort_keys=True), status, now, now, now),
             )
+            if url:
+                record_listing_url_in_txn(conn, item_id, market, url)
         return pass_id
+
+    def settle_driven_publish(
+        self,
+        pass_id: str,
+        *,
+        status: str,
+        unverified: bool,
+        url: str | None = None,
+        in_review: bool = False,
+    ) -> None:
+        """Turn a publish recorded unverified ahead of its commit click into how it ended. A
+        verified `url` is recorded in the same transaction, so the guard never clears without it."""
+        if status not in _PASS_TERMINAL:
+            raise StoreError(f"a finished pass status must be one of {_PASS_TERMINAL}")
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            payload.pop("unverified", None)
+            if unverified:
+                payload["unverified"] = True
+            if in_review:
+                payload["in_review"] = True
+            conn.execute(
+                "UPDATE passes SET status = ?, payload = ?, finished_ts = ? WHERE pass_id = ?",
+                (status, json.dumps(payload, sort_keys=True), _now(), pass_id),
+            )
+            if url:
+                record_listing_url_in_txn(conn, payload["item_id"], payload["market"], url)
+
+    def in_review_publishes(self) -> list[dict]:
+        """Publishes that went up but are still waiting on the marketplace's review for a link,
+        as {pass_id, item_id, market, finished_ts, checked_ts}."""
+        rows = self._db.query(
+            "SELECT pass_id, payload, finished_ts FROM passes "
+            "WHERE type = 'publish' AND status = 'error' ORDER BY finished_ts ASC"
+        )
+        out = []
+        for row in rows:
+            payload = json.loads(row["payload"])
+            if not payload.get("in_review"):
+                continue
+            out.append(
+                {
+                    "pass_id": row["pass_id"],
+                    "item_id": payload.get("item_id"),
+                    "market": payload.get("market"),
+                    "finished_ts": row["finished_ts"] or 0,
+                    "checked_ts": payload.get("review_checked_ts") or 0,
+                }
+            )
+        return out
+
+    def note_review_checked(self, pass_id: str, ts: float) -> None:
+        """Record that an in-review publish was looked for and still has no link."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            payload["review_checked_ts"] = ts
+            conn.execute(
+                "UPDATE passes SET payload = ? WHERE pass_id = ?",
+                (json.dumps(payload, sort_keys=True), pass_id),
+            )
+
+    def settle_reviewed_publish(self, pass_id: str, url: str) -> None:
+        """An in-review publish found with its link: done and verified, with the URL in the same
+        transaction, and owed a report again so the seller is sent the link."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            payload = json.loads(row["payload"])
+            for key in ("unverified", "in_review", "review_checked_ts"):
+                payload.pop(key, None)
+            conn.execute(
+                "UPDATE passes SET status = 'done', payload = ?, finished_ts = ?, reported = 0 "
+                "WHERE pass_id = ?",
+                (json.dumps(payload, sort_keys=True), _now(), pass_id),
+            )
+            record_listing_url_in_txn(conn, payload["item_id"], payload["market"], url)
+
+    def forget_driven_publish(self, pass_id: str) -> None:
+        """Drop a publish recorded ahead of a commit click the page refused, so nothing was sent."""
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM passes WHERE pass_id = ?", (pass_id,))
 
     def claim_queued_pass(self) -> ClaimedPass | None:
         """Claim the oldest queued pass, stamping it running in the same transaction so two
@@ -142,15 +256,38 @@ class PassesMixin:
                 )
         return pass_ids
 
+    def active_channel_pass(self) -> dict | None:
+        """The channel pass the seller is currently waiting on, as {pass_id, requested_ts,
+        started_ts}, or None.
+
+        `enqueue_channel_pass` refuses while any channel pass is queued or running, so there is
+        never more than one row to choose between; the ORDER BY is defensive rather than a policy,
+        and a caller can read it as "the one".
+
+        Rows, not a boolean, because the typing indicator needs the stamps as well as the fact:
+        `requested_ts` bounds how long the indicator may stay lit (a pass killed mid-run keeps its
+        `running` status until the stale sweep, which is a quarter of an hour away), and `pass_id`
+        is what says whether this pass has spoken yet. Keeping it to one read means the gate and
+        the coalescing check can never disagree about what is in flight.
+        """
+        rows = self._db.query(
+            "SELECT pass_id, requested_ts, started_ts FROM passes WHERE type = 'channel' "
+            "AND status IN ('queued', 'running') ORDER BY requested_ts DESC LIMIT 1"
+        )
+        if not rows:
+            return None
+        row = rows[0]
+        return {
+            "pass_id": row["pass_id"],
+            "requested_ts": row["requested_ts"],
+            "started_ts": row["started_ts"],
+        }
+
     def has_active_channel_pass(self) -> bool:
         """True while a channel pass is queued or running — the coalescing gate: the poller only
         enqueues a new channel pass when this is False, so one pass sweeps all pending rows and
         later arrivals wait for the next (at most one in-flight + one queued batch)."""
-        rows = self._db.query(
-            "SELECT 1 FROM passes WHERE type = 'channel' "
-            "AND status IN ('queued', 'running') LIMIT 1"
-        )
-        return bool(rows)
+        return self.active_channel_pass() is not None
 
     def enqueue_channel_pass(self) -> str | None:
         """Coalescing route, one transaction: when pending inbox rows exist and no channel pass is
@@ -237,19 +374,20 @@ class PassesMixin:
         return {"pass_id": pass_id, **payload}
 
     def last_finished_pass(self, pass_type: str) -> dict | None:
-        """The most recently finished pass of a type, as {class, finished_ts} — or None.
-
-        The reply lane's cooldown read: a pass that ended `no_send` is the one signal that
-        respawning right now would only repeat it.
-        """
+        """The most recently finished pass of a type, as {class, finished_ts, payload}, or None.
+        The reply lane's cooldown reads it."""
         rows = self._db.query(
-            "SELECT class, finished_ts FROM passes WHERE type = ? AND finished_ts IS NOT NULL "
-            "ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",
+            "SELECT class, finished_ts, payload FROM passes WHERE type = ? "
+            "AND finished_ts IS NOT NULL ORDER BY finished_ts DESC, pass_id DESC LIMIT 1",
             (pass_type,),
         )
         if not rows:
             return None
-        return {"class": rows[0]["class"], "finished_ts": rows[0]["finished_ts"]}
+        return {
+            "class": rows[0]["class"],
+            "finished_ts": rows[0]["finished_ts"],
+            "payload": json.loads(rows[0]["payload"] or "{}"),
+        }
 
     def active_passes_of_types(self, types) -> list[dict]:
         """Queued or running passes of the given types, as {type, payload}.
@@ -295,6 +433,12 @@ class PassesMixin:
                     "finished_ts": row["finished_ts"],
                 }
             )
+            if payload.get("unverified"):
+                out[-1]["unverified"] = True  # a listing may exist: never driven again
+            if payload.get("retired"):
+                out[-1]["retired"] = True
+            if payload.get("category"):
+                out[-1]["category"] = payload["category"]
         return out
 
     def unreported_crosslist_passes(self) -> list[dict]:
@@ -324,6 +468,7 @@ class PassesMixin:
                     "market": payload.get("market"),
                     "status": row["status"],
                     "class": row["class"],
+                    "in_review": bool(payload.get("in_review")),
                 }
             )
         if owes_nothing:

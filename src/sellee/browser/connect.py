@@ -9,9 +9,13 @@ the probe re-derives the answer every time it is asked.
 
 The lane exists because the tap arrives on the provider's receive loop, which answers fast paths
 inline. Opening Chrome cold takes seconds to tens of seconds, and blocking that loop would stall
-every other message and the typing pulse. So the tap writes a durable row and returns, and this
-runs off the row — which also makes a double-tap single-flight (the row's primary key is the
-market) and survives a restart between the tap and the open.
+every other message the seller sends. So the tap writes a durable row and returns, and this runs
+off the row — which also makes a double-tap single-flight (the row's primary key is the market) and
+survives a restart between the tap and the open.
+
+(The typing indicator is no longer among the casualties: it is held by its own thread now, so a
+blocked receive loop cannot put it out. The inline pulse at the end of an ingest still rides this
+loop, but it is only ever the first of many.)
 
 Every outcome ends in exactly one notice back to the seller. A request that cannot be served yet
 (a pass is driving the tab) is left pending rather than answered wrongly, and a request that has
@@ -25,12 +29,16 @@ import time
 from dataclasses import dataclass
 from typing import Callable
 
-from sellee import deployment, marketplaces, settings
-from sellee.browser import blindness, inbox, window
+from sellee import craigslist_posts, deployment, marketplaces, settings
+from sellee.browser import blindness, craigslist_account, doorbell, inbox, window
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
-from sellee.store.browser import CONNECT_MODE_OPEN
+from sellee.store.browser import (
+    BROWSER_HOLD_TTL_SEC,
+    CONNECT_MODE_OPEN,
+    HOLD_POST_PREFIX,
+)
 
 log = logging.getLogger(__name__)
 
@@ -56,7 +64,12 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     asked to sign in: being asked to open a marketplace is being asked for a window, while a read
     probe that reordered tabs would elbow the seller mid-browse.
 
-    Returns (state, url) where state is logged_in | logged_out | unknown.
+    Returns (state, url, wall, email) where state is logged_in | logged_out | unknown, `wall` is
+    the marketplace's own refusal of the account ('' when there is none), and `email` is the
+    signed-in account's, where the market's page names it ('' otherwise). The wall is read here
+    rather than left to the read lane because this is the probe a *blocked* market is cleared by,
+    and "signed in" is not the same question as "no longer being refused": Facebook answers a login
+    probe perfectly while holding a warning over the account.
     """
     region = store.seller_region()
     url = marketplaces.market_home(adapter.market, region)
@@ -65,6 +78,8 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
             f"{marketplaces.display_name(adapter.market)} has no site for "
             f"{region or 'an unset region'}"
         )
+    # The market has a site here; some sign in on a page other than its front one.
+    url = adapter.home_url or url
     try:
         client = browser_factory()
         with client.exclusive():
@@ -82,6 +97,13 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
                     log.debug("could not bring the connect tab forward", exc_info=True)
                     client.navigate(url)
             answer = client.evaluate(adapter.login_js) or {}
+            wall = (
+                str(client.evaluate(adapter.block_wall_js) or "") if adapter.block_wall_js else ""
+            )
+            if not bring_tab_forward:
+                # A quiet check is a visit like any other, so it leaves the page afterwards. A page
+                # opened for the seller to sign in on is theirs, and stays.
+                doorbell.step_away(client, adapter)
     except BrowserDetached:
         # Deliberately not flattened into BrowserDown. Everything below answers the seller's tap,
         # and the only honest answer to "am I signed in?" while our own server has lost Chrome is
@@ -91,7 +113,8 @@ def open_and_probe(*, store, browser_factory, adapter, bring_tab_forward: bool =
     except BrowserError as exc:
         raise BrowserDown(str(exc)) from exc
     state = answer.get("state")
-    return (state if state in ("logged_in", "logged_out") else "unknown"), url
+    email = str(answer.get("email") or "")
+    return (state if state in ("logged_in", "logged_out") else "unknown"), url, wall, email
 
 
 # --- the lane -----------------------------------------------------------------------------------
@@ -126,6 +149,10 @@ class ConnectDeps:
     config: object
     browser_factory: object
     now: Callable[[], float] = time.time
+    # Reads a Craigslist post's public page; None reads it over the network.
+    fetch_post: Callable[[str], str] | None = None
+    # bazaar, for the registration address a Craigslist connect names.
+    rail_factory: Callable | None = None
 
 
 def _shell_where() -> str:
@@ -145,6 +172,15 @@ def _chrome_check(already_said: bool) -> str:
     if already_said:
         return ""
     return blindness.chrome_hint(chrome_up=False)
+
+
+# Said when a probe finds a market that had stopped us is clear again. Claims only what was
+# checked — that the wall is gone and the account is signed in — and not that whatever Meta was
+# unhappy about is resolved, which is not ours to assert.
+UNBLOCKED_NOTICE = (
+    "{name} isn't showing me that warning any more and the account is signed in, so I've started "
+    "reading and answering there again."
+)
 
 
 def connect_lane(deps: ConnectDeps) -> None:
@@ -180,14 +216,109 @@ def connect_lane(deps: ConnectDeps) -> None:
                 )
             continue
         _serve(deps, market, adapter, request["mode"])
+    for request in deps.store.pending_post_opens():
+        _serve_post_open(deps, request, connected)
+
+
+# The seller asked for these, so quiet hours do not hold them; the governor still paces the load.
+POST_OPEN_NOTICE = (
+    'Your Craigslist post is open in my Chrome window{where}. Press "Delete this Posting" '
+    "there to take it down, then tap Done."
+)
+POST_SIGNED_OUT_NOTICE = (
+    "Craigslist shows me signed out, so the post didn't open. I'm signing back in by myself; "
+    "tap Open on desktop again in a few minutes."
+)
+POST_BLOCKED_NOTICE = "Craigslist has asked me to stop for now, so I didn't open the post."
+POST_OFF_NOTICE = "Craigslist was switched off before I could open that post."
+POST_CANT_OPEN_NOTICE = (
+    "I couldn't reach Craigslist just now, so the post didn't open. Tap Open on desktop to try "
+    "again."
+)
+POST_STALE_NOTICE = "I couldn't get to opening that Craigslist post — tap to try again."
+POST_GONE_NOTICE = "That Craigslist post is already down, so there's nothing to delete."
+
+
+def _serve_post_open(deps: ConnectDeps, request: dict, connected) -> None:
+    """Put one sold item's post in front of the seller, signed in, for them to close."""
+    item_id, market, url = request["item_id"], request["market"], request["url"]
+    adapter = market_adapters.get_adapter(market)
+    if market not in connected or adapter is None:
+        _post_done(deps, item_id, POST_OFF_NOTICE)
+        return
+    if deps.store.market_block(market):
+        _post_done(deps, item_id, POST_BLOCKED_NOTICE)
+        return
+    if inbox.browser_busy(deps.store):
+        # Waiting behind another opened post is not stale: that hold ends at Done or its expiry.
+        if not _behind_a_post(deps) and deps.now() - request["requested_ts"] > STALE_REQUEST_SEC:
+            _post_done(deps, item_id, POST_STALE_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    item = deps.store.get_item(item_id)
+    if item and craigslist_posts.check(deps.store, deps.bus, item, deps.fetch_post) in (
+        craigslist_posts.REMOVED
+    ):
+        _post_done(deps, item_id, POST_GONE_NOTICE)
+        return
+    try:
+        client = deps.browser_factory()
+        with client.exclusive():
+            client.navigate_visible(url)
+            signed_in = (client.evaluate(adapter.login_js) or {}).get("state") == "logged_in"
+    except BrowserDetached:
+        return
+    except BrowserError as exc:
+        # The browser's own error is for the log; the seller gets a plain line and the button back.
+        log.warning("opening a %s post failed: %s", market, exc)
+        _post_done(deps, item_id, POST_CANT_OPEN_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    if not signed_in:
+        craigslist_account.start_login(deps.store, market)
+        _post_done(deps, item_id, POST_SIGNED_OUT_NOTICE, fastpaths.open_post_controls(item_id))
+        return
+    # Held like a sign-in, so no lane moves the tab while the seller is deleting.
+    deps.store.hold_browser(
+        HOLD_POST_PREFIX + item_id, f"closing a {market} post", BROWSER_HOLD_TTL_SEC
+    )
+    _raise_window(deps)
+    _post_done(
+        deps,
+        item_id,
+        POST_OPEN_NOTICE.format(where=window.where()),
+        fastpaths.post_done_controls(item_id),
+    )
+
+
+def _behind_a_post(deps: ConnectDeps) -> bool:
+    holders = deps.store.browser_holders()
+    return (
+        not inbox.browser_pass_running(deps.store)
+        and bool(holders)
+        and all(h.startswith(HOLD_POST_PREFIX) for h in holders)
+    )
+
+
+def _post_done(deps: ConnectDeps, item_id: str, notice: str, controls=None) -> None:
+    deps.store.clear_post_open(item_id)
+    deps.store.queue_notice(notice, controls=controls)
 
 
 def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
     """Open (or just re-probe) one market and tell the seller what came back."""
     name = marketplaces.display_name(market)
     opening = mode == CONNECT_MODE_OPEN
+    # Craigslist's steps go out before its page opens, so the seller knows why it is there.
+    intro_sent = False
+    if (
+        opening
+        and market == marketplaces.CRAIGSLIST
+        and deps.rail_factory is not None
+        and (deps.store.craigslist_account() or {}).get("state") != craigslist_account.ACTIVE
+    ):
+        deps.store.queue_notice(craigslist_account.connect_intro(deps.store, deps.rail_factory))
+        intro_sent = True
     try:
-        state, _url = open_and_probe(
+        state, _url, wall, email = open_and_probe(
             store=deps.store,
             browser_factory=deps.browser_factory,
             adapter=adapter,
@@ -215,17 +346,94 @@ def _serve(deps: ConnectDeps, market: str, adapter, mode: str) -> None:
 
     deps.store.clear_market_connect_request(market)
     deps.bus.publish("browser.login", {"market": market, "state": state})
+    if not _settle_block(deps, market, name, state, wall):
+        return
+    known = (deps.store.craigslist_account() or {}).get("state")
+    state = craigslist_account.connect_state(
+        deps.store, market, state, restart=opening, email=email, rail_factory=deps.rail_factory
+    )
     if state == "logged_in":
         _ask_about_existing_listings(deps, market)
-        deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
+        # A Craigslist account just connected has its own notice, with Sign in myself.
+        if market != marketplaces.CRAIGSLIST or known == craigslist_account.ACTIVE:
+            deps.store.queue_notice(SIGNED_IN_NOTICE.format(name=name))
         return
     if opening:
         _raise_window(deps)
     template = SIGN_IN_HERE_NOTICE if opening else STILL_OUT_NOTICE
-    deps.store.queue_notice(
-        template.format(name=name, where=window.where()),
-        controls=fastpaths.check_again_controls(market),
-    )
+    if not opening and market == marketplaces.CRAIGSLIST and not _own_craigslist(deps.store):
+        # Its login links come to sellee, so the seller need not keep checking.
+        template = craigslist_account.STILL_SIGNING_IN_NOTICE
+    text = template.format(name=name, where=window.where())
+    if (
+        opening
+        and not intro_sent
+        and market == marketplaces.CRAIGSLIST
+        and deps.rail_factory is not None
+    ):
+        # Its account is made with the address sellee minted, so the seller is told which.
+        text = f"{craigslist_account.connect_intro(deps.store, deps.rail_factory)}\n\n{text}"
+    deps.store.queue_notice(text, controls=fastpaths.check_again_controls(market))
+
+
+def _own_craigslist(store) -> bool:
+    return bool((store.craigslist_account() or {}).get("own_email"))
+
+
+def _settle_block(deps: ConnectDeps, market: str, name: str, state: str, wall: str) -> bool:
+    """Decide what this probe did to a blocked market. Answers whether to carry on reporting it.
+
+    The block stays on until something proves the market is clear, and this is that something. The
+    order matters and the fail-open version of it is the bug worth naming: clearing first and
+    probing afterwards leaves a window in which every lane resumes against a market nobody has
+    checked. So a wall still standing *renews* the block — escalating its window, because a wall
+    that comes straight back is telling us the last window was not the answer — and only a probe
+    that came back both signed in and unwalled clears it.
+
+    A read that merely happened to succeed is never enough, and does not come through here at all:
+    Facebook can drop an interstitial for a single page load, and letting that clear the block
+    would put the account back to full rate three hundred seconds later.
+
+    Which walls may block is `blindness.BLOCKING_CAUSES` and not "any wall", and this path has to
+    ask the same question every other one does. A `verify` wall is a PIN prompt, whose phrases are
+    things people type and which Facebook shows over a dialog it has open half the time — so it is
+    not evidence worth stopping a marketplace for. It is still not *proof the market is clear*
+    either, which is the asymmetry: on a blocked market a wall we do not block on leaves the block
+    exactly as it was, neither cleared nor escalated nor renamed.
+    """
+    block = deps.store.market_block(market)
+    if wall in blindness.BLOCKING_CAUSES:
+        deps.store.block_market(
+            market,
+            wall,
+            ttl_sec=blindness.block_window_sec(deps.store.market_block_strikes(market) + 1),
+        )
+        deps.store.report_market_block_once(
+            market,
+            blindness.notice_for(wall, name=name, where=window.where()),
+            fastpaths.check_again_controls(market),
+        )
+        deps.bus.publish("browser.blocked", {"market": market, "cause": wall, "via": "probe"})
+        return False
+    if wall and block is not None:
+        # Something is in the way that we do not block on, so this probe proved nothing either
+        # direction. Left untouched, and reported no further: telling the seller they are signed in
+        # while the market is still stopped would be the wrong half of the truth.
+        deps.bus.publish("browser.probe_inconclusive", {"market": market, "wall": wall})
+        return False
+    if block is None:
+        return True
+    if state != "logged_in":
+        # Not walled, but not demonstrably fine either. Left blocked rather than cleared on half an
+        # answer; the sign-in copy below tells the seller what to do next.
+        return True
+    deps.store.clear_market_block(market)
+    deps.bus.publish("browser.unblocked", {"market": market, "cause": block["cause"]})
+    if block["cause"] in blindness.BLOCKING_CAUSES:
+        # Only a wall had something to say it no longer shows. A block that was only a signed-out
+        # session or a run of refusals is answered in full by the signed-in notice that follows.
+        deps.store.queue_notice(UNBLOCKED_NOTICE.format(name=name))
+    return True
 
 
 def _ask_about_existing_listings(deps: ConnectDeps, market: str) -> None:

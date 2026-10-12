@@ -248,14 +248,16 @@ def test_start_spins_poller_and_registers_lanes_then_shuts_down(store, bus, xdg_
         handle = telegram_provider.start(store=store, bus=bus, config=Config(), scheduler=scheduler)
         try:
             assert handle.thread.is_alive()
-            # the delivery lanes are registered while the provider runs
+            assert handle.presence_thread.is_alive()
+            # the drain lane is registered while the provider runs
             assert "notice_drain" in scheduler._reg.tasks
-            assert "typing_pulse" in scheduler._reg.tasks
+            # the indicator is not a lane — see channel/presence.py for the arithmetic
+            assert "typing_pulse" not in scheduler._reg.tasks
         finally:
             handle.shutdown()
         assert not handle.thread.is_alive()  # joined
-        assert "notice_drain" not in scheduler._reg.tasks  # lanes removed on shutdown
-        assert "typing_pulse" not in scheduler._reg.tasks
+        assert not handle.presence_thread.is_alive()  # joined too, never left pulsing
+        assert "notice_drain" not in scheduler._reg.tasks  # lane removed on shutdown
 
 
 def test_scheduler_deregister_stops_scheduling(bus) -> None:

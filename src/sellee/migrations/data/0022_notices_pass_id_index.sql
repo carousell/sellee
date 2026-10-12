@@ -1,0 +1,23 @@
+-- `notices.pass_id` becomes a hot read, so it gets an index.
+--
+-- Numbered 22 rather than the next free slot: 19 and 20 are reserved for the craigslist and
+-- mail-relay branches, and 21 is the market block. Two branches taking one number would apply
+-- different schemas under the same version depending on the order an install saw them.
+--
+-- The column has existed since 0004 and was written but never queried: `send_message` stamps the
+-- running pass on every notice it queues, and nothing looked it up again. `has_notice_for_pass`
+-- now does, from two places that run on very different clocks — `made_progress`, once when a
+-- channel pass settles, and the typing keeper, every refresh interval for as long as the seller is
+-- waiting (4s on Telegram, 9s on Discord).
+--
+-- The keeper is the reason this is not left to the scan. A single seller's notices table is small
+-- enough that the difference is unmeasurable today, but it is the one table that only grows — it
+-- is never pruned, by design, because catchup reaches back through all of it — and it is now read
+-- on a timer rather than on an event. An unindexed scan on a forever-growing table under a
+-- once-per-4-seconds reader is the shape of a problem that shows up a year in, on someone else's
+-- install, as a daemon that got slow for no reason anybody can point at.
+--
+-- `idx_notices_status`, the only index here before this one, does not help: `status` is 'queued' or
+-- 'delivered', so it selects roughly half the table, and the delivered half is the half that grows.
+
+CREATE INDEX idx_notices_pass_id ON notices (pass_id);

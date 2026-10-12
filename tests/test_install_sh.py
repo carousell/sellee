@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import pty
 import re
 import shutil
 import stat
@@ -76,7 +77,11 @@ def release(tmp_path):
     stage = tmp_path / "stage" / "sellee-1.2.3"
     stage.mkdir(parents=True)
     receipt = tmp_path / "setup-ran.txt"
-    _executable(stage / "setup", f'#!/bin/sh\necho "setup ran: $*" > {receipt}\nexit 0\n')
+    stdin_receipt = tmp_path / "setup-stdin.txt"
+    _executable(
+        stage / "setup",
+        f'#!/bin/sh\necho "setup ran: $*" > {receipt}\ntty > {stdin_receipt}\nexit 0\n',
+    )
 
     name = "sellee-1.2.3.tar.gz"
     with tarfile.open(served / name, "w:gz") as tar:
@@ -97,10 +102,13 @@ def release(tmp_path):
 _RELEASE_URL_LINE = re.compile(r"^RELEASE_URL=.*$", re.M)
 
 
-def _sh(script, args, env):
+def _sh(script, args, env, stderr):
+    # stdin is never a terminal under `curl … | sh`, so it is not one here either.
     return subprocess.run(
         ["sh", str(script), *args],
-        capture_output=True,
+        stdin=subprocess.DEVNULL,
+        stdout=subprocess.PIPE,
+        stderr=stderr,
         text=True,
         env=env,
         timeout=120,
@@ -108,7 +116,7 @@ def _sh(script, args, env):
     )
 
 
-def run_install(*args, base_url=None, path=None):
+def run_install(*args, base_url=None, path=None, stderr=subprocess.PIPE):
     """Run install.sh, optionally against a locally served release.
 
     The script takes no base-URL override, so pointing it somewhere else means editing it — done
@@ -120,7 +128,7 @@ def run_install(*args, base_url=None, path=None):
     if path:
         env["PATH"] = path
     if base_url is None:
-        return _sh(INSTALL_SH, args, env)
+        return _sh(INSTALL_SH, args, env, stderr)
     source, count = _RELEASE_URL_LINE.subn(
         f'RELEASE_URL="{base_url}"', INSTALL_SH.read_text(), count=1
     )
@@ -128,7 +136,7 @@ def run_install(*args, base_url=None, path=None):
     with tempfile.TemporaryDirectory() as tmp:
         script = Path(tmp) / "install-under-test.sh"
         script.write_text(source)
-        return _sh(script, args, env)
+        return _sh(script, args, env, stderr)
 
 
 def test_it_states_what_it_will_do_before_doing_it(host_shims, release) -> None:
@@ -145,6 +153,24 @@ def test_a_verified_release_is_unpacked_and_its_own_setup_takes_over(host_shims,
     result = run_install("--yes", "--manual", base_url=base, path=host_shims)
     assert result.returncode == 0, result.stderr
     assert receipt.read_text().strip() == "setup ran: --yes --manual"
+
+
+def test_setup_is_handed_the_terminal_by_its_own_device_not_through_dev_tty(
+    host_shims, release
+) -> None:
+    """On macOS, kqueue rejects a descriptor opened through /dev/tty, and the claude CLI setup runs
+    watches its stdin with kqueue. A setup handed /dev/tty therefore reads a signed-in machine as
+    signed out. The terminal's own device carries no such restriction."""
+    _served, base, receipt = release
+    leader, follower = pty.openpty()
+    try:
+        result = run_install(base_url=base, path=host_shims, stderr=follower)
+        device = os.ttyname(follower)
+    finally:
+        os.close(follower)
+        os.close(leader)
+    assert result.returncode == 0
+    assert receipt.with_name("setup-stdin.txt").read_text().strip() == device
 
 
 def test_a_tampered_archive_is_refused_and_setup_never_runs(host_shims, release) -> None:

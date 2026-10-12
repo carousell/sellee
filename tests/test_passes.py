@@ -11,6 +11,7 @@ import pytest
 
 from sellee import passes, paths, retention
 from sellee.config import Config
+from sellee.harness import claude
 from sellee.store import ClaimedPass
 
 
@@ -31,10 +32,19 @@ class FakeAuth:
 # A fake harness: emits a couple of stream-json lines then exits with a chosen code. Written to a
 # tmp file and invoked as the pass argv, so run_pass exercises real spawn/stream/reap/cleanup.
 _FAKE_HARNESS = """\
-import json, sys, time
+import json, os, sys, time
 def emit(obj):
     print(json.dumps(obj), flush=True)
 mode = sys.argv[1] if len(sys.argv) > 1 else "ok"
+if mode == "env":
+    # Says back the tool timeout it was started with, so a test sees the environment the runner
+    # really spawned the harness into.
+    emit({"type": "system", "subtype": "init", "session_id": "s1", "tools": []})
+    emit({"type": "assistant", "message": {"content": [
+        {"type": "text", "text": os.environ.get("MCP_TOOL_TIMEOUT", "unset")}]}})
+    emit({"type": "result", "subtype": "success", "is_error": False,
+          "num_turns": 1, "session_id": "s1", "usage": {"input_tokens": 1}})
+    sys.exit(0)
 if mode == "stdin":
     # Blocks until the runner closes the handle, the way the real CLI reads a bare -p prompt.
     # Nothing is emitted before the read, so a runner that never closes wedges both sides.
@@ -170,6 +180,44 @@ def test_a_reply_pass_that_sent_nothing_is_ledgered_no_send(
     assert _events(bus, "pass.end")[0].payload["is_error"] is True
 
 
+def test_a_channel_pass_that_said_nothing_is_not_filed_a_success(
+    bus, store, fake_harness, xdg_tmp
+) -> None:
+    """The same rule as the reply pass, arrived at by the same route. While the daemon receipted
+    every arrival, a channel pass that read and decided without writing had already been answered
+    for. Now the wait is shown rather than narrated, so a pass that exits rc 0 having called no
+    send_message is the seller watching the indicator stop and nothing arriving."""
+    paths.ensure_state_dirs()
+    store.ingest_updates(
+        [{"event_id": 1, "kind": "text", "text": "is the lamp still up?", "payload": {}}],
+        update_offset=2,
+    )
+    pid = store.enqueue_channel_pass()
+    claimed = store.claim_queued_pass()
+
+    cls = passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed)
+
+    assert cls == "no_send"
+    row = store.get_pass(pid)
+    assert row["status"] == "error" and row["class"] == "no_send" and row["rc"] == 0
+
+
+def test_a_channel_pass_that_queued_a_word_is_a_success(bus, store, fake_harness, xdg_tmp) -> None:
+    """Queued, not delivered: the notice is the mark, and the drain lane is a separate concern. It
+    is the same read the typing indicator stops on, so the two can never disagree about whether the
+    seller is still owed something."""
+    paths.ensure_state_dirs()
+    store.ingest_updates(
+        [{"event_id": 1, "kind": "text", "text": "is the lamp still up?", "payload": {}}],
+        update_offset=2,
+    )
+    pid = store.enqueue_channel_pass()
+    claimed = store.claim_queued_pass()
+    store.queue_notice("Yes — S$35, still listed.", pass_id=pid)
+
+    assert passes.run_pass(_deps(bus, store, fake_harness, mode="ok"), claimed) == "ok"
+
+
 def test_a_pass_type_with_no_progress_hook_stays_ok(bus, store, fake_harness, xdg_tmp) -> None:
     """Only the reply type can answer "did this send anything" — a publish's success is its own."""
     paths.ensure_state_dirs()
@@ -203,6 +251,24 @@ def test_run_pass_missing_item_is_spawn_error(bus, store, fake_harness, xdg_tmp)
     cls = passes.run_pass(_deps(bus, store, fake_harness), claimed)
     assert cls == "spawn_error"
     assert store.get_pass(pid)["class"] == "spawn_error"
+
+
+def test_a_pass_waits_on_a_tool_as_long_as_a_human_paced_send_takes(
+    bus, store, fake_harness, xdg_tmp
+) -> None:
+    """The daemon answers a tool call with one JSON body when the tool is done, and the CLI gives
+    up on such an answer at sixty seconds unless told otherwise. On 2026-10-02 a reply pass got "The
+    operation timed out." while its send, typed at a person's pace, carried on for three minutes and
+    landed — and the pass took it for a failure and tried again."""
+    paths.ensure_state_dirs()
+    store.enqueue_pass("publish", {"item_id": "item_1"})
+    claimed = store.claim_queued_pass()
+
+    assert passes.run_pass(_deps(bus, store, fake_harness, mode="env"), claimed) == "ok"
+
+    said = _events(bus, "pass.message")[0].payload["text"]
+    assert said == str(int(claude.TOOL_TIMEOUT_SEC * 1000))
+    assert claude.TOOL_TIMEOUT_SEC < Config().pass_deadline_sec
 
 
 def test_spawn_error_when_argv_builder_raises(bus, store, xdg_tmp) -> None:

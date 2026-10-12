@@ -35,16 +35,20 @@ a guard test enforces that the core imports no provider.
     transcript, and catchup — read as them saying it.
   - `routing` — after a batch is ingested: the `channel.in` event, coalesced
     routing of pending free text to a channel pass, and `settle_batch`, the
-    shared ingest tail (route → receipt → typing pulse).
-  - `acks` — the receipt policy: what the seller hears the moment something they
-    sent lands, and how long the wait honestly is.
+    shared ingest tail (route → mark seen → say what only words can say → pulse).
+  - `acks` — the two arrivals a typing indicator would lie about: a paused agent,
+    and a tap whose ask cannot be placed. Everything else says nothing.
+  - `presence` — showing the wait rather than narrating it: the typing keeper's
+    cadence and health, and the threshold notice for a wait the indicator cannot
+    honestly carry.
   - `controls` — how a control spec packs into rows, by label width rather than a
     fixed count, so nothing renders truncated.
-  - `outbound` — the delivery *policy* (notice drain, typing pulse), the
-    settled-pass inbox fold (a scheduler lane off durable rows), and the
-    escalation-push bus subscriber (which renders the escalation's `options` as
-    its buttons). The typing pulse fires from the receive loop too, at route
-    time, so the indicator does not wait out a scheduler tick.
+  - `outbound` — the delivery *policy* (notice drain), `typing_target` (the one
+    answer to "should the chat be lit right now"), the settled-pass inbox fold (a
+    scheduler lane off durable rows), and the escalation-push bus subscriber
+    (which renders the escalation's `options` as its buttons). The pulse fires
+    from the receive loop too, at route time, so the indicator does not wait out
+    the keeper's first refresh.
   - `prompt` — the channel pass's prompt with its capped transcript window.
 - **Provider** (`channel/telegram/`):
   - `transport` — the Bot API client (the one network module; allowlisted) and
@@ -202,25 +206,52 @@ while the gateway holds no WebSocket open at all.
   unacknowledged interaction as failed) — including the taps that route rather
   than being answered here. This is protocol, not feedback: it clears a spinner
   the seller never sees.
-- An **answered ask loses its buttons** in the same step. Only asks: the control
-  row and the marketplace switches are meant to be tapped again tomorrow.
+- A **tapped message loses its buttons** in the same step — every tap, not only an
+  ask's. An ask has been answered; a control row's labels were rendered from state
+  the tap has just changed, so what is left on screen would be a lie. This is the
+  fastest feedback in the system and, since the receipt was removed, a tap's only
+  permanent one.
 - Fast paths are then answered by daemon code immediately.
 - Everything else — free text, photos, and a tap on a *decision* — stays pending
   and routes to a channel pass. A decision tap is deliberately not a fast path:
   answering "checkout or handle it myself" means composing a buyer reply and
   minting a link, which is the pass's work, not a deterministic one.
-- That routed remainder gets a **receipt** (`channel/acks.py`), because a pass
-  takes 30s–15min and Telegram renders a tap as nothing at all. It names what
-  arrived and how long the wait is, never what will be done about it — that is
-  the pass's to know. One per arrival rather than per row, since a pass coalesces
-  and answers once. Queued as a notice, so it lands in the pass's own transcript
-  window and needs no prompt telling the pass not to acknowledge twice; sent
-  directly only while paused, where the drain lane deliberately does not run.
+- That routed remainder is **shown** rather than told. Each of the seller's own
+  messages gets an 👀 reaction (`routing.mark_seen`) — per-message, so a burst of
+  three shows that none was missed, and durable in the scrollback where the
+  indicator is not. The chat then shows "typing…" for as long as the seller is
+  owed an answer (`channel/presence.py`).
+
+  This replaced a receipt that said "Got it: <label>. I'm working out what to
+  do — that usually takes a minute or two, sometimes longer." on every arrival:
+  honest, and identical every time. It was never what fixed the double-tap it was
+  written for — the keyboard strip lands in the same tick, a lane ahead of it —
+  and the pass is told to ack before slow work anyway, so a slow pass said it
+  twice.
+
+  Words survive only where an indicator would lie (`channel/acks.py`): **paused**,
+  where nothing runs and nothing will, sent directly because the drain lane is not
+  running either and carrying the Resume door; and a **tap whose ask cannot be
+  placed**, where a pass does run but reaches a bare token. The unplaceable one is
+  queued against the waiting pass, so the indicator goes dark as the words land.
 
 `routing.settle_batch` owns that tail on both providers, and its order is not
 arrangeable: route first (ingest has already advanced the cursor, so an unrouted
-row cannot be redelivered), then receipt, then pulse typing (both platforms clear
-the indicator the moment the bot sends anything).
+row cannot be redelivered), then mark seen, then the words, then pulse. Speaking
+before pulsing matters in exactly the two word cases — paused there is no pulse to
+spend, and unplaceable the two signals contradict each other. A reaction sits
+anywhere in the order: unlike a message it does not clear the indicator.
+
+The pulse covers the whole batch, not just the routed remainder, because a fast
+path answering `/status` mid-pass sends a message and both platforms clear the
+indicator the instant the bot sends anything.
+
+A wait that outruns the indicator gets words after all: `seller_waiting_notice`
+fires once per waiting message past 180s — just outside the measured p75 of 155s,
+so an ordinary pass is never named — and is the only durable, push-generating
+thing left in that window. It carries no `pass_id`, deliberately: the indicator
+darkens once the waiting pass has spoken, and the agent saying "still working"
+must never count as the pass having answered.
 
 Routing also runs as its own lane (`channel_route`), not only from an ingest
 path. `enqueue_channel_pass` coalesces, so a message arriving mid-pass stays

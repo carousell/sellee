@@ -72,6 +72,18 @@ INBOX_FOLDER_JS = f"""() => {{
   }});
   let marked = false;
   let candidates = 0;
+  // Nothing to mark on a folder that is already open, and marking anyway wrote an attribute of
+  // ours onto one of Facebook's own nodes on every read — a mutation its own observers can see,
+  // for a click the caller was never going to make.
+  if (alreadyOpen) {{
+    return {{
+      marked: false,
+      already_open: true,
+      candidates: 0,
+      width: window.innerWidth,
+      visible: document.visibilityState === 'visible',
+    }};
+  }}
   document.querySelectorAll('div[role="button"]').forEach((el) => {{
     const r = el.getBoundingClientRect();
     if (r.left > RAIL_EDGE || r.width < 200 || r.height < 40 || r.height > 100) return;
@@ -91,6 +103,59 @@ INBOX_FOLDER_JS = f"""() => {{
   }};
 }}"""
 
+# Whether the marketplace is refusing us, and what kind of refusal it is. Answers one of
+# '' | 'verify' | 'automation' | 'checkpoint', most specific first.
+#
+# Hoisted out of the list artifact because it is needed on every read, not only on one that has
+# already failed: a wall inside a conversation was reported as our own broken reader, and a wall on
+# the listings page could not be reported at all.
+#
+# Two kinds of clause, deliberately not alike.
+#
+# `/checkpoint` needs no text pairing, because no buyer can type a URL. It is the one signal here
+# that nothing a person writes can forge.
+#
+# The rest keep the verification wall's discipline verbatim: a phrase AND a prompt-shaped element.
+# The reason was its own — the words alone appear in buyers' messages — and it applies harder to
+# "automated", "restricted" and "terms of use", which buyers and scammers both type. So the
+# automation phrases are whole sentences from the dialog Facebook actually served, long enough that
+# nobody types one by accident, and they count only inside a dialog.
+#
+# Matched against `body.innerText`, which joins separate elements with newlines, so each phrase has
+# to live inside a single element. The heading does. A phrase spanning the heading and the
+# paragraph beneath it would never match at all, which is why none of these try to.
+#
+# `restricted` is deliberately absent. It is the one cause whose block would not decay on its own,
+# so a phrase list guessed rather than copied from a real one could turn a buyer's message into a
+# permanent outage. It goes in when there is a real one to copy.
+BLOCK_WALL_JS = """() => {
+  // A whole path segment, not a prefix: Facebook serves checkpoints from `/checkpoint/...` but
+  // also from under other roots, and a prefix test misses every one of those. Anchored on the
+  // separators so `/mycheckpoints` is not one.
+  if (/(^|\\/)checkpoint(\\/|$)/.test(location.pathname || '')) return 'checkpoint';
+  const text = ((document.body && document.body.innerText) || '').toLowerCase();
+  const dialog = () => !!document.querySelector('[role="dialog"]');
+  const automation = [
+    'we suspect automated behavior on your account',
+    'we suspect automated behaviour on your account',
+    'ensure that no other users or tools have access to your account',
+  ];
+  if (automation.some((phrase) => text.includes(phrase)) && dialog()) return 'automation';
+  const asks = [
+    'enter your pin',
+    'enter pin',
+    'confirm your pin',
+    'restore your chats',
+    "confirm it's you",
+    'confirm your identity',
+  ];
+  if (!asks.some((phrase) => text.includes(phrase))) return '';
+  const field = document.querySelector(
+    'input[type="password"], input[autocomplete*="one-time"], input[inputmode="numeric"]'
+  );
+  return field || dialog() ? 'verify' : '';
+}"""
+
 # The conversations in the Marketplace folder.
 #
 # Proves the folder is open before answering: the rail heading is "Chats" on the personal inbox and
@@ -107,7 +172,7 @@ INBOX_FOLDER_JS = f"""() => {{
 # matched on — the id is read from the opened conversation. `unread` is 0 because the folder's
 # unread marker has not been captured and a guess would suppress reads; `_can_skip` errs toward
 # opening and the full sweep opens everything regardless.
-CONVERSATIONS_LIST_JS = """async () => {
+_CONVERSATIONS_LIST_TEMPLATE = """async () => {
   const RAIL_EDGE = 400;
   const SEPARATOR = ' \\u00b7 ';
   // The folder's own heading. Scoped to the rail: the right-hand pane shows the word
@@ -159,27 +224,7 @@ CONVERSATIONS_LIST_JS = """async () => {
     });
     return { conversations: out, skipped: skipped };
   };
-  // Facebook can put a wall in front of the messages rather than refusing us: a PIN prompt for
-  // encrypted chats, or a "confirm it's you" interstitial. From the lane it is indistinguishable
-  // from Facebook declining to hand over the list, and the seller would be told to check a login
-  // that is working perfectly. Deliberately hard to trigger — a phrase AND a prompt-shaped
-  // element — because the words alone appear in buyers' own messages.
-  const verifyWall = () => {
-    const text = (document.body.innerText || '').toLowerCase();
-    const asks = [
-      'enter your pin',
-      'enter pin',
-      'confirm your pin',
-      'restore your chats',
-      "confirm it's you",
-      'confirm your identity',
-    ];
-    if (!asks.some((phrase) => text.includes(phrase))) return '';
-    const field = document.querySelector(
-      'input[type="password"], input[autocomplete*="one-time"], input[inputmode="numeric"]'
-    );
-    return field || document.querySelector('[role="dialog"]') ? 'verify' : '';
-  };
+  const blockWall = __BLOCK_WALL__;
   // Back up to the newest end: `loadAll` finishes at the OLDEST row, and Messenger unmounts rows
   // far outside the viewport, so a read taken there is missing the most recent conversations
   // entirely.
@@ -221,7 +266,7 @@ CONVERSATIONS_LIST_JS = """async () => {
     await new Promise((r) => setTimeout(r, 250));
     result = read();
   }
-  if (result !== null) {
+  if (result !== null && __DEEP__) {
     await loadAll();
     const bottom = read();
     await scrollToTop();
@@ -233,11 +278,32 @@ CONVERSATIONS_LIST_JS = """async () => {
       rows: rows().length,
       width: window.innerWidth,
       visible: document.visibilityState === 'visible',
-      blocked: verifyWall(),
+      blocked: blockWall(),
     };
   }
+  // Carried on the success path too: a wall can sit over a list that still reads, and the tick
+  // that can read it is exactly the tick that should stop rather than carry on.
+  result.blocked = blockWall();
   return result;
 }"""
+
+# Two readings of the same folder, differing only in how far they scroll.
+#
+# The deep one paginates the whole folder: it is how a conversation nobody has written in for weeks
+# is still found, which is what adoption needs. It is also `loadAll` — up to sixty `scrollIntoView`
+# steps on a 400ms timer, each one triggering Messenger's own load-more fetch — and running that
+# every five minutes is a scroll pattern with no wheel event behind it and no variance in its
+# spacing, all day.
+#
+# The shallow one reads the screenful already painted. Nothing is lost by it: the folder is ordered
+# by recency and a buyer writing bumps their conversation to the top, so every conversation with
+# something new in it is in the first screenful by construction. The comment on `loadAll` says as
+# much — a plain read "looks exactly like a seller with a handful of buyers".
+#
+# So: shallow on an ordinary tick, deep on the sweep that already opens everything anyway.
+_LIST_WITH_WALL = _CONVERSATIONS_LIST_TEMPLATE.replace("__BLOCK_WALL__", BLOCK_WALL_JS)
+CONVERSATIONS_LIST_JS = _LIST_WITH_WALL.replace("__DEEP__", "true")
+CONVERSATIONS_RECENT_JS = _LIST_WITH_WALL.replace("__DEEP__", "false")
 
 # Which listing the open conversation is about.
 #
@@ -332,6 +398,10 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       const r = el.getBoundingClientRect();
       return r.width > 200 && r.height > 100;
     });
+  // How near its own edge a bubble starts, and how much more room it must leave on the far side,
+  // for the edge to say whose it is when the ratio cannot.
+  const EDGE_PX = 96;
+  const SLACK_PX = 24;
   const read = () => {
     const log = logs()[0];
     if (!log) return null;
@@ -364,6 +434,14 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       let side = 'center';
       if (fromRight < fromLeft * 0.6) side = 'out';
       else if (fromLeft < fromRight * 0.6) side = 'in';
+      // A long message in a narrow log spans most of it, and the ratio above calls it centred:
+      // captured 2026-10-02, a buyer's first message 64px from the left and 103px from the right
+      // of a log the details pane had narrowed to 492px. The edge it starts from still says whose
+      // it is — an inbound bubble starts at the avatar gutter, an outbound one ends at the right
+      // margin — so long as the other side has clearly more room. A line with about as much room
+      // on both sides is a system line, and stays centred.
+      else if (fromLeft <= EDGE_PX && fromRight - fromLeft >= SLACK_PX) side = 'in';
+      else if (fromRight <= EDGE_PX && fromLeft - fromRight >= SLACK_PX) side = 'out';
       out.push({ text: text.slice(0, 300), side: side, y: Math.round(r.top) });
     });
     out.sort((a, b) => a.y - b.y);
@@ -382,17 +460,30 @@ _CONVERSATION_TAIL_TEMPLATE = """async () => {
       width: window.innerWidth,
       height: window.innerHeight,
       visible: document.visibilityState === 'visible',
+      blocked: (__BLOCK_WALL__)(),
     };
   }
   return result;
 }"""
 
-CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS)
+CONVERSATION_TAIL_JS = _CONVERSATION_TAIL_TEMPLATE.replace("__IS_CHROME__", CHROME_LINE_JS).replace(
+    "__BLOCK_WALL__", BLOCK_WALL_JS
+)
 
 # Is the seller logged in? Three-state, and it must never answer logged_out on thin evidence: a
 # false logged_out tells a signed-in seller to re-authenticate and stops their market. Only the
-# password field proves logged_out; only a signed-in-only control (the chat rail) proves logged_in —
-# a logged-out visitor gets the marketplace nav too, so that is deliberately not the marker.
+# password field or a sign-up link proves logged_out; only a signed-in-only control (the chat rail)
+# proves logged_in — a logged-out visitor gets the marketplace nav too, so that is deliberately not
+# the marker.
+#
+# The sign-up link is for the way Facebook actually ends a session: the address asked for comes
+# back as its "Continue as" profile chooser, served in place, with no password field until a
+# profile is picked. Only a signed-out visitor is offered an account to create: across every
+# Facebook page the agent saved while signed in — thousands, home feeds and selling pages without a
+# chat rail among them — none carried one, and every chooser did. It is asked after the signed-in
+# markers on purpose, since a buyer can paste that link into a conversation and a conversation only
+# renders on a signed-in page. And only a link the page is rendering counts: a menu built ahead of
+# being opened is in the DOM all the same, and `querySelector` does not care what is on screen.
 LOGIN_JS = """() => {
   try {
     if (document.querySelector('input[name="pass"], input[type="password"]')) {
@@ -401,6 +492,10 @@ LOGIN_JS = """() => {
     const rail = !!document.querySelector('a[href*="/messages/t/"]');
     const compose = !!document.querySelector('[aria-label="New message"], [role="textbox"]');
     if (rail || compose) return { state: 'logged_in' };
+    const signUp = document.querySelectorAll('a[href^="/reg/"], a[href*="facebook.com/reg/"]');
+    if (Array.from(signUp).some((a) => a.getClientRects().length > 0)) {
+      return { state: 'logged_out' };
+    }
     const text = (document.body && document.body.innerText) || '';
     if (/\\bLog in to Facebook\\b|\\bLog Into Facebook\\b/i.test(text)) {
       return { state: 'logged_out' };
@@ -421,6 +516,23 @@ LOGIN_JS = """() => {
 #
 # Answers `{url}`, or `{url: null}` when the link is not there, which the caller reports rather
 # than reading the wrong page.
+# The titles on the seller's selling page that Facebook is still reviewing. A listing in review
+# carries no item link, so it cannot be read like the rest; its card reads the notice, then its
+# title, then its price.
+MY_LISTINGS_IN_REVIEW_JS = """async () => {
+  const NOTICE = 'This listing is being reviewed.';
+  const lines = () => ((document.body && document.body.innerText) || '').split('\\n')
+    .map((s) => s.trim()).filter(Boolean);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline && !lines().includes('Your listings')) {
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  const all = lines();
+  const titles = [];
+  all.forEach((line, i) => { if (line === NOTICE && all[i + 1]) titles.push(all[i + 1]); });
+  return { in_review: titles };
+}"""
+
 MY_LISTINGS_ENTRY_JS = """() => {
   const link = document.querySelector('a[href*="/marketplace/profile/"]');
   const href = link ? link.getAttribute('href') : null;
@@ -438,13 +550,17 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   // names them, and Facebook interleaves a "Today's picks" grid of OTHER people's listings down
   // the same page at overlapping positions. The first ancestor of the heading that holds any
   // listing link is the seller's grid and holds only it — read the wrong container and the survey
-  // offers to relist strangers' items.
+  // offers to relist strangers' items. The profile now opens as a dialog over that feed, so the
+  // climb stops at the dialog's edge, and at a section saying the seller has nothing listed.
+  const EMPTY = /^No listings found$/im;
   const scope = () => {
     const heading = Array.from(document.querySelectorAll('h1,h2,h3,[role="heading"]'))
       .find((el) => /listings$/i.test((el.innerText || '').trim()));
     if (!heading) return null;
     for (let node = heading; node; node = node.parentElement) {
-      if (node.querySelector('a[href*="/marketplace/item/"]')) return node;
+      if (node.querySelector('a[href*="/marketplace/item/"]')) return { root: node, empty: false };
+      if (EMPTY.test(node.innerText || '')) return { root: node, empty: true };
+      if (node.getAttribute('role') === 'dialog') return null;
     }
     return null;
   };
@@ -458,19 +574,37 @@ _MY_LISTINGS_TEMPLATE = """async () => {
     return seen;
   };
 
-  const root = scope();
-  if (root === null) {
+  // The dialog fills in after it opens; nothing in it yet is not nothing listed.
+  const deadline = Date.now() + 5000;
+  let found = scope();
+  while (found === null && Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, 250));
+    found = scope();
+  }
+  if (found === null) {
     return {
       error: 'no scoped listings container',
       headings: document.querySelectorAll('h1,h2,h3,[role="heading"]').length,
       width: window.innerWidth,
       visible: document.visibilityState === 'visible',
+      blocked: (__BLOCK_WALL__)(),
     };
   }
   // The page's own count of what is live — the only thing that can tell a partial render from a
   // small inventory.
   const bodyText = (document.body && document.body.innerText) || '';
   const active = Number((bodyText.match(/(\\d+)\\s+active listings?/i) || [])[1]) || 0;
+  const root = found.root;
+  if (found.empty) {
+    return {
+      listings: [],
+      active_count: active,
+      dropped: 0,
+      unreadable: 0,
+      truncated: active > 0,
+      visible: document.visibilityState === 'visible',
+    };
+  }
 
   // The grid loads lazily, and `window.scrollTo` does not drive it — bringing the last card into
   // view does. Stop when the count has stopped growing, or when it reaches the page's own tally.
@@ -491,6 +625,8 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   cards(root).forEach((a, id) => {
     // Title by position: a listing may legitimately be titled something that parses as a price.
     const lines = (a.innerText || '').trim().split('\\n').map((s) => s.trim()).filter(Boolean);
+    // A fresh listing's card opens with a badge above its price.
+    while (lines.length && /^Just listed$/i.test(lines[0])) lines.shift();
     const priceText = lines[0] || '';
     const title = lines[1] || '';
     const price = parsePrice(priceText);
@@ -516,9 +652,11 @@ _MY_LISTINGS_TEMPLATE = """async () => {
   };
 }"""
 
-MY_LISTINGS_JS = _MY_LISTINGS_TEMPLATE.replace(
-    "__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN)
-).replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
+MY_LISTINGS_JS = (
+    _MY_LISTINGS_TEMPLATE.replace("__LISTING_ID_RE__", json.dumps(LISTING_ID_PATTERN))
+    .replace("__PARSE_PRICE__", jslib.PARSE_PRICE_JS)
+    .replace("__BLOCK_WALL__", BLOCK_WALL_JS)
+)
 
 # One listing's own page, read at adoption time.
 #
@@ -641,6 +779,9 @@ PUBLISH_FIELDS_JS = f"""() => {{
     category: mark(byLabel('label[role="combobox"]', 'Category'), 'category'),
     condition: mark(byLabel('label[role="combobox"]', 'Condition'), 'condition'),
     description: mark(byLabel('textarea', 'Description'), 'description'),
+    // Under "More details": a typed box that only takes a place Facebook suggests.
+    location: mark(
+      document.querySelector('input[role="combobox"][aria-label="Location"]'), 'location'),
     photos: mark(document.querySelector('input[type="file"]'), 'photos'),
     // The control that opens the file chooser, marked separately from the input: the upload only
     // works while a chooser is open, so the driver has to press this first.
@@ -690,6 +831,7 @@ PUBLISH_READBACK_JS = f"""() => {{
     description: value('description'),
     condition: value('condition'),
     category: value('category'),
+    location: value('location'),
   }};
 }}"""
 
@@ -729,15 +871,40 @@ _PUBLISH_OPTIONS_TEMPLATE = f"""() => {{
     options.sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top);
   }}
   const texts = options.map(label);
-  const want = String(__WANTED__ || '').trim().toLowerCase();
+  // Facebook switches between "-" and "–" in its labels, so any dash and spacing count as one.
+  const same = (t) => String(t || '').toLowerCase().replace(/\\s*[-\\u2010-\\u2015]\\s*/g, ' - ')
+    .replace(/\\s+/g, ' ').trim();
+  const want = same(__WANTED__);
   // Exact first, then a prefix — a listing must never be filed under a category that merely
   // contains the word we were looking for.
-  let at = texts.findIndex((t) => t.toLowerCase() === want);
-  if (at < 0) at = texts.findIndex((t) => t.toLowerCase().startsWith(want));
+  let at = texts.findIndex((t) => same(t) === want);
+  if (at < 0) at = texts.findIndex((t) => same(t).startsWith(want));
   if (at < 0) return {{ chosen: null, options: texts.slice(0, 40) }};
   options[at].setAttribute(MARK, 'option');
   return {{ chosen: texts[at], options: texts.slice(0, 40) }};
 }}"""
+
+
+# Where in Facebook's suggestions for a ZIP the place naming it sits. The list also offers places
+# that merely resemble what was typed, so only one naming the ZIP counts. A click on a suggestion
+# does not take; the arrow keys and Enter do, so the driver needs its position, not a mark.
+_PUBLISH_PLACE_TEMPLATE = """async () => {
+  const zip = String(__ZIP__);
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    const rows = Array.from(document.querySelectorAll('[role="option"]'))
+      .filter((el) => !(el.parentElement && el.parentElement.closest('[role="option"]')));
+    const at = rows.findIndex((el) => (el.innerText || '').split(/\\s+/).includes(zip));
+    if (at >= 0) return { chosen: (rows[at].innerText || '').trim().split('\\n')[0], at };
+    await new Promise((r) => setTimeout(r, 250));
+  }
+  return { chosen: null };
+}"""
+
+
+def place_js(zip_code: str) -> str:
+    """The suggestion-picking artifact for a ZIP, baked in as `options_js` bakes its wanted text."""
+    return _PUBLISH_PLACE_TEMPLATE.replace("__ZIP__", json.dumps(str(zip_code or "")))
 
 
 def options_js(wanted: str) -> str:
@@ -764,9 +931,9 @@ PUBLISH_RESULT_JS = """() => {
   };
 }"""
 
-# Facebook's own condition wording, offered verbatim by the dropdown. Anything else is mapped by
-# `condition_for`; an item with no usable condition does not publish, because guessing "New" for a
-# used thing is a lie told to a buyer.
+# Facebook's condition wording; its menu varies the dash and case, which the picker ignores. Any
+# other wording is mapped by `condition_for`; an item with no usable condition does not publish,
+# because guessing "New" for a used thing is a lie told to a buyer.
 CONDITIONS = ("New", "Used - Like New", "Used - Good", "Used - Fair")
 
 
@@ -791,6 +958,105 @@ def condition_for(said: str) -> str:
 # a title is judgement that belongs to the listing flow, not a driver; this is Facebook's own
 # catch-all word, and one of the menu's options.
 DEFAULT_CATEGORY = "Miscellaneous"
+
+# --- editing a live listing ----------------------------------------------------------------------
+
+# Its own attribute rather than the publish one: a stale publish mark left in the DOM by an earlier
+# create must never be mistaken for a control on the edit form.
+EDIT_MARK_ATTR = "data-sellee-edit"
+
+# What the edit driver changes. Photos are not here: replacing Facebook's photo set means removing
+# each existing photo by its own hover control before adding any, and until that is modelled a
+# photo change on Facebook is the seller's to make by hand — said to them, never half-done.
+EDITABLE_FIELDS = frozenset({"title", "description", "list_price"})
+
+
+def edit_target(step: str) -> str:
+    """The selector for one marked edit control."""
+    return f"[{EDIT_MARK_ATTR}='{step}']"
+
+
+# The listing's own Edit control, on its item page, as its owner sees it. `LISTING_DETAIL_JS`
+# filters this same "Edit" line out of the panel as chrome — it is there on every listing the
+# seller owns. Marked rather than clicked, because the click has to be a real one.
+EDIT_ENTRY_JS = f"""() => {{
+  const MARK = '{EDIT_MARK_ATTR}';
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }};
+  const entry = Array.from(document.querySelectorAll('[role="button"],a,button')).filter(visible)
+    .find((el) => /^Edit( listing)?$/.test(
+      (el.getAttribute('aria-label') || el.innerText || '').trim()));
+  if (entry) entry.setAttribute(MARK, 'entry');
+  return {{
+    found: !!entry,
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
+# Mark the edit form's controls, and say which were found. The edit dialog is the create composer
+# with its values filled in, so fields are found by the label beside them exactly as the publish
+# artifact finds them — the two text inputs are indistinguishable otherwise, and a partly
+# recognised form could put the price in the title. The commit is a single button ("Update" on
+# the current layout, "Save" on older ones) rather than create's Next-then-Publish.
+EDIT_FIELDS_JS = f"""() => {{
+  const MARK = '{EDIT_MARK_ATTR}';
+  const labelOf = (el) => {{
+    for (let n = el, i = 0; n && i < 6; n = n.parentElement, i++) {{
+      const t = (n.innerText || '').trim();
+      if (t && t.length < 60) return t.split('\\n')[0].trim();
+    }}
+    return '';
+  }};
+  const visible = (el) => {{
+    const r = el.getBoundingClientRect();
+    return r.width > 0 && r.height > 0;
+  }};
+  const mark = (el, step) => {{ if (el) el.setAttribute(MARK, step); return !!el; }};
+  const byLabel = (selector, wanted) =>
+    Array.from(document.querySelectorAll(selector)).filter(visible)
+      .find((el) => labelOf(el) === wanted) || null;
+  const button = (re) =>
+    Array.from(document.querySelectorAll('[role="button"],button')).filter(visible)
+      .find((el) => re.test((el.getAttribute('aria-label') || el.innerText || '').trim()))
+    || null;
+  const found = {{
+    title: mark(byLabel('input[type="text"]', 'Title'), 'title'),
+    price: mark(byLabel('input[type="text"]', 'Price'), 'price'),
+    description: mark(byLabel('textarea', 'Description'), 'description'),
+    more: mark(button(/^More details/), 'more'),
+    save: mark(button(/^(Update|Save)$/), 'save'),
+  }};
+  const boost = Array.from(document.querySelectorAll('input[type="checkbox"]'))
+    .find((el) => /Boost listing/i.test(el.getAttribute('aria-label') || ''));
+  mark(boost, 'boost');
+  const save = document.querySelector('[' + MARK + "='save']");
+  return {{
+    marked: Object.keys(found).filter((k) => found[k]),
+    missing: Object.keys(found).filter((k) => !found[k]),
+    save_enabled: !!save && save.getAttribute('aria-disabled') !== 'true',
+    boost_on: !!(boost && boost.checked),
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
+
+# What the edit form holds now — read before pressing Update, the last moment a mistake is free.
+EDIT_READBACK_JS = f"""() => {{
+  const value = (step) => {{
+    const el = document.querySelector("[{EDIT_MARK_ATTR}='" + step + "']");
+    return el ? el.value : null;
+  }};
+  return {{
+    title: value('title'),
+    price: value('price'),
+    description: value('description'),
+    width: window.innerWidth,
+    visible: document.visibilityState === 'visible',
+  }};
+}}"""
 
 
 # The reply composer, as shipped defaults under the heal cache.

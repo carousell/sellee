@@ -13,7 +13,7 @@ _ZONES = [
     {"zone": "far", "match": {"max_km": 30}, "fee": 12},
     {"zone": "nationwide", "match": {"areas": ["__else__"]}, "fee": 8},
 ]
-_SURCHARGE = {"large": 10}
+_SURCHARGE = {"l": 10}
 
 
 # --- engine ------------------------------------------------------------------------------------
@@ -25,7 +25,7 @@ def test_first_matching_zone_wins_in_seller_order() -> None:
 
 
 def test_buyer_total_invariant() -> None:
-    r = shipping.compute(_ZONES, _SURCHARGE, 80, "large", "SGD", "tampines", None)
+    r = shipping.compute(_ZONES, _SURCHARGE, 80, "l", "SGD", "tampines", None)
     # buyer_total = price + delivery_fee + size_surcharge
     assert r["size_surcharge"] == 10
     assert r["total_fee"] == 15
@@ -86,8 +86,7 @@ def test_update_seller_config_requires_a_section(make_ctx) -> None:
 
 def test_quote_shipping_composes_engine_and_never_emits_address(make_ctx, store) -> None:
     ctx = make_ctx("attended")
-    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD")
-    store.update_item(item["id"], {"size_bucket": "large"})
+    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD", size_bucket="l")
     dispatch(
         "update_seller_config",
         {
@@ -99,6 +98,24 @@ def test_quote_shipping_composes_engine_and_never_emits_address(make_ctx, store)
     quote = dispatch("quote_shipping", {"item_id": item["id"], "dest_area": "tampines"}, ctx)
     assert quote["covered"] is True and quote["buyer_total"] == 95
     assert "12 Secret Lane" not in str(quote) and "address" not in quote
+
+
+def test_quote_shipping_takes_its_currency_from_the_item(make_ctx, store) -> None:
+    """Setup records no currency any more, so the item's is the one a quote can name — and an
+    item gets that from the listing carousell.ai creates, not from a local guess."""
+    ctx = make_ctx("attended")
+    dispatch("update_seller_config", {"shipping": {"zones": _ZONES}}, ctx)
+    priced = store.create_item(title="Lamp", list_price=80.0, currency="VND")
+    unpriced = store.create_item(title="Vase", list_price=80.0)
+
+    quoted = dispatch("quote_shipping", {"item_id": priced["id"], "dest_area": "tampines"}, ctx)
+    assert quoted["currency"] == "VND"
+
+    # Before a listing exists there is no authoritative code, and the quote says so rather than
+    # naming a currency nobody chose. Only the code is absent; the fees are unaffected.
+    quiet = dispatch("quote_shipping", {"item_id": unpriced["id"], "dest_area": "tampines"}, ctx)
+    assert quiet["currency"] == ""
+    assert quiet["buyer_total"] == quoted["buyer_total"]
 
 
 def test_quote_shipping_requires_configured_zones(make_ctx, store) -> None:

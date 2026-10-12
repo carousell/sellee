@@ -68,6 +68,40 @@ def same_text(left: str, right: str) -> bool:
     return _same_normalized(normalize(left), normalize(right))
 
 
+def holds_whole(box_text: str, text: str) -> bool:
+    """Whether a composer holds `text`, all of it, however the page draws it.
+
+    Not `same_text`, which forgives a truncated read of a long message because a bubble may be read
+    back cut short. A box is read in full, so a box holding the first part of a reply is a reply
+    that has not been typed, and committing it would deliver half.
+
+    What it guards against is keys that went missing or somewhere else, so beyond an exact match it
+    compares the letters and digits, in order, and nothing else: a composer is free to redraw an
+    emoji, turn `:)` into one, or re-space a line, and none of that is a lost key — while a dropped
+    letter, a missing last word, or a half-typed reply all change the letters.
+
+    A reply with no letters or digits at all — a thumbs-up — is matched only exactly. Nothing to
+    compare is never a match: this is also how the send decides a box already holds our own reply,
+    and a yes there would press Send on whatever the seller had half-written. Whether such a reply
+    was typed is the send's to decide (`checkable`).
+    """
+    held, meant = normalize(box_text), normalize(text)
+    if held == meant:
+        return True
+    letters = _letters(meant)
+    return bool(letters) and _letters(held) == letters
+
+
+def checkable(text: str) -> bool:
+    """Whether a reply has anything a box read back could be checked against — letters or digits.
+    A page may draw an emoji as an element with no text, so a thumbs-up reads back as nothing."""
+    return bool(_letters(normalize(text)))
+
+
+def _letters(text: str) -> str:
+    return "".join(char for char in text if char.isalnum())
+
+
 def _same_normalized(a: str, b: str) -> bool:
     if _same_or_truncated(a, b):
         return True

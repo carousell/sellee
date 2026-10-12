@@ -23,6 +23,7 @@ from sellee import (
     config,
     connect_cli,
     control,
+    countries,
     deployment,
     healthcheck,
     heartbeat,
@@ -103,7 +104,7 @@ def _run(args, ui: Ui) -> None:
         raise Abort("the daemon is running but minted no attended token", _daemon_diagnostics())
 
     region = _seller_region(ui, args, port, token)
-    _provision_rail(ui, region)
+    _provision_rail(ui, region, port, token)
     _connect_markets(ui, args, port, token, region)
     _browser_window(ui, port, token)
     _offer_channel(ui, args, port, token)
@@ -126,7 +127,7 @@ def _intro(ui: Ui, platform) -> None:
     ui.say("  • check for Node, Chrome, and the claude CLI (installed and signed in)")
     ui.say("  • install this version, plus the `sellee` command")
     ui.say("  • register and start the background worker")
-    ui.say("  • record the region and currency to price in")
+    ui.say("  • record the country you sell in")
     ui.say("  • optionally connect marketplaces and a chat channel (Telegram or Discord)")
     ui.say("")
     ui.say("Sellee will be installed into the following locations:")
@@ -149,7 +150,7 @@ def _intro_container(ui: Ui) -> None:
     ui.say(f"limits you set. Version {__version__} is already running in this container.")
     ui.say("")
     ui.say("This will:")
-    ui.say("  • record the region and currency to price in")
+    ui.say("  • record the country you sell in")
     ui.say("  • set up carousell.ai")
     ui.say("  • optionally connect marketplaces and a chat channel (Telegram or Discord)")
     ui.say("  • write the workspace for the terminal session")
@@ -455,12 +456,11 @@ def _wait_for_daemon(started_after: float) -> bool:
 
 
 def _seller_region(ui: Ui, args, port: int, token: str):
-    """Record region, currency and timezone, and answer with the region the daemon now holds.
+    """Record country and timezone, and answer with the region the daemon now holds.
 
-    The machine's timezone already implies all three, so this confirms a proposal rather than
-    conducting an interview. A machine that implies nothing (or a seller who says no) is asked.
-    Provisioning and the marketplace list both key off the answer, so it is read back from the
-    daemon rather than assumed — on a re-run the region may already be there.
+    The machine's timezone implies both, so this confirms a proposal rather than conducting an
+    interview, and a machine that implies nothing is asked instead. The answer is read back from
+    the daemon rather than assumed, because provisioning and the marketplace list key off it.
     """
     known = _stored_basics(port, token)
     if known.get("region") and not args.region:
@@ -498,32 +498,45 @@ def _stored_basics(port: int, token: str) -> dict:
 
 
 def _basics_from_flag(args) -> dict:
-    code = str(args.region).strip().upper()
-    basics = {"region": code, "timezone": region_guess.default_zone(code)}
-    currency = region_guess.CURRENCIES.get(code)
-    if currency:
-        basics["currency"] = currency
-    return {key: value for key, value in basics.items() if value}
+    # Spelled like a typed answer, so "--region UK" records GB rather than a country that does not
+    # exist.
+    code = countries.code_for_name(args.region) or str(args.region).strip().upper()
+    zone = region_guess.default_zone(code)
+    return {"region": code, "timezone": zone} if zone else {"region": code}
 
 
 def _ask_basics(ui: Ui):
-    """Ask which country outright. Answers nothing when there is nobody to ask.
-
-    Only the countries the rail serves are offered, and an answer outside them is refused here
-    rather than three questions later at the door — the currency and timezone are not worth
-    collecting for a region that cannot be stored.
-    """
+    """Ask which country outright, taking any of them: what carousell.ai can pay out is the
+    backend's answer, so a list here would be the agent deciding something it does not know."""
     if not ui.interactive:
         return None
-    supported = region_guess.supported()
-    code = ui.choose("Which country do you sell in?", supported)
-    region = supported[code]
-    basics = {
-        "region": region,
-        "currency": region_guess.CURRENCIES.get(region, ""),
-        "timezone": _ask_timezone(ui, region),
-    }
-    return {key: value for key, value in basics.items() if value}
+    region = _ask_country(ui)
+    zone = _ask_timezone(ui, region)
+    return {"region": region, "timezone": zone} if zone else {"region": region}
+
+
+def _ask_country(ui: Ui) -> str:
+    """Ask for a country code until the answer is one the write door will take, and confirm it.
+
+    The confirm is the point. A code of the right shape is always accepted, so the error no check
+    can catch is a real country that is not theirs — "SA" typed for "SG" is two letters, is a
+    country, provisions, and then prices every listing in the wrong currency. Naming it back is
+    the only thing standing between that typo and a live mislabelled listing.
+
+    A typed country *name* is resolved rather than rejected: the seller has already told us what
+    they meant, and spelling it as a code for them is not the agent deciding where they may sell.
+    """
+    default = (region_guess.guess() or {}).get("region", "")
+    while True:
+        answer = ui.ask("Which country do you sell in?", default=default, lead=False).strip()
+        # Spelled before the shape check: "UK" is two letters but not a code, and resolves to GB.
+        # A real code is left alone by code_for_name, so "AU" is never read as a name.
+        code = countries.code_for_name(answer) or answer.upper()
+        if len(code) != 2 or not code.isalpha():
+            ui.say("A country is its two-letter code, like US or CA.")
+            continue
+        if ui.confirm(f"You sell in {countries.label(code)}, correct?", default=True):
+            return code
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:
@@ -550,7 +563,7 @@ def _ask_timezone(ui: Ui, region: str) -> str:
 # --- the rail ----------------------------------------------------------------------------------
 
 
-def _provision_rail(ui: Ui, region) -> None:
+def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
     """Get the carousell.ai guest key. Quiet on success, and never fatal.
 
     A provisioning hiccup is a network problem, not an install problem: everything except the
@@ -564,9 +577,26 @@ def _provision_rail(ui: Ui, region) -> None:
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         ui.say("ready — always enabled, with nothing to sign in to")
+        _record_currency(ui, port, token, str(status.get("currency") or ""))
+        # Whether carousell.ai can pay this seller out is the backend's answer, printed as given.
+        notice = str(status.get("notice") or "")
+        if notice:
+            ui.note(notice)
         return
     ui.warn(f"carousell.ai setup did not complete: {status.get('error')}")
     ui.note("re-run `sellee provision carousell-ai` when back online")
+
+
+def _record_currency(ui: Ui, port: int, token: str, currency: str) -> None:
+    """Keep what registration answered beside the country. Every later price is checked against
+    it, and an idempotent re-run answers nothing new to record."""
+    if not currency:
+        return
+    status, body = control.post(port, token, "/control/seller-basics", {"currency": currency})
+    if status != 200:
+        ui.warn(f"could not record your currency: {body.get('error', status)}")
+        return
+    ui.say(f"your listings are priced in {currency}")
 
 
 # --- marketplaces ---------------------------------------------------------------------------

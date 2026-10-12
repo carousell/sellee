@@ -117,3 +117,17 @@ def test_send_message_rejects_malformed_options(make_ctx, store) -> None:
             make_ctx(TIER_ATTENDED),
         )
     assert store.list_queued_notices() == []  # rejected whole — no half-sent ask
+
+
+def test_an_item_with_no_currency_named_takes_the_sellers(make_ctx, store) -> None:
+    """An item created with no currency gets the seller's, so "200 dollars" from a seller in
+    Singapore is 200 SGD."""
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    item = dispatch("create_item", {"title": "Bike", "list_price": 200.0}, make_ctx(TIER_ATTENDED))
+    assert item["currency"] == "SGD"
+
+
+def test_a_currency_the_seller_named_is_kept(make_ctx, store) -> None:
+    store.set_seller_config_section("basics", {"region": "SG", "currency": "SGD"})
+    item = _mk_item(make_ctx(TIER_ATTENDED), currency="USD")
+    assert item["currency"] == "USD"

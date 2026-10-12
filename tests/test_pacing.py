@@ -82,13 +82,19 @@ def test_cap_still_bites_a_reactive_kind_during_quiet_hours() -> None:
 
 
 def test_fast_mode_zeroes_jitter_lifts_cap_disables_quiet() -> None:
+    now = _midnight_ish()
     cfg = pacing.resolve(
-        Config(pacing_mode="fast", max_actions_per_hour=1, reply_delay_sec=[1, 3]),
+        Config(
+            pacing_mode="fast",
+            pacing_fast_until=now + 3600,
+            max_actions_per_hour=1,
+            reply_delay_sec=[1, 3],
+        ),
         quiet_hours=[1380, 480],
+        now=now,
     )
     assert cfg.cap == 60
     # even at 02:00 and with a full small cap's worth of history, fast still goes, jitter-free
-    now = _midnight_ish()
     r = pacing.evaluate([now - 1] * 5, now=now, cfg=cfg, kind="reply")
     assert r["verdict"] == "go" and r["delay_sec"] == 0.0
 
@@ -187,8 +193,67 @@ class _FakeRail:
 def test_publish_reserves_and_caps(make_ctx, store) -> None:
     cfg_obj = Config(max_actions_per_hour=1)
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: _FakeRail(), config=cfg_obj)
-    first = store.create_item(title="A", list_price=80.0, currency="SGD")
-    second = store.create_item(title="B", list_price=90.0, currency="SGD")
+    first = store.create_item(title="A", list_price=80.0, currency="SGD", size_bucket="m")
+    second = store.create_item(title="B", list_price=90.0, currency="SGD", size_bucket="m")
     dispatch("carousell_ai_publish_listing", {"item_id": first["id"]}, ctx)
     with pytest.raises(ToolError, match="paced"):
         dispatch("carousell_ai_publish_listing", {"item_id": second["id"]}, ctx)
+
+
+# --- fast mode ends by itself -------------------------------------------------------------------
+#
+# Fast drops the whole account-safety disguise: the cap goes 12 -> 60, both jitter ranges go to
+# zero, and quiet hours stop applying. It exists for a live demo, and a demo ends — but nothing
+# used to end it. Left set after one, an account runs at five times the cap with no pause between
+# sends, through the night, until somebody happens to read config.json.
+
+
+def test_fast_mode_stops_when_its_window_closes() -> None:
+    now = _noon_on()
+    cfg = pacing.resolve(
+        Config(pacing_mode="fast", pacing_fast_until=now - 1, max_actions_per_hour=7),
+        quiet_hours=[1380, 480],
+        now=now,
+    )
+
+    assert cfg.mode == "normal"
+    assert cfg.cap == 7
+    assert (cfg.quiet_start_min, cfg.quiet_end_min) == (1380, 480)
+
+
+def test_fast_mode_holds_until_then() -> None:
+    now = _noon_on()
+    cfg = pacing.resolve(
+        Config(pacing_mode="fast", pacing_fast_until=now + 1, max_actions_per_hour=7),
+        quiet_hours=[1380, 480],
+        now=now,
+    )
+
+    assert cfg.mode == "fast"
+    assert cfg.cap == 60
+
+
+# --- how long after a ring the conversation is opened ---------------------------------------------
+
+
+def test_a_reaction_is_never_quicker_or_slower_than_a_person_manages() -> None:
+    import random
+
+    from sellee.engines import pacing as engine
+
+    delays = [engine.reaction_delay_sec(random.Random(seed), 90.0) for seed in range(500)]
+
+    assert min(delays) >= engine.REACTION_FLOOR_SEC
+    assert max(delays) <= engine.REACTION_CEILING_SEC
+
+
+def test_a_reaction_centres_on_the_median_and_is_not_a_constant() -> None:
+    import random
+    import statistics
+
+    from sellee.engines import pacing as engine
+
+    delays = [engine.reaction_delay_sec(random.Random(seed), 90.0) for seed in range(500)]
+
+    assert 70.0 <= statistics.median(delays) <= 110.0
+    assert statistics.pstdev(delays) > 20.0

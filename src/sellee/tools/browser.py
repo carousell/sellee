@@ -21,6 +21,7 @@ from sellee.browser.client import BrowserError
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
+    TIER_PASS_EDIT,
     TIER_PASS_PUBLISH,
     ToolContext,
     ToolError,
@@ -107,7 +108,7 @@ register(
             "additionalProperties": False,
         },
         handler=_ui_cache_get,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_EDIT}),
     )
 )
 register(
@@ -131,7 +132,7 @@ register(
             "additionalProperties": False,
         },
         handler=_ui_cache_record,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_EDIT}),
     )
 )
 register(
@@ -150,7 +151,7 @@ register(
             "additionalProperties": False,
         },
         handler=_ui_cache_invalidate,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_EDIT}),
     )
 )
 register(
@@ -170,6 +171,6 @@ register(
             "additionalProperties": False,
         },
         handler=_probe_selector,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH}),
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_EDIT}),
     )
 )

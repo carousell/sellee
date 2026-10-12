@@ -115,6 +115,8 @@ _SKILL_BLURBS = (
     ("seller-comms", "how to frame a decision the seller has to make"),
     ("listing-flow", "photos in, live listing out"),
     ("listing-flow-carousell", "the same, filled into Carousell's own composer in the browser"),
+    ("listing-edit", "changing a listing that is already live, everywhere it is listed"),
+    ("edit-flow-carousell", "the same change, made in Carousell's own edit form in the browser"),
     ("buyer-conversation", "how a buyer's message is classified, answered, and negotiated"),
     ("scam-guard", "the never-engage rule, and what to do with a flagged thread"),
 )
@@ -242,4 +244,30 @@ def provision(args) -> int:
     cfg = config.load()
     status = rail_provision.ensure(args.region or None, api_base=cfg.carousell_ai_api_base)
     print(json.dumps(status))
-    return 0 if status.get("status") == "ok" else 3
+    if status.get("status") != "ok":
+        return 3
+    _record_currency(cfg.http_port, str(status.get("currency") or ""))
+    return 0
+
+
+def _record_currency(port: int, currency: str) -> None:
+    """Keep what registration answered beside the country, as setup does. Every later price is
+    checked against it, and an idempotent re-run answers nothing new to record.
+
+    Not fatal: the key is already stored. A re-run finds that key and registers nothing, so the
+    warning names the currency the seller would otherwise lose."""
+    if not currency:
+        return
+    token = control.require_token()
+    if not token:
+        return
+    try:
+        status, body = control.post(port, token, "/control/seller-basics", {"currency": currency})
+    except control.DaemonUnreachable as exc:
+        print(f"sellee: could not record your currency ({currency}): {exc}", file=sys.stderr)
+        return
+    if status != 200:
+        print(
+            f"sellee: could not record your currency ({currency}): {body.get('error', status)}",
+            file=sys.stderr,
+        )

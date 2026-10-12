@@ -580,3 +580,27 @@ def test_a_window_that_cannot_be_measured_is_not_reported_as_narrow(
     factory()
 
     assert bus.store.read(kinds=["browser.window_narrow"]) == []
+
+
+def test_a_replacement_client_carries_the_same_governor(store, bus, monkeypatch) -> None:
+    """The governor outlives every client. A recycled server that came back with fresh counts
+    would let a policed marketplace be shown the page loads it had just been spared."""
+    monkeypatch.setattr(daemon.browser_client, "ensure_available", lambda command: None)
+    monkeypatch.setattr(daemon.chrome, "ensure_running", lambda port, **kw: (chrome.READY, 9222))
+    monkeypatch.setattr(daemon.chrome, "is_ready", lambda port, **kw: True)
+    monkeypatch.setattr(daemon.chrome, "page_targets", lambda port, **kw: 1)
+    built: list = []
+
+    def build(**kw):
+        built.append(kw.get("governor"))
+        return FakeClient(age=daemon.BROWSER_RECYCLE_AGE_SEC + 1.0)
+
+    monkeypatch.setattr(daemon.browser_client, "BrowserClient", build)
+    governor = object()
+    factory = daemon.make_browser_factory(Config(), store, bus, {}, governor=governor)
+
+    factory()
+    factory()
+
+    assert len(built) == 2
+    assert built == [governor, governor]

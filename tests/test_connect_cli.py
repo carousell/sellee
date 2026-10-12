@@ -496,6 +496,27 @@ def test_an_already_signed_in_market_exits_0_without_asking(
     assert "Signed in to Carousell" in capsys.readouterr().out
 
 
+def test_craigslist_shows_the_intro_then_waits_for_the_seller_like_any_market(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    """The seller creates the account themselves; the intro names the address it is made with."""
+    stub_market_daemon["state"] = "logged_out"
+    stub_market_daemon["post_body"] = {
+        "market": "craigslist",
+        "url": "https://accounts.craigslist.org/login/home",
+        "state": "logged_out",
+        "intro": "Create your Craigslist account with seller@inbox.carousell.ai.",
+    }
+    prompts = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "")
+
+    connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    out = capsys.readouterr().out
+    assert "seller@inbox.carousell.ai" in out and "I never sign in for you" not in out
+    assert len(prompts) == 1 and stub_market_daemon["probes"]
+
+
 def test_a_signed_out_market_waits_then_re_probes(monkeypatch, stub_market_daemon, capsys) -> None:
     stub_market_daemon["state"] = "logged_out"
     prompts = []
@@ -653,3 +674,120 @@ def test_a_refused_settings_decision_is_not_reported_as_done(monkeypatch, capsys
     monkeypatch.setattr(control, "post", lambda *a, **k: (400, {"error": "unknown change id"}))
     assert settings_cli._decide(9999, "tok", "approve", "chg_nope") == 1
     assert "unknown change id" in capsys.readouterr().err
+
+
+def test_craigslist_shows_its_steps_and_waits_before_chrome_opens(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    # Live, run 9: Chrome opened Craigslist's login page before the steps were printed.
+    stub_market_daemon["state"] = "logged_out"
+    order: list = []
+    monkeypatch.setattr(
+        control,
+        "get",
+        lambda port, token, route, params=None, **kw: (
+            order.append(route) or (200, {"intro": "To connect Craigslist:\n1. Use x@inbox"})
+        ),
+    )
+    real_post = control.post
+    monkeypatch.setattr(
+        control,
+        "post",
+        lambda port, token, route, body, **kw: (
+            order.append(route) or real_post(port, token, route, body, **kw)
+        ),
+    )
+    monkeypatch.setattr(
+        "builtins.input", lambda prompt="": order.append(prompt.split(" (")[0]) or ""
+    )
+
+    connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    assert order[:3] == [
+        "/control/craigslist-intro",
+        "Press Enter to open Craigslist in my Chrome window",
+        "/control/connect-market",
+    ]
+    assert capsys.readouterr().out.count("To connect Craigslist:") == 1
+
+
+def test_skipping_at_the_steps_opens_nothing(monkeypatch, stub_market_daemon) -> None:
+    monkeypatch.setattr(control, "get", lambda *a, **k: (200, {"intro": "To connect Craigslist:"}))
+
+    def skip(prompt=""):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr("builtins.input", skip)
+
+    assert connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True) == 1
+    assert stub_market_daemon["posts"] == []
+
+
+def _following(monkeypatch, stages) -> dict:
+    """A daemon whose Craigslist sign-in goes through `stages`, one per poll."""
+    seen = {"polls": 0, "flushed": 0}
+    script = list(stages)
+
+    def fake_get(port, token, route, params=None, **kw):
+        if route == "/control/craigslist-intro":
+            return 200, {"intro": "To connect Craigslist:", "address": "x@inbox.carousell.ai"}
+        seen["polls"] += 1
+        stage = script.pop(0) if len(script) > 1 else script[0]
+        return 200, {"stage": stage, "line": f"line:{stage}"}
+
+    monkeypatch.setattr(control, "get", fake_get)
+    monkeypatch.setattr(connect_cli.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(connect_cli, "_copy_to_clipboard", lambda text: True)
+    monkeypatch.setattr(connect_cli, "_discard_typed_input", lambda: seen.__setitem__("flushed", 1))
+    return seen
+
+
+def test_craigslist_is_followed_to_connected_with_no_enter_to_press(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["state"] = "logged_out"
+    seen = _following(monkeypatch, ["waiting", "waiting", "link_opened", "connected"])
+    prompts: list = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "")
+
+    rc = connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    out = capsys.readouterr().out
+    assert rc == 0
+    assert prompts == ["Press Enter to open Craigslist in my Chrome window (or Ctrl-C to skip)… "]
+    assert out.index("line:waiting") < out.index("line:link_opened") < out.index("line:connected")
+    assert out.count("line:waiting") == 1
+    assert "x@inbox.carousell.ai is copied to your clipboard." in out
+    assert ("/control/browser-release", "signin") in stub_market_daemon["holds"]
+    assert stub_market_daemon["probes"] == [] and seen["flushed"]
+
+
+def test_ctrl_c_while_following_leaves_the_sign_up_running(
+    monkeypatch, stub_market_daemon, capsys
+) -> None:
+    stub_market_daemon["state"] = "logged_out"
+    _following(monkeypatch, ["waiting"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": "")
+
+    def interrupted(_s):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(connect_cli.time, "sleep", interrupted)
+
+    rc = connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    assert rc == 1 and "Stopped watching" in capsys.readouterr().out
+    assert ("/control/browser-release", "signin") not in stub_market_daemon["holds"]
+
+
+def test_a_daemon_that_cannot_say_falls_back_to_pressing_enter(
+    monkeypatch, stub_market_daemon
+) -> None:
+    stub_market_daemon["state"] = "logged_out"
+    monkeypatch.setattr(control, "get", lambda *a, **k: (404, {}))
+    prompts: list = []
+    monkeypatch.setattr("builtins.input", lambda prompt="": prompts.append(prompt) or "")
+
+    connect_cli.market_flow(9999, "mcp-tok", "craigslist", interactive=True)
+
+    assert prompts[-1].startswith("Press Enter once you've signed in")

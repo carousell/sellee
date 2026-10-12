@@ -29,6 +29,15 @@ forwarder and a Chrome the seller starts by hand. The readiness probe
 (`chrome.is_ready`) also checks *whose* Chrome answered, not just that something served
 JSON on the port.
 
+**`navigator.webdriver` stays false.** Measured on Chrome 154, `--remote-debugging-port` on its
+own turns it true on every page, before anything has attached — so every Facebook page the agent
+loaded answered the cheapest automation check there is with yes. `launch_command` and both
+`start-chrome` scripts pass `--disable-blink-features=AutomationControlled`, which keeps it false
+with Playwright attached too, and leaves CDP working. A Chrome started before this has to be
+restarted for it to apply. The same measurements found nothing else a page could see: Chrome 154
+does not trigger the old `Runtime.enable` console-serialisation leak, and Playwright leaves no
+globals in the page.
+
 **Raising that window is macOS-only.** `browser/foreground.py` finds the agent's Chrome
 by the pid listening on its CDP port — the only thing that tells it apart from the
 seller's own Chrome — and activates that pid. `browser/window.py` is the seam over it:
@@ -273,6 +282,10 @@ process per recycle, in no holder and reaped by nobody.
 | `listing_id_pattern` | where a listing's id sits in a permalink, one regex group |
 | `composer` | shipped selector defaults, by step |
 | `publish_skill` | the skill holding this market's publish recipe |
+| `publish_driver`, `publish_url`, `publish_loads` | **publishing through a market's own driver** when its form spans pages — the function, where it starts, and the page loads one publish may cost; every step submit asks the governor through `BrowserClient.pace` |
+| `edit_entry_js`, `edit_fields_js`, `edit_readback_js`, `edit_target` | **editing a live listing by driving its form** — the listing page's own Edit control, the form's marked controls, and what the form holds before saving |
+| `editable_fields` | which item fields the edit driver can change; a change outside it is the seller's to make by hand, and they are told so |
+| `edit_driver`, `edit_loads` | **editing through a market's own driver** under `editor.revise`'s contract, and the page loads one edit may cost; Craigslist's edits from the post's manage page, photos included |
 | `system_handles` | rows an inbox read must never treat as a buyer |
 
 `chat_message_submit_js` is per-market decision rather than a per-market fact.
@@ -376,8 +389,9 @@ Mercari link.
 
 ## The read lane
 
-`browser/inbox.py`, on the `inbox_read` scheduler task. One tick asks each
-browser market which conversations exist, opens the ones that look like they
+`browser/inbox.py`, on two scheduler tasks — `inbox_read` for a market read on a
+timer (Carousell), `ring_read` for one read only when it rings (Facebook; see
+[The doorbell](#the-doorbell)). One tick asks each due market which conversations exist, opens the ones that look like they
 moved, and reconciles each tail against the rows already stored — a navigate and
 one JS evaluate per thread, **no model turns at all**. That is what lets the reply
 pass above it stay browser-free: by the time it runs, what the buyer said is
@@ -470,6 +484,49 @@ failed reads earns is decided by *how far the read got*, and the copy of each cl
 | the login probe says `logged_out` | that market's session is logged out; reading stopped, and the notice carries a **Sign in on desktop** button |
 | `BrowserUnavailable` | the browser can't be driven at all; browser markets paused, the rail unaffected |
 
+**A marketplace that polices automation is stopped, not knocked on.** Facebook
+(`MarketAdapter.polices_automation`) watches accounts for automated behaviour, and the shape
+that got this seller's account flagged twice was the lane loading a page that had
+already shown it the door, every few minutes, for hours. So on such a market every one of these
+writes a durable `market_blocks` row, which every lane honours, and says so once:
+
+| what the read found | block | lifted by |
+| --- | --- | --- |
+| a wall: `/checkpoint`, or the automation warning | 6h, 24h, then 72h on repeat | a probe that comes back signed in and unwalled (**Check again**) |
+| the login probe says `logged_out` on two reads in a row | no window: nothing a timer does can sign an account back in, which is also why one look is not enough | the sign-in probe (**Sign in on desktop**) |
+| `browser_blind_after` list reads in a row answered `{error}`, in a window wide enough to lay the page out | 6h, 24h, then 72h on repeat | the same probe as a wall |
+
+A page that never loaded is never a refusal: a navigation that times out is the laptop asleep or
+the network gone, which is evidence about our side, and it only counts toward the blind notice. A
+window too narrow to read is not one either — it is the seller's to widen. Facebook ends a session
+in place, too: the address asked for comes back as a "Continue as" profile chooser with no password
+field, which the login probe reads as `logged_out` by the sign-up link only a signed-out visitor is
+offered and is actually rendering (`tests/integration/test_facebook_login_probe.py`). A refusal
+shares the strike count with the walls, so a wall after one rests the account longer — the error
+runs toward a longer rest, never a shorter one.
+
+**And it is moved through at a person's pace.** On 2026-09-29 the lane opened thirty-two Facebook
+conversations in three minutes and twenty seconds, and kept that rate all night. Every page load
+of a market that polices automation now goes through one governor (`browser/governor.py`), which
+`BrowserClient.navigate` asks before it loads anything — the recovery re-navigations included,
+since each is a load the marketplace sees. It holds two limits:
+
+- **a gap before each load**, drawn per load around `policed_page_gap_sec` (never under 6s) and
+  measured from that market's last load. It is slept, not refused;
+- **allowances per hour and per day.** A flow that needs several loads (a survey look, an
+  adoption, a driven publish or edit) asks before it starts, so it is turned away whole rather than
+  halfway through a form. A load past the allowance anyway raises `PagesSpent` — a `BrowserError`,
+  so every send, publish and edit already treats it as "nothing happened" — and the read lane
+  stops its tick without counting it as blindness.
+
+There is one governor per daemon, shared by every client the factory makes, so a recycled server
+cannot reset what the market has been shown. A pass drives a Playwright server of its own, which
+the governor never sees; `tests/guard/test_policed_market_pass_grant.py` is what keeps any pass on
+such a market from being granted a browser at all. Work nobody asked for on these markets — a
+survey, an adoption, a fan-out publish, an edit — also waits out the seller's quiet hours, because
+the account starting things at 4am is itself what gets noticed. Replies do not wait: a buyer who
+just wrote is awake.
+
 **None of them tells the seller to go and look at Chrome**, and that is load-bearing rather than
 tidy. Reaching the blind counter *proves* Chrome answered its CDP probe on that tick — every
 acquisition runs `ensure_chrome`, and a Chrome that is genuinely down raises `BrowserUnavailable`
@@ -490,6 +547,61 @@ The reply lane (`reply_lane`, every 10s) is a sibling: it claims every waiting
 thread into **one** coalesced reply pass, refuses to enqueue a second while one is
 in flight, and auto-refires nothing — eligibility comes from the rows, so a failed
 pass's threads are simply picked up next tick.
+
+## The doorbell
+
+A person does not reload Messenger every five minutes to see whether a buyer wrote: the phone or
+the browser pings, and a minute or two later they open the conversation. Facebook was shown the
+other thing — its inbox loaded eleven to thirteen times an hour around the clock, with every
+conversation opened every half hour — and flagged the account for automation twice. So a market
+whose adapter has `read_trigger = "notification"` is read only when it rings. Craigslist's is
+`"mail"`: it has no inbox page, and its buyers arrive through the registration lane instead.
+
+**What rings is a notification the agent's Chrome displayed**, and it is heard without going near
+the page. DevTools keeps a background-services log of every notification a site shows — its title,
+body and tag — and replays all of it to whoever starts observing (`chrome.recorded_notifications`).
+The log is not on the browser target; a session on any tab has it, for every site in the profile.
+So the `doorbell` lane attaches to whichever tab is open, re-arms the recording (it outlives the
+connection but not forever), reads the replay and detaches — nothing evaluated, nothing enabled,
+no page loaded, and never through the browser factory, which would start the page server and
+re-assert focus on every tab on each tick. It does ensure Chrome is running, because a push only
+reaches a Chrome that is.
+
+**A ring is heard once and owed one visit.** `market_rings` is keyed on the notification's own
+identity, so the replay adds nothing and a restart neither loses a ring nor answers it twice. Each
+is due `pacing.reaction_delay_sec` after it was heard — around `ring_reaction_sec` (90s), never
+under 20 seconds or over six minutes. The `ring_read` task (every 15s) pays a due visit through the
+same read as the timer, with three differences: it never sweeps (a person opening a notification
+reads what moved), it answers only the rings heard before it began, and a visit that could not read
+the conversation list waits ten minutes before the next rather than asking again every tick. Every
+other tick it returns before acquiring the browser at all. Replies are not affected: a buyer who
+rang is awake, and the reply is sent the usual way.
+
+**Two things are deliberately not rings.** What rang while nobody was listening — the first look
+after an install or a restart replays days of it — is recorded answered: evidence the doorbell
+works, not a reason to visit. And after the laptop sleeps, the pushes that arrive together on wake
+wait until it has been awake for five minutes, because the network is still coming back and a burst
+of page loads on wake is its own tell.
+
+**The doorbell must never pass for a quiet inbox.** Silence from it is the one state that looks
+exactly like nothing happening, so three conditions are said out loud, once each, until they clear:
+Chrome cannot be asked for its log; the market's notifications are not allowed in Chrome's profile
+(read off `Preferences`; a container, whose Chrome is on the seller's desktop, skips this); or a
+market that rings several times a day on its own has not rung at all in three days. Facebook's
+permission must be the seller's own Allow: DevTools' `Browser.grantPermissions` lasts only as long
+as the connection that granted it, measured on Chrome 154.
+
+**Once a visit is over, the tab steps away** (`doorbell.visiting`, around the ring visit, the reply
+send, the survey look, the adoption, the driven publish and the driven edit). Every acquisition
+tells the tab it is focused and visible, which is what lets it be read in the background — and a
+tab left on Facebook like that is someone sitting in front of Messenger. A marketplace may hold
+back a push from a person it thinks is already looking, which would silence the doorbell exactly
+when a buyer writes. `about:blank` is not a page of the marketplace, and its push subscription
+lives in its service worker, not the tab.
+
+What a ring was is the adapter's (`ring_kind`), and today every Facebook ring counts as a message —
+the agent opens Messenger when Facebook notifies it, as the seller would. It narrows only from
+notifications Facebook has actually been seen to send.
 
 ## The survey: taking over what the seller already had
 
@@ -634,12 +746,40 @@ kept anywhere; the state that decides is the state that persists.
 
 `browser/sink.py` fills the `ReplySink` seam `send_reply` sends through. One call
 does the whole bracket: navigate the recorded thread URL → (bring the tab forward,
-if this market sends with a real key) → locate the composer → fill it in one go
-→ commit → stamp the intent → confirm by reading our own words back off the page.
+if this market sends with a real key) → locate the composer → type the reply →
+read the box back → commit → stamp the intent → confirm by reading our own words
+back off the page.
 
-The text is filled whole rather than typed character by character, so a reply
-containing a newline cannot commit part-way through itself and send half a
-message. Verification is strict: "no error from the key press" is not success — a
+**The reply is typed a key at a time, at a person's pace.** A composer is
+instrumented at the key level, and the gap between keydowns is something the page
+can measure: typing used to go out one tool call per line, and the page saw every
+key of a line 2.5ms after the last. `engines/typist.py` now decides the keys and
+the pauses — a speed drawn per message between 35 and 55 words a minute, a spread
+around it, longer pauses at spaces and punctuation, never a gap under 30ms, and a
+90-second ceiling that a long reply types faster to meet rather than holding the
+shared tab. Printable ASCII is pressed; a line break is Shift+Enter, because a bare
+Enter is the send; anything else (an accent, an emoji) is entered whole with
+`browser_type` and `slowly`. Never `browser_type` without `slowly`: that is a fill,
+and measured on Chrome 154 a fill replaced sixty typed characters with one.
+
+**A click travels there first** (`BrowserClient.click`, every click the agent makes on a
+marketplace). A locator click lands at the exact centre of the control with no movement before it,
+which a page recording pointer events sees on every click. `engines/pointer.py` aims inside the
+control but not at its middle and draws a curved path in a person's steps and time; the client
+moves the mouse along it, scrolls an off-screen control into view with the wheel, holds the press
+for a moment, and reads the control's position again just before pressing — one that moved is not
+clicked at all. The mouse tools need the server's `--caps=vision`; a hand-configured server without
+it, or a control the page has not drawn, gets the locator click as before.
+
+**A pressed key lands wherever focus is**, so the caret is put in the box before
+the first key and checked at every word, and the box is read back whole before
+anything commits it (`reconcile.holds_whole`, which, unlike `same_text`, forgives no
+truncation: the first part of a reply is a reply not yet typed). A box read as
+empty before typing is emptied again after a failed attempt, since whatever is in
+it is ours; one that could not be read beforehand is never emptied, because it may
+have held the seller's words. Our own whole reply already in the box, from an
+attempt that failed before its commit, is committed as it is rather than typed a
+second time. Verification is strict: "no error from the key press" is not success — a
 refused validation, a composer that silently cleared, or a chat that ignored the
 key because it thought the box was empty all look like success from outside. Only
 our own words in an outbound bubble count (`reconcile.contains_outbound`, the one
@@ -783,9 +923,16 @@ listed on that marketplace or already under way, which is the mistake that would
 two live listings on the seller's own account. Quiet hours do not apply; they hold
 unprompted work, and this was prompted.
 
-The lane holds off while paused, while another publish is queued or running (passes run
-one at a time), and inside quiet hours — a publish is a visible burst on the seller's
-real account. Quiet hours hold the *start* of work; nothing running is interrupted.
+The lane holds off while paused and while another publish is queued or running (passes run
+one at a time). Quiet hours hold a publish only on a marketplace that polices automation, where
+the account starting things at 4am is what gets noticed; elsewhere a listing sits there until
+someone looks, so the hour it went up is not what a buyer sees. Quiet hours hold the *start* of
+work; nothing running is interrupted.
+
+A Craigslist post also waits, spending nothing, for an active account (the account lane creates
+one, or signs it back in by an emailed login link when a page shows it signed out), the seller's ZIP code, and on a site split into areas the seller's `craigslist_area`. The
+area is only learned from the form: the driver stops there (`PublishNeedsSeller`), the seller is
+asked once with the labels it read, and the post waits until that basics setting changes.
 
 **The outcome is read off the rows, not off the pass.** A recorded URL becomes a success
 notice with the link. Anything else — including a pass that exited clean having recorded
@@ -831,6 +978,10 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `survey.relist_retry` | it recorded no URL and is owed another go |
 | `survey.relist_failed` | it ran out of attempts and the seller was told |
 | `browser.chrome_launched` | the daemon started Chrome because an acquisition needed it |
+| `doorbell.rang` | a marketplace rang with new notifications, how many, and in how long the visit is due |
+| `doorbell.woke` | the machine slept, and for how long; visits wait for it to settle |
+| `doorbell.notice` | the doorbell told the seller it cannot hear, and which condition |
+| `browser.paced` | a market ran out of page loads partway through a read |
 | `browser.read` | one market's tick: rows listed, threads opened, rows recorded, unreadable count, whether it was a full sweep, and how many opens were to settle a send of our own (`settling`) |
 | `browser.inbound` | one message folded into a durable row, with its scam verdict |
 | `browser.thread_new` | a buyer's conversation adopted as a thread |
@@ -858,6 +1009,9 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `crosslist_lane` interval | `30.0` (code) | how soon a seller hears a listing went up; not throughput — one publish is queued per tick at most |
 | `inbox_full_sweep_every` | `6` | every Nth tick opens every active thread; `1` disables the skip gate |
 | `browser_blind_after` | `3` | consecutive failed reads before the needs-me notice |
+| `policed_page_gap_sec` | `15.0` | the median gap before each page load of a market that polices automation; clamped up to 6s |
+| `policed_pages_per_hour` / `_per_day` | `30` / `150` | how many page loads such a market gets; clamped down to 60 / 400 |
+| `ring_reaction_sec` | `90.0` | the median delay between a market ringing and the agent opening it; every draw is kept between 20s and 6 minutes |
 | `send_verify_window_sec` | `20.0` | how long the send read-back keeps looking for its own bubble. Every send that runs out of window here becomes work for the settle lane and, eventually, a question for the seller |
 | `RECYCLE_AFTER_FAILURES` | `3` (code) | consecutive tool failures that, with Chrome answering, mean the server has lost it |
 | `BROWSER_RECYCLE_MAX` / `_WINDOW_SEC` / `_COOLDOWN_SEC` | `3` / `3600` / `120` (code) | how often a server may be replaced before we stop and say so |
@@ -866,16 +1020,18 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 
 Lane counters (tick count, consecutive failures, which notices are already
 queued) live **in process** on purpose: they are all counters, and a restart
-re-arming them errs toward reading more rather than less. The exception is the
+re-arming them errs toward reading more rather than less. The exceptions are the
 unplaceable-conversations notice, whose "already said" is about people rather
-than about this process, and is a table.
+than about this process, and the market block above, where reading more after a
+restart is exactly the wrong direction. Both are tables.
 
 ## Adding a marketplace
 
 **Connecting is one promise.** A seller who switches a marketplace on is told
-Sellee will list to it, read its inbox, answer its buyers, and adopt what they
-already have listed there. The unit of work is those four surfaces, plus signing
-back in and being offered at onboarding — not "an adapter".
+Sellee will list to it, read its inbox, answer its buyers, adopt what they
+already have listed there, and change a listing after it is up. The unit of work
+is those five surfaces, plus signing back in and being offered at onboarding —
+not "an adapter".
 
 A market can exist in the registry and still deliver none of the four. The guard
 against that is `tests/test_marketplace_surfaces.py`: it derives each surface from
@@ -887,12 +1043,18 @@ naming the reason. Closing the gap fails the build until the waiver is deleted.
 1. **Offered at onboarding** — a registry entry plus an adapter.
 2. **Connect / disconnect** — free once 1 exists.
 3. **Listing to it** — a publish recipe, or the selectors the deterministic
-   driver needs.
+   driver needs. A form spread over several pages gets its own driver instead
+   (`publish_driver`, starting at `publish_url`), under the same contract: Craigslist's walks
+   its `?s=` steps. A market that polices automation must be driven, never given to a recipe.
 4. **Adopting existing listings** — a read of the seller's own listings, a
    listing-page read, and permission to fetch its photos.
 5. **Inbox and replies** — a conversation list, a message read, a composer, and a
    way to name the listing a conversation is about.
-6. **Signing back in** — a login probe. Every adapter must have one.
+6. **Signing back in** — a login probe. Every adapter must have one. It reads the market's
+   front page, or the adapter's `home_url` when signing in happens elsewhere, as on Craigslist,
+   whose account the seller creates in sellee's Chrome with the registration address.
+7. **Changing a live listing** — an `edit_flow` recipe (a skill an `edit` pass
+   follows), the edit selectors `browser/editor.py` drives, or a market's own `edit_driver`.
 
 Leave the page-dispatched submit mechanism empty unless someone has decided that
 market's account can afford it.
@@ -924,6 +1086,12 @@ market's account can afford it.
   means retryable; a listing may exist means never re-driven. Read the form back
   before pressing anything, refuse to publish with a paid boost on, and confirm
   the listing from a page that names it.
+- **An edit is idempotent**, which inverts the publish rule: pressing Save twice
+  sets the same values twice, so an unverified edit may be retried within its
+  attempt bound. An edit form arrives already filled, so every box is emptied
+  with a real select-all before typing, and the form is read back before saving —
+  a box that did not empty would otherwise save "150120" as the price. The
+  outcome is read off the listing page itself, per field.
 
 Nothing else in the layer changes: the read lane, reconcile, the sink and the
 selector cache are all written against the protocol.

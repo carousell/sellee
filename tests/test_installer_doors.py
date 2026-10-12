@@ -13,7 +13,7 @@ import urllib.parse
 import urllib.request
 
 import pytest
-from tests.conftest import seed_setting
+from tests.conftest import connect_craigslist, seed_setting
 
 import sellee.tools  # noqa: F401  tool registration
 from sellee import settings
@@ -303,6 +303,75 @@ def test_connect_market_opens_the_regional_site_and_reports_the_probe(
     assert browser.visited == ["https://www.carousell.sg/"]
 
 
+class _Rail:
+    def get_registration_address(self) -> str:
+        return "seller@inbox.carousell.ai"
+
+
+def test_connect_craigslist_signed_out_has_the_seller_create_the_account_at_the_computer(
+    server, store, browser
+) -> None:
+    """A sign-in like any market's, held for the seller, with an intro naming their address."""
+    from sellee.browser.markets import craigslist
+
+    server.rail_factory = _Rail
+    store.set_seller_config_section("basics", {"region": "US"})
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200 and body["state"] == "logged_out"
+    assert "seller@inbox.carousell.ai" in body["intro"]
+    assert browser.visited == [craigslist.ACCOUNT_URL]
+    assert store.browser_hold_reason() != ""
+    assert store.craigslist_account()["state"] == "awaiting_activation"
+
+
+def test_connect_a_signed_out_craigslist_account_asks_the_seller_to_sign_back_in(
+    server, store, browser
+) -> None:
+    server.rail_factory = _Rail
+    store.set_seller_config_section("basics", {"region": "US"})
+    connect_craigslist(store)
+    browser.state = "logged_out"
+
+    status, body = _call(server, "POST", "/control/connect-market", body={"market": "craigslist"})
+
+    assert status == 200 and body["state"] == "logged_out"
+    assert body["intro"].startswith("Sign back in to Craigslist")
+    assert store.craigslist_account()["state"] == "awaiting_login_link"
+
+
+def test_the_craigslist_steps_are_read_without_opening_anything(server, store, browser) -> None:
+    server.rail_factory = _Rail
+
+    status, body = _call(server, "GET", "/control/craigslist-intro")
+
+    assert status == 200 and body["intro"].startswith("To connect Craigslist:")
+    assert "seller@inbox.carousell.ai" in body["intro"]
+    assert body["address"] == "seller@inbox.carousell.ai"
+    assert browser.visited == []
+
+    connect_craigslist(store)
+    assert _call(server, "GET", "/control/craigslist-intro") == (
+        200,
+        {"intro": "", "address": ""},
+    )
+
+
+def test_the_craigslist_sign_in_stage_is_read_without_opening_anything(
+    server, store, browser
+) -> None:
+    server.rail_factory = _Rail
+
+    assert _call(server, "GET", "/control/craigslist-account")[1]["stage"] == "waiting"
+
+    connect_craigslist(store)
+    status, body = _call(server, "GET", "/control/craigslist-account")
+    assert status == 200 and body["stage"] == "connected"
+    assert browser.visited == []
+
+
 def test_connect_market_reports_the_sellers_window_preference(server, store) -> None:
     """The CLI does the OS-level raise, but the setting lives in the daemon's store — so the
     answer rides in the response for the CLI to obey."""
@@ -570,22 +639,33 @@ def test_a_structurally_invalid_timezone_is_refused_not_shrugged_at(server) -> N
     assert "not a valid timezone" in body["error"]
 
 
-def test_a_country_the_rail_does_not_serve_is_refused_at_the_door(server, store) -> None:
-    status, body = _call(server, "POST", "/control/seller-basics", body={"region": "MY"})
-    assert status == 400
-    assert "MY isn't a country sellee works in yet" in body["error"]
-    assert "SG, US" in body["error"]
+def test_any_real_country_is_recorded_at_the_door(server, store) -> None:
+    # The door checks the shape of a country code and nothing else. Where carousell.ai can pay
+    # out is the backend's answer to give, and it is not a reason to refuse a configuration.
+    for code in ("VN", "MY", "BR", "vn"):
+        status, body = _call(server, "POST", "/control/seller-basics", body={"region": code})
+        assert status == 200, body
+        assert store.seller_region() == code.upper()
+
+
+def test_a_malformed_country_code_is_still_refused_at_the_door(server, store) -> None:
+    for code in ("V", "VNM", "V1", ""):
+        status, body = _call(server, "POST", "/control/seller-basics", body={"region": code})
+        assert status == 400, code
+        assert "two-letter country code" in body["error"]
     assert store.seller_region() is None
 
 
-def test_the_model_is_held_to_the_same_region_rule_as_the_installer(make_ctx) -> None:
+def test_the_model_is_held_to_the_same_region_rule_as_the_installer(make_ctx, store) -> None:
     # One validator behind both writers, so the LLM cannot record what the door refuses.
     from sellee.tools.registry import ToolError, dispatch
 
     ctx = make_ctx("attended")
+    dispatch("update_seller_config", {"basics": {"region": "VN"}}, ctx)
+    assert store.seller_region() == "VN"
     with pytest.raises(ToolError) as caught:
-        dispatch("update_seller_config", {"basics": {"region": "MY"}}, ctx)
-    assert "isn't a country sellee works in yet" in str(caught.value)
+        dispatch("update_seller_config", {"basics": {"region": "VNM"}}, ctx)
+    assert "two-letter country code" in str(caught.value)
 
 
 def test_the_model_updating_one_basics_key_keeps_the_rest(make_ctx, store) -> None:
@@ -630,10 +710,10 @@ def test_the_control_client_returns_a_refusal_rather_than_calling_the_daemon_dow
     from sellee import control
 
     status, body = control.post(
-        server.port, "attended-secret", "/control/seller-basics", {"region": "ZZ"}
+        server.port, "attended-secret", "/control/seller-basics", {"region": "VNM"}
     )
     assert status == 400
-    assert "isn't a country" in body["error"]
+    assert "two-letter country code" in body["error"]
 
     status, _body = control.get(server.port, "wrong-token", "/control/seller-basics")
     assert status == 401

@@ -94,8 +94,9 @@ their tests:
   code constants). The store's `reserve_action` records at reserve in one
   transaction; the caller sleeps the go-jitter after, never under the lock. Quiet
   hours hold only what we *start* (`REACTIVE_KINDS` — a reply or holding line to a
-  waiting buyer is exempt); the hourly cap holds every kind. The reply lane asks
-  the same question read-only via `peek_action` **before** spawning a pass, so a
+  waiting buyer is exempt); the hourly cap holds every kind, except a carousell.ai
+  email reply (`UNPACED_MARKETS`), which is no browser send and is capped by
+  bazaar. The reply lane asks the same question read-only via `peek_action` **before** spawning a pass, so a
   send the engine would refuse never costs a model turn.
 - **`engines/shipping.py`** — the deterministic delivery-fee computation; the
   origin address is never an input.
@@ -154,7 +155,8 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   safety tools compose the engines with the store; `send_reply` runs the whole
   send bracket (pacing reserve + durable intent in one transaction, the sink send
   outside it, then fold + cursor advance + commit) behind a `ReplySink` seam, which
-  the browser layer fills. A killed send is folded by the `stale_intent_sweep`
+  the browser layer fills, and `rail/sink.py` fills for carousell.ai email threads
+  through bazaar's `reply_to_thread`. A killed send is folded by the `stale_intent_sweep`
   scheduler task as unconfirmed + an escalation, never re-sent.
 - **`mcp_proxy.py`** — a stdio↔HTTP shim so stdio-only harnesses reach the same
   server.
@@ -197,6 +199,17 @@ the pass said about itself. The lane's third phase closes the loop the other way
 it writes each item's browser-listing URLs onto its carousell.ai listing (rendered
 to buyers as "Also available on"), pushing only when the recorded URLs differ from
 what the rail last accepted and retrying silently until it does.
+
+**`revise.py`** is its counterpart for a listing that is already up. When the
+seller asks to change a price, a description, a title or the photos,
+`update_live_listing` writes the item (clamping the confidential floor under a
+lowered price in the same transaction), edits the carousell.ai listing inline, and
+leaves one `listing_revisions` row per browser marketplace the item is live on.
+The lane drains those rows one at a time: a market with a driver (Facebook) is
+edited in process by `browser/editor.py`; a market with an edit recipe
+(Carousell) becomes an `edit` pass. Attempts are bounded and spaced, a second
+edit supersedes a pending one, and each outcome is reported by the daemon from the
+row — read back off the listing page, never assumed from having pressed Save.
 
 ### Skills and prompt composition
 

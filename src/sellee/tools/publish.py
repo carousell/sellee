@@ -10,12 +10,16 @@ transaction, so the DB lock is never held across network I/O.
 
 from __future__ import annotations
 
+import logging
+import time
+
 from sellee import settings
+from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail.client import RailUnprovisioned
-from sellee.store import StoreError
+from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -27,11 +31,29 @@ from sellee.tools.registry import (
 )
 from sellee.tools.verify import verify_market_url
 
+log = logging.getLogger(__name__)
+
 _MARKET = "carousell-ai"
 # The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
 _MEDIA_TYPE_IMAGE = 1
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
+
+
+def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
+    """Refuse a price the seller approved in another currency: 500 USD on an account pricing in
+    VND goes live as 500 VND. A pre-check ahead of reserve_action; carousell.ai enforces it."""
+    recorded = (item.get("currency") or "").strip().upper()
+    if not recorded or not expected:
+        # Nothing to contradict, or a seller provisioned before registration answered a code.
+        # Asserting one here would be a false refusal.
+        return
+    if recorded != expected:
+        raise ToolError(
+            f"this item is priced in {recorded}, but carousell.ai prices your listings in "
+            f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
+            f"a different amount of money. Re-price the item in {expected} before publishing"
+        )
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -42,6 +64,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
+        # Same keys a fresh publish returns: the shape must not depend on the attempt.
         return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
@@ -51,8 +74,15 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
-    if not (item.get("currency") or "").strip():
-        raise ToolError("item has no currency — set one before publishing")
+    if item.get("size_bucket") not in SIZE_BUCKETS:
+        # carousell.ai prices shipping from the class and refuses a listing without one. Refused
+        # here so the message names the tool that sets it, and before any pacing slot is spent.
+        raise ToolError(
+            "item has no valid parcel size class; set size_bucket "
+            f"({', '.join(SIZE_BUCKETS)}) with update_item first"
+        )
+    currency = ctx.store.seller_currency() or ""
+    _require_a_currency_the_seller_prices_in(currency, item)
     try:
         price_cents = to_price_cents(item["list_price"])
     except ValueError as exc:
@@ -61,7 +91,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
-    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store))
+    cfg = pacing_engine.resolve(
+        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
+    )
     paced = ctx.store.reserve_action(
         marketplace=_MARKET,
         kind="publish",
@@ -75,12 +107,16 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             f"{int(paced['delay_sec'])}s"
         )
 
+    # The recorded code is what registration answered, so asserting it turns a disagreement into
+    # a refusal before any listing exists.
     args = {
         "title": item["title"],
         "description": item["description"] or "",
         "price_cents": price_cents,
-        "currency": item["currency"],
+        "parcel_bucket": f"PARCEL_BUCKET_{item['size_bucket'].upper()}",
     }
+    if currency:
+        args["currency"] = currency
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
     # upload reference is skipped rather than blocking the publish; an item with no photos at all
@@ -116,6 +152,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         ctx.store.record_listing_url(item_id, _MARKET, listing["url"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+
     return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
 
 
@@ -147,6 +184,7 @@ def _record_published_listing_url(ctx: ToolContext, params: dict) -> dict:
     verdict = verify_market_url(ctx, market, url, ctx.store.seller_region())
     if not verdict.get("ok"):
         raise ToolError(f"not a listing URL on {market}: {verdict.get('reason')}")
+    url = verdict["url"]
     try:
         item = ctx.store.record_listing_url(params["item_id"], market, url)
     except StoreError as exc:
@@ -239,6 +277,12 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
     if _queued_for(ctx.store, item_id, market):
         return {"status": "already_queued", "item_id": item_id, "market": market}
 
+    # A market with a driver is never a model's work: the fan-out lane publishes it by driving the
+    # form. Queueing a pass here would spend one of the pair's three attempts on a refusal, because
+    # `validate_payload` turns it away where the pass is claimed.
+    if publisher.can_drive(market):
+        return {"status": "driven", "item_id": item_id, "market": market}
+
     # Checked before queueing, so "I can't drive a browser right now" is answered in the
     # conversation asking for it rather than by a pass that dies seconds later with nobody there.
     if ctx.browser_factory is None:
@@ -265,10 +309,12 @@ register(
         "runs in the background and reports its own outcome, so tell the seller it has started — "
         "never that the listing is up. Refuses a marketplace they have not turned on, and will "
         "not queue a second publish of something already listed there or already under way. "
-        "Two statuses mean 'not yet, and not an error': looking_first = we have not read what the "
-        "seller already has on that marketplace, so posting now could duplicate it — say we are "
-        "checking their existing listings first. already_there = they have that item on that "
-        "marketplace themselves, so there is nothing to post.",
+        "Three statuses mean 'not yet, and not an error': looking_first = we have not read what "
+        "the seller already has on that marketplace, so posting now could duplicate it — say we "
+        "are checking their existing listings first. already_there = they have that item on that "
+        "marketplace themselves, so there is nothing to post. driven = that marketplace is posted "
+        "by the automatic cross-poster rather than by you — say it is handled automatically and "
+        "that you cannot start one from here; do not claim you have queued anything.",
         input_schema={
             "type": "object",
             "properties": {

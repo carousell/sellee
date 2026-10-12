@@ -122,7 +122,15 @@ def other_best(buyers: dict, thread_id: str) -> int:
 
 
 def decide_below_list(
-    offer, buyer, effective_min, list_price, step, max_counters, min_offer_ratio, lowball_cap
+    offer,
+    buyer,
+    effective_min,
+    list_price,
+    step,
+    max_counters,
+    min_offer_ratio,
+    lowball_cap,
+    floor,
 ):
     """< list haggling: counter toward list, never below effective_min, capped + sticky. Whole
     dollars (int) — the marketplace convention here."""
@@ -139,6 +147,10 @@ def decide_below_list(
     target = list_price - step * (rounds + 1)
     ceiling = last if last is not None else list_price
     counter = max(effective_min, min(target, ceiling))
+    if counter == floor and ceiling > floor and offer < floor:
+        # A counter equal to the floor tells the buyer the floor. Counter one step above it, at
+        # most the last counter.
+        counter = min(ceiling, floor + step)
     if counter <= offer:
         return "accept_fcfs", int(offer), False, f"accept:{int(offer)}"
     return "counter", int(counter), False, f"counter:{int(counter)}"
@@ -204,7 +216,11 @@ def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
             "message_intent": "pending_fcfs",
         }
     ob = other_best(led["buyers"], thread_id)
-    effective_min = max(floor, (ob + 1) if ob else floor)
+    # A rival's standing offer raises the bar, but never past the seller's own asking price: once
+    # the list price has dropped below an older offer, "beat the other buyer" would otherwise quote
+    # a number above what the listing itself says. The floor still wins over both, so the
+    # below-floor backstop underneath holds whatever the list price is.
+    effective_min = max(floor, min(list_price, (ob + 1) if ob else floor))
     dec, counter, hold, intent = decide_below_list(
         offer,
         buyer,
@@ -214,6 +230,7 @@ def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
         knobs["max_counters"],
         knobs["min_offer_ratio"],
         knobs["lowball_cap"],
+        floor=floor,
     )
     if counter is not None and counter < floor:
         raise BelowFloorError("price below floor — refusing to emit")

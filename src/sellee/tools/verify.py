@@ -47,6 +47,9 @@ def verify_market_url(ctx: ToolContext, market: str, url: str, region: str | Non
         }
     region_host = marketplaces.resolve_domain(market, region) if region else None
     ok, reason = hosts.verify_listing_pattern(url, host_pattern, path_pattern, region_host)
+    if ok and not marketplaces.is_canonical_listing_url(market, url.strip()):
+        # Buyer mail is matched to a listing by exact URL, so only the canonical shape is kept.
+        ok, reason = False, f"url is not in the form {market} uses for a listing"
     if ok:
         return {"ok": True, "market": market, "url": url.strip()}
     return {"ok": False, "market": market, "reason": reason}

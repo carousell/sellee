@@ -21,7 +21,7 @@ def test_configured_once_a_token_is_written(xdg_tmp) -> None:
     assert provider.is_configured() is True
 
 
-def test_start_registers_drain_and_typing_lanes_then_shutdown_removes_them(
+def test_start_registers_the_drain_lane_and_the_presence_keeper_then_shutdown_removes_them(
     store, bus, xdg_tmp
 ) -> None:
     # `start` spins a real DiscordGateway.run() thread. It stays off the network only because the
@@ -33,7 +33,10 @@ def test_start_registers_drain_and_typing_lanes_then_shutdown_removes_them(
     handle = provider.start(bus=bus, store=store, config=Config(), scheduler=scheduler)
     assert store.get_channel()["chat_id"] is None
     assert "notice_drain" in scheduler._reg.tasks
-    assert "typing_pulse" in scheduler._reg.tasks
+    # The indicator is a thread, not a lane: the scheduler's tick is a floor no interval can beat,
+    # and its pool is shared with a pass lane that blocks for as long as a pass runs.
+    assert "typing_pulse" not in scheduler._reg.tasks
+    assert handle.presence_thread.is_alive()
     handle.shutdown()
     assert "notice_drain" not in scheduler._reg.tasks
-    assert "typing_pulse" not in scheduler._reg.tasks
+    assert not handle.presence_thread.is_alive()  # joined, not left pulsing

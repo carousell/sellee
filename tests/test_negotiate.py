@@ -86,6 +86,20 @@ def test_stale_lower_offer_never_undercuts_other_best(store: Store) -> None:
             assert res[key] >= 91
 
 
+def test_a_rival_offer_above_a_dropped_list_price_never_quotes_above_the_listing(
+    store: Store,
+) -> None:
+    # list 100 with a standing 90; the seller then drops the price to 60. Before the bound, a new
+    # buyer at 55 was countered at 91 — above the number the listing itself shows.
+    item = _item(store, list_price=100.0, floor=50.0)
+    _offer(store, item["id"], "fb:high", 90)
+    store.update_item(item["id"], {"list_price": 60.0})
+    res = _offer(store, item["id"], "fb:new", 55)
+    for key in ("counter_price", "accept_price"):
+        if res.get(key) is not None:
+            assert 50 <= res[key] <= 60, f"{key}={res[key]} outside [floor, list]"
+
+
 # --- the same offer, handed to us again ------------------------------------------------------
 
 
@@ -147,6 +161,14 @@ def test_below_list_with_no_floor_holds_for_floor(store: Store) -> None:
     # nothing numeric leaked, and no default floor was written on the below-list path
     assert res.get("counter_price") is None
     assert store.get_floor(item["id"]) is None
+
+
+def test_the_floor_ask_names_the_offer_and_the_list_price(store: Store) -> None:
+    """The pass escalates floor_ask as written, so it must tell the seller what the buyer offered
+    and what the item is listed at."""
+    item = _item(store, list_price=200.0)
+    res = _offer(store, item["id"], "ca:1", 150)
+    assert "150" in res["floor_ask"] and "200" in res["floor_ask"]
 
 
 def test_at_or_above_list_with_no_floor_writes_default_floor(store: Store) -> None:
@@ -278,3 +300,113 @@ def test_confirming_a_sale_on_another_items_thread_is_refused(store: Store, make
         dispatch("negotiate_confirm_sold", {"item_id": fan["id"], "thread_id": "fb:1"}, ctx)
     assert store.negotiate_status(fan["id"])["item_state"] == "open"  # still for sale
     assert store.get_item(fan["id"])["listing_urls"]["carousell"].endswith("fan-1")
+
+
+def test_confirming_a_sale_queues_the_craigslist_take_down_once(store: Store, make_ctx) -> None:
+    # Live: the agent confirmed a sale but skipped the archive, so no Open on desktop was sent.
+    from sellee.channel import fastpaths
+    from sellee.tools import dispatch, listing
+
+    item = _item(store, list_price=20.0, floor=15.0)
+    post = "https://www.craigslist.org/view/d/samsung-buds3/9TXkjafxYMDS5VaPLGdRyk"
+    store.record_listing_url(item["id"], "craigslist", post)
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 20)
+    ctx = _pair_ctx(store, make_ctx)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+    listing.manual_take_downs(store, item["id"])  # the archive step asking again
+
+    assert result["manual_take_downs"] == [{"market": "craigslist", "url": post}]
+    [notice] = [n for n in store.list_queued_notices() if post in n["text"]]
+    assert [tuple(c) for c in notice["controls"]] == fastpaths.open_post_controls(item["id"])
+
+
+class _Rail:
+    def __init__(self, refuse: bool = False):
+        self.archived: list = []
+        self.refuse = refuse
+
+    def update_listing(self, listing_id, *, status):
+        from sellee.rail.client import RailError
+
+        if self.refuse:
+            raise RailError("carousell.ai is down")
+        self.archived.append((listing_id, status))
+
+
+@pytest.mark.parametrize("refuse", [False, True])
+def test_confirming_a_sale_archives_the_carousell_ai_listing(
+    store: Store, make_ctx, refuse
+) -> None:
+    # Live: the agent was handed the take-down list, never archived it, and the listing stayed up.
+    from sellee.tools import dispatch
+    from sellee.tools.registry import TIER_ATTENDED
+
+    item = _item(store, list_price=60.0, floor=40.0)
+    store.record_listing_url(item["id"], "carousell-ai", "https://carousell.ai/listing/abc-123")
+    store.create_thread(
+        thread_id="craigslist:b",
+        side="sell",
+        market="craigslist",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    _offer(store, item["id"], "craigslist:b", 60)
+    rail = _Rail(refuse=refuse)
+    ctx = make_ctx(TIER_ATTENDED, rail_factory=lambda: rail)
+
+    result = dispatch(
+        "negotiate_confirm_sold", {"item_id": item["id"], "thread_id": "craigslist:b"}, ctx
+    )
+
+    assert store.negotiate_status(item["id"])["item_state"] == "sold"
+    if refuse:
+        assert result["carousell_ai_take_down"].startswith("failed:")
+        assert "carousell_ai_update_listing" in result["carousell_ai_take_down"]
+    else:
+        assert rail.archived == [("abc-123", "archived")]
+        assert result["carousell_ai_take_down"] == "taken_down"
+
+
+# --- the floor is never quoted ----------------------------------------------------------------
+
+
+def test_a_walked_down_counter_stops_above_the_floor(store: Store) -> None:
+    # The break suite's case: 150 got a counter of 190, then 120 got the floor itself.
+    item = _item(store, list_price=200.0, floor=180.0)
+    first = _offer(store, item["id"], "ca:1", 150)
+    second = _offer(store, item["id"], "ca:1", 120)
+    assert first["counter_price"] == 190
+    assert second["counter_price"] is not None and second["counter_price"] > 180
+
+
+@pytest.mark.parametrize("floor", [55, 70, 85, 90, 95, 99])
+def test_no_counter_ever_quotes_the_floor_while_the_list_price_is_above_it(
+    store: Store, floor
+) -> None:
+    # Every pair of below-floor offers from one buyer, on a list price of 100.
+    for first in range(5, floor, 7):
+        for second in range(5, floor, 9):
+            item = _item(store, list_price=100.0, floor=float(floor))
+            for offer in (first, second):
+                res = _offer(store, item["id"], f"ca:{first}-{second}", offer)
+                assert res.get("counter_price") != floor, (
+                    f"offers {first} then {second} quoted the floor {floor}"
+                )
+
+
+def test_an_offer_at_or_above_the_floor_is_still_accepted_on_the_walk(store: Store) -> None:
+    """An offer at or above the floor is still accepted."""
+    item = _item(store, list_price=200.0, floor=180.0)
+    _offer(store, item["id"], "ca:1", 150)
+    res = _offer(store, item["id"], "ca:1", 185)
+    assert res["decision"] == "accept_fcfs" and res["accept_price"] == 185

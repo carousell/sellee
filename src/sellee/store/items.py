@@ -6,9 +6,9 @@ import json
 
 from sellee.db import Database
 from sellee.store.helpers import (
+    _BUYER_VISIBLE,
     _FLOOR_SOURCES,
-    _ITEM_STATUSES,
-    _ITEM_WRITABLE,
+    _LIVE_EDITABLE,
     _QA_SEARCH_CAP,
     _QA_SOURCES,
     _UI_CACHE_STRATEGIES,
@@ -18,7 +18,9 @@ from sellee.store.helpers import (
     FloorRecord,
     ItemNotFound,
     ItemRecord,
+    ReviseAck,
     StoreError,
+    _clamp_floor_in_txn,
     _forget_thread_listings_in_txn,
     _insert_item_in_txn,
     _item_from_row,
@@ -26,6 +28,8 @@ from sellee.store.helpers import (
     _term_overlap,
     _ui_cache_from_row,
     validate_photos,
+    validated_item_fields,
+    validated_size_bucket,
 )
 
 
@@ -59,10 +63,14 @@ class ItemsMixin:
         description: str = "",
         condition: str | None = None,
         photos: list | None = None,
+        size_bucket: str | None = None,
     ) -> ItemRecord:
         if not title or not title.strip():
             raise StoreError("title must be non-empty")
         stored_photos = validate_photos(photos or [])
+        # Optional: a draft may be created before anyone has judged the parcel, and publish is
+        # where the class becomes required.
+        bucket = None if size_bucket is None else validated_size_bucket(size_bucket)
         ts = _now()
         with self._db.transaction() as conn:
             item_id = _insert_item_in_txn(
@@ -73,43 +81,63 @@ class ItemsMixin:
                 description=description,
                 condition=condition,
                 photos=stored_photos,
+                size_bucket=bucket,
                 now=ts,
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
     def update_item(self, item_id: str, fields: dict) -> ItemRecord:
-        if "listing_urls" in fields:
-            raise StoreError(
-                "listing_urls is not writable here — it is recorded by "
-                "carousell_ai_publish_listing after the listing is verified live"
-            )
-        unknown = [k for k in fields if k not in _ITEM_WRITABLE]
-        if unknown:
-            raise StoreError(
-                f"unknown or non-writable field(s): {', '.join(sorted(unknown))}; "
-                f"writable: {', '.join(_ITEM_WRITABLE)}"
-            )
-        if "status" in fields and fields["status"] not in _ITEM_STATUSES:
-            raise StoreError(
-                f"status may only move between {_ITEM_STATUSES}; sale-state transitions are "
-                "owned by their own flow"
-            )
-        if not fields:
-            raise StoreError("no fields to update")
-        if "photos" in fields:
-            fields = dict(fields, photos=json.dumps(validate_photos(fields["photos"])))
+        """Update writable item fields. Changes the record and nothing a buyer can see.
 
+        So on an item that is already listed it refuses the fields a buyer sees, rather than
+        trusting the prompt to steer the model elsewhere: the whole failure this guards against was
+        a model that used this on a live listing and truthfully believed it had changed the price.
+
+        The floor is clamped here and not only in `revise_item`, because a draft's price changes
+        through this writer too, and a floor recorded before publishing must stay under it.
+        """
+        self._write_item_fields(item_id, validated_item_fields(fields), refuse_if_listed=True)
+        return self.get_item(item_id)  # type: ignore[return-value]
+
+    def revise_item(self, item_id: str, fields: dict) -> ReviseAck:
+        """Change what an item's live listing says, and report whether the floor moved with it.
+
+        The narrower door: `_LIVE_EDITABLE` is what a marketplace actually renders, so a caller
+        pushing this out to real listings cannot quietly also flip a status or a size bucket.
+
+        `floor_clamped` is a bare boolean by construction — the floor is confidential, so the
+        caller is told that it moved and never what to.
+        """
+        clamped = self._write_item_fields(item_id, validated_item_fields(fields, _LIVE_EDITABLE))
+        return {"item": self.get_item(item_id), "floor_clamped": clamped}  # type: ignore[typeddict-item]
+
+    def _write_item_fields(self, item_id: str, fields: dict, *, refuse_if_listed=False) -> bool:
+        """One UPDATE plus the floor clamp, in one transaction. Returns whether the floor moved.
+
+        `refuse_if_listed` is checked inside the transaction, so a publish recording its URL a
+        moment earlier cannot slip a buyer-visible change past it.
+        """
         assignments = ", ".join(f"{name} = ?" for name in fields)
         values = [fields[name] for name in fields]
+        now = _now()
         with self._db.transaction() as conn:
-            exists = conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone()
-            if not exists:
+            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+            if not row:
                 raise ItemNotFound(f"no item with id {item_id!r}")
+            visible = sorted(name for name in fields if name in _BUYER_VISIBLE)
+            if refuse_if_listed and visible and any(json.loads(row["listing_urls"]).values()):
+                raise StoreError(
+                    f"this item is already listed, so changing {', '.join(visible)} here would "
+                    "change the record and no listing — use update_live_listing to change what "
+                    "buyers see (currency and condition cannot change on a live listing)"
+                )
             conn.execute(
                 f"UPDATE items SET {assignments}, updated_ts = ? WHERE id = ?",
-                (*values, _now(), item_id),
+                (*values, now, item_id),
             )
-        return self.get_item(item_id)  # type: ignore[return-value]
+            # In the same transaction as the price write, so `floor <= list_price` is never
+            # observable as broken — not even by a reader between two statements.
+            return _clamp_floor_in_txn(conn, item_id, now)
 
     def set_photo_uploads(self, item_id: str, uploaded_urls: list) -> ItemRecord:
         """Stamp the uploaded media reference onto every photo of an item, in display order.
@@ -151,16 +179,7 @@ class ItemsMixin:
         otherwise never be looked at again.
         """
         with self._db.transaction() as conn:
-            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
-            if not row:
-                raise ItemNotFound(f"no item with id {item_id!r}")
-            urls = json.loads(row["listing_urls"])
-            urls[market] = url
-            conn.execute(
-                "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
-                (json.dumps(urls, sort_keys=True), _now(), item_id),
-            )
-            _forget_thread_listings_in_txn(conn, market)
+            record_listing_url_in_txn(conn, item_id, market, url)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     # --- Q&A bank ---------------------------------------------------------------------------
@@ -346,6 +365,23 @@ class ItemsMixin:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
+    def record_post_read(self, url: str, state: str, *, live: bool) -> dict:
+        """Ledger one read of a post's public page. Returns the read before it, as {state,
+        seen_live}, or {} for the first; `live` says whether this read saw the post up."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT state, seen_live FROM post_reads WHERE url = ?", (url,)
+            ).fetchone()
+            before = {"state": row["state"], "seen_live": bool(row["seen_live"])} if row else {}
+            conn.execute(
+                "INSERT INTO post_reads (url, state, seen_live, read_ts) VALUES (?, ?, ?, ?) "
+                "ON CONFLICT (url) DO UPDATE SET state = excluded.state, "
+                "seen_live = MAX(post_reads.seen_live, excluded.seen_live), "
+                "read_ts = excluded.read_ts",
+                (url, state, int(live), _now()),
+            )
+        return before
+
     # --- floors -----------------------------------------------------------------------------
 
     def get_floor(self, item_id: str) -> FloorRecord | None:
@@ -424,3 +460,17 @@ class ItemsMixin:
                 ),
             )
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
+
+
+def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:
+    """`record_listing_url` inside a caller's transaction, so a publish settles with its URL."""
+    row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+    if not row:
+        raise ItemNotFound(f"no item with id {item_id!r}")
+    urls = json.loads(row["listing_urls"])
+    urls[market] = url
+    conn.execute(
+        "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
+        (json.dumps(urls, sort_keys=True), _now(), item_id),
+    )
+    _forget_thread_listings_in_txn(conn, market)

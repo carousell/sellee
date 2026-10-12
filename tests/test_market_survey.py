@@ -78,6 +78,10 @@ class StubClient:
         self.navigations: list = []
         self.prepared = 0
 
+    def user_agent(self) -> str:
+        """What the photo fetch is told to call itself — the real client asks Chrome."""
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Chrome/151.0.0.0 Safari/537.36"
+
     class _Exclusive:
         def __init__(self, client):
             self.client = client
@@ -910,6 +914,39 @@ def test_a_listing_capped_mid_crash_is_still_retired(store, bus, monkeypatch, xd
     assert any(n["text"].startswith("Done with") for n in store.list_queued_notices())
 
 
+class _NoRoom:
+    def can_start(self, market, loads=1):
+        return False
+
+
+def test_adoption_with_no_page_loads_left_waits_and_spends_nothing(store, bus) -> None:
+    _accepted(store, bus)
+    client = StubClient(detail=_detail())
+    deps = _deps(store, bus, client)
+    deps.governor = _NoRoom()
+
+    adopt.adopt_phase(deps)
+
+    assert client.navigations == []
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["status"] == "accepted" and row["attempts"] == 0
+
+
+def test_adoption_waits_while_the_market_is_blocked(store, bus) -> None:
+    """A market that told the account to stop is not driven by any lane, and reading a listing page
+    is driving it. The row stays accepted with no attempt spent, for when the block lifts."""
+    _accepted(store, bus)
+    store.block_market(_MARKET, "automation", ttl_sec=3600.0)
+    client = StubClient(detail=_detail())
+
+    adopt.adopt_phase(_deps(store, bus, client))
+
+    assert client.navigations == []
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["status"] == "accepted"
+    assert row["attempts"] == 0
+
+
 def test_a_partial_listings_read_never_closes_the_survey(store, bus) -> None:
     """Asking on a half-read list would close the ask-once survey, so the seller would be asked
     about some of their listings and never about the rest."""
@@ -956,6 +993,30 @@ def test_abandoning_a_survey_tells_the_seller_and_leaves_a_way_back(store, bus) 
     assert any("couldn't read your" in n["text"] for n in notices)
     controls = [tuple(c) for n in notices for c in (n["controls"] or [])]
     assert (fastpaths.LOOK_AGAIN_LABEL, f"{_MARKET}:{fastpaths.CB_SURVEY_YES}") in controls
+
+
+def test_abandoning_says_posting_there_waits_on_the_look(store, bus) -> None:
+    """The fan-out holds a market it could not read, so a seller told an item is "going up there"
+    must hear, once, why it is not."""
+    _ready(store)
+    store.request_market_survey(_MARKET)
+    deps = _deps(store, bus, StubClient(login="logged_out"))
+
+    for _ in range(survey.SURVEY_MAX_ATTEMPTS + 2):
+        survey.discover_phase(deps)
+
+    texts = [n["text"] for n in _notices(store)]
+    assert [t for t in texts if "couldn't read your" in t] == [
+        survey.abandoned_text(store, _MARKET)
+    ]
+    assert "won't post anything new to Carousell" in texts[0]
+
+
+def test_a_market_not_posted_to_is_not_told_posting_waits(store, bus) -> None:
+    _ready(store)
+    seed_setting(store, "connected_markets", [])
+
+    assert "won't post" not in survey.abandoned_text(store, _MARKET)
 
 
 def test_the_way_back_actually_reopens_the_survey(store, bus) -> None:

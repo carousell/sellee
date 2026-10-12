@@ -65,6 +65,14 @@ class SlowClient:
             self.typed = arguments["text"]
         return "ok"
 
+    def composer_text(self, target, element):
+        """Whatever has been typed, and nothing before it: this file is about interleaving, not
+        about drafts."""
+        return self.typed or ""
+
+    def type_humanly(self, target, element, text):
+        self.call_tool("browser_type", {"target": target, "element": element, "text": text})
+
     def evaluate(self, function, **kwargs):
         if function == carousell_market.CHAT_MESSAGE_SUBMIT_JS:
             self._record(("submit", None))

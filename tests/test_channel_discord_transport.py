@@ -36,7 +36,7 @@ def test_normalize_text() -> None:
     ev = transport._normalize(_message_create("hello there"))
     assert ev["kind"] == "text"
     assert ev["text"] == "hello there"
-    assert ev["payload"] == {}
+    assert ev["payload"] == {"message_id": 1}
     assert ev["event_id"] == 1
 
 
@@ -76,6 +76,26 @@ def test_normalize_lifts_an_attachment_to_photo_kind() -> None:
     assert ev["kind"] == "photo"
     assert ev["text"] == "a caption"
     assert ev["payload"]["url"] == "http://example/attachments/fake.jpg"
+
+
+def test_a_button_click_reads_as_the_label_pressed() -> None:
+    row = {
+        "type": 1,
+        "components": [{"type": 2, "label": "peninsula", "custom_id": "peninsula:clarea"}],
+    }
+    interaction = {
+        "t": "INTERACTION_CREATE",
+        "d": {
+            "id": "111222333444555667",
+            "token": "int-token",
+            "type": 3,
+            "channel_id": str(CHANNEL_ID),
+            "data": {"custom_id": "peninsula:clarea"},
+            "message": {"components": [row]},
+        },
+    }
+    ev = transport._normalize(interaction)
+    assert ev["text"] == "peninsula" and ev["payload"]["choice"] == "clarea"
 
 
 def test_normalize_button_click() -> None:

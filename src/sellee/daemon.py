@@ -29,21 +29,25 @@ from sellee import (
     heartbeat,
     intent_sweep,
     lock,
+    marketplaces,
     migrations,
     passes,
     paths,
     retention,
+    revise,
     secrets,
     settings,
 )
-from sellee.browser import chrome, inbox
+from sellee.browser import chrome, craigslist_account, inbox
 from sellee.browser import client as browser_client
 from sellee.browser import connect as browser_connect
+from sellee.browser import doorbell as browser_doorbell
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
-from sellee.channel import outbound, routing
+from sellee.channel import outbound, presence, routing
 from sellee.channel.discord import provider as discord_provider
 from sellee.channel.manager import ChannelManager
 from sellee.channel.telegram import provider as telegram_provider
@@ -51,6 +55,9 @@ from sellee.db import Database
 from sellee.events import EventBus, EventStore
 from sellee.http_server import HttpServer
 from sellee.installer import update
+from sellee.rail import inbox as relay_inbox
+from sellee.rail import mail_stream, registration, registration_sink
+from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
@@ -69,6 +76,11 @@ _REPLY_LANE_INTERVAL_SEC = 10.0
 # The proposal TTL is a day; an hourly sweep gives at most an hour's slack past it. The doors also
 # enforce the TTL inline when a stale id is tapped, so this only cleans up the never-answered ones.
 _SETTINGS_EXPIRY_INTERVAL_SEC = 3600.0
+# bazaar's mail stream rings these reads as mail lands. The timed read catches what no ring
+# announced, and is the only read against a bazaar without the stream.
+_RELAY_READ_INTERVAL_SEC = 300.0
+_REGISTRATION_READ_INTERVAL_SEC = 300.0
+_CRAIGSLIST_ACCOUNT_INTERVAL_SEC = 30.0
 # The fan-out lane only reads durable rows and queues at most one publish per tick, and a browser
 # publish takes minutes — so this is about how soon a seller hears their listing went up, not about
 # throughput.
@@ -84,6 +96,19 @@ _SURVEY_LANE_INTERVAL_SEC = 60.0
 # A cold `npx` fetch of the browser server and its dependencies is a download, so minutes. This is
 # off the hot path entirely, so it only has to be longer than a slow connection needs.
 _BROWSER_WARM_TIMEOUT_SEC = 600.0
+
+# How far either side of its interval a browser lane's next run may wander. These are the lanes a
+# marketplace can see, and an arrival every interval_sec exactly, forever, is the cheapest thing an
+# account-integrity model can notice about an account. 0.3 keeps a 300s read inside 3.5-6.5 minutes,
+# which costs nobody anything: a buyer's message is found on the next read either way.
+_BROWSER_LANE_JITTER = 0.3
+# How often the doorbell listens for a marketplace ringing. One short CDP connection to Chrome's own
+# notification log, which the marketplace's page never sees, so this is only about how soon a ring
+# is heard — and the reaction time drawn after it dwarfs the interval either way.
+_DOORBELL_INTERVAL_SEC = 20.0
+# How often the ring lane checks for a visit that has come due. A no-op, without so much as a
+# browser acquisition, on every tick that has none.
+_RING_READ_INTERVAL_SEC = 15.0
 
 # Said whenever acquiring the browser had to start Chrome. Deliberately names no flow: any actor
 # that needs the browser may be the one that opens the window, and the seller only needs to know
@@ -166,6 +191,19 @@ def ensure_chrome(cfg, store, bus, should_stop=None) -> int:
         store.queue_notice(CHROME_STARTED_NOTICE)
         bus.publish("browser.chrome_launched", {"port": port})
     return port
+
+
+def doorbell_port(cfg, store, bus, should_stop=None) -> int | None:
+    """The agent's Chrome's CDP port for the doorbell, or None when Chrome cannot be made to answer.
+
+    Ensured the way every acquisition is, because a push only reaches a Chrome that is running and a
+    doorbell whose Chrome is closed hears nothing — but never through the browser factory, which
+    would start the page server and re-assert focus on every tab on each tick.
+    """
+    try:
+        return ensure_chrome(cfg, store, bus, should_stop)
+    except browser_client.BrowserUnavailable:
+        return None
 
 
 def warm_browser_server(cfg, *, once: bool) -> threading.Thread | None:
@@ -311,7 +349,9 @@ def _widen_window(bus, port: int, store) -> None:
         bus.publish("browser.window_narrow", {"width": width, "needed": minimum})
 
 
-def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic):
+def make_browser_factory(
+    cfg, store, bus, holder: dict, should_stop=None, now=time.monotonic, governor=None
+):
     """The daemon's one browser acquisition path: every actor that needs the browser — the read
     lane, the reply send, the selector probe, the fan-out — goes through the factory this returns.
 
@@ -381,7 +421,7 @@ def make_browser_factory(cfg, store, bus, holder: dict, should_stop=None, now=ti
                 recycle_browser_client(bus, holder, reason, now=now)
                 client = holder.get("client")
         if client is None:
-            client = browser_client.BrowserClient(command=command)
+            client = browser_client.BrowserClient(command=command, governor=governor)
             holder["client"] = client
             holder["command"] = command
         client.set_follow(bool(settings.get(store, browser_window.WATCH_SETTING)))
@@ -420,6 +460,22 @@ def _notice_window_reopening(store, bus, holder: dict, port: int) -> None:
     holder["said_window_reopened"] = True
     store.queue_notice(CHROME_WINDOW_REOPENED_NOTICE)
     bus.publish("browser.window_reopened", {"port": port})
+
+
+def reply_sink_for(market: str, *, store, bus, cfg, rail_factory, browser_factory):
+    """The send for a market's threads: bazaar for the email markets, Chrome for the rest."""
+    if market == marketplaces.RAIL:
+        return relay_sink.RelayReplySink(client=rail_factory(), store=store, bus=bus)
+    if market == marketplaces.CRAIGSLIST:
+        return registration_sink.RegistrationReplySink(client=rail_factory(), store=store, bus=bus)
+    return browser_sink.BrowserReplySink(
+        client=browser_factory(),
+        store=store,
+        bus=bus,
+        region=inbox.seller_region(store),
+        on_drive=lambda: browser_window.raise_if_watching(cfg, store),
+        verify_window_sec=cfg.send_verify_window_sec,
+    )
 
 
 def _is_loopback_bind(host: str) -> bool:
@@ -540,11 +596,17 @@ def run_daemon(*, once: bool) -> int:
     # factory so a machine with no Node still starts, with its browser lanes reporting unavailable
     # instead of the daemon failing at boot.
     browser_holder: dict = {}
-    browser_factory = make_browser_factory(cfg, store, bus, browser_holder, stop.is_set)
+    # One for the daemon's lifetime, outliving every client the factory replaces, so a recycled
+    # server cannot reset what a policed marketplace has already been shown. Its gap waits on the
+    # stop event, so a shutdown is not held up by a paced page load.
+    governor = page_governor.PageGovernor(page_governor.Allowance.from_config(cfg), sleep=stop.wait)
+    browser_factory = make_browser_factory(
+        cfg, store, bus, browser_holder, stop.is_set, governor=governor
+    )
     warm_browser_server(cfg, once=once)
 
-    def reply_sink_factory():
-        """The marketplace send, built when a send actually needs it — never at context build, so
+    def reply_sink_factory(market: str):
+        """The market's send, built when a send actually needs it — never at context build, so
         only a tool that intends to send acquires the browser (and starts Chrome, if that is all
         that is missing). The sink writes through the unscoped store: it stamps the intent it was
         handed, which the tool has already checked against the session's scope."""
@@ -553,13 +615,13 @@ def run_daemon(*, once: bool) -> int:
             # no reason to start Chrome. The sim sink refuses any thread that is not simulated,
             # rather than silently swallowing a real buyer's reply while the seller plays.
             return buyer_sim.SimReplySink(bus=bus)
-        return browser_sink.BrowserReplySink(
-            client=browser_factory(),
+        return reply_sink_for(
+            market,
             store=store,
             bus=bus,
-            region=inbox.seller_region(store),
-            on_drive=lambda: browser_window.raise_if_watching(cfg, store),
-            verify_window_sec=cfg.send_verify_window_sec,
+            cfg=cfg,
+            rail_factory=rail_factory,
+            browser_factory=browser_factory,
         )
 
     def context_factory(session):
@@ -582,6 +644,8 @@ def run_daemon(*, once: bool) -> int:
         tick_interval_sec=cfg.tick_interval_sec,
         on_tick=lambda: heartbeat.write(paths.heartbeat_path()),
         stop_event=stop,
+        # Off under --once, where the whole point is that one tick exercises every lane.
+        stagger=not once,
     )
 
     # Channel providers run only when registered: at boot for those already configured, and at
@@ -617,6 +681,7 @@ def run_daemon(*, once: bool) -> int:
             attended_token=attended_token,
             config=cfg,
             channels=channels,
+            rail_factory=rail_factory,
         )
     except OSError as exc:
         # A fixed config port; a bind failure (port in use, etc.) is fatal — fail loud so
@@ -690,12 +755,91 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        governor=governor,
     )
     scheduler.register(
         Task(
             name="inbox_read",
             interval_sec=float(cfg.inbox_read_interval_sec),
             func=lambda: inbox.inbox_lane(inbox_deps),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    # A marketplace that polices automation is not read on the timer above. The doorbell hears it
+    # ring without touching its page, and the ring lane pays the visit each ring asks for once a
+    # person's reaction time has passed. Its own lane state, so the two readers share no counters.
+    ring_deps = inbox.InboxDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+    )
+    scheduler.register(
+        Task(
+            name="ring_read",
+            interval_sec=_RING_READ_INTERVAL_SEC,
+            func=lambda: inbox.inbox_lane(ring_deps, trigger="notification"),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    doorbell_deps = browser_doorbell.DoorbellDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        port=lambda: doorbell_port(cfg, store, bus, stop.is_set),
+    )
+    scheduler.register(
+        Task(
+            name="doorbell",
+            interval_sec=_DOORBELL_INTERVAL_SEC,
+            func=lambda: browser_doorbell.doorbell_lane(doorbell_deps),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+
+    # Read carousell.ai email threads through the rail. Token-free and off the browser, so it
+    # neither waits on Chrome nor counts against a marketplace's pacing.
+    relay_deps = relay_inbox.RelayDeps(store=store, bus=bus, config=cfg, rail_factory=rail_factory)
+    relay_read = mail_stream.SingleFlight(lambda: relay_inbox.relay_lane(relay_deps))
+    scheduler.register(
+        Task(name="relay_read", interval_sec=_RELAY_READ_INTERVAL_SEC, func=relay_read.run)
+    )
+    # Read mail to the seller's registration address: Craigslist's buyers and its own mail.
+    registration_deps = registration.RegistrationDeps(
+        store=store,
+        bus=bus,
+        config=cfg,
+        rail_factory=rail_factory,
+        service_hooks=craigslist_account.service_hooks(store),
+    )
+    registration_read = mail_stream.SingleFlight(
+        lambda: registration.registration_lane(registration_deps)
+    )
+    scheduler.register(
+        Task(
+            name="registration_read",
+            interval_sec=_REGISTRATION_READ_INTERVAL_SEC,
+            func=registration_read.run,
+        )
+    )
+    mail = mail_stream.MailStream(
+        open_stream=lambda: rail_factory().open_mail_stream(),
+        reads={"relay": relay_read, "registration": registration_read},
+    )
+    # Open the links Craigslist mails while the seller creates or signs in to their account.
+    craigslist_deps = craigslist_account.AccountDeps(
+        store=store,
+        bus=bus,
+        browser_factory=browser_factory,
+        rail_factory=rail_factory,
+        config=cfg,
+    )
+    scheduler.register(
+        Task(
+            name="craigslist_account",
+            interval_sec=_CRAIGSLIST_ACCOUNT_INTERVAL_SEC,
+            func=lambda: craigslist_account.account_lane(craigslist_deps),
         )
     )
     # Sign the seller in to a marketplace when they ask from chat. The tap itself lands on the
@@ -706,6 +850,7 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        rail_factory=rail_factory,
     )
     scheduler.register(
         Task(
@@ -720,12 +865,14 @@ def run_daemon(*, once: bool) -> int:
         bus=bus,
         config=cfg,
         browser_factory=browser_factory,
+        governor=governor,
     )
     scheduler.register(
         Task(
             name="market_survey",
             interval_sec=_SURVEY_LANE_INTERVAL_SEC,
             func=lambda: browser_survey.survey_lane(survey_deps),
+            jitter=_BROWSER_LANE_JITTER,
         )
     )
     # Answer the buyers who are waiting. Driven off durable rows rather than off the read lane, so a
@@ -740,13 +887,32 @@ def run_daemon(*, once: bool) -> int:
     # List what is on carousell.ai everywhere else the seller sells, and report each outcome. Driven
     # off stored rows, so rail-first is a precondition rather than a step a recipe could skip.
     crosslist_deps = crosslist.CrosslistDeps(
-        store=store, bus=bus, config=cfg, browser_factory=browser_factory, rail_factory=rail_factory
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+        rail_factory=rail_factory,
     )
     scheduler.register(
         Task(
             name="crosslist_lane",
             interval_sec=_CROSSLIST_LANE_INTERVAL_SEC,
             func=lambda: crosslist.crosslist_lane(crosslist_deps),
+            jitter=_BROWSER_LANE_JITTER,
+        )
+    )
+    # Carry a seller's listing edit out to each browser marketplace, and report each outcome. The
+    # rail half already happened inline, in the conversation that asked for it.
+    revise_deps = revise.ReviseDeps(
+        store=store, bus=bus, config=cfg, browser_factory=browser_factory, governor=governor
+    )
+    scheduler.register(
+        Task(
+            name="revise_lane",
+            interval_sec=_CROSSLIST_LANE_INTERVAL_SEC,
+            func=lambda: revise.revise_lane(revise_deps),
+            jitter=_BROWSER_LANE_JITTER,
         )
     )
     # Look for a new release and say so once. Nothing installs itself — an update replaces the
@@ -810,19 +976,40 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: outbound.buyer_waiting_notice(store=store),
         )
     )
+    # And the same from the other side: when the *seller* has been waiting longer than the typing
+    # indicator can honestly carry. Registered here rather than with a provider because it reads and
+    # writes durable rows only — it needs no `deliver`, so it is right whichever provider is bound,
+    # and it keeps working across a provider switch.
+    scheduler.register(
+        Task(
+            name="seller_waiting_notice",
+            interval_sec=presence.SELLER_WAITING_INTERVAL_SEC,
+            func=lambda: presence.seller_waiting_notice(store=store),
+        )
+    )
 
-    # Start the providers already configured (their poller + delivery lanes); a fresh `connect`
-    # starts one later at runtime. The delivery/typing scheduler tasks are registered inside the
-    # provider's start, so they exist only while a provider runs.
+    # Start the providers already configured (their receive loop + notice drain + typing keeper); a
+    # fresh `connect` starts one later at runtime. The drain lane is registered inside the
+    # provider's
+    # start, so it exists only while a provider runs; the keeper is a thread the handle owns.
     if channels is not None:
         channels.register_configured()
 
+    mail_thread = None
+    if not once:
+        mail_thread = threading.Thread(target=mail.run, name="mail-stream", daemon=True)
+        mail_thread.start()
     try:
         if once:
             scheduler.run_once()
         else:
             scheduler.run()
     finally:
+        if mail_thread is not None:
+            mail.shutdown()
+            # Untimed, like the scheduler's drain: a read the stream started must finish before
+            # the stores close and the lock is released.
+            mail_thread.join()
         if channels is not None:
             channels.shutdown_all()
         scheduler.shutdown()

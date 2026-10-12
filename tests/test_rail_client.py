@@ -97,7 +97,7 @@ def test_initialize_and_create_listing(fake_rail) -> None:
     server.tool_result = {"structuredContent": {"listing_id": "L1", "url": url}}
     client = _client(base)
     client.initialize()
-    listing = client.create_listing({"title": "Lamp", "price_cents": 8000, "currency": "SGD"})
+    listing = client.create_listing({"title": "Lamp", "price_cents": 8000})
     assert listing == {"listing_id": "L1", "url": url}
 
 
@@ -116,6 +116,13 @@ def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
     }
     listing = _client(base).create_listing({"title": "x"})
     assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3"}
+
+
+def test_create_listing_ignores_the_currency_the_response_carries(fake_rail) -> None:
+    """The request asserts the recorded code, so nothing is read back off the listing."""
+    server, base = fake_rail
+    server.tool_result = {"structuredContent": {"listing": {"id": "L5", "currency": "VND"}}}
+    assert "currency" not in _client(base).create_listing({"title": "x"})
 
 
 def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:
@@ -272,6 +279,29 @@ def test_update_listing_with_neither_raises_before_any_call(recording_rail) -> N
     assert server.calls == []
 
 
+def test_update_listing_carries_only_the_content_fields_passed(recording_rail) -> None:
+    server, base = recording_rail
+    _client(base).update_listing("L1", price_cents=12000, description="with the box")
+    (call,) = server.calls
+    # PATCH: title, media, status and the cross-links are absent, so the rail leaves them alone
+    assert call["arguments"] == {"id": "L1", "price_cents": 12000, "description": "with the box"}
+
+
+def test_update_listing_sends_a_replacement_photo_set(recording_rail) -> None:
+    server, base = recording_rail
+    media = {"urls": [{"url": "https://cdn/a.jpg", "type": 1}]}
+    _client(base).update_listing("L1", title="Dyson V8", media=media)
+    (call,) = server.calls
+    assert call["arguments"] == {"id": "L1", "title": "Dyson V8", "media": media}
+
+
+def test_update_listing_has_no_currency_argument(recording_rail) -> None:
+    server, base = recording_rail
+    with pytest.raises(TypeError):
+        _client(base).update_listing("L1", currency="USD")  # type: ignore[call-arg]
+    assert server.calls == []
+
+
 def test_update_listing_sends_an_empty_set_as_present(recording_rail) -> None:
     """{"urls": []} travels — present-but-empty replaces the rail's whole set with nothing, which
     absent (unchanged) could never do."""
@@ -351,3 +381,16 @@ def test_every_rpc_accepts_both_json_and_event_stream(fake_rail) -> None:
     _client(base).create_listing({"title": "x"})
     assert "application/json" in seen["accept"]
     assert "text/event-stream" in seen["accept"]
+
+
+def test_offers_tool_reads_the_servers_tool_list():
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    relay_state = FakeRelay()
+    base, shutdown = serve(relay_state)
+    try:
+        client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
+        assert client.offers_tool("list_threads")
+        assert not client.offers_tool("create_photo_upload_url")
+    finally:
+        shutdown()

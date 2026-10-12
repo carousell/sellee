@@ -8,15 +8,60 @@ import pkgutil
 import re
 import subprocess
 import time
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from sellee import migrations, paths
+from sellee import migrations, paths, secrets
 from sellee.browser import chrome
 from sellee.config import Config
 from sellee.db import Database
 from sellee.events import EventBus, EventStore
+
+# The developer's own config directory, resolved once at import — before any test has had a chance
+# to monkeypatch HOME or XDG_CONFIG_HOME out from under it.
+_REAL_CONFIG_DIR = paths.config_dir()
+
+
+@pytest.fixture(autouse=True)
+def _never_write_real_secrets(monkeypatch):
+    """Fail any test that writes a secret into the developer's real config directory.
+
+    Secrets are written by path, and the path comes from the environment — so a test that binds a
+    channel without the `xdg_tmp` fixture does not fail, or skip, or write somewhere harmless. It
+    silently overwrites `~/.config/sellee/telegram_bot_token` with the suite's FAKE_TOKEN, and the
+    developer's live bot starts answering every getUpdates with HTTP 401 until they fetch the real
+    token back from BotFather. The token is not recoverable from anywhere on disk.
+
+    This is not hypothetical and the guard is not speculative generality: it happened, from a new
+    test file whose author (me) simply did not know `_bound` had a filesystem side effect. Nothing
+    about the test's signature said so, and a passing suite said nothing either. The class of bug is
+    "a fixture is load-bearing and its absence is silent", which review does not reliably catch.
+
+    Autouse, so it covers tests that do not know they need it — which is exactly the set at risk.
+    """
+    real_write = secrets.write_secret
+
+    def guarded(path, value) -> None:
+        if _REAL_CONFIG_DIR in Path(path).parents:
+            raise AssertionError(
+                f"test tried to write a real secret to {path} — add the `xdg_tmp` fixture, which "
+                "points HOME and the XDG dirs at a tmpdir. Without it this overwrites your own "
+                "credentials."
+            )
+        real_write(path, value)
+
+    monkeypatch.setattr(secrets, "write_secret", guarded)
+
+
+@pytest.fixture(autouse=True)
+def _no_real_craigslist_reads(monkeypatch):
+    """Every Craigslist post reads as up unless a test says otherwise: the lanes read the real page
+    by default, and a test's made-up post would read as gone."""
+    from sellee import craigslist_posts
+
+    monkeypatch.setattr(craigslist_posts, "fetch_state", lambda _url: "live")
 
 
 @pytest.fixture(autouse=True)
@@ -134,6 +179,15 @@ def seed_setting(store, key, value) -> None:
         )
 
 
+def connect_craigslist(store) -> None:
+    """The seller has created their Craigslist account in sellee's Chrome and is signed in."""
+    store.craigslist_signed_in(
+        activated_notice="connected", activated_controls=[], back_in_notice="back in"
+    )
+    with store._db.transaction() as conn:  # noqa: SLF001 — tests may arrange store state directly
+        conn.execute("DELETE FROM notices WHERE text = 'connected'")
+
+
 @pytest.fixture
 def bus(tmp_path):
     """A ready EventBus backed by freshly-migrated data/events DBs under tmp_path."""
@@ -221,7 +275,7 @@ def make_ctx(bus, store, xdg_tmp):
             rail_factory=rail_factory,
             # The daemon hands tools a factory (acquiring is what starts Chrome); tests hand in a
             # built fake, so wrap it the way the tool will call it.
-            reply_sink=(lambda: reply_sink) if reply_sink is not None else None,
+            reply_sink=(lambda _market: reply_sink) if reply_sink is not None else None,
             browser_factory=browser_factory,
             started_ts=started_ts,
         )

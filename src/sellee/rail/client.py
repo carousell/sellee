@@ -13,6 +13,8 @@ import json
 import urllib.error
 import urllib.request
 
+from sellee.rail.mail_stream import MailStreamConnection
+
 _DEFAULT_TIMEOUT_SEC = 15.0
 _VERIFY_TIMEOUT_SEC = 5.0
 _LISTING_PATH = "/listing/"
@@ -40,9 +42,18 @@ class RailAuthError(RailError):
 class RailNetworkError(RailError):
     """The rail was unreachable, timed out, or returned an unparseable response."""
 
+    def __init__(self, message: str, *, status: int | None = None):
+        super().__init__(message)
+        # The HTTP status the rail answered with, when it answered at all.
+        self.status = status
+
 
 class RailToolError(RailError):
     """The rail accepted the request but the tool call itself failed."""
+
+
+class RailToolRefused(RailToolError):
+    """The rail itself answered the call with an error, rather than an answer we could not read."""
 
 
 class RailClient:
@@ -54,7 +65,8 @@ class RailClient:
         web_base_url: str,
         timeout_sec: float = _DEFAULT_TIMEOUT_SEC,
     ):
-        self._endpoint = api_base.rstrip("/") + "/mcp"
+        self._api_base = api_base.rstrip("/")
+        self._endpoint = self._api_base + "/mcp"
         self._api_key = api_key
         self._web_base_url = web_base_url.rstrip("/")
         self._timeout = timeout_sec
@@ -84,7 +96,7 @@ class RailClient:
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
                 raise RailAuthError("carousell.ai rejected the guest key") from exc
-            raise RailNetworkError(f"rail returned HTTP {exc.code}") from exc
+            raise RailNetworkError(f"rail returned HTTP {exc.code}", status=exc.code) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
         try:
@@ -95,11 +107,17 @@ class RailClient:
             raise RailNetworkError("rail response is not a JSON-RPC object")
         if envelope.get("error"):
             message = str(envelope["error"].get("message", "rail error"))
-            raise RailToolError(message)
+            raise RailToolRefused(message)
         result = envelope.get("result")
         if not isinstance(result, dict):
             raise RailNetworkError("rail response has no result object")
         return result
+
+    def open_mail_stream(self) -> MailStreamConnection:
+        """bazaar's mail stream for this key; nothing is sent until its events are read."""
+        return MailStreamConnection(
+            url=self._api_base + "/api/v1/me/mail-stream", api_key=self._api_key
+        )
 
     def initialize(self) -> dict:
         return self._rpc(
@@ -111,10 +129,16 @@ class RailClient:
             },
         )
 
+    def offers_tool(self, name: str) -> bool:
+        """Whether the server lists this tool. bazaar registers some tools only when a feature is
+        on, such as photo upload when media is enabled."""
+        tools = self._rpc("tools/list").get("tools") or []
+        return any(isinstance(t, dict) and t.get("name") == name for t in tools)
+
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
-            raise RailToolError(_text_content(result) or f"{name} failed")
+            raise RailToolRefused(_text_content(result) or f"{name} failed")
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
             return structured
@@ -134,7 +158,7 @@ class RailClient:
 
     def create_listing(self, args: dict) -> dict:
         """Create a listing and return {listing_id, url}. Raises RailToolError when the response
-        carries no id — without one there is no listing to point at."""
+        carries no id. The currency is not read back: the request asserts the recorded one."""
         result = self.call_tool("create_listing", args)
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result
@@ -181,20 +205,36 @@ class RailClient:
         return encrypted
 
     def update_listing(
-        self, listing_id: str, *, status: str | None = None, external_urls: dict | None = None
+        self,
+        listing_id: str,
+        *,
+        status: str | None = None,
+        external_urls: dict | None = None,
+        title: str | None = None,
+        description: str | None = None,
+        price_cents: int | None = None,
+        media: dict | None = None,
     ) -> dict:
         """Change a listing on the rail. PATCH semantics all the way through: an argument not
         passed is left out of the call and stays unchanged, so a status flip never touches the
-        cross-links and a cross-link push never touches status. `external_urls` replaces the
-        rail's whole set — `{"urls": []}` clears it, which is not the same as leaving it out."""
-        if status is None and external_urls is None:
-            raise ValueError("update_listing needs a status or an external_urls set")
-        args: dict = {"id": str(listing_id)}
-        if status is not None:
-            args["status"] = status
-        if external_urls is not None:
-            args["external_urls"] = external_urls
-        return self.call_tool("update_listing", args)
+        cross-links, a cross-link push never touches status, and a price edit touches nothing but
+        the price. `external_urls` and `media` each replace the rail's whole set — `{"urls": []}`
+        clears it, which is not the same as leaving it out.
+
+        There is no `currency`: the rail fixes it at create and its update verb does not take one.
+        """
+        fields = {
+            "status": status,
+            "external_urls": external_urls,
+            "title": title,
+            "description": description,
+            "price_cents": price_cents,
+            "media": media,
+        }
+        present = {name: value for name, value in fields.items() if value is not None}
+        if not present:
+            raise ValueError("update_listing needs at least one field to change")
+        return self.call_tool("update_listing", {"id": str(listing_id), **present})
 
     def create_checkout(self, args: dict) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
@@ -215,6 +255,69 @@ class RailClient:
         if not url:
             raise RailToolError("create_promotion_url returned no promotion URL")
         return {"promotion_url": url}
+
+    def list_threads(self, cursor: str, limit: int) -> dict:
+        """The seller's relay threads changed since `cursor`, as {threads, next_cursor}. At least
+        once: a thread can come back on a later page, so the caller drops repeats."""
+        args: dict = {"limit": limit}
+        if cursor:
+            args["cursor"] = cursor
+        result = self.call_tool("list_threads", args)
+        if not isinstance(result.get("threads", []), list):
+            raise RailToolError("list_threads returned no thread list")
+        return {
+            "threads": result.get("threads") or [],
+            "next_cursor": result.get("next_cursor", ""),
+        }
+
+    def get_thread(self, thread_id: str) -> dict:
+        """One relay thread and all its messages in the order bazaar stored them."""
+        result = self.call_tool("get_thread", {"id": str(thread_id)})
+        if not isinstance(result.get("thread"), dict):
+            raise RailToolError("get_thread returned no thread")
+        return {"thread": result["thread"], "messages": result.get("messages") or []}
+
+    def reply_to_thread(self, thread_id: str, text: str, client_message_id: str) -> dict:
+        """Reply to the buyer on a relay thread. bazaar stores one reply per client_message_id,
+        so a retry under the same id returns the same {message_id} and sends nothing twice."""
+        result = self.call_tool(
+            "reply_to_thread",
+            {"id": str(thread_id), "text": text, "client_message_id": client_message_id},
+        )
+        if not result.get("message_id"):
+            raise RailToolError("reply_to_thread returned no message id")
+        return {"message_id": result["message_id"]}
+
+    def list_registration_mail(self, cursor: str, limit: int) -> dict:
+        """Mail to the seller's registration address since `cursor`, as {mail, next_cursor}. At
+        least once: a mail can come back on a later page, so the caller drops repeats."""
+        args: dict = {"limit": limit}
+        if cursor:
+            args["cursor"] = cursor
+        result = self.call_tool("list_registration_mail", args)
+        if not isinstance(result.get("mail", []), list):
+            raise RailToolError("list_registration_mail returned no mail list")
+        return {"mail": result.get("mail") or [], "next_cursor": result.get("next_cursor", "")}
+
+    def get_registration_address(self) -> str:
+        """The seller's registration address, minted by bazaar on the first call."""
+        address = self.call_tool("get_registration_address", {}).get("registration_email")
+        if not address:
+            raise RailToolError("get_registration_address returned no address")
+        return str(address)
+
+    def send_registration_reply(
+        self, to: str, subject: str, text: str, client_message_id: str
+    ) -> dict:
+        """Email a correspondent from the registration address. bazaar sends once per
+        client_message_id, so a retry under the same id returns the first {sent_at}."""
+        result = self.call_tool(
+            "send_registration_reply",
+            {"to": to, "subject": subject, "text": text, "client_message_id": client_message_id},
+        )
+        if not result.get("sent_at"):
+            raise RailToolError("send_registration_reply returned no sent_at")
+        return {"sent_at": result["sent_at"]}
 
     def verify_listing_url(self, url: str) -> None:
         """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP

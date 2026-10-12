@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Callable
 
 from sellee import marketplaces
-from sellee.browser.markets import carousell, facebook
+from sellee.browser.markets import carousell, craigslist, facebook
 
 
 @dataclass(frozen=True)
@@ -52,6 +52,14 @@ class MarketAdapter:
     # keystroke dispatched from the page, carrying `isTrusted: false` — a signal on the seller's own
     # account, so it belongs to a market someone has decided that for.
     chat_message_submit_js: str = ""
+    # The same folder read as `conversations_list_js`, without the pagination. Used on an ordinary
+    # tick; the deep one is kept for the sweep, which opens every conversation anyway. Empty means
+    # this market has only one reading of its inbox and gets it every time.
+    conversations_recent_js: str = ""
+    # Whether this marketplace is refusing the account, and what kind of refusal it is. Answers
+    # '' when it is not. Evaluated on its own before a read commits to anything, so a wall is
+    # found before a click is dispatched at it rather than by the read that failed.
+    block_wall_js: str = ""
     # What the seller already has listed, read off their own listings page:
     # `{listings: [{listing_id, url, title, price, price_text}], active_count, dropped, truncated}`
     # or `{error: …}`. Live listings only — a reader that cannot prove the rows are live must
@@ -75,22 +83,36 @@ class MarketAdapter:
     # JS answering `{url}` for a market whose listings page sits behind a link rather than at a
     # fixed address; the survey follows it before reading `my_listings_js`.
     my_listings_entry_js: str = ""
+    # On the listings page, the titles the marketplace is still reviewing and has given no link.
+    my_listings_in_review_js: str = ""
     # Publishing by driving the form rather than by a recipe a model reads. These move together: a
     # market has them or it has a `listing_flow`, and `supported_markets` asks for either.
     # `publish_fields_js` marks every control and says which it found; `publish_readback_js` says
     # what the form holds; `publish_options_js(wanted)` marks one dropdown option;
-    # `publish_result_js` names the listing that was made.
+    # `publish_place_js(zip)` marks the place suggested for a ZIP; `publish_result_js` names the
+    # listing that was made.
     publish_fields_js: str = ""
     publish_readback_js: str = ""
     publish_result_js: str = ""
     publish_target: Callable[[str], str] = lambda step: ""
     publish_options_js: Callable[[str], str] = lambda wanted: ""
+    publish_place_js: Callable[[str], str] = lambda zip_code: ""
     # Where a driver files a listing when nothing better is known — choosing a category from a
     # title is the listing flow's judgement, not a driver's.
     publish_default_category: str = ""
     # This market's own word for an item's free-text condition — the vocabulary its condition
     # dropdown offers is the market's, so the mapping lives with the market, not the driver.
     publish_condition_for: Callable[[str], str] = lambda said: ""
+    # Changing a live listing by driving its edit form (`browser/editor.py`). They move together,
+    # like the publish set: `edit_entry_js` marks the listing page's own Edit control,
+    # `edit_fields_js` marks the form's controls and says which it found, `edit_readback_js` says
+    # what the form holds. `editable_fields` names the item fields the driver can change — a field
+    # outside it is a change the seller makes by hand, and is told so rather than half-done.
+    edit_entry_js: str = ""
+    edit_fields_js: str = ""
+    edit_readback_js: str = ""
+    edit_target: Callable[[str], str] = lambda step: ""
+    editable_fields: frozenset = field(default_factory=frozenset)
     # The reply composer's shipped selector defaults, by step.
     composer: tuple = ()
     # Rows an inbox read should never treat as a buyer conversation.
@@ -107,6 +129,39 @@ class MarketAdapter:
     # 0 means no width is too narrow. Only a floor — it never claims a read failed, it only
     # reframes one that already did.
     min_usable_width_px: int = 0
+    # Whether this marketplace watches accounts for automation. On one that does, a signed-out
+    # session or a run of refused reads stops every lane on it durably (the `logged_out` and
+    # `refused` causes in blindness.py) instead of being re-probed on a timer — knocking on an
+    # account that has been shown the door is what gets it checkpointed. Off, a signed-out market
+    # keeps being probed and picks itself back up when the seller signs in.
+    polices_automation: bool = False
+    # What makes the read lane look at this market's inbox. "timer" reads it every few minutes.
+    # "notification" reads it only when the market rings — a notification the agent's Chrome
+    # displayed (browser/doorbell.py) — and a person's reaction time afterwards, which is how
+    # someone checks marketplace messages rather than how a poller does.
+    read_trigger: str = "timer"
+    # Where connecting opens and the login probe reads, when it is not the market's front page.
+    home_url: str = ""
+    # A market whose create form is several pages drives it with its own function, under
+    # `publisher.publish`'s contract, starting at `publish_url` when the registry cannot compose it.
+    publish_driver: Callable | None = None
+    publish_url: str = ""
+    # The page loads one publish may cost, asked of the governor before it starts.
+    publish_loads: int = 3
+    # Editing through a market's own driver, under `editor.revise`'s contract, and its page cost.
+    edit_driver: Callable | None = None
+    edit_loads: int = 2
+    # A text-only edit's cost, where it is cheaper than one that touches photos.
+    edit_text_loads: int | None = None
+    # What a ring was, from its title and body: "message" asks for a visit, "other" is heard and
+    # recorded only. The default treats every ring as a message; a market narrows it only from
+    # notifications it has actually been seen to send.
+    ring_kind: Callable[[str, str], str] = lambda title, body: "message"
+
+    @property
+    def drives_publish(self) -> bool:
+        """Whether code, not a recipe, can publish here."""
+        return bool(self.publish_fields_js or self.publish_driver)
 
     def composer_step(self, step: str) -> Selector | None:
         for selector in self.composer:
@@ -132,18 +187,27 @@ CAROUSELL = MarketAdapter(
 FACEBOOK = MarketAdapter(
     market="fb",
     conversations_list_js=facebook.CONVERSATIONS_LIST_JS,
+    conversations_recent_js=facebook.CONVERSATIONS_RECENT_JS,
+    block_wall_js=facebook.BLOCK_WALL_JS,
     conversation_tail_js=facebook.CONVERSATION_TAIL_JS,
     login_js=facebook.LOGIN_JS,
     my_listings_js=facebook.MY_LISTINGS_JS,
     listing_detail_js=facebook.LISTING_DETAIL_JS,
     my_listings_entry_js=facebook.MY_LISTINGS_ENTRY_JS,
+    my_listings_in_review_js=facebook.MY_LISTINGS_IN_REVIEW_JS,
     publish_fields_js=facebook.PUBLISH_FIELDS_JS,
     publish_readback_js=facebook.PUBLISH_READBACK_JS,
     publish_result_js=facebook.PUBLISH_RESULT_JS,
     publish_target=facebook.publish_target,
     publish_options_js=facebook.options_js,
+    publish_place_js=facebook.place_js,
     publish_default_category=facebook.DEFAULT_CATEGORY,
     publish_condition_for=facebook.condition_for,
+    edit_entry_js=facebook.EDIT_ENTRY_JS,
+    edit_fields_js=facebook.EDIT_FIELDS_JS,
+    edit_readback_js=facebook.EDIT_READBACK_JS,
+    edit_target=facebook.edit_target,
+    editable_fields=facebook.EDITABLE_FIELDS,
     listing_id_pattern=facebook.LISTING_ID_PATTERN,
     inbox_folder_js=facebook.INBOX_FOLDER_JS,
     inbox_folder_target=facebook.INBOX_FOLDER_TARGET,
@@ -153,9 +217,44 @@ FACEBOOK = MarketAdapter(
     empty_preview_pattern=facebook.EMPTY_PREVIEW_PATTERN,
     verify_notice=facebook.VERIFY_NOTICE,
     min_usable_width_px=facebook.MIN_USABLE_WIDTH_PX,
+    polices_automation=True,
+    read_trigger="notification",
 )
 
-_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK}
+
+def _drive_craigslist(*args, **kwargs):
+    # Imported here: the driver imports the publisher, which imports this package.
+    from sellee.browser import craigslist_publisher
+
+    return craigslist_publisher.publish(*args, **kwargs)
+
+
+def _edit_craigslist(*args, **kwargs):
+    from sellee.browser import craigslist_publisher
+
+    return craigslist_publisher.revise(*args, **kwargs)
+
+
+# No inbox page: buyers mail the registration address, which the registration lane reads.
+# `read_trigger` matches neither browser read lane.
+CRAIGSLIST = MarketAdapter(
+    market="craigslist",
+    conversations_list_js="",
+    conversation_tail_js="",
+    login_js=craigslist.LOGIN_JS,
+    home_url=craigslist.ACCOUNT_URL,
+    publish_driver=_drive_craigslist,
+    publish_url=craigslist.POST_URL,
+    publish_loads=craigslist.PUBLISH_LOADS,
+    edit_driver=_edit_craigslist,
+    edit_loads=craigslist.EDIT_LOADS,
+    edit_text_loads=craigslist.EDIT_TEXT_LOADS,
+    editable_fields=craigslist.EDITABLE_FIELDS,
+    polices_automation=True,
+    read_trigger="mail",
+)
+
+_ADAPTERS = {CAROUSELL.market: CAROUSELL, FACEBOOK.market: FACEBOOK, CRAIGSLIST.market: CRAIGSLIST}
 
 # The flow name the composer selectors are cached under.
 REPLY_FLOW = "reply"
@@ -196,7 +295,7 @@ def _has_a_publish_path(market: str) -> bool:
     drives — asked of the code, never of a registry flag.
     """
     adapter = _ADAPTERS.get(market)
-    return bool(marketplaces.listing_flow(market) or (adapter and adapter.publish_fields_js))
+    return bool(marketplaces.listing_flow(market) or (adapter and adapter.drives_publish))
 
 
 def surveyable_markets(region: str | None = None) -> list:
@@ -234,7 +333,8 @@ def connectable_markets(region: str | None = None) -> list:
 
     A marketplace with a site in the seller's own country sorts first — registry order alone would
     read as a recommendation. Sorted off the registry rather than a per-region list, so a
-    marketplace that adds a regional site sorts up on its own.
+    marketplace that adds a regional site sorts up on its own. One the registry marks `offer_last`
+    (Craigslist, whose account the seller makes themselves) comes after the rest.
     """
     connectable = [
         market
@@ -243,7 +343,11 @@ def connectable_markets(region: str | None = None) -> list:
     ]
     # Stable, so registry order still breaks ties within each group.
     return sorted(
-        connectable, key=lambda market: not marketplaces.has_regional_site(market, region)
+        connectable,
+        key=lambda market: (
+            bool((marketplaces.get_marketplace(market) or {}).get("offer_last")),
+            not marketplaces.has_regional_site(market, region),
+        ),
     )
 
 

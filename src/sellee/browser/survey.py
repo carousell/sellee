@@ -26,7 +26,8 @@ from typing import Callable
 from urllib.parse import urljoin
 
 from sellee import marketplaces, settings
-from sellee.browser import adopt, inbox, reconcile
+from sellee.browser import adopt, doorbell, inbox, reconcile
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.channel import fastpaths
@@ -67,8 +68,13 @@ STALE_NOTICE = (
 # market that quietly stops working with no explanation anywhere.
 ABANDONED_NOTICE = (
     "I couldn't read your {name} listings — I tried a few times and kept getting nowhere, so I've "
-    "stopped for now. I'm still reading your {name} messages. Tap below when you'd like me to try "
-    "again."
+    "stopped for now. I'm still reading your {name} messages.{waiting} Tap below when you'd like "
+    "me to try again."
+)
+# The fan-out holds a market until it has been read, so a seller who publishes there hears why.
+ABANDONED_WAITING = (
+    " I won't post anything new to {name} until I've had that look, so nothing you already have "
+    "there gets a second copy."
 )
 ALREADY_MANAGING_NOTICE = (
     "I've already taken over {count} on {name} and I'm answering buyers on them. Tell me which "
@@ -82,7 +88,13 @@ class SurveyDeps:
     bus: object
     config: object
     browser_factory: object
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
+
+
+# The pages one look costs: the selling page, and the profile page the listings are on.
+SURVEY_LOADS = 2
 
 
 def survey_lane(deps: SurveyDeps) -> None:
@@ -119,8 +131,21 @@ def discover_phase(deps: SurveyDeps) -> None:
             # Disconnected since the look was owed — left owed rather than abandoned, because
             # reconnecting is a later tick that can serve it.
             continue
+        if deps.store.market_block(market):
+            # The marketplace has told the account to stop. Left owed and costing no attempt, for
+            # the same reason the browser failures below are: five unserved looks abandon the ask
+            # for good, and a wall that clears in six hours must not be what spends them.
+            continue
+        if page_governor.unprompted_held(
+            deps.store, deps.config, market, deps.now()
+        ) or not page_governor.has_room(deps.governor, market, SURVEY_LOADS):
+            # Nobody asked for this look, so it waits for the morning or for the page loads, owed
+            # and costing no attempt.
+            continue
         try:
             _survey(deps, market, region)
+        except page_governor.PagesSpent:
+            continue
         except (BrowserUnavailable, BrowserDetached) as exc:
             # The layer cannot be driven at all, or our own server has lost Chrome. Either way this
             # market is no more at fault than any other, so the row is left owed and costs no
@@ -159,7 +184,7 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
     adapter = market_adapters.get_adapter(market)
     url = marketplaces.market_url(market, "my_listings", region)
     client = deps.browser_factory()
-    with client.exclusive():
+    with client.exclusive(), doorbell.visiting(client, adapter):
         client.prepare_background()
         client.navigate(url)
         login = client.evaluate(adapter.login_js) or {}
@@ -216,11 +241,8 @@ def _survey(deps: SurveyDeps, market: str, region: str | None) -> None:
         # Rows that were on the page but would not parse. `truncated` does not catch this — a
         # dropped row counts as read — and an unread row leaves no trace anywhere, which the
         # fan-out reads as "not listed there" and answers by posting a duplicate.
-        _unserved(
-            deps,
-            market,
-            f"{answer['unreadable']} of {answer.get('active_count')} listings would not read",
-        )
+        rows = len(answer["listings"]) + answer["unreadable"]
+        _unserved(deps, market, f"{answer['unreadable']} of {rows} listings would not read")
         return
     if not fresh:
         # Surveyed, with nothing to ask about. Recorded as done so it is not asked again.
@@ -356,8 +378,11 @@ def stale_text(market: str) -> str:
     return STALE_NOTICE.format(name=marketplaces.display_name(market))
 
 
-def abandoned_text(market: str) -> str:
-    return ABANDONED_NOTICE.format(name=marketplaces.display_name(market))
+def abandoned_text(store, market: str) -> str:
+    name = marketplaces.display_name(market)
+    posted_to = market in settings.publish_markets(store)
+    waiting = ABANDONED_WAITING.format(name=name) if posted_to else ""
+    return ABANDONED_NOTICE.format(name=name, waiting=waiting)
 
 
 def already_managing_text(market: str, count: int) -> str:
@@ -380,5 +405,5 @@ def _unserved(deps: SurveyDeps, market: str, reason: str) -> None:
         deps.store.abandon_market_survey(market)
         deps.bus.publish("survey.abandoned", {"market": market, "reason": reason[:200]})
         deps.store.queue_notice(
-            abandoned_text(market), controls=fastpaths.look_again_controls(market)
+            abandoned_text(deps.store, market), controls=fastpaths.look_again_controls(market)
         )

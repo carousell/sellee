@@ -38,8 +38,17 @@
     "send_reply",
     "set_floor",
     "update_item",
+    "update_live_listing",
     "update_seller_config",
     "update_thread"
+  ],
+  "pass:edit": [
+    "get_item",
+    "probe_selector",
+    "record_listing_revision",
+    "ui_cache_get",
+    "ui_cache_invalidate",
+    "ui_cache_record"
   ],
   "pass:publish": [
     "carousell_ai_publish_listing",

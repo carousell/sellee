@@ -50,7 +50,9 @@ def test_sell_path_end_to_end_no_secret_leak(make_ctx, store, bus) -> None:
     ctx = _ctx(make_ctx)
 
     item = dispatch(
-        "create_item", {"title": "Vintage lamp", "list_price": 9000.0, "currency": "SGD"}, ctx
+        "create_item",
+        {"title": "Vintage lamp", "list_price": 9000.0, "currency": "SGD", "size_bucket": "m"},
+        ctx,
     )
     iid = item["id"]
     dispatch("set_floor", {"item_id": iid, "floor": FLOOR_SENTINEL, "source": "seller"}, ctx)

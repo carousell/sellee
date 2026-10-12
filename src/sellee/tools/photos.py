@@ -113,6 +113,13 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
+    try:
+        takes_photos = rail.offers_tool("create_photo_upload_url")
+    except Exception:  # if the tool list cannot be read, try the upload anyway
+        takes_photos = True
+    if not takes_photos:
+        return {"count": 0, "photos_skipped": True}
+
     workdir = paths.media_dir() / f"prepared-{uuid.uuid4().hex[:12]}"
     uploaded = []
     try:

@@ -11,6 +11,7 @@ time.
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import time
 from collections.abc import Callable
@@ -36,6 +37,16 @@ class Task:
     name: str
     interval_sec: float
     func: Callable[[], None]
+    # How far either side of `interval_sec` this task's next run may wander, as a fraction: 0.3
+    # means 70%–130% of the interval. Zero — the default — keeps the exact interval, which is what
+    # a latency path wants.
+    #
+    # Set it on a lane whose work is visible to someone outside this machine. A marketplace read
+    # arriving every 300.000 seconds forever is the cheapest thing an account-integrity model can
+    # notice: it needs no fingerprinting, only an inter-arrival histogram with no variance. Leave
+    # it at zero for `pass_lane` and `market_connect`, whose two-second interval is how quickly a
+    # seller's own tap is answered.
+    jitter: float = 0.0
 
 
 @dataclass
@@ -62,11 +73,20 @@ class Scheduler:
         on_tick: Callable[[], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
         stop_event: threading.Event | None = None,
+        rng: object = None,
+        stagger: bool = True,
     ):
         self._bus = bus
         self._tick_interval = tick_interval_sec
         self._on_tick = on_tick
         self._clock = clock
+        self._rng = rng if rng is not None else random
+        # Whether a jittered task's *first* run is spread too. Separate from the jitter itself
+        # because the two answer different questions: jitter shapes the steady state, staggering
+        # shapes the boot. `--once` turns it off — that smoke run rests on one tick exercising
+        # every lane, and a lane that is built but never scheduled is precisely what it exists to
+        # catch, so a staggered first due would hide the bug rather than find it.
+        self._stagger = stagger
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._reg = _Registry()
         self._lock = threading.Lock()
@@ -79,7 +99,11 @@ class Scheduler:
             # Due-ness is only evaluated at tick boundaries, so an interval under the tick is a
             # request the loop cannot serve: the lane runs once per tick and no faster. Said out
             # loud because it is otherwise invisible — the typing pulse declared 4.0s, ran at
-            # ~5.14s, and carried a comment claiming it kept a 5s indicator alive.
+            # ~5.14s, and carried a comment claiming it kept a 5s indicator alive. That one is gone
+            # (it is a thread now, see channel/presence.py); the lanes that still warn here are all
+            # latency targets, where a tick's rounding costs nothing and a deadline is not being
+            # missed. If a lane ever appears here that is holding something *open*, it belongs on a
+            # thread too.
             log.warning(
                 "task %s asks for %.1fs but the scheduler ticks every %.1fs — it will run at the "
                 "tick, not its interval",
@@ -89,8 +113,12 @@ class Scheduler:
             )
         with self._lock:
             self._reg.tasks[task.name] = task
-            # due immediately on the first tick, so a fresh start exercises each lane
-            self._reg.state[task.name] = _TaskState(next_due=self._clock())
+            # Due immediately on the first tick, so a fresh start exercises each lane — except a
+            # jittered one under staggering, which starts somewhere inside its first interval so
+            # the browser lanes do not all fire together on every boot.
+            self._reg.state[task.name] = _TaskState(
+                next_due=self._clock() + self._first_delay(task)
+            )
 
     def deregister(self, name: str) -> None:
         """Remove a task so it stops being scheduled — used when a channel provider is torn down,
@@ -108,6 +136,18 @@ class Scheduler:
     def _backoff_delay(self, consecutive_failures: int) -> float:
         return min(BACKOFF_BASE_SEC * (2 ** (consecutive_failures - 1)), BACKOFF_CAP_SEC)
 
+    def _first_delay(self, task: Task) -> float:
+        """How long after registration a task first becomes due."""
+        if not task.jitter or not self._stagger:
+            return 0.0
+        return self._rng.uniform(0.0, task.interval_sec * task.jitter)
+
+    def _next_interval(self, task: Task) -> float:
+        """This task's next gap. Exact unless the task asked to wander."""
+        if not task.jitter:
+            return task.interval_sec
+        return task.interval_sec * self._rng.uniform(1.0 - task.jitter, 1.0 + task.jitter)
+
     def _claim_due(self, now: float) -> list[Task]:
         due: list[Task] = []
         with self._lock:
@@ -116,7 +156,7 @@ class Scheduler:
                 if st.running or now < st.next_due or now < st.backoff_until:
                     continue
                 st.running = True
-                st.next_due = now + task.interval_sec
+                st.next_due = now + self._next_interval(task)
                 due.append(task)
         return due
 

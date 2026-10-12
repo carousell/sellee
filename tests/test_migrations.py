@@ -59,6 +59,19 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 16),
         ("data", 17),
         ("data", 18),
+        # 19 is the craigslist work, in flight on its own branch. The number is reserved rather
+        # than reused: two branches that both took 19 would apply a different schema under the same
+        # version on whichever install saw them in the wrong order.
+        ("data", 20),
+        ("data", 21),
+        ("data", 22),
+        ("data", 23),
+        # 24 and 25 are the hosted work, in flight on its own branch, and reserved the same way.
+        ("data", 26),
+        ("data", 27),
+        ("data", 28),
+        ("data", 29),
+        ("data", 30),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -82,6 +95,13 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "thread_listing_lookups")
     assert _table_exists(data_db, "market_surveys")
     assert _table_exists(data_db, "discovered_listings")
+    assert _table_exists(data_db, "market_blocks")
+    assert _table_exists(data_db, "listing_revisions")
+    assert _table_exists(data_db, "market_rings")
+    assert _table_exists(data_db, "relay_cursor")
+    assert _table_exists(data_db, "registration_cursor")
+    assert _table_exists(data_db, "registration_seen")
+    assert _table_exists(data_db, "craigslist_account")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -102,6 +122,16 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         16,
         17,
         18,
+        # See the note on the applied-set above for why 19 is not ours to take.
+        20,
+        21,
+        22,
+        23,
+        26,
+        27,
+        28,
+        29,
+        30,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

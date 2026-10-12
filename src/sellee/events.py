@@ -53,6 +53,12 @@ _KIND_LEVELS = {
     "task.ok": "routine",
     "task.error": "warn",
     "task.backoff": "warn",
+    # The typing keeper is a thread, not a lane, so it has no task.error to be seen through. These
+    # are its ledger — published on transition only, so a warn here is a signal rather than a
+    # stream. `channel.presence.resumed` is deliberately absent: it defaults to info, which is what
+    # a recovery is.
+    "channel.presence.stalled": "warn",
+    "channel.presence.orphaned": "warn",
 }
 
 

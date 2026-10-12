@@ -13,6 +13,9 @@ from typing import TypedDict
 from sellee.db import Database
 from sellee.store.helpers import UNPLACEABLE_REPORTED_META, _insert_notice, _now
 
+# How long an answered ring is kept, as the record of when the marketplace last rang.
+_RING_KEPT_SEC = 30 * 86400.0
+
 # What the lane should do for a request. `open` is the seller asking to be signed in: navigate,
 # pull the tab forward, and raise the window. `probe` is them saying they already have — re-read
 # the login state without touching what is in front of them.
@@ -25,6 +28,8 @@ CONNECT_MODES = (CONNECT_MODE_OPEN, CONNECT_MODE_PROBE)
 # whole marketplace phase, which outlives every sign-in inside it.
 HOLD_SIGNIN = "signin"
 HOLD_SETUP = "setup"
+# One per opened post, `post:<item id>`, so its Done button frees only that post's hold.
+HOLD_POST_PREFIX = "post:"
 
 # How long a claim survives unrenewed — for a seller who wandered off or closed the terminal.
 # Long enough to find a password, short enough that a dead CLI is not a permanent outage.
@@ -70,6 +75,28 @@ class BrowserMixin:
             for r in rows
         ]
 
+    def request_post_open(self, item_id: str, market: str, url: str) -> None:
+        """Ask the connect lane to open this sold item's post at `url` for the seller."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO post_open_requests (item_id, market, url, requested_ts) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT (item_id) DO UPDATE SET "
+                "market = excluded.market, url = excluded.url, "
+                "requested_ts = excluded.requested_ts",
+                (item_id, market, url, _now()),
+            )
+
+    def pending_post_opens(self) -> list[dict]:
+        rows = self._db.query(
+            "SELECT item_id, market, url, requested_ts FROM post_open_requests "
+            "ORDER BY requested_ts ASC, item_id ASC"
+        )
+        return [dict(r) for r in rows]
+
+    def clear_post_open(self, item_id: str) -> None:
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM post_open_requests WHERE item_id = ?", (item_id,))
+
     def clear_market_connect_request(self, market: str) -> None:
         """Drop a request once it has an answer. Safe to call for a row that is already gone."""
         with self._db.transaction() as conn:
@@ -97,6 +124,177 @@ class BrowserMixin:
         """Give the tab back. Safe for a holder that never held it, or whose hold has expired."""
         with self._db.transaction() as conn:
             conn.execute("DELETE FROM browser_holds WHERE holder = ?", (holder,))
+
+    def browser_holders(self, now: float | None = None) -> set[str]:
+        """Who holds the browser right now; expired holds are not counted."""
+        now = _now() if now is None else now
+        rows = self._db.query("SELECT holder FROM browser_holds WHERE expires_ts > ?", (now,))
+        return {str(r["holder"]) for r in rows}
+
+    # --- a marketplace that has told us to stop ------------------------------------------------
+
+    def block_market(
+        self,
+        market: str,
+        cause: str,
+        *,
+        ttl_sec: float | None,
+        now: float | None = None,
+    ) -> None:
+        """Stop driving `market` until it is cleared. `ttl_sec` None means indefinite.
+
+        Re-blocking the same market under the same cause renews the window and counts a strike; a
+        *different* cause is a new incident, so `incident_ts` moves and the seller is owed a fresh
+        telling. Strikes are what let a caller lengthen the window rather than repeat it.
+        """
+        now = _now() if now is None else now
+        expires = None if ttl_sec is None else now + ttl_sec
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO market_blocks "
+                "(market, cause, strikes, blocked_ts, incident_ts, expires_ts, told_ts) "
+                "VALUES (?, ?, 1, ?, ?, ?, NULL) ON CONFLICT (market) DO UPDATE SET "
+                "cause = excluded.cause, "
+                "strikes = market_blocks.strikes + 1, "
+                "blocked_ts = excluded.blocked_ts, "
+                "expires_ts = excluded.expires_ts, "
+                # A new incident re-arms the telling; the same one going on does not.
+                "incident_ts = CASE WHEN market_blocks.cause = excluded.cause "
+                "THEN market_blocks.incident_ts ELSE excluded.incident_ts END, "
+                "told_ts = CASE WHEN market_blocks.cause = excluded.cause "
+                "THEN market_blocks.told_ts ELSE NULL END",
+                (market, cause, now, now, expires),
+            )
+
+    def market_block(self, market: str, now: float | None = None) -> dict | None:
+        """This market's live block, or None when it is free to drive.
+
+        An expired row reads as None rather than being deleted: a read that writes would turn every
+        lane tick into a transaction, and the row costs nothing until the next block overwrites it.
+        A NULL `expires_ts` never expires — see the migration for why that case exists.
+        """
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT market, cause, strikes, blocked_ts, incident_ts, expires_ts, told_ts "
+            "FROM market_blocks WHERE market = ? AND (expires_ts IS NULL OR expires_ts > ?)",
+            (market, now),
+        )
+        return dict(rows[0]) if rows else None
+
+    def blocked_markets(self, now: float | None = None) -> list[str]:
+        """Every market currently blocked. For the gates that ask about a set rather than one."""
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT market FROM market_blocks WHERE expires_ts IS NULL OR expires_ts > ? "
+            "ORDER BY market ASC",
+            (now,),
+        )
+        return [str(row["market"]) for row in rows]
+
+    def market_block_strikes(self, market: str) -> int:
+        """How many times this market has hit a wall with no clean probe in between.
+
+        Read regardless of expiry, unlike `market_block`. The row outlives its own window — only a
+        confirmed-clean probe deletes it — so a wall that comes back after a block lapsed is a
+        repeat rather than a first offence, which is what makes the escalating window mean what its
+        comment says.
+        """
+        rows = self._db.query("SELECT strikes FROM market_blocks WHERE market = ?", (market,))
+        return int(rows[0]["strikes"]) if rows else 0
+
+    def clear_market_block(self, market: str) -> None:
+        """Let this market be driven again. Only ever called once something has proved it is
+        clear — never by a read that merely happened to succeed."""
+        with self._db.transaction() as conn:
+            conn.execute("DELETE FROM market_blocks WHERE market = ?", (market,))
+
+    def report_market_block_once(self, market: str, text: str, controls: list | None = None):
+        """Tell the seller this market is blocked — once per incident, not once per strike.
+
+        Returns whether this queued the notice. One transaction, because saying it and recording
+        that we said it are one event: split in two, a crash between them tells the seller twice.
+
+        The guard is `told_ts` against the incident, so a block that expired and re-triggered is a
+        new thing to say while the same one going on is not.
+        """
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE market_blocks SET told_ts = ? WHERE market = ? AND told_ts IS NULL",
+                (_now(), market),
+            )
+            if not cur.rowcount:
+                return False
+            _insert_notice(conn, text, controls=controls)
+            return True
+
+    # --- a marketplace ringing --------------------------------------------------------------
+
+    def record_rings(
+        self,
+        market: str,
+        rings,
+        *,
+        due_ts: float,
+        now: float | None = None,
+        answered: bool = False,
+    ) -> int:
+        """Record the rings `(ring_key, kind, shown_ts)` not heard before. Returns how many were.
+
+        `answered` records them as already dealt with — what the doorbell hears the first time it
+        listens can be days old, and is evidence the doorbell works, not a reason to visit. Answered
+        rings older than a month are let go in the same transaction.
+        """
+        now = _now() if now is None else now
+        handled = now if answered else None
+        added = 0
+        with self._db.transaction() as conn:
+            for ring_key, kind, shown_ts in rings:
+                cur = conn.execute(
+                    "INSERT OR IGNORE INTO market_rings "
+                    "(market, ring_key, kind, shown_ts, heard_ts, due_ts, handled_ts) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                    (market, str(ring_key), kind, float(shown_ts), now, due_ts, handled),
+                )
+                added += cur.rowcount
+            conn.execute(
+                "DELETE FROM market_rings WHERE handled_ts IS NOT NULL AND heard_ts < ?",
+                (now - _RING_KEPT_SEC,),
+            )
+        return added
+
+    def ring_owed(self, market: str, now: float | None = None) -> bool:
+        """Whether a message ring on this market is due a visit that has not happened."""
+        now = _now() if now is None else now
+        rows = self._db.query(
+            "SELECT 1 FROM market_rings WHERE market = ? AND kind = 'message' "
+            "AND handled_ts IS NULL AND due_ts <= ? LIMIT 1",
+            (market, now),
+        )
+        return bool(rows)
+
+    def answer_rings(self, market: str, *, heard_before: float, now: float | None = None) -> int:
+        """Mark answered every ring heard before the visit began. One heard while it was under way
+        was not read by it, and stays owed."""
+        now = _now() if now is None else now
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE market_rings SET handled_ts = ? "
+                "WHERE market = ? AND handled_ts IS NULL AND heard_ts <= ?",
+                (now, market, heard_before),
+            )
+            return cur.rowcount
+
+    def last_ring_ts(self, market: str) -> float | None:
+        """When this market last rang with anything at all, or None if it never has."""
+        rows = self._db.query(
+            "SELECT MAX(shown_ts) AS shown FROM market_rings WHERE market = ?", (market,)
+        )
+        shown = rows[0]["shown"] if rows else None
+        return float(shown) if shown is not None else None
+
+    def ring_count(self, market: str) -> int:
+        rows = self._db.query("SELECT COUNT(*) AS n FROM market_rings WHERE market = ?", (market,))
+        return int(rows[0]["n"]) if rows else 0
 
     # --- what a conversation is about -------------------------------------------------------
 
@@ -178,3 +376,135 @@ class BrowserMixin:
             (now,),
         )
         return str(rows[0]["reason"]) if rows else ""
+
+    # --- the seller's Craigslist account -------------------------------------------------------
+    # Each write names the state it moves from; a notice is queued in the move's own transaction.
+    # `requested_ts` is when the seller last started a sign-in in sellee's Chrome; 0 when none is
+    # under way, so no emailed link is opened.
+
+    def craigslist_account(self) -> dict | None:
+        rows = self._db.query("SELECT * FROM craigslist_account WHERE id = 1")
+        return dict(rows[0]) if rows else None
+
+    def begin_craigslist_sign_in(self, now: float, *, restart: bool = True) -> None:
+        """The seller is about to create the account, or sign back in, in sellee's Chrome: a link
+        Craigslist mails from now on is theirs to finish there. Without `restart`, a sign-in
+        already under way keeps its start, so a link it was mailed is not dropped as stale."""
+        keep = "" if restart else " WHERE craigslist_account.requested_ts = 0"
+        with self._db.transaction() as conn:
+            conn.execute(
+                "INSERT INTO craigslist_account (id, state, requested_ts, updated_ts) "
+                "VALUES (1, 'awaiting_activation', ?, ?) ON CONFLICT (id) DO UPDATE SET "
+                "state = CASE WHEN state IN ('active', 'awaiting_login_link') "
+                "THEN 'awaiting_login_link' ELSE 'awaiting_activation' END, "
+                "link = NULL, link_opened = 0, requested_ts = excluded.requested_ts, "
+                "late_reported = 0, updated_ts = excluded.updated_ts" + keep,
+                (now, _now()),
+            )
+
+    def record_craigslist_link(self, link: str, *, received_ts: float) -> bool:
+        """Keep an emailed link for the lane to open, if the seller started a sign-in no later
+        than it was sent."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link = ?, link_opened = 0, updated_ts = ? "
+                "WHERE id = 1 AND state IN ('awaiting_activation', 'awaiting_login_link') "
+                "AND requested_ts > 0 AND requested_ts <= ? "
+                "AND link IS NOT ?",
+                (link, _now(), received_ts, link),
+            )
+            return bool(cur.rowcount)
+
+    def mark_craigslist_link_opened(self, link: str, address: str, notice: str) -> None:
+        """The lane opened `link` in sellee's Chrome; `address` is the one it reached."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET link_opened = 1, address = ?, updated_ts = ? "
+                "WHERE id = 1 AND link = ? AND link_opened = 0",
+                (address, _now(), link),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+
+    def craigslist_signed_in(
+        self,
+        *,
+        activated_notice: str,
+        activated_controls: list,
+        back_in_notice: str,
+        own_email: str = "",
+        own_notice: str = "",
+    ) -> bool:
+        """The seller is signed in: a new account is connected, a signed-out one is back, or a
+        connected one changed between the seller's own account (`own_email`) and sellee's."""
+        now = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT state, own_email FROM craigslist_account WHERE id = 1"
+            ).fetchone()
+            changed = row is not None and (row["own_email"] or "") != own_email
+            if row is not None and row["state"] == "active" and not changed:
+                return False
+            conn.execute(
+                "INSERT INTO craigslist_account (id, state, requested_ts, updated_ts, own_email) "
+                "VALUES (1, 'active', 0, ?, ?) ON CONFLICT (id) DO UPDATE SET state = 'active', "
+                "link = NULL, link_opened = 0, requested_ts = 0, late_reported = 0, "
+                "updated_ts = excluded.updated_ts, own_email = excluded.own_email",
+                (now, own_email or None),
+            )
+            if row is not None and row["state"] == "awaiting_login_link" and not changed:
+                _insert_notice(conn, back_in_notice)
+            elif own_email:
+                _insert_notice(conn, own_notice)
+            else:
+                _insert_notice(conn, activated_notice, controls=activated_controls)
+            return True
+
+    def mark_craigslist_signed_out(self, notice: str, controls: list) -> bool:
+        """An active account was found signed out: ask the seller once to sign back in."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET state = 'awaiting_login_link', link = NULL, "
+                "link_opened = 0, requested_ts = 0, late_reported = 0, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active'",
+                (_now(),),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice, controls=controls)
+            return bool(cur.rowcount)
+
+    def want_seller_login_link(self, now: float) -> bool:
+        """The seller asked to sign in themselves; False when there is no active account."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET seller_login_ts = ?, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active'",
+                (now, _now()),
+            )
+            return bool(cur.rowcount)
+
+    def hand_seller_login_link(
+        self, link: str, *, received_ts: float, wait_sec: float, notice: str
+    ) -> bool:
+        """Send the seller a login link mailed after they asked for one, once."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET seller_login_ts = NULL, updated_ts = ? "
+                "WHERE id = 1 AND state = 'active' AND seller_login_ts IS NOT NULL "
+                "AND seller_login_ts <= ? AND ? - seller_login_ts <= ?",
+                (_now(), received_ts, received_ts, wait_sec),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)
+
+    def report_craigslist_late_once(self, notice: str) -> bool:
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE craigslist_account SET late_reported = 1, updated_ts = ? "
+                "WHERE id = 1 AND state != 'active' AND requested_ts > 0 AND late_reported = 0",
+                (_now(),),
+            )
+            if cur.rowcount:
+                _insert_notice(conn, notice)
+            return bool(cur.rowcount)

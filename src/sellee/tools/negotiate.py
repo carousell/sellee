@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from sellee import settings
 from sellee.store import StoreError
+from sellee.tools import listing
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -78,9 +79,16 @@ def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
 def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     _require_pair(ctx, params)
     try:
-        return ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
+        result = ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
+    # Live: the agent left a sold item's carousell.ai listing up, so the sale archives it itself.
+    rail = listing.take_down_on_sale(ctx, params["item_id"], result.get("take_down") or [])
+    if rail is not None:
+        result["carousell_ai_take_down"] = rail
+    # Browser listings only the seller can close are named now, not after the rail archive.
+    result["manual_take_downs"] = listing.manual_take_downs(ctx.store, params["item_id"])
+    return result
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:
@@ -144,7 +152,8 @@ register(
 register(
     ToolSpec(
         name="negotiate_confirm_sold",
-        description="Mark an item sold to a thread; returns the other-market take-down list "
+        description="Mark an item sold to a thread. Archives its carousell.ai listing itself "
+        "(carousell_ai_take_down says how that went); returns the other-market take-down list "
         "and the threads to close.",
         input_schema=_ITEM_THREAD_SCHEMA,
         handler=_confirm_sold,

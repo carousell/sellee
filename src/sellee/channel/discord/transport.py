@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import urllib.error
+import urllib.parse
 import urllib.request
 from datetime import datetime
 from pathlib import Path
@@ -107,12 +108,26 @@ def _epoch(timestamp: str | None) -> float | None:
         return None
 
 
+def _tapped_label(message: dict, custom_id: str) -> str:
+    """The label of the button carrying `custom_id` on the message it was tapped on, or ""."""
+    for row in message.get("components") or []:
+        for component in row.get("components") or []:
+            if component.get("custom_id") == custom_id:
+                return str(component.get("label") or "")
+    return ""
+
+
 def _normalize(event: dict) -> dict | None:
     kind = event.get("t")
     data = event.get("d") or {}
     if kind == "MESSAGE_CREATE":
         if (data.get("author") or {}).get("bot"):
             return None  # the bot's own sends, echoed back like any other channel message
+        # Carried in the payload even though it is the same value as `event_id` here, unlike
+        # Telegram where the two genuinely differ. The ingest tail reads one key on both providers
+        # to know what it may react to, and a core that had to know which provider makes its event
+        # id a message reference would be a provider fact in provider-agnostic code.
+        seen = {"message_id": int(data["id"])}
         attachments = data.get("attachments") or []
         if attachments:
             largest = max(attachments, key=lambda a: a.get("size", 0))
@@ -120,7 +135,7 @@ def _normalize(event: dict) -> dict | None:
                 "event_id": int(data["id"]),
                 "kind": "photo",
                 "text": data.get("content", ""),
-                "payload": {"url": largest["url"], "filename": largest.get("filename")},
+                "payload": {**seen, "url": largest["url"], "filename": largest.get("filename")},
                 "src_ts": _epoch(data.get("timestamp")),
             }
         content = data.get("content", "")
@@ -132,14 +147,14 @@ def _normalize(event: dict) -> dict | None:
                 "event_id": int(data["id"]),
                 "kind": "command",
                 "text": command,
-                "payload": {},
+                "payload": {**seen},
                 "src_ts": _epoch(data.get("timestamp")),
             }
         return {
             "event_id": int(data["id"]),
             "kind": "text",
             "text": content,
-            "payload": {},
+            "payload": {**seen},
             "src_ts": _epoch(data.get("timestamp")),
         }
     if kind == "INTERACTION_CREATE" and data.get("type") == 3:  # MESSAGE_COMPONENT
@@ -148,7 +163,8 @@ def _normalize(event: dict) -> dict | None:
         return {
             "event_id": int(data["id"]),
             "kind": "action",
-            "text": choice,
+            # What the seller tapped, as later passes read it back; the token stays in payload.
+            "text": _tapped_label(data.get("message") or {}, custom_id) or choice,
             "payload": {
                 "ref": ref,
                 "choice": choice,
@@ -171,7 +187,13 @@ class DiscordClient:
         self._api_base = api_base.rstrip("/")
         self._timeout = timeout
 
-    def _request(self, method: str, path: str, body: dict | None = None) -> object:
+    def _request(
+        self, method: str, path: str, body: dict | None = None, *, timeout: float | None = None
+    ) -> object:
+        """One API call. `timeout` overrides the client's for this call only — deliberately per
+        call rather than per client, because the same client downloads attachments, and Discord
+        serves the *original* file: a cap short enough to be right for a typing pulse would
+        silently truncate a photo on a slow link."""
         url = f"{self._api_base}{path}"
         data = json.dumps(body).encode("utf-8") if body is not None else None
         req = urllib.request.Request(
@@ -185,7 +207,9 @@ class DiscordClient:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:  # noqa: S310 our URL
+            with urllib.request.urlopen(  # noqa: S310 our URL
+                req, timeout=self._timeout if timeout is None else timeout
+            ) as resp:
                 raw = resp.read()
                 return json.loads(raw) if raw else {}
         except urllib.error.HTTPError as exc:
@@ -218,8 +242,25 @@ class DiscordClient:
             message_id = int(result["id"]) if isinstance(result, dict) and "id" in result else None
         return message_id
 
-    def trigger_typing(self, channel_id: int) -> None:
-        self._request("POST", f"/channels/{channel_id}/typing")
+    def trigger_typing(self, channel_id: int, *, timeout: float | None = None) -> None:
+        self._request("POST", f"/channels/{channel_id}/typing", timeout=timeout)
+
+    def add_reaction(
+        self, channel_id: int, message_id: int, emoji: str, *, timeout: float | None = None
+    ) -> None:
+        """React to one of the seller's own messages, as the bot (`@me`).
+
+        The emoji rides in the path, so it is percent-encoded — a raw multi-byte emoji in a URL is
+        rejected by the edge before the API sees it. `safe=""` because urllib leaves `/` alone by
+        default, and a multi-emoji sequence joined by a zero-width joiner would otherwise be split
+        into path segments.
+        """
+        quoted = urllib.parse.quote(emoji, safe="")
+        self._request(
+            "PUT",
+            f"/channels/{channel_id}/messages/{message_id}/reactions/{quoted}/@me",
+            timeout=timeout,
+        )
 
     def acknowledge_interaction(
         self, interaction_id, interaction_token: str, *, clear_components: bool = False

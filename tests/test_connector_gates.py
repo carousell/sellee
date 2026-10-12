@@ -75,7 +75,9 @@ def test_the_read_lane_skips_a_disconnected_market_entirely(store, bus) -> None:
     """Never opens the page, not merely "reads nothing" — a probe is what produces the logged-out
     notice."""
     _disconnect(store)
-    deps = inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
+    deps = inbox.InboxDeps(
+        store=store, bus=bus, config=Config(), browser_factory=StubClient, sleep=lambda _s: None
+    )
 
     inbox.inbox_lane(deps)
 
@@ -358,3 +360,48 @@ def test_a_withdrawn_adapter_does_not_silently_vanish_from_the_sellers_list(
 
     assert settings.connected_markets(store) == [_MARKET]
     assert settings.publish_markets(store) == []
+
+
+# --- a market that told the account to stop -------------------------------------------------------
+#
+# Same shape as removing a marketplace: durable rows written before the block would each otherwise
+# drive a market that has asked us to stop. One case per consumer, and every one must leave the work
+# resumable, because a block clears.
+
+
+def _blocked(store, market=_MARKET):
+    store.block_market(market, "automation", ttl_sec=3600.0)
+
+
+def test_a_blocked_market_spends_no_survey_attempt(store, bus) -> None:
+    """Five unserved looks abandon the ask for good. A wall that clears in six hours must not be
+    what spends them."""
+    _blocked(store)
+    store.request_market_survey(_MARKET)
+
+    survey.survey_lane(
+        survey.SurveyDeps(store=store, bus=bus, config=Config(), browser_factory=StubClient)
+    )
+
+    assert store.get_market_survey(_MARKET)["state"] != "abandoned"
+    assert store.pending_market_surveys()  # still owed
+
+
+def test_a_blocked_market_holds_the_reply_pass_not_the_buyer(store) -> None:
+    """The gate holds the pass; the thread stays eligible, so the buyer is answered when it
+    clears rather than being dropped."""
+    _sell_thread(store)
+    store.record_inbound(f"{_MARKET}:1", msg_id="m1", text="still there?", ts=100.0)
+    _blocked(store)
+
+    assert _MARKET in inbox.paced_out_markets(store, Config())
+    assert [row["market"] for row in store.threads_with_unhandled_inbound()] == [_MARKET]
+
+
+def test_a_publish_pass_queued_before_the_block_is_refused_at_claim(store) -> None:
+    """The gate that matters most: a pass enqueued before the wall went up is still valid, still
+    claimable, and would still be handed the browser."""
+    _blocked(store)
+
+    with pytest.raises(passes.PassPayloadError, match="asked us to stop"):
+        passes.validate_payload("publish", {"item_id": "i1", "market": _MARKET}, store)

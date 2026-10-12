@@ -1,9 +1,9 @@
 """carousell.ai guest-key provisioning — zero-LLM, fail-soft, off the pass path.
 
-POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key}; the key is
-stored 0600 through secrets.py and never printed. ensure is idempotent (a key already present
-means no network call); reprovision forces a fresh key. Operational failures are returned as a
-status dict with defer=True, never raised — a provisioning hiccup must not crash a caller.
+POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key, notice, currency};
+the key is stored 0600 through secrets.py and never printed. ensure is idempotent (a key already
+present means no network call); reprovision forces a fresh key. Operational failures are returned
+as a status dict with defer=True, never raised — a provisioning hiccup must not crash a caller.
 """
 
 from __future__ import annotations
@@ -12,7 +12,7 @@ import json
 import urllib.error
 import urllib.request
 
-from sellee import secrets
+from sellee import countries, secrets
 
 _GUESTS_PATH = "/api/v1/guests"
 _DEFAULT_TIMEOUT_SEC = 10.0
@@ -26,28 +26,30 @@ class ProvisionError(Exception):
 
 
 def _normalize_region(region: str | None) -> str:
-    if not region or len(region.strip()) != 2 or not region.strip().isalpha():
-        raise ValueError("a two-letter region code is required (e.g. --region SG)")
-    return region.strip().upper()
+    # Spelled as setup spells it, so `--region UK` registers GB rather than a country that does
+    # not exist.
+    code = countries.code_for_name(region or "") or (region or "").strip()
+    if len(code) != 2 or not code.isalpha():
+        raise ValueError("a two-letter region code is required (e.g. --region US)")
+    return code.upper()
+
+
+def _printable(raw: str) -> str:
+    """Remote words made safe to print raw: control characters flattened to spaces, so none can
+    retitle the terminal or forge a line that looks like ours."""
+    return " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())[:400]
 
 
 def _refusal(exc: urllib.error.HTTPError) -> str:
     """The rail's own words when it refuses, falling back to the status code.
-    A 400 is usually actionable — an unserved country — and "HTTP 400" is not.
-    The words are remote and ui.warn prints them raw, so control characters are
-    flattened to spaces: an escape sequence or newline in the body must not be
-    able to retitle the terminal or forge a line that looks like ours — the same
-    reason a non-printable api_key is rejected below."""
+    A 400 is the rail answering and its words are actionable; "HTTP 400" is not."""
     try:
         body = json.loads(exc.read().decode("utf-8"))
         raw = str(body.get("error") or "")
     except (ValueError, AttributeError, OSError):
         # Unreadable, non-JSON, or non-object body — a proxy's error page, not a refusal.
         raw = ""
-    message = " ".join("".join(ch if ch.isprintable() else " " for ch in raw).split())
-    if not message:
-        return f"guests API returned HTTP {exc.code}"
-    return message[:400]
+    return _printable(raw) or f"guests API returned HTTP {exc.code}"
 
 
 def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAULT_TIMEOUT_SEC):
@@ -82,6 +84,17 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
     return {**payload, "api_key": api_key}
 
 
+def _currency(payload: dict) -> str:
+    """The ISO 4217 code registration answered, or empty when it answered nothing usable. Checked
+    by the write door's own validator, so one rule decides what a recordable code is."""
+    from sellee.tools.seller import BasicsError, validate_basics
+
+    try:
+        return validate_basics({"currency": str(payload.get("currency") or "")})["currency"]
+    except BasicsError:
+        return ""
+
+
 def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
     """Ensure a guest key exists. Returns a status dict; the key value is never in it."""
     if not force and secrets.read_carousell_ai_api_key() is not None:
@@ -101,6 +114,10 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         "forced": force,
         "user_id": str(payload.get("user_id") or ""),
         "country": payload.get("country") or resolved,
+        # Whether carousell.ai can pay this seller out is the backend's answer, not ours. Empty
+        # means there is nothing to tell them.
+        "notice": _printable(str(payload.get("notice") or "")),
+        "currency": _currency(payload),
     }
 
 

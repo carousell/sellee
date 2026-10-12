@@ -29,6 +29,7 @@
       "id": "carousell",
       "display_name": "Carousell",
       "listing_flow": "listing-flow-carousell",
+      "edit_flow": "edit-flow-carousell",
       "listing_url": {
         "host": "carousell.",
         "path": "/p/"
@@ -65,8 +66,7 @@
         "path": "/listing/"
       },
       "domains": {
-        "US": "www.carousell.ai",
-        "SG": "www.carousell.ai"
+        "*": "www.carousell.ai"
       },
       "connector": {
         "type": "mcp"
@@ -146,14 +146,19 @@
     {
       "id": "craigslist",
       "display_name": "Craigslist",
+      "domains": {
+        "US": "www.craigslist.org"
+      },
       "listing_url": {
         "host": "craigslist.org",
-        "path": "/d/"
+        "path": "/view/d/",
+        "pattern": "https://www\\.craigslist\\.org/view/d/[a-z0-9-]+/[A-Za-z0-9]+"
       },
       "connector": {
         "type": "browser"
       },
-      "status": "active"
+      "status": "active",
+      "offer_last": true
     }
   ]
 }

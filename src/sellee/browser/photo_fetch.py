@@ -36,8 +36,20 @@ FETCH_TIMEOUT_SEC = 20.0
 MAX_PHOTO_BYTES = 12 * 1024 * 1024
 # The ceiling for one listing's whole set.
 MAX_TOTAL_BYTES = 60 * 1024 * 1024
-# A CDN may require one; ours names the listing the photo belongs to.
-_USER_AGENT = "Mozilla/5.0 (compatible; sellee/1.0)"
+# What to say when Chrome could not be asked what it calls itself.
+#
+# These photographs come off the marketplace's own CDN — for Facebook that is fbcdn.net, which Meta
+# operates — from the same IP as the logged-in session, carrying the seller's own listing page as
+# the Referer. A User-Agent naming this tool on that request is not something anyone has to infer:
+# it is a labelled join key, handed over. So the caller passes the live string from the Chrome we
+# are already driving, and this is only the fallback for a Chrome that could not answer.
+#
+# Generic on purpose, and a plain browser: a stale version here is unremarkable — a great many
+# people run a Chrome a few releases behind — where a name is not.
+_FALLBACK_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/151.0.0.0 Safari/537.36"
+)
 
 
 class _NoRedirects(urllib.request.HTTPRedirectHandler):
@@ -75,11 +87,16 @@ def allowed_url(url: str, hosts, suffixes=()) -> bool:
     )
 
 
-def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> list:
+def fetch_listing_photos(
+    urls, *, market: str, dest_dir, referer: str = "", user_agent: str = ""
+) -> list:
     """Download a listing's photographs into `dest_dir`, and answer with the stored paths.
 
     Fewer paths than URLs whenever something was refused or failed; empty when nothing could be
     brought across — which the caller reports rather than treating as an item with no pictures.
+
+    `user_agent` is what the Chrome we are already driving calls itself; empty falls back to a
+    plain browser string. See `_FALLBACK_USER_AGENT` for why this is not ours to name.
     """
     hosts = marketplaces.media_hosts(market)
     suffixes = marketplaces.media_host_suffixes(market)
@@ -94,7 +111,13 @@ def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> l
         if not allowed_url(url, hosts, suffixes):
             log.warning("refusing a listing photo that is not https on a %s media host", market)
             continue
-        data = _fetch_one(opener, url, referer=referer, cap=min(MAX_PHOTO_BYTES, budget))
+        data = _fetch_one(
+            opener,
+            url,
+            referer=referer,
+            cap=min(MAX_PHOTO_BYTES, budget),
+            user_agent=user_agent or _FALLBACK_USER_AGENT,
+        )
         if data is None:
             continue
         sniffed = images.sniff_bytes(data[: images.MAGIC_READ_BYTES])
@@ -119,11 +142,11 @@ def fetch_listing_photos(urls, *, market: str, dest_dir, referer: str = "") -> l
     return stored
 
 
-def _fetch_one(opener, url: str, *, referer: str, cap: int) -> bytes | None:
+def _fetch_one(opener, url: str, *, referer: str, cap: int, user_agent: str) -> bytes | None:
     """One photo's bytes, or None when it could not be had within the bounds."""
     if cap <= 0:
         return None
-    headers = {"User-Agent": _USER_AGENT, "Accept": "image/*"}
+    headers = {"User-Agent": user_agent, "Accept": "image/*"}
     if referer:
         headers["Referer"] = referer
     request = urllib.request.Request(url, headers=headers)  # noqa: S310 — https-and-host checked

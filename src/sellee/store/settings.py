@@ -43,15 +43,23 @@ class SettingsMixin:
         return json.loads(rows[0]["value"]) if rows else None
 
     def seller_region(self) -> str | None:
-        """Which regional site of a marketplace this seller posts on, or None if not recorded.
+        """The seller's own country as a two-letter code, or None if not recorded.
 
-        Every URL the agent composes and every one it verifies is pinned to this, so it is read from
-        here rather than accepted from a caller — and normalized here for the same reason. The
-        registry keys its regional sites by code ("SG"), and an exact-match lookup on "sg" resolves
-        to no site at all, which reads downstream as "this marketplace isn't available to you".
+        It names a country, not a marketplace: the currency gate reads it as where the seller is,
+        and a marketplace's regional site is then chosen by it. Every URL the agent composes and
+        every one it verifies is pinned to this, so it is read from here rather than accepted from
+        a caller — and normalized here for the same reason. The registry keys its regional sites by
+        code ("SG"), and an exact-match lookup on "sg" resolves to no site at all, which reads
+        downstream as "this marketplace isn't available to you".
         """
         region = (self.get_seller_config_section("basics") or {}).get("region")
         return str(region).strip().upper() or None if region else None
+
+    def seller_currency(self) -> str | None:
+        """The ISO 4217 code registration said this seller's listings are priced in, or None when
+        they were provisioned before registration answered one."""
+        code = (self.get_seller_config_section("basics") or {}).get("currency")
+        return str(code).strip().upper() or None if code else None
 
     def get_seller_config_public(self) -> dict:
         """Every section except the private origin address — the buyer-safe view a read tool may

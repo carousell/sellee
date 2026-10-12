@@ -17,8 +17,13 @@ Photos come from one of two places, and both give you paths that are already sto
 - **From a local file** (attended sessions). `import_photos` with the file paths; it returns the
   stored paths to use.
 
-Create the draft with `create_item` (title, list price, currency, and the photos). Anything you
-learn later — a better title, the condition, more photos — goes on with `update_item`.
+Photos make a better listing, so ask for one if the seller has none, but never wait on it: a seller
+with no photo still gets a draft, and the listing can go up without one.
+
+Create the draft with `create_item` (title, list price, the photos, and the box size for shipping —
+see §3). Leave out `currency` unless the seller named one: left out, it is the currency the seller
+sells in, so "200 dollars" from a seller in Singapore is S$200. Anything you learn later — a better
+title, the condition, more photos — goes on with `update_item`.
 
 ## 2. Research the price
 
@@ -40,6 +45,24 @@ explicit go-ahead. No listing goes live on an assumption.
 setting names other marketplaces, name them here as well — they were maybe set weeks ago, and
 "listing this" should never turn out to mean more places than they had in mind. If the setting is
 empty, say nothing about it.
+
+**When Craigslist is one of them,** add this line to the confirmation, word for word: "Posting to
+Craigslist means accepting its terms of use for this post: craigslist.org/about/terms.of.use". The
+seller's ✅ List it is their acceptance, so posting can go through Craigslist's own terms step.
+
+**Give it a box size for shipping.** carousell.ai prices shipping from a size class, so every
+listing needs one — publishing refuses an item without one. Pick it from the photos, the title and
+whatever the seller said — judge the box it would pack into, not the weight:
+
+- **S** — fits a padded envelope or a small box
+- **M** — about a shoebox
+- **L** — you can carry it under one arm
+- **XL** — bigger than that, or heavier than 20 lb
+
+When two classes both look possible, pick the larger. Your pick goes on the draft as
+`create_item`'s `size_bucket` (one of `s`, `m`, `l`, `xl`), and into the confirmation message as
+one line — "Box size for shipping: about a shoebox (M)". The seller's answer wins over yours: if
+they name a different one, write it with `update_item` before publishing.
 
 **Ask for their floor in the same message.** The floor is the lowest they would accept, and it is
 what lets you negotiate a later offer on your own instead of going back to them for every one. Ask
@@ -65,8 +88,10 @@ list price, work the same here as anywhere — seller-comms owns both, under "No
 
 ## 4. Publish
 
-`carousell_ai_upload_photos` first, then `carousell_ai_publish_listing`. Report the live URL the
-tool returns — never a URL you composed.
+`carousell_ai_upload_photos` first when the item has photos, then `carousell_ai_publish_listing`.
+Report the live URL the tool returns — never a URL you composed. If the upload comes back with
+`photos_skipped`, carousell.ai is not taking photos right now: publish anyway, and tell the seller the
+listing is up without its photos.
 
 If either step fails, say what failed and what survived: the draft and its photos are still there,
 so a retry is one "try again" away. Don't retry silently in a loop, and don't report a listing as

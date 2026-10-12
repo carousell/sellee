@@ -52,11 +52,9 @@ class ToolContext:
     # A factory so the publish tool can surface an "unprovisioned" error itself rather than the
     # server failing to build a rail client up front. May be None where no tool needs a rail.
     rail_factory: Callable[[], object] | None = None
-    # The marketplace reply sink, as a factory like everything else acquired lazily: calling it
-    # acquires the daemon's scripted browser send, starting Chrome if that is all that is missing.
-    # None where no browser is configured; send_reply then returns a structured no_send_path
-    # rather than pretending.
-    reply_sink: Callable[[], object] | None = None
+    # Builds the send path for a thread's market when called, which for a browser market starts
+    # Chrome. None means send_reply returns no_send_path rather than pretending.
+    reply_sink: Callable[[str], object] | None = None
     # Same shape as rail_factory, for the tools that drive the browser themselves (the selector
     # probe). Raises BrowserUnavailable when there is no browser to reach, which the tool reports.
     browser_factory: Callable[[], object] | None = None
@@ -208,6 +206,10 @@ TIER_ATTENDED = "attended"
 # photos, publish, report — plus the selector cache, since a browser-market publish is the flow that
 # re-finds a moved control and records where it went.
 TIER_PASS_PUBLISH = "pass:publish"
+# The edit pass: changes one already-listed item on a marketplace with a recipe rather than a
+# driver. Narrower than publish — it reads the item, re-finds moved controls, and records how the
+# edit went, and nothing else; the change itself was decided and confirmed before it was queued.
+TIER_PASS_EDIT = "pass:edit"
 # The reply pass: the only flow acting on words a stranger wrote, and so the narrowest one that does
 # real work. It may read its own threads and items, decide offers, answer from the Q&A bank, send,
 # hold, and escalate — and nothing else. Absent by design: anything that writes on the seller's

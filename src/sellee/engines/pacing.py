@@ -9,7 +9,8 @@ under-sends — the safe direction.
 Verdicts: `go` (act after the returned jitter), `wait` (at the hourly cap; delay is when a slot
 frees), `quiet` (inside quiet hours; delay is until the window ends). quiet hours and the cap are
 checked BEFORE any jitter is chosen, so a mode can only change the jitter, never a safety floor.
-Quiet hours hold only the kinds we *start* — see REACTIVE_KINDS; the cap holds every kind.
+Quiet hours hold only the kinds we *start* — see REACTIVE_KINDS; the cap holds every kind. A reply
+on a market that is no browser send skips this engine: see UNPACED_MARKETS in store/send.py.
 FAST mode zeroes jitter, lifts the cap to its ceiling, and disables quiet hours — it drops the
 account-safety disguise for a live demo and never auto-reverts.
 
@@ -48,19 +49,32 @@ class PacingConfig:
     mode: str
 
 
-def resolve(config, quiet_hours) -> PacingConfig:
+def resolve(config, quiet_hours, *, now: float | None = None) -> PacingConfig:
     """Build the effective pacing config from the daemon config plus the quiet-hours window. The
     window — a [start, end] pair of minutes since midnight — is passed in explicitly: it is a
     runtime *setting* (read from the settings store by the tool layer), not a config knob, and
     engines never touch the store. The jitter/cap knobs are already validated and clamped to the
     hard ceilings at load; FAST mode is applied here — it zeroes both jitter ranges, lifts the cap
-    to the ceiling, and disables quiet hours."""
+    to the ceiling, and disables quiet hours.
+
+    FAST also ends by itself. `pacing_fast_until` is required alongside the mode, and once `now` is
+    past it this answers exactly as `normal` does — so a demo cannot leave an account running at
+    five times the cap, jitter-free, through the night, because nobody went back to the file.
+
+    `now` is therefore required to resolve a FAST config and not otherwise, which is why it is
+    optional in the signature and raises here rather than defaulting: a caller that forgot it would
+    otherwise get fast-forever, the one answer this exists to make impossible. Nothing here reads
+    the clock — engines never do.
+    """
     from sellee import config as config_mod
 
     reply = tuple(config.reply_delay_sec)
     interactive = tuple(config.interactive_reply_delay_sec)
     quiet = tuple(quiet_hours)
-    if config.pacing_mode == "fast":
+    if config.pacing_mode == "fast" and now is None:
+        raise ValueError("resolving a fast pacing config needs `now` to know whether it has ended")
+    fast_until = getattr(config, "pacing_fast_until", None)
+    if config.pacing_mode == "fast" and fast_until is not None and float(now) < float(fast_until):
         return PacingConfig(
             cap=config_mod.HARD_CAP_CEILING,
             delay_min=0.0,
@@ -146,3 +160,18 @@ def evaluate(
         lo, hi = (cfg.idelay_min, cfg.idelay_max) if interactive else (cfg.delay_min, cfg.delay_max)
         delay = random.uniform(lo, hi) if hi > 0 else 0.0
     return {**base, "verdict": "go", "delay_sec": round(delay, 2), "record": True}
+
+
+# How long after a marketplace rings the agent opens the conversation: someone glancing at a ping,
+# then opening the chat. Bounded both ways — nobody answers every notification inside twenty
+# seconds, and six minutes is as long as a buyer should wait for a person who saw the message.
+REACTION_FLOOR_SEC = 20.0
+REACTION_CEILING_SEC = 360.0
+# The spread around the median — the sigma of a lognormal.
+REACTION_SPREAD = 0.6
+
+
+def reaction_delay_sec(rng, median_sec: float) -> float:
+    """A person's delay between a notification and opening it, drawn around `median_sec`."""
+    drawn = median_sec * rng.lognormvariate(0.0, REACTION_SPREAD)
+    return min(max(drawn, REACTION_FLOOR_SEC), REACTION_CEILING_SEC)

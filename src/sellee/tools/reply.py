@@ -10,11 +10,13 @@ With no way to send, it returns a structured no_send_path with nothing recorded.
 
 from __future__ import annotations
 
+import threading
 import time
 
 from sellee import marketplaces, settings
 from sellee.browser.client import BrowserError
 from sellee.engines import pacing as pacing_engine
+from sellee.rail.client import RailError
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -35,6 +37,15 @@ _KINDS = ("reply", "holding", "followup", "nudge")
 _YES = "yes"
 _NOT = "no"
 _UNKNOWN = "unknown"
+
+# The threads a send is running on in this process right now. A send paced like a person takes
+# minutes — the page-load gap, the typing, the read-back — and a harness tool call can give up long
+# before it finishes, take the reply for failed, and call again. Refused here, before anything is
+# reserved: a second send started now would type the same words once the first had committed.
+# Kept in process rather than read off intents, because a pending intent is also a send that failed
+# before it reached the page, which is safe to retry at once; and a crash clears it by itself.
+_SENDING: set = set()
+_SENDING_LOCK = threading.Lock()
 
 # Terminal / owned statuses a reply must never re-engage.
 _SELL_REFUSED = frozenset(
@@ -126,8 +137,8 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
     # recorded: no pacing slot spent, and no pending intent for the sweep to escalate as a send
     # nobody can verify — this send provably never happened.
     try:
-        sink = ctx.reply_sink() if ctx.reply_sink is not None else None
-    except BrowserError as exc:
+        sink = ctx.reply_sink(thread["market"]) if ctx.reply_sink is not None else None
+    except (BrowserError, RailError) as exc:
         return {
             "status": "no_send_path",
             "delivered": _NOT,
@@ -143,7 +154,23 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             "market": thread["market"],
         }
 
-    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store))
+    thread_id = params["thread_id"]
+    with _SENDING_LOCK:
+        if thread_id in _SENDING:
+            # Not "no": the send under way may be reaching the buyer as this is read.
+            return {"status": "in_flight", "delivered": _UNKNOWN, "thread_id": thread_id}
+        _SENDING.add(thread_id)
+    try:
+        return _reserve_and_send(ctx, params, thread, kind, sink)
+    finally:
+        with _SENDING_LOCK:
+            _SENDING.discard(thread_id)
+
+
+def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, sink) -> dict:
+    cfg = pacing_engine.resolve(
+        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
+    )
     interactive = ctx.session.tier == TIER_ATTENDED
     try:
         reserved = ctx.store.reserve_reply(
@@ -153,6 +180,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             in_msg_id=params.get("in_msg_id"),
             cfg=cfg,
             interactive=interactive,
+            pass_id=ctx.session.pass_id,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
@@ -174,7 +202,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
 
     intent_id = reserved["intent_id"]
     try:
-        sink.send(thread, params["text"], kind, intent_id)
+        sent = sink.send(thread, params["text"], kind, intent_id) or {}
     except Exception:
         # The sink's own message never reaches here by design (it emits its own events). Whether
         # the message may be retried is the intent's durable status, and the return says which
@@ -192,6 +220,7 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
         text=params["text"],
         kind=kind,
         pass_id=ctx.session.pass_id,
+        msg_id=sent.get("msg_id"),
     )
     return {
         "status": "sent",
@@ -229,6 +258,9 @@ register(
         "and do not report it to the seller. "
         "unverified_open = delivered no, because an earlier send on this thread is still "
         "unsettled; wait for it rather than talking past it. "
+        "in_flight = delivered unknown: a send on this thread is still being typed and checked — "
+        "a send paced like a person takes minutes, and a call that timed out may have been that "
+        "send. It will finish by itself. Do not send it again and do not tell anyone it failed. "
         "paused / no_send_path = delivered no, nothing was recorded. "
         "scam_held = delivered no: the message you are answering was flagged as a scam, so the "
         "send is refused in code. Do not rephrase and retry — raise it with the seller and let "

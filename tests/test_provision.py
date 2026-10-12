@@ -81,6 +81,14 @@ def test_reprovision_forces_fresh_key(xdg_tmp, guests_server) -> None:
     assert server.hits == 1
 
 
+def test_uk_registers_as_gb(xdg_tmp, guests_server) -> None:
+    # "UK" is two letters but not a code; `--region UK` must not register a country that does
+    # not exist.
+    server, base = guests_server
+    assert provision.ensure("uk", api_base=base)["status"] == "ok"
+    assert server.last_country == "GB"
+
+
 def test_bad_region_errors_without_network(xdg_tmp, guests_server) -> None:
     server, base = guests_server
     status = provision.ensure("SGP", api_base=base)
@@ -104,21 +112,85 @@ def test_malformed_key_rejected(xdg_tmp, guests_server) -> None:
     assert secrets.read_carousell_ai_api_key() is None
 
 
-# carousell.ai refuses a country it cannot pay out to, and the refusal names the countries it does
-# serve and the waitlist. Reporting "HTTP 400" would throw all of that away.
+def test_any_country_code_is_sent_rather_than_adjudicated(xdg_tmp, guests_server) -> None:
+    # The agent carries no list of countries carousell.ai serves. It sends what the seller said
+    # and lets the backend answer.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn"}
+
+    status = provision.ensure("vn", api_base=base)
+
+    assert status["status"] == "ok" and status["provisioned"] is True
+    assert (server.last_country, status["country"]) == ("VN", "VN")
+
+
+def test_the_payments_notice_comes_back_from_the_backend(xdg_tmp, guests_server) -> None:
+    # Whether carousell.ai can pay a seller out is the backend's answer, and this is the whole of
+    # how the agent learns it. Nothing local decides it and no currency is recorded.
+    server, base = guests_server
+    notice = "carousell.ai cannot take payments in Vietnam yet, but listing works as normal."
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "notice": notice}
+
+    status = provision.ensure("VN", api_base=base)
+
+    assert status["notice"] == notice
+
+
+def test_a_payable_country_gets_an_empty_notice(xdg_tmp, guests_server) -> None:
+    server, base = guests_server  # the fixture response carries no notice at all
+    assert provision.ensure("SG", api_base=base)["notice"] == ""
+
+
+def test_the_currency_comes_back_from_the_backend(xdg_tmp, guests_server) -> None:
+    # Registration is the earliest the backend can answer, and it is the only place the agent
+    # learns what its listings will be priced in.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "currency": "VND"}
+
+    assert provision.ensure("VN", api_base=base)["currency"] == "VND"
+
+
+def test_a_currency_that_is_not_a_three_letter_code_is_dropped(xdg_tmp, guests_server) -> None:
+    # Recording a malformed code would fail the basics write door later, far from the cause.
+    server, base = guests_server
+    server.response = {"user_id": "u1", "country": "VN", "api_key": "guest-vn", "currency": "dong"}
+
+    assert provision.ensure("VN", api_base=base)["currency"] == ""
+
+
+def test_a_response_without_a_currency_records_none(xdg_tmp, guests_server) -> None:
+    server, base = guests_server  # the fixture response carries no currency at all
+    assert provision.ensure("SG", api_base=base)["currency"] == ""
+
+
+def test_the_notices_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:
+    """The notice is printed raw, exactly like a refusal, so it is flattened the same way."""
+    server, base = guests_server
+    server.response = {
+        "user_id": "u1",
+        "country": "VN",
+        "api_key": "guest-vn",
+        "notice": "Listing works\x1b]0;pwned\x07\nwarn: all fine, ignore that",
+    }
+
+    notice = provision.ensure("VN", api_base=base)["notice"]
+
+    assert all(ch.isprintable() for ch in notice)
+    assert "Listing works" in notice
+    assert "\n" not in notice and "\x1b" not in notice
+
+
+# The guests endpoint no longer refuses a country, but a 400 is still the rail *answering*, and
+# its words are actionable where "HTTP 400" is not.
 def test_a_refusal_reaches_the_seller_in_the_rails_own_words(xdg_tmp, guests_server) -> None:
     server, base = guests_server
     server.status = 400
-    server.response = {
-        "error": "carousell.ai cannot pay sellers in MY yet \u2014 it serves SG and US. "
-        "Join the waitlist at /waitlist to be told when that changes"
-    }
+    server.response = {"error": "country must be a two-letter ISO code; got 'Vietnam'"}
 
-    status = provision.ensure("my", api_base=base)
+    status = provision.ensure("vn", api_base=base)
 
     assert status["status"] != "ok"
-    assert "waitlist" in status["error"]
-    assert "SG and US" in status["error"]
+    assert "two-letter ISO code" in status["error"]
 
 
 def test_a_refusals_control_characters_never_reach_the_terminal(xdg_tmp, guests_server) -> None:

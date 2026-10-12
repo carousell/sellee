@@ -15,7 +15,7 @@ import pytest
 
 from fake_discord_api import CHANNEL_ID, FAKE_TOKEN, FakeDiscordAPI
 from sellee import secrets
-from sellee.channel import acks, fastpaths
+from sellee.channel import fastpaths, routing
 from sellee.channel.discord import gateway
 from sellee.channel.discord.gateway import DiscordGateway
 from sellee.channel.discord.transport import DiscordClient
@@ -369,33 +369,38 @@ def test_a_decision_tap_is_acknowledged_but_left_for_the_pass(store, bus, xdg_tm
     assert store.has_active_channel_pass()
 
 
-def test_a_decision_tap_is_receipted_on_discord_too(store, bus, xdg_tmp) -> None:
+def test_a_decision_tap_shows_the_wait_on_discord_too(store, bus, xdg_tmp) -> None:
     """Parity, and it is not decorative: Discord splits ingest across two handlers where Telegram
     has one loop, so the tail is exactly the shape that gets added to one and forgotten on the
     other. Both go through routing.settle_batch."""
     _bound(store)
-    notice_id = store.queue_notice(
-        "Needs your call: meet at Orchard, or checkout?",
-        options=["🔗 Send checkout link", "🤝 I'll handle it"],
-    )
+    ask = "Needs your call: meet at Orchard, or checkout?"
+    notice_id = store.queue_notice(ask, options=["🔗 Send checkout link", "🤝 I'll handle it"])
     with FakeDiscordAPI() as api:
         _gateway(store, bus, api)._handle_interaction(
             _interaction(f"n{notice_id}:a0"), client=_client(api)
         )
         assert api.typing_pulses == [True]
+        # A click is not a message of theirs; its own feedback is the buttons coming off.
+        assert api.reactions == []
 
-    receipts = [n["text"] for n in store.list_queued_notices() if n["text"].startswith("Got it:")]
-    assert receipts == ["Got it: 🔗 Send checkout link. " + acks.WORKING]
+    assert [n["text"] for n in store.list_queued_notices()] == [ask]  # the tap added nothing
 
 
-def test_a_typed_message_is_receipted_on_discord_too(store, bus, xdg_tmp) -> None:
+def test_a_typed_message_is_marked_seen_and_shows_the_wait_on_discord_too(
+    store, bus, xdg_tmp
+) -> None:
+    """The pulse assertion is the half this handler never had — the tap path asserted it and the
+    message path did not, which is exactly the parity gap the shared tail exists to close."""
     _bound(store)
     with FakeDiscordAPI() as api:
         _gateway(store, bus, api)._handle_bound_message(
             _dm("is the lamp still available?"), client=_client(api)
         )
+        assert api.typing_pulses == [True]
+        assert [r["emoji"] for r in api.reactions] == [routing.SEEN_REACTION]
 
-    assert [n["text"] for n in store.list_queued_notices()] == [acks.WORKING]
+    assert store.list_queued_notices() == []
 
 
 def test_a_fast_path_click_is_never_also_receipted_on_discord(store, bus, xdg_tmp) -> None:

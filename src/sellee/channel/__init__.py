@@ -2,9 +2,12 @@
 
 Core (this package): `fastpaths` (the deterministic commands' decision + text renders + a
 provider-neutral control spec), `routing` (ingest fan-out: the channel.in event + coalesced
-channel-pass routing), `outbound` (the notice-drain / typing-pulse *policy* plus the pure-store
-fold + escalation-push subscribers), and `prompt` (the channel-pass prompt with its transcript
-window). None of these import a provider.
+channel-pass routing + marking a message seen), `acks` (the two arrivals a typing indicator would
+lie about), `presence` (the indicator's cadence, and the threshold notice for a wait it cannot
+carry),
+`outbound` (the notice-drain policy and the typing gate, plus the pure-store fold + escalation-push
+subscribers), and `prompt` (the channel-pass prompt with its transcript window). None of these
+import a provider.
 
 Providers (`channel.telegram`, and future siblings): the transport, the receive loop, the bind
 flow, and the `deliver`/`typing` mechanisms. A provider's loop normalizes inbound messages into the

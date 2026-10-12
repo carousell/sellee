@@ -9,10 +9,12 @@ the lane always ends in exactly one notice the seller can act on.
 from __future__ import annotations
 
 import pytest
-from tests.conftest import seed_setting
+from tests.conftest import connect_craigslist, seed_setting
 
-from sellee.browser import connect
+from sellee import marketplaces, settings
+from sellee.browser import blindness, connect, craigslist_account
 from sellee.browser import markets as market_adapters
+from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.store import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE
@@ -23,9 +25,11 @@ _HOME = "https://www.carousell.sg/"
 class StubClient:
     """A browser that answers the login probe from a script and records what it was asked to do."""
 
-    def __init__(self, *, login="logged_out", fail=None):
+    def __init__(self, *, login="logged_out", fail=None, wall=""):
         self.login = login
         self.fail = fail
+        # What the wall probe answers: '' is a marketplace that is not refusing the account.
+        self.wall = wall
         self.navigations: list = []
         self.frontmost: list = []
 
@@ -60,6 +64,12 @@ class StubClient:
         # Every market's login probe: this file is about the lane's scheduling, not one DOM.
         if function in {adapter.login_js for adapter in market_adapters.adapters()}:
             return {"state": self.login}
+        # And its wall probe, which the same tap asks about: a market that is not refusing us
+        # answers the empty string.
+        if function in {
+            adapter.block_wall_js for adapter in market_adapters.adapters() if adapter.block_wall_js
+        }:
+            return self.wall
         raise AssertionError(f"the lane evaluated an artifact this stub does not know: {function}")
 
 
@@ -167,7 +177,9 @@ def test_every_surface_attaches_the_same_door(store, bus) -> None:
     seen = set()
 
     inbox._notify_once(  # noqa: SLF001 — the notice builder is the surface under test
-        inbox.InboxDeps(store=store, bus=bus, config=Config(), browser_factory=None),
+        inbox.InboxDeps(
+            store=store, bus=bus, config=Config(), browser_factory=None, sleep=lambda _s: None
+        ),
         "logged_out:carousell",
         "x",
         controls=fastpaths.signin_controls("carousell"),
@@ -420,3 +432,222 @@ def test_the_lane_is_a_no_op_with_nothing_pending(store, bus) -> None:
 
     assert client.navigations == []
     assert store.count_queued_notices() == 0
+
+
+# --- clearing a market that told the account to stop ----------------------------------------------
+#
+# The block stays on until something proves the market is clear, and the Check again probe is that
+# something. The fail-open version — clear first, probe after — is the bug these hold shut: it
+# leaves a window in which every lane resumes against a market nobody has checked.
+
+
+def _blocked_fb(store):
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", "automation", ttl_sec=3600.0)
+    store.request_market_connect("fb", CONNECT_MODE_PROBE)
+
+
+def test_a_probe_that_finds_the_wall_still_there_does_not_clear_it(store, bus) -> None:
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="automation")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    block = store.market_block("fb")
+    assert block is not None
+    assert block["strikes"] == 2  # renewed, and the window escalates with it
+
+
+def test_a_probe_that_is_clean_and_signed_in_clears_it(store, bus) -> None:
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb") is None
+    assert any("reading and answering there again" in n["text"] for n in _notices(store))
+
+
+def test_a_probe_with_no_wall_but_signed_out_leaves_it_blocked(store, bus) -> None:
+    """Not walled is not the same as demonstrably fine, and half an answer must not resume a
+    market that was stopped."""
+    _blocked_fb(store)
+    client = StubClient(login="logged_out", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert store.market_block("fb") is not None
+
+
+def test_a_pin_wall_never_blocks_a_market_the_probe_found_clear(store, bus) -> None:
+    """The recovery path has to ask the same question every other one does.
+
+    `verify` is a PIN prompt, and its phrases are things people type over a dialog Facebook has
+    open half the time — which is why it is not in `BLOCKING_CAUSES`. A seller tapping Sign in
+    while one is up must not lose the marketplace for six hours.
+    """
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.request_market_connect("fb", CONNECT_MODE_PROBE)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="verify")))
+
+    assert store.market_block("fb") is None
+
+
+def test_a_pin_wall_mid_recovery_neither_clears_nor_escalates(store, bus) -> None:
+    """It proved nothing in either direction, so the block is left exactly as it was — not
+    cleared, not escalated, and not renamed to a cause that would outlive the real one."""
+    _blocked_fb(store)
+    before = store.market_block("fb")
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="verify")))
+
+    after = store.market_block("fb")
+    assert after is not None
+    assert after["cause"] == "automation" == before["cause"]
+    assert after["strikes"] == before["strikes"]
+    assert after["expires_ts"] == before["expires_ts"]
+
+
+def _signed_out_fb(store, mode=CONNECT_MODE_PROBE):
+    from tests.conftest import seed_setting
+
+    seed_setting(store, "connected_markets", ["fb"])
+    store.block_market("fb", blindness.CAUSE_LOGGED_OUT, ttl_sec=None)
+    store.request_market_connect("fb", mode)
+
+
+def test_signing_back_in_lifts_a_signed_out_block_with_one_message(store, bus) -> None:
+    """Nothing warned the account, so there is no warning to say has gone — "signed in" is the
+    whole of the news, and saying it twice in two wordings reads as two events."""
+    _signed_out_fb(store)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_in", wall="")))
+
+    assert store.market_block("fb") is None
+    texts = [n["text"] for n in _notices(store)]
+    assert texts == [connect.SIGNED_IN_NOTICE.format(name=marketplaces.display_name("fb"))]
+
+
+def test_a_sign_in_page_still_showing_leaves_the_signed_out_block_on(store, bus) -> None:
+    _signed_out_fb(store, mode=CONNECT_MODE_OPEN)
+
+    connect.connect_lane(_deps(store, bus, StubClient(login="logged_out", wall="")))
+
+    block = store.market_block("fb")
+    assert block is not None
+    assert block["cause"] == blindness.CAUSE_LOGGED_OUT
+    assert block["expires_ts"] is None
+
+
+def test_a_probe_reaches_a_blocked_market_at_all(store, bus) -> None:
+    """The narrow bypass: the one thing that may still drive a blocked market is the probe that
+    decides whether it is still blocked."""
+    _blocked_fb(store)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert client.navigations  # it went and looked
+
+
+def test_a_quiet_check_on_facebook_steps_off_it_afterwards(store, bus) -> None:
+    """The probe behind Check again is a visit like any other, and a tab left on Facebook looks
+    like someone sitting in front of it."""
+    from sellee.browser import doorbell
+
+    _signed_out_fb(store, mode=CONNECT_MODE_PROBE)
+    client = StubClient(login="logged_in", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert client.navigations[-1] == doorbell.AWAY_URL
+
+
+def test_the_sign_in_page_is_left_open_for_the_seller(store, bus) -> None:
+    """Opening the page so the seller can sign in is the one visit that must stay where it is."""
+    from sellee.browser import doorbell
+
+    _signed_out_fb(store, mode=CONNECT_MODE_OPEN)
+    client = StubClient(login="logged_out", wall="")
+
+    connect.connect_lane(_deps(store, bus, client))
+
+    assert doorbell.AWAY_URL not in client.navigations
+
+
+# --- Craigslist: nobody can sign in by hand, so connecting creates the account -----------------
+
+
+@pytest.fixture
+def us_craigslist(store):
+    store.set_seller_config_section("basics", {"region": "US"})
+    seed_setting(store, "connected_markets", ["craigslist"])
+    return store
+
+
+class _Rail:
+    def get_registration_address(self) -> str:
+        return "seller@inbox.carousell.ai"
+
+
+def test_connecting_craigslist_signed_out_has_the_seller_create_the_account_themselves(
+    us_craigslist, bus
+) -> None:
+    """sellee opens Craigslist and names the address it made; the seller makes the account."""
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+    client = StubClient(login="logged_out")
+
+    connect.connect_lane(_deps(us_craigslist, bus, client, rail_factory=_Rail))
+
+    assert client.navigations == [craigslist.ACCOUNT_URL]
+    # The steps go out before the page opens; the open page is said after.
+    steps, opened = _texts(us_craigslist)
+    assert "seller@inbox.carousell.ai" in steps and craigslist_account.TERMS_LINE in steps
+    assert "sign-in page is open" in opened and "seller@inbox.carousell.ai" not in opened
+    row = us_craigslist.craigslist_account()
+    assert row["state"] == "awaiting_activation" and row["requested_ts"] > 0
+    assert us_craigslist.pending_market_connects() == []
+
+
+def test_connecting_a_signed_out_craigslist_account_asks_the_seller_to_sign_back_in(
+    us_craigslist, bus
+) -> None:
+    connect_craigslist(us_craigslist)
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+
+    connect.connect_lane(
+        _deps(us_craigslist, bus, StubClient(login="logged_out"), rail_factory=_Rail)
+    )
+
+    [text] = _texts(us_craigslist)
+    assert text.startswith("Sign back in to Craigslist") and "seller@inbox.carousell.ai" in text
+    row = us_craigslist.craigslist_account()
+    assert row["state"] == craigslist_account.AWAITING_LOGIN_LINK and row["requested_ts"] > 0
+
+
+def test_connecting_craigslist_twice_keeps_one_account(us_craigslist, bus) -> None:
+    for _ in range(2):
+        us_craigslist.request_market_connect("craigslist", CONNECT_MODE_OPEN)
+        connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_out")))
+
+    assert len(us_craigslist._db.query("SELECT 1 FROM craigslist_account")) == 1
+
+
+def test_a_craigslist_account_found_signed_in_is_connected_once(us_craigslist, bus) -> None:
+    us_craigslist.request_market_connect("craigslist", CONNECT_MODE_PROBE)
+
+    connect.connect_lane(_deps(us_craigslist, bus, StubClient(login="logged_in")))
+
+    assert _texts(us_craigslist) == [craigslist_account.ACTIVATED_NOTICE]
+    assert us_craigslist.craigslist_account()["state"] == craigslist_account.ACTIVE
+
+
+def test_craigslist_is_refused_for_a_seller_outside_the_us(store, bus) -> None:
+    with pytest.raises(settings.SettingError) as excinfo:
+        settings.set_now(store, bus, key="connected_markets", raw_value=["craigslist"])
+    assert "Craigslist isn't available for SG accounts" in str(excinfo.value)

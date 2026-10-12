@@ -15,9 +15,10 @@ Two rules keep it from being expensive or surprising:
   * Bounded attempts per item and marketplace. Every attempt is minutes of browser work, so a
     failed publish is retried at most `PUBLISH_MAX_ATTEMPTS` times, spaced out (`_shots_spent`).
     What is retried freely is the cheap part: whether Chrome is up, whether Node is installed.
-  * Listing is not held by quiet hours. A listing sits there until someone looks at it, so the hour
-    it went up is not what a buyer sees. The window still holds follow-ups and nudges, which land
-    in someone's notifications at that hour.
+  * Listing is held by quiet hours only on a marketplace that polices automation. Elsewhere a
+    listing sits there until someone looks at it, so the hour it went up is not what a buyer sees;
+    on Facebook the account starting things at 4am is itself what gets noticed. The window also
+    holds follow-ups and nudges, which land in someone's notifications at that hour.
   * The outcome is reported by the daemon, from the rows the pass wrote. A publish pass has no
     conversation to report into, and asking a model to remember to send a message is how a listing
     went live once with nobody told.
@@ -39,11 +40,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import marketplaces, settings
+from sellee import craigslist_posts, marketplaces, settings
+from sellee.browser import craigslist_account, doorbell, publisher, reconcile
+from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
-from sellee.browser import publisher, reconcile
 from sellee.browser.client import BrowserError, BrowserUnavailable
-from sellee.engines import pacing as pacing_engine
+from sellee.browser.markets import craigslist
+from sellee.channel import fastpaths
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
 
@@ -68,6 +71,14 @@ NO_BROWSER_NOTICE = (
     "unaffected. Details: {reason}"
 )
 PUBLISHED_NOTICE = "{item} is now listed on {market}: {url}"
+IN_REVIEW_NOTICE = (
+    "{item} is up on {market}, and {market} is reviewing it before it shows to buyers. I'll send "
+    "you its link once the review clears."
+)
+# How often a listing in review is looked for again, and for how long, before the seller's own
+# look is the only one left.
+REVIEW_CHECK_EVERY_SEC = 30 * 60.0
+REVIEW_WAIT_SEC = 3 * 24 * 3600.0
 FAILED_NOTICE = (
     "I couldn't list {item} on {market}. Everything else about it is fine, including its "
     "carousell.ai listing. Ask me and I'll have another go at it."
@@ -91,31 +102,45 @@ class CrosslistDeps:
     # Consecutive transient publish refusals per (item, market). In process, like the notice
     # dedup beside it, so a restart errs toward one more try.
     attempts: dict = field(default_factory=dict)
+    # Per market, a check that is true while a publish must wait for a seller's answer or a
+    # sign-out to pass. In process: a restart costs one more look at the form.
+    waiting_on: dict = field(default_factory=dict)
+    # Per market, why its publishes are held back by pacing, so each hold is reported once.
+    held_for: dict = field(default_factory=dict)
+    # The daemon's one page-load governor (browser/governor.py); None paces nothing.
+    governor: object = None
     now: Callable[[], float] = time.time
+    # Reads a Craigslist post's public page; the last check made per post, in process.
+    fetch_post: Callable[[str], str] | None = None
+    post_checks: dict = field(default_factory=dict)
 
 
-def _notify_once(deps: CrosslistDeps, key: str, text: str) -> None:
+# How long a market that showed the account signed out is left before posting is tried again.
+SIGNED_OUT_HOLD_SEC = 3600.0
+SIGNED_OUT_NOTICE = (
+    "{market} shows me signed out, so posts there are on hold. I'll try again in an hour."
+)
+
+
+def _basics(deps: CrosslistDeps) -> dict:
+    return deps.store.get_seller_config_section("basics") or {}
+
+
+def _notify_once(
+    deps: CrosslistDeps, key: str, text: str, *, controls=None, durable: bool = False
+) -> None:
+    """`durable` questions are asked once ever, so a daemon restart does not ask them again."""
     if deps.notified.get(key):
         return
     deps.notified[key] = True
-    deps.store.queue_notice(text)
+    ref = f"crosslist:{key}" if durable else None
+    if ref and deps.store.has_notice_with_ref(ref):
+        return
+    deps.store.queue_notice(text, ref=ref, controls=controls)
 
 
 def _clear_notice(deps: CrosslistDeps, key: str) -> None:
     deps.notified.pop(key, None)
-
-
-def in_quiet_hours(deps: CrosslistDeps) -> bool:
-    """Whether now is inside the seller's quiet window.
-
-    Not consulted by this lane (see the module docstring); kept as the one place that resolves the
-    window against the pacing config.
-    """
-    cfg = pacing_engine.resolve(deps.config, settings.quiet_window_minutes(deps.store))
-    stamp = time.localtime(deps.now())
-    return pacing_engine.in_quiet_window(
-        stamp.tm_hour * 60 + stamp.tm_min, cfg.quiet_start_min, cfg.quiet_end_min
-    )
 
 
 def crosslist_lane(deps: CrosslistDeps) -> None:
@@ -125,6 +150,8 @@ def crosslist_lane(deps: CrosslistDeps) -> None:
     if deps.store.is_paused():
         return
     push_crosslinks(deps)
+    link_reviewed(deps)
+    craigslist_posts.sweep(deps.store, deps.bus, deps.post_checks, deps.now(), deps.fetch_post)
     enqueue_next(deps)
 
 
@@ -178,13 +205,21 @@ def _shots_spent(index, now: float) -> dict:
     """
     attempts: dict = {}
     latest: dict = {}
+    reposts: set = set()
     for row in index:
         market = row.get("market")
         if not market or market == DEFAULT_PUBLISH_MARKET:
             continue
         key = (row.get("item_id"), market)
-        if row.get("status") in ("queued", "running"):
-            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS  # in flight: hold it
+        if market == marketplaces.CRAIGSLIST and row.get("status") == "done":
+            reposts.add(key)  # a post went up, so the next go is a repost
+        if (
+            row.get("status") in ("queued", "running")
+            or row.get("unverified")
+            or row.get("retired")
+        ):
+            # In flight, a listing may already exist, or the pair is over: never queue it again.
+            attempts[key] = attempts.get(key, 0) + PUBLISH_MAX_ATTEMPTS
             continue
         attempts[key] = attempts.get(key, 0) + 1
         finished = row.get("finished_ts") or 0
@@ -192,7 +227,9 @@ def _shots_spent(index, now: float) -> dict:
     return {
         key: True
         for key, count in attempts.items()
-        if count >= PUBLISH_MAX_ATTEMPTS or (now - latest.get(key, 0)) < PUBLISH_RETRY_AFTER_SEC
+        if count >= PUBLISH_MAX_ATTEMPTS
+        or (now - latest.get(key, 0))
+        < (craigslist_posts.REPOST_AFTER_SEC if key in reposts else PUBLISH_RETRY_AFTER_SEC)
     }
 
 
@@ -210,7 +247,7 @@ def _shots_out(index) -> dict:
         if row.get("status") in ("queued", "running"):
             continue
         key = (row.get("item_id"), market)
-        attempts[key] = attempts.get(key, 0) + 1
+        attempts[key] = attempts.get(key, 0) + (PUBLISH_MAX_ATTEMPTS if row.get("retired") else 1)
     return {key: True for key, count in attempts.items() if count >= PUBLISH_MAX_ATTEMPTS}
 
 
@@ -306,15 +343,89 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     URL, which retires the pair for good.
     """
     region = deps.store.seller_region()
-    create_url = marketplaces.market_url(market, "sell", region)
     adapter = market_adapters.get_adapter(market)
-    if create_url is None or adapter is None:
+    if adapter is None:
         return
+    create_url = adapter.publish_url or marketplaces.market_url(market, "sell", region)
+    if create_url is None:
+        return
+    missing = craigslist_account.missing_for_post(market, item)
+    if missing:
+        # Craigslist refuses the form without it; asking first spends no attempt and no page.
+        _notify_once(
+            deps,
+            f"{market}:{missing}:{item['id']}",
+            craigslist_account.DESCRIPTION_NOTICE.format(title=item.get("title") or "this item"),
+            durable=True,
+        )
+        deps.bus.publish(
+            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": missing}
+        )
+        return
+    if page_governor.unprompted_held(deps.store, deps.config, market, deps.now()):
+        held = "quiet_hours"
+    elif not page_governor.has_room(deps.governor, market, adapter.publish_loads):
+        held = "page_loads"
+    else:
+        held = None
+    if held:
+        # Left eligible with no attempt spent: the morning, or the next hour's page loads, will do.
+        if deps.held_for.get(market) != held:
+            deps.held_for[market] = held
+            deps.bus.publish(
+                "crosslist.held", {"item_id": item["id"], "market": market, "reason": held}
+            )
+        return
+    deps.held_for.pop(market, None)
+    category = None
+    if market == marketplaces.CRAIGSLIST:
+        category = craigslist_posts.next_category(item, deps.store.publish_pass_index())
+        if category is None:
+            # Every category that fits has been tried; the report phase tells the seller.
+            deps.store.record_driven_publish(
+                item["id"], market, status="error", origin=ORIGIN, retired=True
+            )
+            return
+        item = {**item, craigslist.CATEGORY_KEY: category}
+    attempted: list = []
+
+    def before_commit() -> None:
+        # Ledgered unverified before the click: a crash past it must not post the item again.
+        attempted.append(
+            deps.store.record_driven_publish(
+                item["id"],
+                market,
+                status="error",
+                origin=ORIGIN,
+                unverified=True,
+                category=category,
+            )
+        )
+
+    def ledger(
+        status: str, *, unverified: bool = False, url: str | None = None, in_review: bool = False
+    ) -> None:
+        if attempted:
+            deps.store.settle_driven_publish(
+                attempted[0], status=status, unverified=unverified, url=url, in_review=in_review
+            )
+        else:
+            deps.store.record_driven_publish(
+                item["id"],
+                market,
+                status=status,
+                origin=ORIGIN,
+                unverified=unverified,
+                category=category,
+                url=url,
+                in_review=in_review,
+            )
+
     # Staged where the browser server may read from: the media store is outside its roots.
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])
     try:
         client = deps.browser_factory()
-        with client.exclusive():
+        with client.exclusive(), doorbell.visiting(client, adapter):
             outcome = publisher.publish(
                 client,
                 adapter,
@@ -322,7 +433,40 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 create_url=create_url,
                 photos=photos,
                 listings_url=marketplaces.market_url(market, "my_listings", region),
+                seller=_basics(deps),
+                before_commit=before_commit,
             )
+    except page_governor.PagesSpent:
+        # Another lane spent the page loads between the check above and the drive. Nothing was
+        # attempted, so nothing is counted; the pair is simply still eligible.
+        deps.bus.publish("browser.paced", {"market": market, "item_id": item["id"]})
+        return
+    except publisher.PublishNeedsSeller as exc:
+        # Only the seller can answer it; nothing is spent while the post waits for them.
+        key, asked = exc.key, _basics(deps).get(exc.key)
+        deps.waiting_on[market] = lambda: _basics(deps).get(key) == asked
+        _notify_once(
+            deps,
+            f"{market}:{key}:{asked}",
+            exc.question,
+            controls=fastpaths.area_controls(exc.options) or None,
+            durable=True,
+        )
+        deps.bus.publish(
+            "crosslist.needs_seller", {"item_id": item["id"], "market": market, "key": key}
+        )
+        return
+    except publisher.PublishSignedOut as exc:
+        # Not the pair's fault, so nothing is spent; signing back in is the account's business.
+        if craigslist_account.start_login(deps.store, market):
+            # The post waits on the account, as it does while one is created.
+            deps.bus.publish("crosslist.signed_out", {"item_id": item["id"], "market": market})
+            return
+        until = deps.now() + SIGNED_OUT_HOLD_SEC
+        deps.waiting_on[market] = lambda: deps.now() < until
+        _notify_once(deps, f"{market}:signed_out", SIGNED_OUT_NOTICE.format(market=exc.market))
+        deps.bus.publish("crosslist.signed_out", {"item_id": item["id"], "market": market})
+        return
     except publisher.PublishNotAttempted as exc:
         # A terminal refusal spends the pair's shot immediately; a transient one gets
         # `MAX_DRIVE_ATTEMPTS` goes and then spends it too.
@@ -341,12 +485,14 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         )
         if giving_up:
             # The row is what stops the pair qualifying; the report phase tells the seller.
-            deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+            ledger("error")
             deps.attempts.pop((item["id"], market), None)
+        elif attempted:
+            deps.store.forget_driven_publish(attempted[0])
         return
     except publisher.PublishUnverified as exc:
         # Something may exist. Never re-driven.
-        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+        ledger("error", unverified=True)
         deps.bus.publish(
             "crosslist.unverified",
             {"item_id": item["id"], "market": market, "reason": str(exc)[:200]},
@@ -358,7 +504,7 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
     except BrowserError as exc:
         # The driver should never leak a bare browser error. If one escapes we cannot tell which
         # side of the commit it came from, so treat it as the dangerous side: retire the pair.
-        deps.store.record_driven_publish(item["id"], market, status="error", origin=ORIGIN)
+        ledger("error", unverified=True)
         deps.bus.publish(
             "crosslist.unverified",
             {"item_id": item["id"], "market": market, "reason": f"unexpected: {str(exc)[:180]}"},
@@ -368,11 +514,13 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
         # Staged copies only; the item's own photographs stay in the media store.
         publisher.clear_staged(item["id"])
 
-    deps.store.record_driven_publish(
-        item["id"], market, status="done" if outcome.verified else "error", origin=ORIGIN
+    # The URL lands with the settlement: until both commit, the pair stays guarded as unverified.
+    ledger(
+        "done" if outcome.verified else "error",
+        unverified=not outcome.verified,
+        url=outcome.url if outcome.verified else None,
+        in_review=outcome.in_review,
     )
-    if outcome.verified and outcome.url:
-        deps.store.record_listing_url(item["id"], market, outcome.url)
     deps.bus.publish(
         "crosslist.published",
         {
@@ -381,20 +529,91 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
             "listing_id": outcome.listing_id,
             "url": outcome.url,
             "verified": outcome.verified,
+            "in_review": outcome.in_review,
             "reason": outcome.reason,
         },
     )
 
 
+def link_reviewed(deps: CrosslistDeps) -> None:
+    """Look again, now and then, for a listing that went up into the marketplace's review, and
+    record its link once it has one. At most one look a tick; the seller is sent the link by the
+    report phase when it lands."""
+    now = deps.now()
+    for row in deps.store.in_review_publishes():
+        if now - row["finished_ts"] > REVIEW_WAIT_SEC:
+            continue
+        if now - max(row["finished_ts"], row["checked_ts"]) < REVIEW_CHECK_EVERY_SEC:
+            continue
+        item = deps.store.get_item(row["item_id"])
+        adapter = market_adapters.get_adapter(row["market"])
+        if not item or adapter is None:
+            continue
+        if not _browser_ready(deps, row["market"]):
+            return
+        if not page_governor.has_room(deps.governor, row["market"], 2):
+            return
+        listings_url = marketplaces.market_url(
+            row["market"], "my_listings", deps.store.seller_region()
+        )
+        found = None
+        try:
+            client = deps.browser_factory()
+            with client.exclusive(), doorbell.visiting(client, adapter):
+                found = publisher.confirm_by_title(client, adapter, item, listings_url)
+        except (BrowserUnavailable, BrowserError):
+            log.debug("could not look for %s's reviewed listing", row["item_id"], exc_info=True)
+        if found is not None and found.verified and found.url:
+            deps.store.settle_reviewed_publish(row["pass_id"], found.url)
+            deps.bus.publish(
+                "crosslist.published",
+                {
+                    "item_id": row["item_id"],
+                    "market": row["market"],
+                    "listing_id": found.listing_id,
+                    "url": found.url,
+                    "verified": True,
+                    "reason": "the marketplace's review cleared",
+                },
+            )
+        else:
+            deps.store.note_review_checked(row["pass_id"], now)
+        return
+
+
 def _browser_ready(deps: CrosslistDeps, market: str) -> bool:
     """Whether a browser publish could actually run right now.
 
-    Acquiring the daemon's browser is the whole check — it verifies Node, starts Chrome when a
+    A market that has told the account to stop is refused first, and silently: the pair stays
+    eligible and spends nothing, which is the same bargain the browser check below makes for the
+    same reason — a condition that fixes itself must not cost this pair its one attempt.
+
+    Acquiring the daemon's browser is the rest of the check — it verifies Node, starts Chrome when a
     closed window is all that is missing (announcing the window itself), and raises with the
     by-hand command when it cannot. Checked before queueing rather than inside the pass, because a
     pass that cannot reach a browser would spend this pair's one attempt on a condition that fixes
     itself.
     """
+    if deps.store.market_block(market):
+        return False
+    still_waiting = deps.waiting_on.get(market)
+    if still_waiting is not None:
+        if still_waiting():
+            return False
+        del deps.waiting_on[market]
+    held = craigslist_account.hold_post(deps.store, market)
+    if held == "zip":
+        _notify_once(deps, "craigslist_zip", craigslist_account.ZIP_NOTICE, durable=True)
+    if held == "connect":
+        _notify_once(
+            deps,
+            "craigslist_connect",
+            craigslist_account.CONNECT_NOTICE,
+            controls=fastpaths.signin_controls(market),
+            durable=True,
+        )
+    if held:
+        return False
     try:
         deps.browser_factory()
     except BrowserUnavailable as exc:
@@ -435,6 +654,8 @@ def report_settled(deps: CrosslistDeps) -> int:
         market_name = marketplaces.display_name(market)
         if url:
             text = PUBLISHED_NOTICE.format(item=title, market=market_name, url=url)
+        elif row.get("in_review"):
+            text = IN_REVIEW_NOTICE.format(item=title, market=market_name)
         elif not spent.get((row["item_id"], market)) or (row["item_id"], market) in announced:
             # Another go is coming, or this pair has already had its say in this sweep. The row is
             # still marked reported so the sweep stays bounded; what is withheld is the message,

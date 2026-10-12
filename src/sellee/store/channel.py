@@ -155,19 +155,25 @@ class ChannelMixin:
 
     # --- channel inbox (durable intake; persist-then-ack in one transaction) --------------------
 
-    def ingest_updates(self, events: list, update_offset: int) -> list[InboxRecord]:
+    def ingest_updates(
+        self, events: list, update_offset: int, *, fast_path=None
+    ) -> list[InboxRecord]:
         """Persist a batch of inbound updates and advance the cursor in ONE transaction (the next
         getUpdates offset silently acks the batch): acking and durability commit together, so a
         crash either re-delivers (deduped by event_id UNIQUE) or finds the rows already safe.
-        Returns the rows actually inserted (new event_ids), arrival order, for the poller to act."""
+        Returns the rows actually inserted (new event_ids), arrival order, for the poller to act.
+
+        A row `fast_path` claims is stored already handled, so a channel pass routed in the gap
+        before the poller answers it can never claim it too."""
         now = _now()
         inserted: list[InboxRecord] = []
         with self._db.transaction() as conn:
             for ev in events:
+                handled = bool(fast_path and fast_path(ev))
                 cur = conn.execute(
                     "INSERT OR IGNORE INTO channel_inbox "
                     "(event_id, kind, text, payload, media_paths, src_ts, received_ts, "
-                    " status, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)",
+                    " status, handled_by, updated_ts) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     (
                         ev["event_id"],
                         ev["kind"],
@@ -176,6 +182,8 @@ class ChannelMixin:
                         json.dumps(ev.get("media_paths") or []),
                         ev.get("src_ts"),
                         now,
+                        "handled" if handled else "pending",
+                        "fast_path" if handled else None,
                         now,
                     ),
                 )
@@ -274,6 +282,26 @@ class ChannelMixin:
             "SELECT COUNT(*) AS n FROM channel_inbox WHERE status IN ('pending', 'claimed')"
         )
         return rows[0]["n"]
+
+    def oldest_unanswered_message(self) -> dict | None:
+        """The seller's longest-waiting unanswered message, as {id, received_ts}, or None.
+
+        The same two statuses `count_unsettled_inbox` counts, for the same reason — from the
+        seller's side "not routed yet" and "claimed by a pass that hasn't settled" are one thing.
+        What this adds is *when*, so a wait can be measured rather than only counted, and the row
+        id, which is what the threshold notice guards itself with: the same seller waiting twice is
+        two waits, and a `ref` keyed to the row reports each of them exactly once.
+
+        Oldest rather than newest: a burst of three messages is one wait, and it started when the
+        first one landed.
+        """
+        rows = self._db.query(
+            "SELECT id, received_ts FROM channel_inbox WHERE status IN ('pending', 'claimed') "
+            "ORDER BY received_ts ASC, id ASC LIMIT 1"
+        )
+        if not rows:
+            return None
+        return {"id": rows[0]["id"], "received_ts": rows[0]["received_ts"]}
 
     def recent_transcript(self, limit: int) -> list[TranscriptEntry]:
         """The recent conversational window: inbound inbox rows (any status) interleaved with the
@@ -409,3 +437,32 @@ class ChannelMixin:
         """Whether any notice — queued or delivered — was ever queued under `ref`. The durable
         once-guard for proactive pushes (retention never prunes notices)."""
         return bool(self._db.query("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)))
+
+    def has_notice_text(self, ref: str, text: str) -> bool:
+        """Whether this exact notice was ever queued under `ref`, so it can be queued once."""
+        return bool(
+            self._db.query("SELECT 1 FROM notices WHERE ref = ? AND text = ? LIMIT 1", (ref, text))
+        )
+
+    def notices_with_ref_prefix(self, prefix: str) -> list[dict]:
+        """Every notice whose ref starts with `prefix`, as {ref, status}, oldest first."""
+        rows = self._db.query(
+            "SELECT ref, status FROM notices WHERE substr(ref, 1, ?) = ? ORDER BY id ASC",
+            (len(prefix), prefix),
+        )
+        return [{"ref": r["ref"], "status": r["status"]} for r in rows]
+
+    def has_notice_for_pass(self, pass_id: str) -> bool:
+        """Whether a pass has said anything to the seller yet.
+
+        The honest mark that a pass has spoken: `send_message` stamps `pass_id` on every notice it
+        queues, so this is true from the moment the words exist rather than from when they are
+        delivered — which is what the typing indicator needs, since the drain lane clears the
+        indicator itself and would otherwise leave it re-arming behind an answer already on screen.
+
+        Two callers on purpose. The indicator stops here, and `made_progress` fails a channel pass
+        here, so "the seller is still owed a word" and "this pass did its job" are the same read
+        and cannot drift apart. Queued or delivered both count: a notice waiting on the drain is a
+        word said, not a word owed.
+        """
+        return bool(self._db.query("SELECT 1 FROM notices WHERE pass_id = ? LIMIT 1", (pass_id,)))
