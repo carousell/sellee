@@ -341,6 +341,20 @@ def test_describe_knows_whether_this_process_runs_in_the_tree_venv(tmp_path):
     assert runtime.describe(tmp_path)["running_in_venv"] is False
 
 
+def test_describe_survives_an_interpreter_that_fails_saying_nothing(tmp_path):
+    """Blank stderr is no detail, not a crash: the gate turns this report into the message, so
+    raising here would read as a broken checker rather than a broken runtime."""
+    interpreter = paths.venv_python(tmp_path)
+    interpreter.parent.mkdir(parents=True)
+    interpreter.write_text("#!/bin/sh\nprintf '\\n\\n' >&2\nexit 1\n")
+    interpreter.chmod(0o755)
+
+    report = runtime.describe(tmp_path)
+    assert report["present"] is True
+    assert report["dependencies_importable"] is False
+    assert report["detail"] == ""
+
+
 # --- the preflight gate --------------------------------------------------------------------
 
 
