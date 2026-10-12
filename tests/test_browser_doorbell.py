@@ -140,6 +140,23 @@ def test_what_rang_while_nobody_was_listening_is_kept_and_owed_nothing(store, bu
     assert not store.ring_owed("fb", now=clock.t + 10 * pacing.REACTION_CEILING_SEC)
 
 
+def test_a_replay_heard_after_the_first_look_is_still_owed_nothing(store, bus) -> None:
+    """Chrome's first answer can come back short and the rest of its replay arrive on a later look.
+    What was shown before the doorbell first heard from Chrome still rang while nobody listened."""
+    clock = _Clock()
+    chrome = _Chrome()
+    deps = _deps(store, bus, chrome, clock)
+    doorbell.doorbell_lane(deps)
+    first_look = clock.t
+
+    clock.t += 20
+    chrome.heard = [_ring("mid.$late", shown=first_look - doorbell.STALE_RING_SEC - 60)]
+    doorbell.doorbell_lane(deps)
+
+    assert store.ring_count("fb") == 1
+    assert not store.ring_owed("fb", now=clock.t + 10 * pacing.REACTION_CEILING_SEC)
+
+
 def test_a_wake_from_sleep_is_settled_before_anything_moves(store, bus) -> None:
     """Pushes sent while the laptop slept arrive together on wake, while the network is still
     coming back. The visit they ask for waits until the machine has been awake a while."""
@@ -237,6 +254,27 @@ def test_a_paused_agent_does_not_listen(store, bus) -> None:
     doorbell.doorbell_lane(_deps(store, bus, chrome, _Clock()))
 
     assert chrome.asked == 0
+
+
+def test_what_rang_while_paused_is_owed_a_visit_once_resumed(store, bus) -> None:
+    """The doorbell was listening before the pause, so a ring shown during it is a buyer still
+    waiting, however long ago — as a market read on a timer catches up on its next read."""
+    clock = _Clock()
+    chrome = _Chrome()
+    deps = _deps(store, bus, chrome, clock)
+    doorbell.doorbell_lane(deps)
+
+    store.set_paused(True)
+    chrome.heard = [_ring("mid.$paused", shown=clock.t + 60)]
+    clock.t += 86400 + 60
+    doorbell.doorbell_lane(deps)
+    store.set_paused(False)
+    clock.t += 20
+    doorbell.doorbell_lane(deps)
+
+    assert store.ring_owed(
+        "fb", now=clock.t + doorbell.WAKE_SETTLE_SEC + pacing.REACTION_CEILING_SEC
+    )
 
 
 # --- saying so when it cannot hear ----------------------------------------------------------------
