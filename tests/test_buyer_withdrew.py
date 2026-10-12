@@ -732,6 +732,9 @@ def test_a_withdrawn_buyer_is_never_followed_up_but_can_be_answered(
         {"kind": "holding"},
         {"kind": "reply", "in_msg_id": "before"},
         {"kind": "reply", "in_msg_id": "nonexistent"},
+        # Naming the message they backed out with does not make a nudge an answer.
+        {"kind": "nudge", "in_msg_id": "out"},
+        {"kind": "followup", "in_msg_id": "out"},
     ],
 )
 def test_a_withdrawn_buyer_is_not_written_to_unprompted(make_ctx, store, send) -> None:
@@ -754,8 +757,10 @@ def test_a_withdrawn_buyer_is_not_written_to_unprompted(make_ctx, store, send) -
     assert sink.sends == []
 
 
-@pytest.mark.parametrize("answering", ["out", "later"])
-def test_a_withdrawn_buyer_is_answered_on_their_own_words(make_ctx, store, answering) -> None:
+@pytest.mark.parametrize(
+    ("answering", "kind"), [("out", "reply"), ("later", "reply"), ("later", "holding")]
+)
+def test_a_withdrawn_buyer_is_answered_on_their_own_words(make_ctx, store, answering, kind) -> None:
     """The sign-off answers the message they backed out with; anything they write after is
     answered too."""
     item = _scarf_thread(store)
@@ -770,7 +775,7 @@ def test_a_withdrawn_buyer_is_answered_on_their_own_words(make_ctx, store, answe
 
     sent = dispatch(
         "send_reply",
-        {"thread_id": "fb:ks5qn", "text": "Navy!", "kind": "followup", "in_msg_id": answering},
+        {"thread_id": "fb:ks5qn", "text": "Navy!", "kind": kind, "in_msg_id": answering},
         make_ctx("attended", reply_sink=sink, config=_FAST),
     )
 

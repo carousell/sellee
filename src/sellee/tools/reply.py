@@ -91,14 +91,21 @@ def _answering_a_scam(store, params: dict) -> bool:
     return (answering.get("scam_verdict") or "") == _SCAM_VERDICT
 
 
-def _chasing_a_withdrawn_buyer(store, thread: dict, in_msg_id) -> bool:
+# Sends that answer nothing by definition, whatever message they name.
+_UNPROMPTED_KINDS = frozenset({"followup", "nudge"})
+
+
+def _chasing_a_withdrawn_buyer(store, thread: dict, kind: str, in_msg_id) -> bool:
     """Whether this send would reach a buyer who backed out without answering anything they said.
 
-    Keyed on the message rather than the send's `kind`, because the model picks the kind: a nudge
-    or a reply that names nothing is the same unprompted message as a follow-up.
+    The kind alone cannot clear a send, because the model picks it: a reply that names no message
+    is as unprompted as a follow-up. So only an answer to the message they backed out with, or to
+    one they wrote since, goes to them.
     """
     if thread["side"] != "sell" or not store.has_withdrawn(thread["item_id"], thread["thread_id"]):
         return False
+    if kind in _UNPROMPTED_KINDS:
+        return True
     return not store.answers_since_withdrawal(thread["item_id"], thread["thread_id"], in_msg_id)
 
 
@@ -143,10 +150,10 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             f"thread is {thread['status']!r} — not eligible for a {kind} "
             "(terminal/held/escalated threads are never re-engaged)"
         )
-    if _chasing_a_withdrawn_buyer(ctx.store, thread, params.get("in_msg_id")):
+    if _chasing_a_withdrawn_buyer(ctx.store, thread, kind, params.get("in_msg_id")):
         raise ToolError(
-            "the buyer backed out, so they are answered, never chased: in_msg_id has to name the "
-            "message they backed out with or one they wrote since"
+            "the buyer backed out, so they are answered, never chased: only a reply whose "
+            "in_msg_id names the message they backed out with, or one they wrote since, goes out"
         )
 
     # Acquire the send path before any reserve or intent, so "no browser" is refused with nothing
