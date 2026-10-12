@@ -14,7 +14,8 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 
-from sellee import crosslist
+from sellee import craigslist_posts, crosslist
+from sellee.browser.markets import craigslist
 from sellee.config import Config
 from sellee.rail.client import RailNetworkError, RailToolRefused, RailUnprovisioned
 
@@ -346,7 +347,7 @@ def test_a_removed_post_drops_out_and_a_repost_replaces_it(store, bus) -> None:
     deps = _deps(store, bus, rail)
     crosslist.push_crosslinks(deps)
 
-    store.archive_listing_url(item["id"], "craigslist")  # what a flagged or deleted post does
+    craigslist_posts.check(store, bus, item, lambda _url: craigslist.POST_FLAGGED)
     crosslist.push_crosslinks(deps)
     assert rail.updates[-1] == ("abc123", {"urls": []})
 
@@ -367,6 +368,19 @@ def test_a_sold_items_craigslist_post_is_not_pushed(store, bus) -> None:
     assert rail.updates == []
 
 
+def test_an_item_sold_after_its_push_is_not_pushed_again(store, bus) -> None:
+    """The sale closes the post too, but the emptied set would race the rail listing's take-down."""
+    item = _item(store, {"carousell-ai": _RAIL_URL, "craigslist": _CL_URL})
+    rail = FakeRail()
+    deps = _deps(store, bus, rail)
+    crosslist.push_crosslinks(deps)
+
+    store.negotiate_confirm_sold(item["id"], "carousell:1")
+    store.archive_listing_url(item["id"], "craigslist")
+    assert crosslist.push_crosslinks(deps) == 0
+    assert rail.updates == [("abc123", {"urls": [_CL_ENTRY]})]
+
+
 def test_a_post_on_the_sellers_own_craigslist_account_is_pushed(store, bus) -> None:
     """The push reads no account state, so a seller on their own account gets the link too."""
     store.craigslist_signed_in(
@@ -383,10 +397,37 @@ def test_a_post_on_the_sellers_own_craigslist_account_is_pushed(store, bus) -> N
     assert rail.updates == [("abc123", {"urls": [_CL_ENTRY]})]
 
 
-def test_a_craigslist_url_that_is_not_the_post_link_is_never_pushed(store, bus) -> None:
-    """The manage page shares the post's token, so only the /view/d/ link goes public."""
+@pytest.mark.parametrize(
+    "url",
+    [
+        _CL_MANAGE,
+        "https://sfbay.craigslist.org/sfc/fuo/d/teak-lamp/7712345678.html",
+        "https://www.craigslist.org.evil.com/view/d/teak-lamp/9TXkjafxYMDS5VaPLGdRyk",
+        "https://www.craigslist.org@evil.com/view/d/teak-lamp/9TXkjafxYMDS5VaPLGdRyk",
+        _CL_URL + "?lang=en",
+        _CL_URL + "#manage",
+        _CL_URL.replace("https://", "http://"),
+        _CL_URL + "/",
+        _CL_URL + "\n",
+        "javascript:alert(1)//www.craigslist.org/view/d/teak-lamp/9TXkjafxYMDS5VaPLGdRyk",
+    ],
+    ids=[
+        "manage",
+        "regional-html",
+        "host-suffix",
+        "userinfo",
+        "query",
+        "fragment",
+        "http",
+        "trailing-slash",
+        "newline",
+        "javascript",
+    ],
+)
+def test_a_craigslist_url_that_is_not_the_post_link_is_never_pushed(store, bus, url) -> None:
+    """Only the one pinned /view/d/ shape goes public; the manage page shares the post's token."""
     connect_craigslist(store)
-    _item(store, {"carousell-ai": _RAIL_URL, "carousell": _CAROUSELL_URL, "craigslist": _CL_MANAGE})
+    _item(store, {"carousell-ai": _RAIL_URL, "carousell": _CAROUSELL_URL, "craigslist": url})
     rail = FakeRail()
 
     crosslist.push_crosslinks(_deps(store, bus, rail))
@@ -524,7 +565,8 @@ def test_any_other_failure_of_a_set_with_craigslist_is_still_reported(store, bus
     assert store.crosslink_pushed_urls() == {}
 
 
-# Craigslist links that are not the post's public page: none may ever be pushed.
+# Craigslist links outside the pinned /view/d/ shape, none of which may ever be pushed: the manage
+# page, and a regional .html address that is the post's public page in a shape we do not pin.
 _NOT_POST_LINKS = [_CL_MANAGE, "https://sfbay.craigslist.org/sfc/fuo/d/teak-lamp/7712345678.html"]
 _MARKETS = ["carousell-ai", "carousell", "fb", "craigslist", "mercari"]
 _URLS = st.sampled_from(
