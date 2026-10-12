@@ -2,6 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import tempfile
+
+import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
+
 from sellee.installer import region
 
 
@@ -185,3 +192,325 @@ def test_zone_error_is_never_stricter_than_the_write_door() -> None:
         except BasicsError:
             refused_there = True
         assert refused_here == refused_there, name
+
+
+# --- the timezone as a place ---------------------------------------------------------------------
+
+_ZONE_TAB = """\
+# tz zone descriptions (fixture)
+ES\t+4024-00341\tEurope/Madrid\tSpain (mainland)
+ES\t+3553-00519\tAfrica/Ceuta\tCeuta, Melilla
+ES\t+2806-01524\tAtlantic/Canary\tCanary Islands
+FR\t+4852+00220\tEurope/Paris
+PT\t+3843-00908\tEurope/Lisbon\tPortugal (mainland)
+PT\t+3238-01654\tAtlantic/Madeira\tMadeira Islands
+PT\t+3744-02540\tAtlantic/Azores\tAzores
+DE\t+5230+01322\tEurope/Berlin\tmost of Germany
+DE\t+4742+00841\tEurope/Busingen\tBusingen
+US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
+US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+US\t+415100-0873900\tAmerica/Chicago\tCentral (most areas)
+US\t+394421-1045903\tAmerica/Denver\tMountain (most areas)
+US\t+332654-1120424\tAmerica/Phoenix\tMST - AZ (except Navajo)
+US\t+340308-1181434\tAmerica/Los_Angeles\tPacific
+US\t+211825-1575130\tPacific/Honolulu\tHawaii
+US\t+381515-0854534\tAmerica/Kentucky/Louisville\tEastern - KY (Louisville area)
+US\t+411745-0863730\tAmerica/Indiana/Knox\tCentral - IN (Starke)
+US\t+515248-1763929\tAmerica/Adak\tAlaska - western Aleutians
+AU\t-3133+15905\tAustralia/Lord_Howe\tLord Howe Island
+AU\t-4253+14719\tAustralia/Hobart\tTasmania
+AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)
+AU\t-3157+14127\tAustralia/Broken_Hill\tNew South Wales (Yancowinna)
+AU\t-2728+15302\tAustralia/Brisbane\tQueensland (most areas)
+AU\t-2016+14900\tAustralia/Lindeman\tQueensland (Whitsunday Islands)
+AU\t-3455+13835\tAustralia/Adelaide\tSouth Australia
+AU\t-1228+13050\tAustralia/Darwin\tNorthern Territory
+AU\t-3157+11551\tAustralia/Perth\tWestern Australia (most areas)
+AU\t-3143+12852\tAustralia/Eucla\tWestern Australia (Eucla)
+CA\t+4734-05243\tAmerica/St_Johns\tNewfoundland, Labrador (SE)
+CA\t+4439-06336\tAmerica/Halifax\tAtlantic - NS (most areas), PE
+CA\t+4612-05957\tAmerica/Glace_Bay\tAtlantic - NS (Cape Breton)
+CA\t+5024-10439\tAmerica/Regina\tCST - SK (most areas)
+CA\t+5017-10750\tAmerica/Swift_Current\tCST - SK (midwest)
+IN\t+2232+08822\tAsia/Kolkata
+XX\t+0000+00000\tNowhere/Atlantis\tA zone no database has
+"""
+
+
+@pytest.fixture
+def zone_tab(tmp_path):
+    path = tmp_path / "zone.tab"
+    path.write_text(_ZONE_TAB)
+    return str(path)
+
+
+def test_a_country_the_table_names_is_offered_by_zone_most_populous_first(zone_tab) -> None:
+    # A seller in Dallas finds Central by its name, not by knowing Chicago shares it.
+    assert region.place_zones("US", zone_tab) == [
+        ("Eastern — New York", "America/New_York"),
+        ("Central — Chicago", "America/Chicago"),
+        ("Mountain — Denver", "America/Denver"),
+        ("Pacific — Los Angeles", "America/Los_Angeles"),
+        ("Arizona — Phoenix", "America/Phoenix"),
+        ("Anchorage", "America/Anchorage"),
+        ("Hawaii — Honolulu", "Pacific/Honolulu"),
+        ("Aleutian Islands — Adak", "America/Adak"),
+    ]
+
+
+def test_zones_only_zone_tab_lists_follow_the_tables_own(zone_tab) -> None:
+    # The table names one Australian zone; a seller in Perth or Brisbane still needs theirs.
+    assert [zone for _, zone in region.place_zones("AU", zone_tab)] == [
+        "Australia/Sydney",
+        "Australia/Lord_Howe",
+        "Australia/Brisbane",
+        "Australia/Adelaide",
+        "Australia/Darwin",
+        "Australia/Perth",
+        "Australia/Eucla",
+    ]
+    canadian = [zone for _, zone in region.place_zones("CA", zone_tab)]
+    assert "America/St_Johns" in canadian
+    assert "America/Glace_Bay" not in canadian
+    assert "America/Swift_Current" not in canadian
+
+
+def test_a_place_whose_clock_is_already_listed_is_left_out(zone_tab) -> None:
+    # Indiana's, Kentucky's and the table's own second zones keep Eastern, Central or Alaska
+    # time; listing each would bury the seven a US seller actually chooses between.
+    listed = {zone for _, zone in region.place_zones("US", zone_tab)}
+    for zone in (
+        "America/Detroit",
+        "America/Boise",
+        "America/Juneau",
+        "America/Indiana/Indianapolis",
+        "America/Kentucky/Louisville",
+        "America/Indiana/Knox",
+    ):
+        assert zone not in listed, zone
+
+
+def test_clocks_are_compared_over_the_coming_year_not_their_history(zone_tab) -> None:
+    from datetime import datetime, timezone
+
+    # Most of Indiana kept no daylight saving until 2006, so its clock differed from New York's
+    # then, and does not now.
+    before = datetime(2005, 1, 1, tzinfo=timezone.utc)
+    assert "America/Indiana/Indianapolis" in {
+        zone for _, zone in region.place_zones("US", zone_tab, now=before)
+    }
+    assert "America/Indiana/Indianapolis" not in {
+        zone for _, zone in region.place_zones("US", zone_tab)
+    }
+
+
+def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
+    # Ceuta keeps mainland time, so it is not offered beside it.
+    assert region.place_zones("ES", zone_tab) == [
+        ("Spain — Madrid", "Europe/Madrid"),
+        ("Canary Islands", "Atlantic/Canary"),
+    ]
+
+
+def test_a_label_drops_zone_tabs_main_area_marker(zone_tab) -> None:
+    assert [label for label, _ in region.place_zones("AU", zone_tab)] == [
+        "New South Wales — Sydney",
+        "Lord Howe Island",
+        "Queensland — Brisbane",
+        "South Australia — Adelaide",
+        "Northern Territory — Darwin",
+        "Western Australia — Perth",
+        "Western Australia — Eucla",
+    ]
+    assert region.place_zones("DE", zone_tab) == [("Germany — Berlin", "Europe/Berlin")]
+
+
+@pytest.mark.parametrize(
+    ("zone", "description", "label"),
+    [
+        ("America/Toronto", "Eastern - ON & QC (most areas)", "Eastern — Toronto"),
+        ("America/Halifax", "Atlantic - NS (most areas), PE", "Atlantic — Halifax"),
+        ("America/Atikokan", "EST - ON (Atikokan), NU (Coral H)", "EST — Atikokan"),
+        ("America/Ciudad_Juarez", "Chihuahua (US border - west)", "Chihuahua — Ciudad Juarez"),
+        ("Asia/Kuala_Lumpur", "Malaysia (peninsula)", "Malaysia — Kuala Lumpur"),
+        ("Asia/Pontianak", "Borneo (west, central)", "Borneo — Pontianak"),
+        (
+            "Asia/Makassar",
+            "Borneo (east, south), Sulawesi/Celebes, Bali",
+            "Borneo, Sulawesi/Celebes, Bali — Makassar",
+        ),
+        ("America/St_Johns", "Newfoundland, Labrador (SE)", "Newfoundland, Labrador — St Johns"),
+        ("Atlantic/Canary", "Canary Islands", "Canary Islands"),
+        ("America/Phoenix", "MST - AZ (except Navajo)", "Arizona — Phoenix"),
+    ],
+)
+def test_a_label_says_where_a_zone_applies_and_leaves_out_the_rest(
+    zone, description, label
+) -> None:
+    # Abbreviated states after " - " and parenthetical carve-outs read as noise to a seller; the
+    # city beside the area says where the zone is.
+    assert region._place_label(zone, description) == label
+
+
+def test_a_zone_tab_line_without_a_comment_is_labelled_by_its_city(zone_tab) -> None:
+    assert region.place_zones("FR", zone_tab) == [("Paris", "Europe/Paris")]
+
+
+def test_a_zone_the_database_does_not_have_is_never_offered(zone_tab) -> None:
+    assert region.place_zones("XX", zone_tab) == []
+
+
+def test_zone_tab_is_read_from_the_zone_search_path(monkeypatch, tmp_path) -> None:
+    import zoneinfo
+
+    empty, database = tmp_path / "empty", tmp_path / "database"
+    empty.mkdir()
+    database.mkdir()
+    (database / "zone.tab").write_text(_ZONE_TAB)
+    monkeypatch.setattr(zoneinfo, "TZPATH", (str(empty), str(database)))
+
+    assert region.zone_tab_path() == str(database / "zone.tab")
+    assert region.place_zones("FR") == [("Paris", "Europe/Paris")]
+
+
+def test_a_search_path_without_zone_tab_falls_back_to_the_usual_place(
+    monkeypatch, tmp_path
+) -> None:
+    import zoneinfo
+
+    monkeypatch.setattr(zoneinfo, "TZPATH", (str(tmp_path),))
+    assert region.zone_tab_path() == "/usr/share/zoneinfo/zone.tab"
+
+
+def test_without_zone_tab_only_the_table_answers(tmp_path) -> None:
+    missing = str(tmp_path / "absent.tab")
+    assert region.place_zones("SG", missing) == [("Singapore", "Asia/Singapore")]
+    assert region.place_zones("ES", missing) == []
+
+
+@given(
+    code=st.sampled_from(["US", "CA", "AU", "ID", "MY", "SG", "ES", "FR", "PT", "IN", "XX", "ZZ"])
+)
+def test_every_offered_place_is_a_zone_the_write_door_takes(code) -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "zone.tab")
+        with open(path, "w") as handle:
+            handle.write(_ZONE_TAB)
+        for _label, zone in region.place_zones(code, path):
+            assert region.zone_error(zone) == "", zone
+
+
+def test_a_city_is_matched_ignoring_case_spaces_and_underscores(zone_tab) -> None:
+    assert region.zones_for_city("los angeles", zone_tab) == ["America/Los_Angeles"]
+    assert region.zones_for_city("LOS_ANGELES", zone_tab) == ["America/Los_Angeles"]
+    assert region.zones_for_city("  Madrid ", zone_tab) == ["Europe/Madrid"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "zone"),
+    [
+        ("São Paulo", "America/Sao_Paulo"),
+        ("Zürich", "Europe/Zurich"),
+        ("St. John's", "America/St_Johns"),
+        ("port au prince", "America/Port-au-Prince"),
+        ("Los Angeles, CA", "America/Los_Angeles"),
+        ("Paris, France", "Europe/Paris"),
+    ],
+)
+def test_a_city_is_matched_through_accents_punctuation_and_a_trailing_region(
+    zone_tab, typed, zone
+) -> None:
+    assert region.zones_for_city(typed, zone_tab) == [zone]
+
+
+def test_an_offsets_sign_still_tells_two_zones_apart(zone_tab) -> None:
+    assert region.zones_for_city("GMT+8", zone_tab) == ["Etc/GMT+8"]
+    assert region.zones_for_city("GMT-8", zone_tab) == ["Etc/GMT-8"]
+
+
+def test_a_city_with_no_zone_of_its_own_matches_nothing(zone_tab) -> None:
+    assert region.zones_for_city("Barcelona", zone_tab) == []
+    assert region.zones_for_city("Austin, TX", zone_tab) == []
+    assert region.zones_for_city("", zone_tab) == []
+    assert region.zones_for_city(", CA", zone_tab) == []
+
+
+def test_a_city_named_by_a_legacy_link_too_prefers_the_zone_tab_zone(zone_tab) -> None:
+    # America/Indianapolis is a legacy link to the zone.tab name; one city is one answer, not two.
+    assert region.zones_for_city("indianapolis", zone_tab) == ["America/Indiana/Indianapolis"]
+
+
+@pytest.mark.parametrize(
+    ("typed", "canonical", "alias"),
+    [
+        ("utc", "Etc/UTC", "UTC"),
+        ("gmt", "Etc/GMT", "GMT"),
+        ("singapore", "Asia/Singapore", "Singapore"),
+        ("hong kong", "Asia/Hong_Kong", "Hongkong"),
+        ("indianapolis", "America/Indiana/Indianapolis", "America/Indianapolis"),
+        ("buenos aires", "America/Argentina/Buenos_Aires", "America/Buenos_Aires"),
+    ],
+)
+def test_names_for_one_clock_are_offered_once_as_the_canonical_one(
+    tmp_path, typed, canonical, alias
+) -> None:
+    # Without zone.tab nothing lists the canonical name, so it is told apart by its shape.
+    import zoneinfo
+
+    if alias not in zoneinfo.available_timezones():
+        pytest.skip(f"this zone database has no {alias} link")
+    assert region.zones_for_city(typed, str(tmp_path / "absent.tab")) == [canonical]
+
+
+def test_a_zone_name_typed_exactly_is_the_one_offered(tmp_path) -> None:
+    assert region.zones_for_city("UTC", str(tmp_path / "absent.tab")) == ["UTC"]
+
+
+def test_names_for_different_clocks_are_all_offered(tmp_path) -> None:
+    import zoneinfo
+
+    if not {"Australia/West", "Brazil/West"} <= zoneinfo.available_timezones():
+        pytest.skip("this zone database has no legacy West links")
+    found = region.zones_for_city("west", str(tmp_path / "absent.tab"))
+    assert found == ["Australia/West", "Brazil/West"]
+
+
+def test_the_zone_database_is_listed_once_however_many_cities_are_asked(
+    monkeypatch, zone_tab
+) -> None:
+    # Listing it opens every file in it, which is too slow to repeat on each typed answer.
+    import zoneinfo
+
+    listed = []
+    available = zoneinfo.available_timezones
+
+    def counting():
+        listed.append(1)
+        return available()
+
+    monkeypatch.setattr(zoneinfo, "available_timezones", counting)
+    region._zones_by_city.cache_clear()
+    try:
+        for city in ("los angeles", "Madrid", "Barcelona", "kolkata"):
+            region.zones_for_city(city, zone_tab)
+    finally:
+        region._zones_by_city.cache_clear()
+    assert len(listed) == 1
+
+
+@settings(max_examples=60, deadline=None)
+@given(
+    zone=st.sampled_from(
+        ["America/Los_Angeles", "America/New_York", "Europe/Madrid", "Asia/Kolkata"]
+    ),
+    upper=st.booleans(),
+    spaced=st.booleans(),
+    suffix=st.sampled_from(["", ", CA", ",ES", ", India", "."]),
+)
+def test_a_zones_own_city_always_finds_it(zone, upper, spaced, suffix) -> None:
+    city = zone.rsplit("/", 1)[-1]
+    typed = city.replace("_", " ") if spaced else city
+    typed = (typed.upper() if upper else typed.lower()) + suffix
+    found = region.zones_for_city(typed, "/nonexistent/zone.tab")
+    assert zone in found
+    assert all(region.zone_error(name) == "" for name in found)
