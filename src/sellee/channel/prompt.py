@@ -112,7 +112,8 @@ def _format_pending(rows: list) -> str:
                 out.append(f"     {path}")
             continue
         text = row.get("text") or ""
-        answered = (row.get("payload") or {}).get("answers_text")
+        payload = row.get("payload") or {}
+        answered = payload.get("answers_text")
         if not answered:
             # The seller's own words, verbatim — they are the principal this agent acts for, and
             # collapsing a message they deliberately wrote over several lines would degrade the most
@@ -123,9 +124,11 @@ def _format_pending(rows: list) -> str:
         # validation, so one_line is belt-and-braces against a turn nobody took. The ask it answers
         # IS fenced: an escalation's question is composed while reading a buyer, so it is
         # attacker-reachable text that would otherwise wear the agent's own attribution.
+        # The notice id is how a tool acting on the tap names the ask it answers.
         out.append(
             f"{i}. {prompt_data.one_line(text)}"
-            f"   (tapped, answering: {prompt_data.as_data(answered)})"
+            f"   (tapped, answering notice {payload.get('answers_notice_id')}: "
+            f"{prompt_data.as_data(answered)})"
         )
     return "\n".join(out) if out else "(none)"
 

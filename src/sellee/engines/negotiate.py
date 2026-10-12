@@ -33,6 +33,8 @@ FIRMNESS_PRESETS = {
 # Its preset reproduces DEFAULTS exactly, so treating it as neutral changes no number — it only
 # avoids overwriting a tuned config with the values it already equals.
 NEUTRAL_FIRMNESS = "balanced"
+# Buyers whose offer no longer stands: sellee walked away, another buyer won, or they backed out.
+NOT_STANDING = ("passed", "lost", "withdrew")
 
 
 class BelowFloorError(AssertionError):
@@ -113,10 +115,25 @@ def record_offer(buyer: dict, offer, held_for_floor: bool = False) -> bool:
     return True
 
 
+def best_standing(buyers: dict) -> tuple | None:
+    """The standing buyer with the highest offer, as (thread_id, offer), or None when no one has
+    a standing offer. A tie goes to the later thread id, so the answer never depends on load order.
+    """
+    standing = [
+        (b["highest_offer"], tid)
+        for tid, b in buyers.items()
+        if b.get("status") not in NOT_STANDING and b.get("highest_offer", 0) > 0
+    ]
+    if not standing:
+        return None
+    offer, thread_id = max(standing)
+    return thread_id, offer
+
+
 def other_best(buyers: dict, thread_id: str) -> int:
     best = 0
     for tid, b in buyers.items():
-        if tid != thread_id and b.get("status") not in ("passed", "lost"):
+        if tid != thread_id and b.get("status") not in NOT_STANDING:
             best = max(best, b.get("highest_offer", 0))
     return best
 
