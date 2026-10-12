@@ -626,6 +626,33 @@ def test_a_strict_legacy_server_gets_the_ready_notification_before_any_call() ->
         assert _headers(ready)["mcp-session-id"] == "s1"
 
 
+def test_a_method_not_found_at_200_means_legacy() -> None:
+    """A legacy server that accepts the version header answers server/discover as an unknown
+    method at HTTP 200, so the client initializes."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.lenient = True
+        _client(base).create_listing({"title": "x"})
+        assert [r["method"] for r in server.eras.requests] == [
+            "server/discover",
+            "initialize",
+            "notifications/initialized",
+            "tools/call",
+        ]
+
+
+def test_a_method_not_found_at_404_means_modern() -> None:
+    """A modern server answers a method it lacks with 404 and -32601, which the spec counts as a
+    modern error, so the client stays modern."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.no_discover = True
+        _client(base).create_listing({"title": "x"})
+        assert server.eras.count("initialize") == 0
+        (call,) = server.eras.calls()
+        assert _headers(call)["mcp-protocol-version"] == MODERN
+
+
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
 _REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 

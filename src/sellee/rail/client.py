@@ -36,6 +36,8 @@ _LEGACY = "2025-06-18"
 _LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # JSON-RPC errors only a 2026-07-28 server sends, so a probe answered with one met a modern server.
 _MODERN_ERRORS = (-32020, -32021)
+# A modern server answers a method it lacks with HTTP 404 and this code; a legacy one uses 200.
+_METHOD_NOT_FOUND = -32601
 _MODERN_META = {
     "io.modelcontextprotocol/protocolVersion": _MODERN,
     "io.modelcontextprotocol/clientCapabilities": {},
@@ -164,7 +166,8 @@ class RailClient:
         except _HTTPAnswer as exc:
             if exc.status not in (400, 404, 405):
                 raise _http_error(exc) from exc
-            if _rpc_error_code(exc.body) in _MODERN_ERRORS:
+            code = _rpc_error_code(exc.body)
+            if code in _MODERN_ERRORS or (exc.status == 404 and code == _METHOD_NOT_FOUND):
                 return self._cache(_MODERN_ERA)
         except RailToolRefused as exc:
             if exc.code in _MODERN_ERRORS:

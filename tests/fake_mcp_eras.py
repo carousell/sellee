@@ -24,6 +24,11 @@ class EraLog:
         # server does; go-sdk does not check. The empty-string session stands for "no session id".
         self.require_ready = False
         self.ready: set = set()
+        # Legacy only: accept any version header, as many legacy servers do, so an unknown method
+        # such as server/discover is answered with a -32601 error at HTTP 200.
+        self.lenient = False
+        # Modern only: no server/discover, answered as the spec says: HTTP 404 with -32601.
+        self.no_discover = False
         # Modern only: a JSON-RPC error code to answer server/discover with, at HTTP 200.
         self.discover_error = 0
         self.requests: list = []
@@ -44,11 +49,11 @@ def answer(handler, body: dict, log: EraLog) -> bool:
     log.requests.append({"method": method, "headers": headers, "params": params})
     supported = ((MODERN,) if log.era == "modern" else ()) + LEGACY_VERSIONS
     version = headers.get("mcp-protocol-version", "")
-    if (version or "2025-03-26") not in supported:
+    if (version or "2025-03-26") not in supported and not (log.lenient and log.era == "legacy"):
         # go-sdk rejects an unknown version header in plain text, before reading the body.
         _plain(handler, 400, "Bad Request: Unsupported protocol version")
         return True
-    if version == MODERN:
+    if version == MODERN and log.era == "modern":
         return _modern(handler, body, headers, method, params, supported, log)
     session = headers.get("mcp-session-id", "")
     if session and session in log.dropped:
@@ -88,6 +93,9 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
     meta = params.get("_meta") or {}
     if meta.get(META_VERSION) != MODERN or not isinstance(meta.get(META_CAPABILITIES), dict):
         _error(handler, 200, body, -32602, "missing or invalid _meta")
+        return True
+    if method == "server/discover" and log.no_discover:
+        _error(handler, 404, body, -32601, "method not found")
         return True
     if method == "server/discover" and log.discover_error:
         _error(handler, 200, body, log.discover_error, "missing required client capabilities")
