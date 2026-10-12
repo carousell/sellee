@@ -5,7 +5,7 @@ so the contract that matters isn't just "rejects bad input," it's "always reject
 
 from __future__ import annotations
 
-from decimal import Decimal, InvalidOperation
+from decimal import Decimal
 
 import pytest
 from hypothesis import assume, given, settings
@@ -73,25 +73,12 @@ anything = st.one_of(
     st.dictionaries(st.text(), st.integers()),
 )
 
-# Past the decimal context precision the conversion escapes as InvalidOperation. That hole is
-# pinned by test_an_extreme_magnitude_is_rejected_as_value_error, so it is excluded here.
-_LIMIT = Decimal(10**20)
-
-
-def _within_supported_magnitude(value: object) -> bool:
-    try:
-        dollars = Decimal(str(value))
-    except (InvalidOperation, TypeError, ValueError):
-        return True
-    return not dollars.is_finite() or abs(dollars) < _LIMIT
-
 
 @_PROPERTY
 @given(anything)
 def test_it_returns_an_int_or_raises_value_error_and_nothing_else(value: object) -> None:
     """The total contract. Every caller catches ValueError only, so another exception type
     reaching them is an outage, not a rejected price."""
-    assume(_within_supported_magnitude(value))
     try:
         result = to_price_cents(value)
     except ValueError:
@@ -128,14 +115,13 @@ def test_a_positive_price_under_half_a_cent_is_rejected_not_made_free(dollars: D
         to_price_cents(dollars)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="Known hole: past the decimal context precision the quantize escapes as "
-    "InvalidOperation, the failure mode the infinity/NaN test above already guards for. "
-    "Remove this marker when an out-of-range magnitude is rejected as ValueError.",
-)
 @_PROPERTY
-@given(st.decimals(min_value=Decimal("1E+27"), max_value=Decimal("1E+40"), allow_nan=False))
-def test_an_extreme_magnitude_is_rejected_as_value_error(dollars: Decimal) -> None:
+@given(st.integers(min_value=1, max_value=999), st.integers(min_value=26, max_value=2_000_000))
+def test_a_magnitude_past_the_decimal_range_is_rejected_as_value_error(
+    digits: int, exponent: int
+) -> None:
+    """From 1E+26 dollars the cents outgrow the decimal context's 28 digits and the quantize
+    raises InvalidOperation; past its exponent range the multiply raises Overflow. Neither is a
+    ValueError, so either would escape every caller, as infinity and NaN once did."""
     with pytest.raises(ValueError):
-        to_price_cents(dollars)
+        to_price_cents(Decimal(f"{digits}E+{exponent}"))
