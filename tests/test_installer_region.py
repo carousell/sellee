@@ -246,6 +246,28 @@ def test_a_zone_the_database_does_not_have_is_never_offered(zone_tab) -> None:
     assert region.place_zones("XX", zone_tab) == []
 
 
+def test_zone_tab_is_read_from_the_zone_search_path(monkeypatch, tmp_path) -> None:
+    import zoneinfo
+
+    empty, database = tmp_path / "empty", tmp_path / "database"
+    empty.mkdir()
+    database.mkdir()
+    (database / "zone.tab").write_text(_ZONE_TAB)
+    monkeypatch.setattr(zoneinfo, "TZPATH", (str(empty), str(database)))
+
+    assert region.zone_tab_path() == str(database / "zone.tab")
+    assert region.place_zones("FR") == [("Paris", "Europe/Paris")]
+
+
+def test_a_search_path_without_zone_tab_falls_back_to_the_usual_place(
+    monkeypatch, tmp_path
+) -> None:
+    import zoneinfo
+
+    monkeypatch.setattr(zoneinfo, "TZPATH", (str(tmp_path),))
+    assert region.zone_tab_path() == "/usr/share/zoneinfo/zone.tab"
+
+
 def test_without_zone_tab_only_the_table_answers(tmp_path) -> None:
     missing = str(tmp_path / "absent.tab")
     assert region.place_zones("SG", missing) == [("Singapore", "Asia/Singapore")]

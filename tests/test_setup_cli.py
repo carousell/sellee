@@ -603,7 +603,7 @@ US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
 def zone_tab(monkeypatch, tmp_path):
     path = tmp_path / "zone.tab"
     path.write_text(_ZONE_TAB)
-    monkeypatch.setattr(region_guess, "ZONE_TAB", str(path))
+    monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(path))
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "")
     return path
 
@@ -650,7 +650,7 @@ def test_a_city_with_no_zone_asks_for_the_nearest_big_city(zone_tab) -> None:
 
 def test_a_city_several_zones_share_is_picked_from_a_list(zone_tab, monkeypatch, tmp_path) -> None:
     # Without zone.tab nothing marks the legacy link as the lesser name, so both are offered.
-    monkeypatch.setattr(region_guess, "ZONE_TAB", str(tmp_path / "absent.tab"))
+    monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(tmp_path / "absent.tab"))
     zone, out = _ask_timezone("BR", ["indianapolis", "1"])
     assert zone == "America/Indiana/Indianapolis"
     assert "1) America/Indiana/Indianapolis\n2) America/Indianapolis\n" in out
@@ -659,7 +659,7 @@ def test_a_city_several_zones_share_is_picked_from_a_list(zone_tab, monkeypatch,
 def test_without_zone_tab_the_table_still_lists_and_others_get_the_city_question(
     zone_tab, monkeypatch, tmp_path
 ) -> None:
-    monkeypatch.setattr(region_guess, "ZONE_TAB", str(tmp_path / "absent.tab"))
+    monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(tmp_path / "absent.tab"))
     zone, out = _ask_timezone("US", ["2"])
     assert zone == "America/Chicago"
     zone, out = _ask_timezone("ES", ["madrid", ""])

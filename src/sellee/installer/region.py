@@ -92,9 +92,20 @@ def zones_for(region: str) -> list:
     return [zone for zone, code in _ZONE_REGIONS.items() if code == region]
 
 
-# The OS's zones by country, with labels. macOS and Debian ship it; without it setup uses the
-# table above, then asks for a city.
-ZONE_TAB = "/usr/share/zoneinfo/zone.tab"
+# Where macOS and Debian keep their zone files, and `zone.tab` beside them: the OS's zones by
+# country, with labels. Without it setup uses the table above, then asks for a city.
+_USUAL_ZONE_DIR = "/usr/share/zoneinfo"
+
+
+def zone_tab_path() -> str:
+    """The `zone.tab` of the first zone directory the interpreter searches that has one."""
+    import zoneinfo
+
+    for directory in (*zoneinfo.TZPATH, _USUAL_ZONE_DIR):
+        path = os.path.join(directory, "zone.tab")
+        if os.path.isfile(path):
+            return path
+    return os.path.join(_USUAL_ZONE_DIR, "zone.tab")
 
 
 def place_zones(region: str, zone_tab: str | None = None) -> list:
@@ -145,7 +156,7 @@ def _city_key(text: str) -> str:
 def _read_zone_tab(path: str | None) -> list:
     """(country, zone, label) per line of `zone.tab`, or none when it cannot be read."""
     try:
-        with open(path or ZONE_TAB, encoding="utf-8") as handle:
+        with open(path or zone_tab_path(), encoding="utf-8") as handle:
             lines = handle.read().splitlines()
     except OSError:
         return []
