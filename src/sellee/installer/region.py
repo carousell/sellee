@@ -111,23 +111,44 @@ def zone_tab_path() -> str:
     return os.path.join(_USUAL_ZONE_DIR, "zone.tab")
 
 
-def place_zones(region: str, zone_tab: str | None = None) -> list:
-    """(label, zone) pairs to offer for this region: the table above's zones in its order, then any
-    others `zone.tab` lists for it. Each is labelled by `zone.tab`'s description of where it
-    applies and the zone's city ("Eastern — New York"), so a seller in a city no zone is named
-    after can still find theirs."""
+def place_zones(region: str, zone_tab: str | None = None, now: datetime | None = None) -> list:
+    """(label, zone) pairs to offer for this region, one per clock it keeps over the coming year:
+    the table above's zones in its order, then the others `zone.tab` lists for it, with an area's
+    exceptions after the rest so its main zone is the one kept ("South Australia" over "New South
+    Wales (Yancowinna)"). Each is labelled by `zone.tab`'s description of where it applies and the
+    zone's city ("Eastern — New York"), so a seller in a city no zone is named after can still
+    find theirs."""
     described = {zone: label for code, zone, label in _read_zone_tab(zone_tab) if code == region}
     table = zones_for(region)
-    zones = table + [zone for zone in described if zone not in table]
+    exceptions = _area_exceptions(described)
+    others = sorted(
+        (zone for zone in described if zone not in table), key=lambda zone: zone in exceptions
+    )
+    zones = [zone for zone in table + others if not zone_error(zone)]
+    since = now or datetime.now(timezone.utc)
     return [
         (_place_label(zone, described.get(zone, "")), zone)
-        for zone in zones
-        if not zone_error(zone)
+        for zone in _one_per_clock(zones, since, _COMING_YEAR_WEEKS)
     ]
 
 
 # How `zone.tab` marks a country's main zone: "Eastern (most areas)", "most of Germany".
 _MAIN_AREA = re.compile(r"^most of |\s*\(most areas\)")
+
+
+def _area_exceptions(described: dict) -> set:
+    """The zones `zone.tab` describes as an exception within an area it names a main zone for:
+    "Queensland (Whitsunday Islands)" beside "Queensland (most areas)"."""
+    mains = {_area(text) for text in described.values() if _MAIN_AREA.search(text)}
+    return {
+        zone
+        for zone, text in described.items()
+        if not _MAIN_AREA.search(text) and _area(text) in mains
+    }
+
+
+def _area(description: str) -> str:
+    return description.split("(", 1)[0].strip()
 
 
 def _place_label(zone: str, description: str) -> str:
@@ -151,7 +172,7 @@ def zones_for_city(text: str, zone_tab: str | None = None) -> list:
         (zone for zone in _zones_by_city().get(wanted, ()) if not zone_error(zone)),
         key=lambda zone: _canonical_first(zone, listed, text.strip()),
     )
-    return _one_per_clock(found)
+    return _one_per_clock(found, _HISTORY_SINCE, _HISTORY_WEEKS)
 
 
 # The areas canonical zone names sit under. A name outside them ("Singapore", "US/Pacific") is a
@@ -169,26 +190,28 @@ def _canonical_first(zone: str, listed: set, typed: str) -> tuple:
     return (zone not in listed, not in_area, zone != typed, -zone.count("/"), zone)
 
 
-# Offsets are compared weekly from 1970, where the database's history is complete, for 70 years.
-_CLOCK_SINCE = datetime(1970, 1, 1, tzinfo=timezone.utc)
-_CLOCK_WEEKS = 52 * 70
+# Offsets are compared weekly. Two names are one zone when they agree from 1970, where the
+# database's history is complete, for 70 years; two places keep one clock when they agree over
+# the coming year, since a difference that has ended no longer matters to the seller.
+_HISTORY_SINCE = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_HISTORY_WEEKS = 52 * 70
+_COMING_YEAR_WEEKS = 53
 
 
-def _one_per_clock(zones: list) -> list:
-    """`zones` less any that keep the same time as one before it."""
+def _one_per_clock(zones: list, since: datetime, weeks: int) -> list:
+    """`zones` less any that keep the same time as one before it for `weeks` from `since`."""
     if len(zones) < 2:
         return zones
-    clocks = [_clock(zone) for zone in zones]
+    clocks = [_clock(zone, since, weeks) for zone in zones]
     return [zone for index, zone in enumerate(zones) if clocks[index] not in clocks[:index]]
 
 
-def _clock(zone: str) -> tuple:
+def _clock(zone: str, since: datetime, weeks: int) -> tuple:
     import zoneinfo
 
     tz = zoneinfo.ZoneInfo(zone)
     return tuple(
-        (_CLOCK_SINCE + timedelta(weeks=week)).astimezone(tz).utcoffset()
-        for week in range(_CLOCK_WEEKS)
+        (since + timedelta(weeks=week)).astimezone(tz).utcoffset() for week in range(weeks)
     )
 
 

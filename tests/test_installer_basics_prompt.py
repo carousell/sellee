@@ -23,6 +23,7 @@ US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
 US\t+415100-0873900\tAmerica/Chicago\tCentral (most areas)
 US\t+394421-1045903\tAmerica/Denver\tMountain (most areas)
 US\t+340308-1181434\tAmerica/Los_Angeles\tPacific
+US\t+515248-1763929\tAmerica/Adak\tAlaska - western Aleutians
 """
 
 
@@ -51,26 +52,25 @@ def _ask_timezone(region, replies):
 
 
 def test_a_country_outside_the_table_is_offered_its_zone_tab_places(zone_tab) -> None:
-    zone, out = _ask_timezone("ES", ["3"])
+    zone, out = _ask_timezone("ES", ["2"])
     assert zone == "Atlantic/Canary"
-    assert "1) Spain (mainland) — Madrid\n2) Ceuta, Melilla\n3) Canary Islands\n" in out
-    assert "4) Somewhere else — type a city" in out
+    assert "1) Spain (mainland) — Madrid\n2) Canary Islands\n3) Somewhere else" in out
 
 
 def test_somewhere_else_takes_a_city_and_confirms_its_zone(zone_tab) -> None:
-    zone, out = _ask_timezone("US", ["14", "los angeles", ""])
+    zone, out = _ask_timezone("US", ["9", "los angeles", ""])
     assert zone == "America/Los_Angeles"
     assert "Which city are you in?" in out
     assert "America/Los_Angeles, correct? [Y/n]" in out
 
 
 def test_a_city_confirmed_wrong_is_asked_again(zone_tab) -> None:
-    zone, _ = _ask_timezone("US", ["14", "los angeles", "n", "denver", "y"])
+    zone, _ = _ask_timezone("US", ["9", "los angeles", "n", "denver", "y"])
     assert zone == "America/Denver"
 
 
 def test_a_city_with_no_zone_is_pointed_at_one_of_the_countrys_own(zone_tab) -> None:
-    zone, out = _ask_timezone("US", ["14", "Dallas", "Chicago", ""])
+    zone, out = _ask_timezone("US", ["9", "Dallas", "Chicago", ""])
     assert zone == "America/Chicago"
     assert (
         "No timezone is named after 'Dallas' — try a city in your timezone, like New York." in out
@@ -98,7 +98,7 @@ def test_a_city_several_zones_share_is_picked_from_a_list(zone_tab, monkeypatch,
 
 
 def test_typing_utc_is_not_asked_to_choose_between_its_names(zone_tab) -> None:
-    zone, out = _ask_timezone("ES", ["4", "utc", ""])
+    zone, out = _ask_timezone("ES", ["3", "utc", ""])
     assert zone == "Etc/UTC"
     assert "Which of these?" not in out
 
@@ -149,11 +149,21 @@ def test_the_machines_zone_is_the_default_place(zone_tab, monkeypatch) -> None:
 
 
 def test_a_zone_only_zone_tab_lists_follows_the_tables_own(zone_tab, monkeypatch) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Adak")
+    zone, out = _ask_timezone("US", [""])
+    assert zone == "America/Adak"
+    assert "(this computer)" not in out
+    assert "[default 8]" in out
+
+
+def test_a_machine_zone_keeping_a_listed_clock_is_still_offered_as_itself(
+    zone_tab, monkeypatch
+) -> None:
+    # Indianapolis keeps New York's clock so it is not listed, but the machine's zone is stored.
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Indiana/Indianapolis")
     zone, out = _ask_timezone("US", [""])
     assert zone == "America/Indiana/Indianapolis"
-    assert "(this computer)" not in out
-    assert "[default 13]" in out
+    assert "1) Indianapolis (this computer)\n2) Eastern — New York\n" in out
 
 
 @pytest.mark.parametrize("machine", ["UTC", "Asia/Singapore"])
@@ -167,17 +177,17 @@ def test_a_machine_zone_outside_the_country_stays_the_default(
 
 
 def test_a_zone_name_without_a_slash_is_taken_as_typed(zone_tab) -> None:
-    zone, _ = _ask_timezone("ES", ["4", "UTC"])
+    zone, _ = _ask_timezone("ES", ["3", "UTC"])
     assert zone == "UTC"
 
 
 def test_a_typed_zone_name_is_still_accepted(zone_tab) -> None:
-    zone, _ = _ask_timezone("US", ["14", "Asia/Singapore"])
+    zone, _ = _ask_timezone("US", ["9", "Asia/Singapore"])
     assert zone == "Asia/Singapore"
 
 
 def test_an_empty_city_skips_with_the_note(zone_tab) -> None:
-    zone, out = _ask_timezone("ES", ["4", ""])
+    zone, out = _ask_timezone("ES", ["3", ""])
     assert zone == ""
     assert "no timezone recorded — ask Sellee to set one any time" in out
 

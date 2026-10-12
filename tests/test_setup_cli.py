@@ -586,7 +586,7 @@ def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
         "1) Eastern — New York\n2) Central — Chicago\n3) Mountain — Denver\n"
         "4) Pacific — Los Angeles\n"
     ) in out
-    assert "14) Somewhere else — type a city" in out
+    assert "9) Somewhere else — type a city" in out
 
 
 def test_the_country_question_takes_any_code_rather_than_offering_a_list(

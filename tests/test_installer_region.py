@@ -214,9 +214,24 @@ US\t+394421-1045903\tAmerica/Denver\tMountain (most areas)
 US\t+332654-1120424\tAmerica/Phoenix\tMST - AZ (except Navajo)
 US\t+340308-1181434\tAmerica/Los_Angeles\tPacific
 US\t+211825-1575130\tPacific/Honolulu\tHawaii
+US\t+381515-0854534\tAmerica/Kentucky/Louisville\tEastern - KY (Louisville area)
+US\t+411745-0863730\tAmerica/Indiana/Knox\tCentral - IN (Starke)
+US\t+515248-1763929\tAmerica/Adak\tAlaska - western Aleutians
+AU\t-3133+15905\tAustralia/Lord_Howe\tLord Howe Island
+AU\t-4253+14719\tAustralia/Hobart\tTasmania
 AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)
+AU\t-3157+14127\tAustralia/Broken_Hill\tNew South Wales (Yancowinna)
 AU\t-2728+15302\tAustralia/Brisbane\tQueensland (most areas)
+AU\t-2016+14900\tAustralia/Lindeman\tQueensland (Whitsunday Islands)
+AU\t-3455+13835\tAustralia/Adelaide\tSouth Australia
+AU\t-1228+13050\tAustralia/Darwin\tNorthern Territory
 AU\t-3157+11551\tAustralia/Perth\tWestern Australia (most areas)
+AU\t-3143+12852\tAustralia/Eucla\tWestern Australia (Eucla)
+CA\t+4734-05243\tAmerica/St_Johns\tNewfoundland, Labrador (SE)
+CA\t+4439-06336\tAmerica/Halifax\tAtlantic - NS (most areas), PE
+CA\t+4612-05957\tAmerica/Glace_Bay\tAtlantic - NS (Cape Breton)
+CA\t+5024-10439\tAmerica/Regina\tCST - SK (most areas)
+CA\t+5017-10750\tAmerica/Swift_Current\tCST - SK (midwest)
 IN\t+2232+08822\tAsia/Kolkata
 XX\t+0000+00000\tNowhere/Atlantis\tA zone no database has
 """
@@ -231,8 +246,7 @@ def zone_tab(tmp_path):
 
 def test_a_country_the_table_names_is_offered_by_zone_most_populous_first(zone_tab) -> None:
     # A seller in Dallas finds Central by its name, not by knowing Chicago shares it.
-    places = region.place_zones("US", zone_tab)
-    assert places[:7] == [
+    assert region.place_zones("US", zone_tab) == [
         ("Eastern — New York", "America/New_York"),
         ("Central — Chicago", "America/Chicago"),
         ("Mountain — Denver", "America/Denver"),
@@ -240,38 +254,71 @@ def test_a_country_the_table_names_is_offered_by_zone_most_populous_first(zone_t
         ("MST - AZ (except Navajo) — Phoenix", "America/Phoenix"),
         ("Anchorage", "America/Anchorage"),
         ("Hawaii — Honolulu", "Pacific/Honolulu"),
+        ("Alaska - western Aleutians — Adak", "America/Adak"),
     ]
-    assert len(places) == 13
 
 
 def test_zones_only_zone_tab_lists_follow_the_tables_own(zone_tab) -> None:
     # The table names one Australian zone; a seller in Perth or Brisbane still needs theirs.
     assert [zone for _, zone in region.place_zones("AU", zone_tab)] == [
         "Australia/Sydney",
+        "Australia/Lord_Howe",
         "Australia/Brisbane",
+        "Australia/Adelaide",
+        "Australia/Darwin",
         "Australia/Perth",
+        "Australia/Eucla",
     ]
-    assert region.place_zones("US", zone_tab)[-1][1] == "America/Indiana/Indianapolis"
+    canadian = [zone for _, zone in region.place_zones("CA", zone_tab)]
+    assert "America/St_Johns" in canadian
+    assert "America/Glace_Bay" not in canadian
+    assert "America/Swift_Current" not in canadian
+
+
+def test_a_place_whose_clock_is_already_listed_is_left_out(zone_tab) -> None:
+    # Indiana's, Kentucky's and the table's own second zones keep Eastern, Central or Alaska
+    # time; listing each would bury the seven a US seller actually chooses between.
+    listed = {zone for _, zone in region.place_zones("US", zone_tab)}
+    for zone in (
+        "America/Detroit",
+        "America/Boise",
+        "America/Juneau",
+        "America/Indiana/Indianapolis",
+        "America/Kentucky/Louisville",
+        "America/Indiana/Knox",
+    ):
+        assert zone not in listed, zone
+
+
+def test_clocks_are_compared_over_the_coming_year_not_their_history(zone_tab) -> None:
+    from datetime import datetime, timezone
+
+    # Most of Indiana kept no daylight saving until 2006, so its clock differed from New York's
+    # then, and does not now.
+    before = datetime(2005, 1, 1, tzinfo=timezone.utc)
+    assert "America/Indiana/Indianapolis" in {
+        zone for _, zone in region.place_zones("US", zone_tab, now=before)
+    }
+    assert "America/Indiana/Indianapolis" not in {
+        zone for _, zone in region.place_zones("US", zone_tab)
+    }
 
 
 def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
+    # Ceuta keeps mainland time, so it is not offered beside it.
     assert region.place_zones("ES", zone_tab) == [
         ("Spain (mainland) — Madrid", "Europe/Madrid"),
-        ("Ceuta, Melilla", "Africa/Ceuta"),
         ("Canary Islands", "Atlantic/Canary"),
     ]
 
 
 def test_a_label_drops_zone_tabs_main_area_marker(zone_tab) -> None:
-    assert [label for label, _ in region.place_zones("AU", zone_tab)] == [
+    assert [label for label, _ in region.place_zones("AU", zone_tab)][:3] == [
         "New South Wales — Sydney",
+        "Lord Howe Island",
         "Queensland — Brisbane",
-        "Western Australia — Perth",
     ]
-    assert [label for label, _ in region.place_zones("DE", zone_tab)] == [
-        "Germany — Berlin",
-        "Busingen",
-    ]
+    assert region.place_zones("DE", zone_tab) == [("Germany — Berlin", "Europe/Berlin")]
 
 
 def test_a_zone_tab_line_without_a_comment_is_labelled_by_its_city(zone_tab) -> None:
