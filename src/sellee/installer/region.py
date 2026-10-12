@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import functools
 import os
+import re
 
 from sellee import countries
 
@@ -109,17 +110,32 @@ def zone_tab_path() -> str:
 
 
 def place_zones(region: str, zone_tab: str | None = None) -> list:
-    """(label, zone) pairs to offer for this region: the table above's zones in its order,
-    labelled by city, then any others `zone.tab` lists for it with its own labels ("Spain
-    (mainland)")."""
+    """(label, zone) pairs to offer for this region: the table above's zones in its order, then any
+    others `zone.tab` lists for it. Each is labelled by `zone.tab`'s description of where it
+    applies and the zone's city ("Eastern — New York"), so a seller in a city no zone is named
+    after can still find theirs."""
+    described = {zone: label for code, zone, label in _read_zone_tab(zone_tab) if code == region}
     table = zones_for(region)
-    places = [(city_label(zone), zone) for zone in table]
-    places += [
-        (label or city_label(zone), zone)
-        for code, zone, label in _read_zone_tab(zone_tab)
-        if code == region and zone not in table
+    zones = table + [zone for zone in described if zone not in table]
+    return [
+        (_place_label(zone, described.get(zone, "")), zone)
+        for zone in zones
+        if not zone_error(zone)
     ]
-    return [(label, zone) for label, zone in places if not zone_error(zone)]
+
+
+# How `zone.tab` marks a country's main zone: "Eastern (most areas)", "most of Germany".
+_MAIN_AREA = re.compile(r"^most of |\s*\(most areas\)")
+
+
+def _place_label(zone: str, description: str) -> str:
+    """The description and the city, or whichever alone says it all: "Hawaii — Honolulu",
+    "Canary Islands", "Paris"."""
+    area = _MAIN_AREA.sub("", description).strip()
+    city = city_label(zone)
+    if not area:
+        return city
+    return area if _city_key(city) in _city_key(area) else f"{area} — {city}"
 
 
 def zones_for_city(text: str, zone_tab: str | None = None) -> list:

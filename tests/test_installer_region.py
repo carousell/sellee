@@ -205,8 +205,15 @@ FR\t+4852+00220\tEurope/Paris
 PT\t+3843-00908\tEurope/Lisbon\tPortugal (mainland)
 PT\t+3238-01654\tAtlantic/Madeira\tMadeira Islands
 PT\t+3744-02540\tAtlantic/Azores\tAzores
+DE\t+5230+01322\tEurope/Berlin\tmost of Germany
+DE\t+4742+00841\tEurope/Busingen\tBusingen
 US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
 US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+US\t+415100-0873900\tAmerica/Chicago\tCentral (most areas)
+US\t+394421-1045903\tAmerica/Denver\tMountain (most areas)
+US\t+332654-1120424\tAmerica/Phoenix\tMST - AZ (except Navajo)
+US\t+340308-1181434\tAmerica/Los_Angeles\tPacific
+US\t+211825-1575130\tPacific/Honolulu\tHawaii
 AU\t-3352+15113\tAustralia/Sydney\tNew South Wales (most areas)
 AU\t-2728+15302\tAustralia/Brisbane\tQueensland (most areas)
 AU\t-3157+11551\tAustralia/Perth\tWestern Australia (most areas)
@@ -222,13 +229,17 @@ def zone_tab(tmp_path):
     return str(path)
 
 
-def test_a_country_the_table_names_is_offered_as_its_cities_most_populous_first(zone_tab) -> None:
+def test_a_country_the_table_names_is_offered_by_zone_most_populous_first(zone_tab) -> None:
+    # A seller in Dallas finds Central by its name, not by knowing Chicago shares it.
     places = region.place_zones("US", zone_tab)
-    assert places[:4] == [
-        ("New York", "America/New_York"),
-        ("Chicago", "America/Chicago"),
-        ("Denver", "America/Denver"),
-        ("Los Angeles", "America/Los_Angeles"),
+    assert places[:7] == [
+        ("Eastern — New York", "America/New_York"),
+        ("Central — Chicago", "America/Chicago"),
+        ("Mountain — Denver", "America/Denver"),
+        ("Pacific — Los Angeles", "America/Los_Angeles"),
+        ("MST - AZ (except Navajo) — Phoenix", "America/Phoenix"),
+        ("Anchorage", "America/Anchorage"),
+        ("Hawaii — Honolulu", "Pacific/Honolulu"),
     ]
     assert len(places) == 13
 
@@ -245,9 +256,21 @@ def test_zones_only_zone_tab_lists_follow_the_tables_own(zone_tab) -> None:
 
 def test_a_country_outside_the_table_is_offered_as_zone_tab_labels(zone_tab) -> None:
     assert region.place_zones("ES", zone_tab) == [
-        ("Spain (mainland)", "Europe/Madrid"),
+        ("Spain (mainland) — Madrid", "Europe/Madrid"),
         ("Ceuta, Melilla", "Africa/Ceuta"),
         ("Canary Islands", "Atlantic/Canary"),
+    ]
+
+
+def test_a_label_drops_zone_tabs_main_area_marker(zone_tab) -> None:
+    assert [label for label, _ in region.place_zones("AU", zone_tab)] == [
+        "New South Wales — Sydney",
+        "Queensland — Brisbane",
+        "Western Australia — Perth",
+    ]
+    assert [label for label, _ in region.place_zones("DE", zone_tab)] == [
+        "Germany — Berlin",
+        "Busingen",
     ]
 
 

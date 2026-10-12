@@ -547,8 +547,9 @@ def _ask_timezone(ui: Ui, region: str) -> str:
     zones, else a city or zone name typed. Returns "" when skipped."""
     machine = region_guess.system_timezone()
     places = region_guess.place_zones(region)
+    listed_city = region_guess.city_label(places[0][1]) if places else ""
     if len(places) < 2:
-        return _ask_city(ui, machine or (places[0][1] if places else ""))
+        return _ask_city(ui, machine or (places[0][1] if places else ""), listed_city)
     zones = [zone for _, zone in places]
     # The stored zone is a claim about this machine, so it stays the default in any country.
     if machine and machine not in zones:
@@ -560,13 +561,18 @@ def _ask_timezone(ui: Ui, region: str) -> str:
         default_index=zones.index(machine) if machine in zones else 0,
         lead=False,
     )
-    return zones[picked] if picked < len(zones) else _ask_city(ui, "")
+    return zones[picked] if picked < len(zones) else _ask_city(ui, "", listed_city)
 
 
-def _ask_city(ui: Ui, default: str) -> str:
+def _ask_city(ui: Ui, default: str, listed_city: str) -> str:
     """Ask for a city or zone name until it resolves to a storable zone, or "" when skipped. A
-    city is confirmed before it is stored, because the match is by spelling alone."""
+    city is confirmed before it is stored, because the match is by spelling alone. Few cities
+    have a zone named after them, so one that has none is pointed at `listed_city`, a city of the
+    seller's country that does."""
     question = "Timezone?" if default else "Which city are you in?"
+    nearby = (
+        f"a city in your timezone, like {listed_city}" if listed_city else "the nearest big city"
+    )
     while True:
         answer = ui.ask(question, default=default, lead=False).strip()
         if not answer:
@@ -576,8 +582,7 @@ def _ask_city(ui: Ui, default: str) -> str:
             reason = region_guess.zone_error(answer)
             if not reason:
                 return answer
-            example = default or "Asia/Singapore"
-            ui.say(f"{reason} — zone names look like {example}.")
+            ui.say(f"{reason} — zone names look like {default or 'Asia/Singapore'}.")
             continue
         zones = region_guess.zones_for_city(answer)
         if answer in zones:
@@ -587,7 +592,7 @@ def _ask_city(ui: Ui, default: str) -> str:
         if len(zones) > 1:
             return zones[ui.choose("Which of these?", zones, lead=False)]
         if not zones:
-            ui.say(f"No timezone is named after {answer!r} — try the nearest big city.")
+            ui.say(f"No timezone is named after {answer!r} — try {nearby}.")
         question = "Which city are you in?"
 
 

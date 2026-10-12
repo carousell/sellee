@@ -583,7 +583,10 @@ def test_a_us_seller_who_declines_the_guess_picks_a_place_by_number(
 
     assert world.calls["basics"] == {"region": "US", "timezone": "America/Los_Angeles"}
     out = capsys.readouterr().out
-    assert "1) New York\n2) Chicago\n3) Denver\n4) Los Angeles\n" in out
+    assert (
+        "1) Eastern — New York\n2) Central — Chicago\n3) Mountain — Denver\n"
+        "4) Pacific — Los Angeles\n"
+    ) in out
     assert "14) Somewhere else — type a city" in out
 
 
@@ -596,6 +599,9 @@ ES\t+2806-01524\tAtlantic/Canary\tCanary Islands
 FR\t+4852+00220\tEurope/Paris
 US\t+404251-0740023\tAmerica/New_York\tEastern (most areas)
 US\t+394606-0860929\tAmerica/Indiana/Indianapolis\tEastern - IN (most areas)
+US\t+415100-0873900\tAmerica/Chicago\tCentral (most areas)
+US\t+394421-1045903\tAmerica/Denver\tMountain (most areas)
+US\t+340308-1181434\tAmerica/Los_Angeles\tPacific
 """
 
 
@@ -626,7 +632,7 @@ def _ask_timezone(region, replies):
 def test_a_country_outside_the_table_is_offered_its_zone_tab_places(zone_tab) -> None:
     zone, out = _ask_timezone("ES", ["3"])
     assert zone == "Atlantic/Canary"
-    assert "1) Spain (mainland)\n2) Ceuta, Melilla\n3) Canary Islands\n" in out
+    assert "1) Spain (mainland) — Madrid\n2) Ceuta, Melilla\n3) Canary Islands\n" in out
     assert "4) Somewhere else — type a city" in out
 
 
@@ -642,8 +648,19 @@ def test_a_city_confirmed_wrong_is_asked_again(zone_tab) -> None:
     assert zone == "America/Denver"
 
 
-def test_a_city_with_no_zone_asks_for_the_nearest_big_city(zone_tab) -> None:
-    zone, out = _ask_timezone("ES", ["4", "Barcelona", "Asia/Singapore"])
+def test_a_city_with_no_zone_is_pointed_at_one_of_the_countrys_own(zone_tab) -> None:
+    zone, out = _ask_timezone("US", ["14", "Dallas", "Chicago", ""])
+    assert zone == "America/Chicago"
+    assert (
+        "No timezone is named after 'Dallas' — try a city in your timezone, like New York." in out
+    )
+
+
+def test_a_city_with_no_zone_in_a_country_with_no_places_asks_for_a_big_city(
+    zone_tab, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(region_guess, "zone_tab_path", lambda: str(tmp_path / "absent.tab"))
+    zone, out = _ask_timezone("ES", ["Barcelona", "Asia/Singapore"])
     assert zone == "Asia/Singapore"
     assert "try the nearest big city" in out
 
@@ -695,7 +712,7 @@ def test_a_machine_zone_outside_the_country_stays_the_default(
     monkeypatch.setattr(region_guess, "system_timezone", lambda: machine)
     zone, out = _ask_timezone("US", [""])
     assert zone == machine
-    assert f"1) {region_guess.city_label(machine)} (this computer)\n2) New York\n" in out
+    assert f"1) {region_guess.city_label(machine)} (this computer)\n2) Eastern — New York\n" in out
 
 
 def test_a_zone_name_without_a_slash_is_taken_as_typed(zone_tab) -> None:
