@@ -9,13 +9,14 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 
 from sellee import crosslist
 from sellee.config import Config
-from sellee.rail.client import RailNetworkError, RailUnprovisioned
+from sellee.rail.client import RailNetworkError, RailToolRefused, RailUnprovisioned
 
 _RAIL_URL = "https://www.carousell.ai/listing/abc123"
 _CAROUSELL_URL = "https://www.carousell.sg/p/teak-lamp-1328307791/"
@@ -400,6 +401,127 @@ def test_a_mixed_set_pushed_twice_makes_one_call(store, bus) -> None:
     crosslist.push_crosslinks(deps)
     crosslist.push_crosslinks(deps)
     assert rail.updates == [("abc123", {"urls": [_CL_ENTRY, _FB_ENTRY]})]
+
+
+# --- a bazaar that has not learned Craigslist yet -----------------------------------------------
+
+# What bazaar answers a set naming a platform it does not know: the names it does.
+_UNKNOWN_PLATFORM = (
+    "platform must be one of: EXTERNAL_PLATFORM_UNSPECIFIED, EXTERNAL_PLATFORM_CAROUSELL, "
+    "EXTERNAL_PLATFORM_FACEBOOK_MARKETPLACE"
+)
+
+
+class RailWithoutCraigslist(FakeRail):
+    """Refuses any set that names Craigslist, and counts the refusals."""
+
+    def __init__(self):
+        super().__init__()
+        self.refused = 0
+
+    def update_listing(self, listing_id, *, status=None, external_urls=None):
+        if any(entry["platform"] == _CL_ENTRY["platform"] for entry in external_urls["urls"]):
+            self.refused += 1
+            raise RailToolRefused(_UNKNOWN_PLATFORM)
+        return super().update_listing(listing_id, status=status, external_urls=external_urls)
+
+
+class FailingRail(FakeRail):
+    """Fails every update with one error, and counts the attempts."""
+
+    def __init__(self, error):
+        super().__init__()
+        self.error = error
+        self.calls = 0
+
+    def update_listing(self, listing_id, *, status=None, external_urls=None):
+        self.calls += 1
+        raise self.error
+
+
+def test_a_refused_craigslist_link_lets_the_other_links_sync(store, bus) -> None:
+    item = _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    rail = RailWithoutCraigslist()
+    deps = _deps(store, bus, rail)
+
+    assert crosslist.push_crosslinks(deps) == 1
+    assert rail.updates == [("abc123", {"urls": [_FB_ENTRY]})]
+    assert _events(bus, "crosslink.push_failed") == []
+    (refused,) = _events(bus, "crosslink.craigslist_refused")
+    assert refused.payload == {"item_id": item["id"], "reason": _UNKNOWN_PLATFORM}
+
+    store.archive_listing_url(item["id"], "fb")
+    assert crosslist.push_crosslinks(deps) == 1
+    assert rail.updates[-1] == ("abc123", {"urls": []})
+
+
+def test_ticks_while_craigslist_is_refused_cost_no_calls_and_no_events(store, bus) -> None:
+    _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    _item(store, {"carousell-ai": "https://www.carousell.ai/listing/def456", "craigslist": _CL_URL})
+    rail = RailWithoutCraigslist()
+    deps = _deps(store, bus, rail)
+
+    for _ in range(5):
+        crosslist.push_crosslinks(deps)
+
+    assert rail.refused == 1  # one refusal holds every item's Craigslist link back
+    assert rail.updates == [("abc123", {"urls": [_FB_ENTRY]})]
+    assert len(_events(bus, "crosslink.craigslist_refused")) == 1
+    assert len(_events(bus, "crosslink.pushed")) == 1
+    assert _events(bus, "crosslink.push_failed") == []
+
+
+def test_craigslist_is_offered_again_after_the_hold_and_goes_up_once_taken(store, bus) -> None:
+    _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    clock = [1_000_000.0]
+    rails = [RailWithoutCraigslist()]
+    deps = crosslist.CrosslistDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        browser_factory=lambda: object(),
+        rail_factory=lambda: rails[0],
+        now=lambda: clock[0],
+    )
+    crosslist.push_crosslinks(deps)
+
+    clock[0] += crosslist.CRAIGSLIST_RETRY_SEC
+    crosslist.push_crosslinks(deps)
+    assert rails[0].refused == 2
+    assert len(_events(bus, "crosslink.craigslist_refused")) == 1  # the same state, not news
+
+    rails[0] = FakeRail()  # bazaar learns the platform
+    crosslist.push_crosslinks(deps)
+    assert rails[0].updates == []  # still inside the hold the last refusal began
+
+    clock[0] += crosslist.CRAIGSLIST_RETRY_SEC
+    assert crosslist.push_crosslinks(deps) == 1
+    assert rails[0].updates == [("abc123", {"urls": [_CL_ENTRY, _FB_ENTRY]})]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        RailToolRefused(_UNKNOWN_PLATFORM + ", EXTERNAL_PLATFORM_CRAIGSLIST"),
+        RailToolRefused("duplicate external url platform: EXTERNAL_PLATFORM_CRAIGSLIST"),
+        RailToolRefused(
+            "invalid url for platform EXTERNAL_PLATFORM_FACEBOOK_MARKETPLACE: "
+            "url must use http or https"
+        ),
+        RailToolRefused("listing not found (code: not_found)"),
+        RailNetworkError("rail unreachable: timeout"),
+    ],
+)
+def test_any_other_failure_of_a_set_with_craigslist_is_still_reported(store, bus, error) -> None:
+    item = _item(store, {"carousell-ai": _RAIL_URL, "fb": _FB_URL, "craigslist": _CL_URL})
+    rail = FailingRail(error)
+
+    assert crosslist.push_crosslinks(_deps(store, bus, rail)) == 0
+    assert rail.calls == 1  # no second try without Craigslist
+    (failed,) = _events(bus, "crosslink.push_failed")
+    assert failed.payload == {"item_id": item["id"], "reason": str(error)}
+    assert _events(bus, "crosslink.craigslist_refused") == []
+    assert store.crosslink_pushed_urls() == {}
 
 
 # Craigslist links that are not the post's public page: none may ever be pushed.

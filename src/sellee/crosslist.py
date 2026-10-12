@@ -48,7 +48,7 @@ from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
 from sellee.passes import DEFAULT_PUBLISH_MARKET
-from sellee.rail.client import RailError, RailUnprovisioned, listing_id_from_url
+from sellee.rail.client import RailError, RailToolRefused, RailUnprovisioned, listing_id_from_url
 
 log = logging.getLogger(__name__)
 
@@ -113,6 +113,9 @@ class CrosslistDeps:
     # Reads a Craigslist post's public page; the last check made per post, in process.
     fetch_post: Callable[[str], str] | None = None
     post_checks: dict = field(default_factory=dict)
+    # When the rail last refused the Craigslist platform; None while it takes it. In process: a
+    # restart costs one more offer.
+    craigslist_refused_at: float | None = None
 
 
 # How long a market that showed the account signed out is left before posting is tried again.
@@ -701,6 +704,13 @@ def desired_external_urls(listing_urls: dict) -> list:
     return sorted(urls, key=lambda entry: entry["platform"])
 
 
+# A rail that has not learned a platform refuses any set naming it, which would hold back every
+# other link on the listing too. So once it refuses Craigslist, every set goes without Craigslist
+# for this long before it is offered again, and the links go up on their own once the rail takes it.
+CRAIGSLIST_RETRY_SEC = 3600.0
+_CRAIGSLIST_PLATFORM = MARKET_PLATFORMS["craigslist"]
+
+
 def push_crosslinks(deps: CrosslistDeps) -> int:
     """Write each item's cross-listing URLs onto its rail listing; returns how many were pushed.
 
@@ -725,25 +735,67 @@ def push_crosslinks(deps: CrosslistDeps) -> int:
         if not rail_id:
             continue
         desired = desired_external_urls(item["listing_urls"])
-        desired_json = json.dumps(desired, sort_keys=True)
-        marker = markers.get(item["id"])
-        if marker == desired_json:
-            continue
-        if marker is None and not desired:
-            continue  # nothing pushed and nothing to push — no call, no marker row
-        try:
-            rail.update_listing(rail_id, external_urls={"urls": desired})
-        except RailError as exc:
-            deps.bus.publish("crosslink.push_failed", {"item_id": item["id"], "reason": str(exc)})
-            continue
-        deps.store.set_crosslink_pushed(item["id"], desired_json)
-        deps.bus.publish(
-            "crosslink.pushed",
-            {
-                "item_id": item["id"],
-                "listing_id": rail_id,
-                "platforms": [entry["platform"] for entry in desired],
-            },
-        )
-        pushed += 1
+        if _craigslist_held(deps):
+            desired = _without_craigslist(desired)
+        pushed += _push(deps, rail, item["id"], rail_id, desired, markers.get(item["id"]))
     return pushed
+
+
+def _push(deps: CrosslistDeps, rail, item_id: str, rail_id: str, desired: list, marker) -> int:
+    """Push one item's set unless the rail already has it; 1 if it was pushed. A set the rail
+    refuses only for naming Craigslist goes again without it."""
+    desired_json = json.dumps(desired, sort_keys=True)
+    if marker == desired_json:
+        return 0
+    if marker is None and not desired:
+        return 0  # nothing pushed and nothing to push — no call, no marker row
+    try:
+        rail.update_listing(rail_id, external_urls={"urls": desired})
+    except RailError as exc:
+        if not _refuses_craigslist(exc, desired):
+            deps.bus.publish("crosslink.push_failed", {"item_id": item_id, "reason": str(exc)})
+            return 0
+        if deps.craigslist_refused_at is None:
+            deps.bus.publish(
+                "crosslink.craigslist_refused", {"item_id": item_id, "reason": str(exc)}
+            )
+        deps.craigslist_refused_at = deps.now()
+        return _push(deps, rail, item_id, rail_id, _without_craigslist(desired), marker)
+    if _has_craigslist(desired):
+        deps.craigslist_refused_at = None
+    deps.store.set_crosslink_pushed(item_id, desired_json)
+    deps.bus.publish(
+        "crosslink.pushed",
+        {
+            "item_id": item_id,
+            "listing_id": rail_id,
+            "platforms": [entry["platform"] for entry in desired],
+        },
+    )
+    return 1
+
+
+def _has_craigslist(urls: list) -> bool:
+    return any(entry["platform"] == _CRAIGSLIST_PLATFORM for entry in urls)
+
+
+def _without_craigslist(urls: list) -> list:
+    return [entry for entry in urls if entry["platform"] != _CRAIGSLIST_PLATFORM]
+
+
+def _craigslist_held(deps: CrosslistDeps) -> bool:
+    refused_at = deps.craigslist_refused_at
+    return refused_at is not None and deps.now() - refused_at < CRAIGSLIST_RETRY_SEC
+
+
+def _refuses_craigslist(exc: RailError, urls: list) -> bool:
+    """Whether the rail refused this set for naming Craigslist. It refuses a platform name it does
+    not know by listing the ones it does, so that refusal, without Craigslist listed, is this one;
+    anything else is a failure to report."""
+    text = str(exc)
+    return (
+        isinstance(exc, RailToolRefused)
+        and _has_craigslist(urls)
+        and text.startswith("platform must be one of")
+        and _CRAIGSLIST_PLATFORM not in text
+    )
