@@ -543,25 +543,32 @@ _SOMEWHERE_ELSE = "Somewhere else — type a city"
 
 
 def _ask_timezone(ui: Ui, region: str) -> str:
-    """Ask for the seller's timezone as a place: a numbered list when the country has several
-    zones, else a city or zone name typed. Returns "" when skipped."""
+    """Ask for the seller's timezone as a place: a numbered list when there is more than one to
+    offer, else a city or zone name typed. Returns "" when skipped."""
     machine = region_guess.system_timezone()
     places = region_guess.place_zones(region)
     listed_city = region_guess.city_label(places[0][1]) if places else ""
-    if len(places) < 2:
-        return _ask_city(ui, machine or (places[0][1] if places else ""), listed_city)
-    zones = [zone for _, zone in places]
-    # The stored zone is a claim about this machine, so it stays the default in any country.
-    if machine and machine not in zones:
+    # The stored zone is a claim about this machine, so its own zone is offered in any country.
+    if machine and machine not in [zone for _, zone in places]:
         places = [(f"{region_guess.city_label(machine)} (this computer)", machine), *places]
-        zones = [machine, *zones]
-    picked = ui.choose(
-        "Which of these is your timezone?",
-        [label for label, _ in places] + [_SOMEWHERE_ELSE],
-        default_index=zones.index(machine) if machine in zones else 0,
-        lead=False,
-    )
+    zones = [zone for _, zone in places]
+    if len(zones) < 2:
+        return _ask_city(ui, zones[0] if zones else "", listed_city)
+    question = "Which of these is your timezone?"
+    options = [label for label, _ in places] + [_SOMEWHERE_ELSE]
+    if machine:
+        picked = ui.choose(question, options, default_index=zones.index(machine), lead=False)
+    else:
+        # Nothing makes one place likelier than another, so Enter skips rather than picks.
+        picked = ui.choose_optional(question, options, lead=False)
+        if picked is None:
+            return _no_timezone(ui)
     return zones[picked] if picked < len(zones) else _ask_city(ui, "", listed_city)
+
+
+def _no_timezone(ui: Ui) -> str:
+    ui.note("no timezone recorded — ask Sellee to set one any time")
+    return ""
 
 
 def _ask_city(ui: Ui, default: str, listed_city: str) -> str:
@@ -576,8 +583,7 @@ def _ask_city(ui: Ui, default: str, listed_city: str) -> str:
     while True:
         answer = ui.ask(question, default=default, lead=False).strip()
         if not answer:
-            ui.note("no timezone recorded — ask Sellee to set one any time")
-            return ""
+            return _no_timezone(ui)
         if answer == default or "/" in answer:
             reason = region_guess.zone_error(answer)
             if not reason:

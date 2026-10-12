@@ -690,6 +690,27 @@ def test_a_one_zone_country_is_proposed_as_before(zone_tab) -> None:
     assert "Timezone? [Europe/Paris]" in out
 
 
+@pytest.mark.parametrize("enter", ["", "2"])
+def test_a_one_zone_country_is_offered_beside_a_machine_zone_outside_it(
+    zone_tab, monkeypatch, enter
+) -> None:
+    monkeypatch.setattr(region_guess, "system_timezone", lambda: "UTC")
+    zone, out = _ask_timezone("FR", [enter])
+    assert zone == ("Europe/Paris" if enter else "UTC")
+    assert "1) UTC (this computer)\n2) Paris\n3) Somewhere else — type a city\n" in out
+    assert "[default 1]" in out
+
+
+@pytest.mark.parametrize("region", ["US", "ES"])
+def test_without_the_machines_zone_no_place_is_the_default(zone_tab, region) -> None:
+    # Nothing makes the first place likelier than the rest, so Enter skips rather than picks it.
+    zone, out = _ask_timezone(region, [""])
+    assert zone == ""
+    assert "[default" not in out
+    assert "or empty to skip" in out
+    assert "no timezone recorded — ask Sellee to set one any time" in out
+
+
 def test_the_machines_zone_is_the_default_place(zone_tab, monkeypatch) -> None:
     monkeypatch.setattr(region_guess, "system_timezone", lambda: "America/Denver")
     zone, out = _ask_timezone("US", [""])
