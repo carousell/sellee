@@ -745,9 +745,15 @@ def test_a_server_that_drops_the_new_era_is_reprobed_and_the_call_runs_once() ->
         assert server.eras.count("initialize") == 1
 
 
-def test_a_server_that_drops_the_legacy_era_is_reprobed_and_the_call_runs_once() -> None:
+@pytest.mark.parametrize("json_rejections", [False, True])
+def test_a_server_that_drops_the_legacy_era_is_reprobed_and_the_call_runs_once(
+    json_rejections,
+) -> None:
+    """go-sdk rejects a dropped version in plain text; the spec asks for JSON -32022. Either way the
+    probe's listed versions show the legacy one is gone."""
     with _serving("legacy") as (server, base):
         server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.json_rejections = json_rejections
         client = _client(base)
         client.create_listing({"title": "x"})
         _switch(server.eras, "modern_only")
@@ -803,6 +809,34 @@ def test_every_call_runs_once_whatever_the_era_switches(steps) -> None:
             _client(base).create_listing({"title": "x"})
         assert server.eras.executed == len(steps)
         assert server.eras.count("server/discover") == 1 + contradictions
+
+
+def test_a_400_from_a_server_still_in_the_era_is_raised_and_never_resent() -> None:
+    """A modern server that refuses a call in plain text is probed, found modern still, and the
+    call is not sent again: the 400 cannot prove the call did not run."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        server.eras.refuse_calls = "plain"
+        with pytest.raises(RailNetworkError) as raised:
+            client.create_listing({"title": "y"})
+        assert raised.value.status == 400
+        assert len(server.eras.calls()) == 2
+        assert server.eras.count("server/discover") == 2
+
+
+def test_a_legacy_400_from_a_dual_era_server_is_raised_and_never_resent() -> None:
+    """The server still lists the legacy version, so the 400 was not about the era."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "modern")
+        server.eras.refuse_calls = "plain"
+        with pytest.raises(RailNetworkError):
+            client.create_listing({"title": "y"})
+        assert len(server.eras.calls()) == 2
 
 
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.

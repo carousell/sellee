@@ -31,8 +31,12 @@ class EraLog:
         self.no_discover = False
         # Modern only: refuse every legacy version, as a server that dropped the legacy era does.
         self.modern_only = False
-        # Modern only: a JSON-RPC error code to refuse every tools/call with, at HTTP 400.
-        self.refuse_calls = 0
+        # Refuse every tools/call at HTTP 400, before any tool runs: a JSON-RPC error code to refuse
+        # a modern call with, or "plain" for a plain-text 400 in either era.
+        self.refuse_calls: object = 0
+        # Modern only: reject an unsupported version header with JSON -32022, as the spec asks,
+        # rather than go-sdk's plain-text 400.
+        self.json_rejections = False
         # The tools/call requests that reached a tool, as opposed to ones refused before it.
         self.executed = 0
         # Modern only: a JSON-RPC error code to answer server/discover with, at HTTP 200.
@@ -64,13 +68,16 @@ def _answer(handler, body: dict, log: EraLog) -> bool:
     supported = ((MODERN,) if log.era == "modern" else ()) + legacy
     version = headers.get("mcp-protocol-version", "")
     if (version or "2025-03-26") not in supported and not (log.lenient and log.era == "legacy"):
-        if log.era == "modern":
+        if log.json_rejections:
             data = {"supported": list(supported), "requested": version or "2025-03-26"}
             error = {"code": -32022, "message": "unsupported protocol version", "data": data}
             _json(handler, 400, {"jsonrpc": "2.0", "id": body.get("id"), "error": error})
         else:
-            # go-sdk v1.6.1 rejects an unknown version header in plain text, before the body.
+            # go-sdk, v1.6.1 and v1.8.0 alike, rejects a version header in plain text.
             _plain(handler, 400, "Bad Request: Unsupported protocol version")
+        return True
+    if method == "tools/call" and log.refuse_calls == "plain":
+        _plain(handler, 400, "Bad Request")
         return True
     if version == MODERN and log.era == "modern":
         return _modern(handler, body, headers, method, params, supported, log)
@@ -113,7 +120,7 @@ def _modern(handler, body, headers, method, params, supported, log) -> bool:
     if meta.get(META_VERSION) != MODERN or not isinstance(meta.get(META_CAPABILITIES), dict):
         _error(handler, 200, body, -32602, "missing or invalid _meta")
         return True
-    if method == "tools/call" and log.refuse_calls:
+    if method == "tools/call" and isinstance(log.refuse_calls, int) and log.refuse_calls:
         _error(handler, 400, body, log.refuse_calls, "header mismatch")
         return True
     if method == "server/discover" and log.no_discover:
