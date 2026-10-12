@@ -123,6 +123,8 @@ class NegotiationMixin:
         list persists the default floor, below list holds for the seller's floor ask, no list price
         is a data error; the engine is then handed a complete floor."""
         with self._db.transaction() as conn:
+            # A caller that names no buyer must not blank the one the thread already knows.
+            handle = handle.strip() or _thread_handle(conn, thread_id)
             list_price, currency = self._item_for_negotiation(conn, item_id)
             floor_row = conn.execute(
                 "SELECT * FROM floors WHERE item_id = ?", (item_id,)

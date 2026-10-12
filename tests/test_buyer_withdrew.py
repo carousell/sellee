@@ -377,6 +377,29 @@ def test_the_notice_names_the_next_buyer_and_their_offer(make_ctx, store) -> Non
     assert "Next in line: fb:7laa at 10 USD." in notice["text"]
 
 
+def test_an_offer_without_a_buyer_name_keeps_the_threads_handle(make_ctx, store) -> None:
+    item = _scarf_thread(store)
+    store.create_thread(
+        thread_id="fb:7laa",
+        side="sell",
+        market="fb",
+        counterpart_handle="Bob Tan",
+        item_id=item["id"],
+    )
+    store.negotiate_offer(item["id"], "fb:7laa", "", 10, config=CFG)
+    store.negotiate_offer(item["id"], "fb:7laa", "", 11, config=CFG)
+    _offer(store, item["id"], "fb:ks5qn", 20)
+
+    dispatch(
+        "buyer_withdrew",
+        {"thread_id": "fb:ks5qn", "reason": "shipping too high"},
+        _reply_ctx(make_ctx, item),
+    )
+
+    (notice,) = store.list_queued_notices()
+    assert "Next in line: Bob Tan at 11 USD." in notice["text"]
+
+
 def test_a_reply_pass_never_learns_who_is_next(make_ctx, store) -> None:
     """The reply pass answers a stranger, so another buyer's handle or offer must not reach it."""
     item = _scarf_thread(store)
