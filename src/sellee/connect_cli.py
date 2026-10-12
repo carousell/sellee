@@ -44,6 +44,7 @@ _INTERACTIVE_TIMEOUT_SEC = 300
 _PIPED_TIMEOUT_SEC = 120
 # While polling interactively, remind the operator of the remaining wait at this cadence.
 _REMAINING_NOTICE_SEC = 30
+_LINE_KILL = "\x15"  # Ctrl-U
 
 _BOTFATHER_GUIDANCE = (
     "To connect Telegram you need a bot token from BotFather:\n"
@@ -64,10 +65,13 @@ def _read_token(interactive: bool, *, prompt: str = "Paste your BotFather bot to
     must stay off the scrollback, but a paste must show). Piped: one readline, no prompt."""
     if interactive:
         try:
-            return getpass.getpass(prompt, echo_char="*").strip()
+            typed = getpass.getpass(prompt, echo_char="*")
         except (EOFError, KeyboardInterrupt):
             print(file=sys.stderr)  # close the dangling prompt line
             return ""
+        # Echoing stars takes the tty out of line mode, so Ctrl-U arrives as a character instead of
+        # clearing the line; honour it, or a seller who re-pastes after one sends both tokens.
+        return typed.rpartition(_LINE_KILL)[2].strip()
     return sys.stdin.readline().strip()
 
 

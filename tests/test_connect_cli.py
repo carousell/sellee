@@ -201,6 +201,14 @@ def test_interactive_prompt_echoes_stars(monkeypatch) -> None:
     assert seen == [("Paste your BotFather bot token: ", "*")]
 
 
+def test_interactive_ctrl_u_discards_what_came_before(monkeypatch) -> None:
+    # with stars on, the tty no longer handles line-kill, so getpass hands back the raw ^U
+    monkeypatch.setattr(
+        connect_cli.getpass, "getpass", lambda *a, **k: "wrong-token\x15oops\x15" + _TOKEN
+    )
+    assert connect_cli._read_token(True) == _TOKEN
+
+
 # --- Discord: discord_bind_flow, mirroring bind_flow's coverage above -------------------------
 
 
