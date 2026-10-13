@@ -9,6 +9,7 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 
 from __future__ import annotations
 
+import functools
 import json
 import urllib.error
 import urllib.request
@@ -91,7 +92,7 @@ class RailClient:
             },
         )
         try:
-            with urllib.request.urlopen(req, timeout=self._timeout) as resp:
+            with _no_redirects().open(req, timeout=self._timeout) as resp:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
@@ -336,6 +337,19 @@ class RailClient:
             raise RailToolError(f"listing page not reachable: {type(exc).__name__}") from exc
         if status != 200:
             raise RailToolError(f"listing page returned HTTP {status}")
+
+
+class _RefuseRedirects(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        # urllib would resend every header, the key included, to wherever Location points.
+        return None
+
+
+@functools.cache
+def _no_redirects() -> urllib.request.OpenerDirector:
+    """The opener for /mcp requests: a redirect surfaces as its HTTP error. Built on first use, as
+    urlopen's is, so it reads the proxy settings at the same moment."""
+    return urllib.request.build_opener(_RefuseRedirects)
 
 
 def listing_id_from_url(url) -> str:
