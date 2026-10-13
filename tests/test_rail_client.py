@@ -781,14 +781,14 @@ def _redirecting(status: int, location: str):
     return _Redirect
 
 
-@pytest.mark.parametrize("earlier_call", [False, True], ids=["first-request", "after-a-call"])
+@pytest.mark.parametrize("cached", [False, True], ids=["first-request", "after-era-cached"])
+@pytest.mark.parametrize("era", ["legacy", "modern"])
 @pytest.mark.parametrize("status", _REDIRECT_STATUSES)
-def test_a_redirect_from_mcp_is_never_followed(fake_rail, status, earlier_call) -> None:
-    server, base = fake_rail
-    server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
-    with _target() as (target, elsewhere):
+def test_a_redirect_from_mcp_is_never_followed(status, era, cached) -> None:
+    with _target() as (target, elsewhere), _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
         client = _client(base)
-        if earlier_call:
+        if cached:
             client.call_tool("create_listing", {"title": "x"})
         server.RequestHandlerClass = _redirecting(status, elsewhere)
         with pytest.raises(RailNetworkError) as raised:
