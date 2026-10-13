@@ -39,6 +39,8 @@ _LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # JSON-RPC errors only a 2026-07-28 server sends, so a probe answered with one met a modern server.
 _MODERN_ERRORS = (-32020, -32021)
 _UNSUPPORTED_VERSION = -32022
+# go-sdk v1.6.1 and v1.8.0 refuse a version header with this text, before dispatching anything.
+_GO_SDK_VERSION_REFUSAL = "Bad Request: Unsupported protocol version"
 # A modern server's own refusals, so a modern call refused with one met a server still modern.
 _MODERN_REFUSALS = (*_MODERN_ERRORS, _UNSUPPORTED_VERSION)
 # A modern server answers a method it lacks with HTTP 404 and this code; a legacy one uses 200.
@@ -168,10 +170,10 @@ class RailClient:
             if exc.status != 400 or modern_refusal:
                 raise _http_error(exc) from exc
             refused = exc
-        # A 400 may mean the server left this era. Resend only if the probe shows it did, since a
-        # server that no longer speaks the era could not have run the call.
+        # A 400 may mean the server left this era, so probe for later calls. Resend only when the
+        # 400 itself refused the version, which happens before the call runs.
         fresh = self._reprobe(era)
-        if not _left(era, fresh):
+        if not (_refused_the_version(refused) and _left(era, fresh)):
             raise _http_error(refused)
         try:
             return self._request(method, params, fresh)[0]
@@ -570,6 +572,13 @@ def _text_content(result: dict) -> str:
         if isinstance(block, dict) and block.get("type") == "text":
             parts.append(block.get("text", ""))
     return "".join(parts)
+
+
+def _refused_the_version(answer: _HTTPAnswer) -> bool:
+    """Whether a 400 refused the request's protocol version: JSON -32022, or go-sdk's plain text."""
+    if _rpc_error_code(answer.body) == _UNSUPPORTED_VERSION:
+        return True
+    return answer.body.startswith(_GO_SDK_VERSION_REFUSAL)
 
 
 def _left(stale: _Era, fresh: _Era) -> bool:

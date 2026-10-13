@@ -74,7 +74,12 @@ def _answer(handler, body: dict, log: EraLog) -> bool:
             _json(handler, 400, {"jsonrpc": "2.0", "id": body.get("id"), "error": error})
         else:
             # go-sdk, v1.6.1 and v1.8.0 alike, rejects a version header in plain text.
-            _plain(handler, 400, "Bad Request: Unsupported protocol version")
+            listed = ",".join(supported)
+            _plain(
+                handler,
+                400,
+                f"Bad Request: Unsupported protocol version (supported versions: {listed})",
+            )
         return True
     if method == "tools/call" and log.refuse_calls == "plain":
         _plain(handler, 400, "Bad Request")

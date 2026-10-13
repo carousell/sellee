@@ -839,6 +839,50 @@ def test_a_legacy_400_from_a_dual_era_server_is_raised_and_never_resent() -> Non
         assert len(server.eras.calls()) == 2
 
 
+@pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])
+def test_a_400_that_is_not_a_version_refusal_is_never_resent(start, found) -> None:
+    """A backend that ran the call and then failed with a plain 400, while the probe reaches a
+    server in the other era, as during a rolling deploy."""
+
+    class _RanThenFailed(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            eras = self.server.eras
+            if body.get("method") == "tools/call" and not self.server.failed_once:
+                self.server.failed_once = True
+                self.server.ran += 1
+                eras.era, eras.modern_only = (
+                    ("modern", True) if found == "modern_only" else (found, False)
+                )
+                payload = b"Bad Request"
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if answer(self, body, eras):
+                return
+            if body.get("method") == "tools/call":
+                self.server.ran += 1
+            self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": self.server.tool_result})
+
+    with _serving(start) as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        assert client.offers_tool("create_listing") or True
+        server.RequestHandlerClass = _RanThenFailed
+        server.failed_once, server.ran = False, 0
+        with pytest.raises(RailNetworkError) as raised:
+            client.call_tool("create_listing", {"title": "x"})
+        assert raised.value.status == 400
+        assert server.ran == 1
+        # The probe still moved the cache, so the next call goes out in the server's era.
+        assert client.call_tool("create_listing", {"title": "y"}) == {"listing": {"id": "L1"}}
+        assert server.ran == 2
+
+
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
 _REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 
