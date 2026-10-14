@@ -221,6 +221,28 @@ def test_a_publish_that_finished_meanwhile_is_not_repeated(ctx, store, fake, mon
     assert _listing_calls(fake) == []
 
 
+def test_a_refusal_leaves_a_newer_attempt_alone(ctx, store, fake, monkeypatch) -> None:
+    """While bazaar refuses one publish, a second has already moved the item to a new key."""
+    item = _item(store)
+    real = fake.create
+    newer = {}
+
+    def refuse_after_a_newer_attempt(tool, args, key, step):
+        if not newer:
+            store.close_publish_attempt(item["id"], key)
+            newer.update(store.open_publish_attempt(item["id"], {**args, "price_cents": 1}))
+            return real(tool, args, key, "refused")
+        return real(tool, args, key, step)
+
+    monkeypatch.setattr(fake, "create", refuse_after_a_newer_attempt)
+    with pytest.raises(ToolError, match="title is required"):
+        _publish(ctx, item)
+
+    _publish(ctx, item)
+
+    assert _keys(fake)[-1] == newer["key"]
+
+
 def test_a_url_recorded_another_way_ends_the_publish_under_way(ctx, store, fake) -> None:
     item = _item(store)
     fake.create_script = ["http503"]

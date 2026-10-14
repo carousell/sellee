@@ -158,7 +158,7 @@ def test_the_create_tools_send_their_key_in_meta(fake_rail) -> None:
         {"idempotency-key": "sale1"},
         None,
     ]
-    assert sent[0]["arguments"] == {"title": "x"}
+    assert [p["arguments"] for p in sent[:2]] == [{"title": "x"}, {"listing_id": "L1"}]
 
 
 def test_bad_key_raises_auth_error(fake_rail) -> None:

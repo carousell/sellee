@@ -35,7 +35,7 @@ from sellee.store.helpers import (
 )
 
 # The market whose publish carries an idempotency key: the rail's own, carousell.ai.
-RAIL_MARKET = "carousell-ai"
+_RAIL_MARKET = "carousell-ai"
 
 
 class ItemsMixin:
@@ -180,7 +180,7 @@ class ItemsMixin:
                 raise ItemNotFound(f"no item with id {item_id!r}")
             # Checked here, not only by the caller: a publish that finished since would otherwise
             # leave this one a fresh key, and a second listing.
-            if json.loads(row["listing_urls"]).get(RAIL_MARKET):
+            if json.loads(row["listing_urls"]).get(_RAIL_MARKET):
                 return None
             key = row["publish_key"] or uuid.uuid4().hex
             requests = json.loads(row["publish_requests"]) if row["publish_key"] else []
@@ -516,7 +516,7 @@ def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None
         "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
         (json.dumps(urls, sort_keys=True), _now(), item_id),
     )
-    if market == RAIL_MARKET:
+    if market == _RAIL_MARKET:
         # Listed, however it got there: a later republish must not reuse this publish's key.
         _close_publish_attempt_in_txn(conn, item_id)
     _forget_thread_listings_in_txn(conn, market)
