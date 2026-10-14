@@ -150,6 +150,22 @@ def test_an_edit_after_a_lost_answer_still_gets_the_first_listing(ctx, store, fa
     assert "does not show that edit" in result["note"]
 
 
+def test_two_edits_after_a_lost_answer_still_get_the_first_listing(ctx, store, fake) -> None:
+    """Three requests under one key, the first held: every earlier one is tried, not only two."""
+    item = _item(store, list_price=80.0)
+    for step, price in (("lost", 85.0), ("busy", 90.0)):
+        fake.create_script = [step]
+        with pytest.raises(ToolError):
+            _publish(ctx, item)
+        store.update_item(item["id"], {"list_price": price})
+
+    _publish(ctx, item)
+
+    assert list(fake.listings) == ["L1"]
+    assert fake.listings["L1"]["price_cents"] == 8000
+    assert _recorded(store, item) == f"{fake.base}/listing/L1"
+
+
 def test_an_edit_after_a_failure_that_made_nothing_publishes_the_edit(ctx, store, fake) -> None:
     item = _item(store, list_price=80.0)
     fake.create_script = ["http503"]
