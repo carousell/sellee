@@ -4,6 +4,7 @@ make a listing and then drop its answer. sellee's idempotency key gets the first
 from __future__ import annotations
 
 import itertools
+import time
 
 import pytest
 from hypothesis import HealthCheck, given, settings
@@ -13,7 +14,7 @@ from tests.fake_carousell_ai_mcp import FakeRelay, serve
 from sellee.config import Config
 from sellee.rail.client import RailClient, RailToolError
 from sellee.store import StoreError
-from sellee.tools.registry import TIER_ATTENDED, ToolError, dispatch
+from sellee.tools.registry import TIER_ATTENDED, TIER_PASS_PUBLISH, ToolError, dispatch
 
 _PROPERTY = settings(
     max_examples=60,
@@ -71,7 +72,7 @@ def _recorded(store, item) -> str:
 def test_a_lost_answer_gets_the_same_listing_back(ctx, store, fake) -> None:
     item = _item(store)
     fake.create_script = ["lost"]
-    with pytest.raises(ToolError, match="publishing again within a day"):
+    with pytest.raises(ToolError, match="publishing again in the next"):
         _publish(ctx, item)
 
     result = _publish(ctx, item)
@@ -342,3 +343,109 @@ def test_property_one_listing_under_one_key_per_attempt(ctx, store, fake, steps)
             assert after["key"] != before["key"]
         else:
             assert after["key"] == before["key"]
+
+
+def _later(monkeypatch, sec: float) -> None:
+    """Move the clock the store and the tool read forward by `sec`."""
+    real = time.time
+    monkeypatch.setattr(time, "time", lambda: real() + sec)
+
+
+_DAY = 24 * 3600
+
+
+def test_a_retry_after_carousell_ai_forgets_the_key_makes_nothing(
+    ctx, store, fake, monkeypatch
+) -> None:
+    item = _item(store)
+    fake.create_script = ["lost"]
+    with pytest.raises(ToolError, match="in the next 23 hours"):
+        _publish(ctx, item)
+    _later(monkeypatch, _DAY + 1)
+
+    with pytest.raises(ToolError, match="carousell_ai_settle_lost_publish"):
+        _publish(ctx, item)
+
+    assert len(_listing_calls(fake)) == 1
+    assert list(fake.listings) == ["L1"]
+
+
+def test_a_retry_just_inside_the_day_still_gets_the_listing(ctx, store, fake, monkeypatch) -> None:
+    item = _item(store)
+    fake.create_script = ["lost"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+    _later(monkeypatch, _DAY - 60)
+
+    result = _publish(ctx, item)
+
+    assert result["url"] == f"{fake.base}/listing/L1"
+    assert list(fake.listings) == ["L1"]
+
+
+def test_a_background_pass_is_not_sent_at_the_settle_tool(
+    make_ctx, ctx, store, fake, monkeypatch
+) -> None:
+    item = _item(store)
+    fake.create_script = ["lost"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+    _later(monkeypatch, _DAY + 1)
+    background = make_ctx(TIER_PASS_PUBLISH, rail_factory=ctx.rail_factory, config=ctx.config)
+
+    with pytest.raises(ToolError, match="until the seller has checked") as refused:
+        _publish(background, item)
+
+    assert "settle" not in str(refused.value)
+
+
+def test_the_seller_finding_the_listing_records_it(ctx, store, fake, monkeypatch) -> None:
+    item = _item(store)
+    fake.create_script = ["lost"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+    _later(monkeypatch, _DAY + 1)
+    url = f"{fake.base}/listing/L1"
+
+    settled = dispatch("carousell_ai_settle_lost_publish", {"item_id": item["id"], "url": url}, ctx)
+
+    assert settled == {"status": "recorded", "item_id": item["id"], "url": url}
+    assert _publish(ctx, item)["already_published"] is True
+    assert list(fake.listings) == ["L1"]
+
+
+def test_the_seller_finding_nothing_lets_it_publish_afresh(ctx, store, fake, monkeypatch) -> None:
+    item = _item(store)
+    fake.create_script = ["http503"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+    _later(monkeypatch, _DAY + 1)
+
+    settled = dispatch("carousell_ai_settle_lost_publish", {"item_id": item["id"]}, ctx)
+    _publish(ctx, item)
+
+    assert settled == {"status": "released", "item_id": item["id"]}
+    first, fresh = _keys(fake)
+    assert first != fresh
+    assert list(fake.listings) == ["L1"]
+
+
+def test_a_publish_still_safe_to_retry_is_not_released(ctx, store, fake) -> None:
+    item = _item(store)
+    fake.create_script = ["lost"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+
+    with pytest.raises(ToolError, match="publish the item again"):
+        dispatch("carousell_ai_settle_lost_publish", {"item_id": item["id"]}, ctx)
+
+    _publish(ctx, item)
+    assert list(fake.listings) == ["L1"]
+
+
+def test_settling_an_item_with_nothing_under_way_changes_nothing(ctx, store) -> None:
+    item = _item(store)
+
+    settled = dispatch("carousell_ai_settle_lost_publish", {"item_id": item["id"]}, ctx)
+
+    assert settled == {"status": "nothing_pending", "item_id": item["id"]}

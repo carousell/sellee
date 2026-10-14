@@ -5,6 +5,7 @@
     "carousell_ai_create_checkout_link",
     "carousell_ai_create_signin_link",
     "carousell_ai_publish_listing",
+    "carousell_ai_settle_lost_publish",
     "carousell_ai_update_listing",
     "carousell_ai_upload_photos",
     "create_item",

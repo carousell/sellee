@@ -181,6 +181,7 @@ _SCOPE_GUARDED = {
     "queue_listing_revision": (("item_id", "item"),),
     "record_listing_url": (("item_id", "item"),),
     "open_publish_attempt": (("item_id", "item"),),
+    "get_publish_attempt": (("item_id", "item"),),
     "close_publish_attempt": (("item_id", "item"),),
     "get_floor": (("item_id", "item"),),
     "set_floor": (("item_id", "item"),),
@@ -245,6 +246,7 @@ _SCOPE_MISS_NONE = frozenset(
         "get_budget",
         "newest_inbound_msg_id",
         "close_publish_attempt",
+        "get_publish_attempt",
     }
 )
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})

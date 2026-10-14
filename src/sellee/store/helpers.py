@@ -258,10 +258,12 @@ class ItemRecord(TypedDict):
 
 
 class PublishAttempt(TypedDict):
-    """What `open_publish_attempt` returns: the key and every request sent under it."""
+    """What `open_publish_attempt` returns: the key, every request sent under it, and when the
+    first was recorded."""
 
     key: str
     requests: list[dict]
+    started_ts: float
 
 
 class ReviseAck(TypedDict):

@@ -43,6 +43,21 @@ _UNSETTLED = ("queued", "running")
 # a call still running, or a fault that may have come after the write.
 _MISMATCH = "already names a different request"
 _NOT_FINAL = (_MISMATCH, "still in progress", "internal server error")
+# carousell.ai honours a key for 24 hours from its first use. Our clock starts when we record the
+# key, before that, so a retry inside this window is inside carousell.ai's.
+_KEY_KEPT_SEC = 24 * 3600
+
+_EXPIRED_SELLER_GUIDANCE = (
+    "an earlier publish of this item lost its answer more than a day ago, so carousell.ai may "
+    "already show it and can no longer say. Ask the seller to look in their carousell.ai "
+    "listings, then call carousell_ai_settle_lost_publish with the listing's URL if it is there, "
+    "or without one if it is not, and publish again"
+)
+_EXPIRED_PASS_GUIDANCE = (
+    "an earlier publish of this item lost its answer more than a day ago, so carousell.ai may "
+    "already show it. This item cannot be published until the seller has checked their "
+    "carousell.ai listings"
+)
 
 
 def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
@@ -59,6 +74,14 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
             f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
             f"a different amount of money. Re-price the item in {expected} before publishing"
         )
+
+
+def _expired_guidance(ctx: ToolContext) -> str:
+    """Worded per tier: a background pass cannot settle it, and must not be sent at a tool it
+    cannot see."""
+    if ctx.session.tier in (TIER_ATTENDED, TIER_PASS_CHANNEL):
+        return _EXPIRED_SELLER_GUIDANCE
+    return _EXPIRED_PASS_GUIDANCE
 
 
 def _says(exc: Exception, *answers: str) -> bool:
@@ -176,6 +199,10 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         # Another publish of this item finished since the check above.
         url = ctx.store.get_item(item_id)["listing_urls"][_MARKET]
         return {"listing_id": None, "url": url, "already_published": True}
+    left_sec = attempt["started_ts"] + _KEY_KEPT_SEC - time.time()
+    if left_sec <= 0:
+        # carousell.ai has forgotten the key, so a call now could make a second listing.
+        raise ToolError(_expired_guidance(ctx))
     try:
         listing, sent = _create_listing(rail, args, attempt)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
@@ -187,10 +214,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         if _is_refusal(exc):
             ctx.store.close_publish_attempt(item_id, attempt["key"])
             raise ToolError(str(exc)) from exc
-        # carousell.ai forgets a key after 24 hours; a retry after that may make a second listing.
         raise ToolError(
-            f"{exc} — carousell.ai may have made the listing; publishing again within a day "
-            "gets that one back rather than a second"
+            f"{exc} — carousell.ai may have made the listing; publishing again in the next "
+            f"{max(1, int(left_sec // 3600))} hours gets that one back rather than a second"
         ) from exc
 
     try:
@@ -220,6 +246,48 @@ register(
         },
         handler=_publish,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH}),
+    )
+)
+
+
+def _settle_lost_publish(ctx: ToolContext, params: dict) -> dict:
+    """The seller's answer for a publish whose answer was lost and whose key carousell.ai has
+    since forgotten: the listing it made, or that it made none."""
+    item_id = params["item_id"]
+    if ctx.store.get_item(item_id) is None:
+        raise ToolError(f"no item with id {item_id!r}")
+    attempt = ctx.store.get_publish_attempt(item_id)
+    if attempt is None:
+        return {"status": "nothing_pending", "item_id": item_id}
+    url = (params.get("url") or "").strip()
+    if url:
+        verdict = verify_market_url(ctx, _MARKET, url, ctx.store.seller_region())
+        if not verdict.get("ok"):
+            raise ToolError(f"not a listing URL on {_MARKET}: {verdict.get('reason')}")
+        ctx.store.record_listing_url(item_id, _MARKET, verdict["url"])
+        return {"status": "recorded", "item_id": item_id, "url": verdict["url"]}
+    if attempt["started_ts"] + _KEY_KEPT_SEC > time.time():
+        # Inside the window a retry is safe and finds the listing if there is one.
+        raise ToolError("that publish can still be retried safely — publish the item again")
+    ctx.store.close_publish_attempt(item_id, attempt["key"])
+    return {"status": "released", "item_id": item_id}
+
+
+register(
+    ToolSpec(
+        name="carousell_ai_settle_lost_publish",
+        description="Settle a carousell.ai publish that carousell_ai_publish_listing says lost its "
+        "answer more than a day ago. Pass the listing's URL if the seller finds it in their "
+        "carousell.ai listings, to record it; pass no URL if they confirm it is not there, so the "
+        "item can be published again. Never guess: ask the seller first.",
+        input_schema={
+            "type": "object",
+            "properties": {"item_id": {"type": "string"}, "url": {"type": "string"}},
+            "required": ["item_id"],
+            "additionalProperties": False,
+        },
+        handler=_settle_lost_publish,
+        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
     )
 )
 

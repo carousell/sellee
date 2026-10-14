@@ -173,7 +173,8 @@ class ItemsMixin:
         the item is listed there. `request` joins the requests sent under that key."""
         with self._db.transaction() as conn:
             row = conn.execute(
-                "SELECT publish_key, publish_requests, listing_urls FROM items WHERE id = ?",
+                "SELECT publish_key, publish_requests, publish_started_ts, listing_urls "
+                "FROM items WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if not row:
@@ -182,20 +183,40 @@ class ItemsMixin:
             # leave this one a fresh key, and a second listing.
             if json.loads(row["listing_urls"]).get(_RAIL_MARKET):
                 return None
-            key = row["publish_key"] or uuid.uuid4().hex
-            requests = json.loads(row["publish_requests"]) if row["publish_key"] else []
+            if row["publish_key"]:
+                key, started = row["publish_key"], row["publish_started_ts"]
+                requests = json.loads(row["publish_requests"])
+            else:
+                key, started, requests = uuid.uuid4().hex, _now(), []
             if request not in requests:
                 requests.append(request)
             conn.execute(
-                "UPDATE items SET publish_key = ?, publish_requests = ? WHERE id = ?",
-                (key, json.dumps(requests, sort_keys=True), item_id),
+                "UPDATE items SET publish_key = ?, publish_requests = ?, publish_started_ts = ? "
+                "WHERE id = ?",
+                (key, json.dumps(requests, sort_keys=True), started, item_id),
             )
-        return {"key": key, "requests": requests}
+        return {"key": key, "requests": requests, "started_ts": started}
 
-    def close_publish_attempt(self, item_id: str, key: str) -> None:
-        """End the publish under `key`, so the next one mints a new key."""
+    def get_publish_attempt(self, item_id: str) -> PublishAttempt | None:
+        """The item's carousell.ai publish under way, if any, without adding to it."""
+        rows = self._db.query(
+            "SELECT publish_key, publish_requests, publish_started_ts FROM items "
+            "WHERE id = ? AND publish_key IS NOT NULL",
+            (item_id,),
+        )
+        if not rows:
+            return None
+        return {
+            "key": rows[0]["publish_key"],
+            "requests": json.loads(rows[0]["publish_requests"]),
+            "started_ts": rows[0]["publish_started_ts"],
+        }
+
+    def close_publish_attempt(self, item_id: str, key: str | None) -> bool:
+        """End the publish under `key`, or whichever is under way when None, so the next one
+        mints a new key. Answers whether there was one to end."""
         with self._db.transaction() as conn:
-            _close_publish_attempt_in_txn(conn, item_id, key)
+            return _close_publish_attempt_in_txn(conn, item_id, key)
 
     def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
         """Merge one verified listing URL into the item's listing_urls map — a live verify has
@@ -496,13 +517,14 @@ class ItemsMixin:
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
 
 
-def _close_publish_attempt_in_txn(conn, item_id: str, key: str | None = None) -> None:
+def _close_publish_attempt_in_txn(conn, item_id: str, key: str | None = None) -> bool:
     # With a key, only that attempt closes, not a newer one that replaced it.
-    conn.execute(
-        "UPDATE items SET publish_key = NULL, publish_requests = NULL "
-        "WHERE id = ? AND (? IS NULL OR publish_key = ?)",
+    closed = conn.execute(
+        "UPDATE items SET publish_key = NULL, publish_requests = NULL, publish_started_ts = NULL "
+        "WHERE id = ? AND publish_key IS NOT NULL AND (? IS NULL OR publish_key = ?)",
         (item_id, key, key),
     )
+    return closed.rowcount > 0
 
 
 def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:
