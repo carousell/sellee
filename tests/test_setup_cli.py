@@ -882,6 +882,10 @@ def test_a_link_off_the_sign_in_page_is_never_printed(world, monkeypatch, capsys
 _MINTS = st.one_of(
     st.builds(lambda tail: _SIGNIN + tail, st.text()),
     st.text(),
+    # What a drifted rail might send in place of a string.
+    st.one_of(
+        st.integers(), st.lists(st.text()), st.dictionaries(st.text(), st.text()), st.booleans()
+    ),
     st.sampled_from(
         [
             RailToolRefused("already a seller"),

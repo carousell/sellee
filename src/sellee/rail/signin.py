@@ -26,7 +26,8 @@ def mint_signin_url(rail, web_base_url: str) -> str | None:
         if _ALREADY_A_SELLER in str(exc):
             return None
         raise
-    url = (minted.get("promotion_url") or "").strip()
+    raw = minted.get("promotion_url")
+    url = raw.strip() if isinstance(raw, str) else ""
     base = _signin_base(web_base_url)
     # Exact base or a real `?`/`/` boundary, as one unbroken run of printable characters: a bare
     # prefix would also accept `/signinfoo`, and a control character could forge a terminal line.
