@@ -146,7 +146,7 @@ def test_an_edit_after_a_lost_answer_still_gets_the_first_listing(ctx, store, fa
     assert list(fake.listings) == ["L1"]
     assert fake.listings["L1"]["price_cents"] == 8000
     assert _recorded(store, item) == f"{fake.base}/listing/L1"
-    # Live at the old price, so the caller is told rather than handed a plain success.
+    # Live at the old price, so the result says so.
     assert "does not show that edit" in result["note"]
 
 
@@ -309,9 +309,8 @@ _STEPS = st.lists(st.sampled_from(["ok", "lost", "http503", "refused", "busy", "
 @_PROPERTY
 @given(steps=_STEPS)
 def test_property_one_listing_under_one_key_per_attempt(ctx, store, fake, steps) -> None:
-    """Property: for any sequence of lost answers, failures, refusals and edits, the item ends up
-    with exactly one listing, every retry of one attempt sends the same key, and a new attempt
-    after a refusal sends a new one."""
+    """Property: any run of lost answers, failures, refusals and edits ends in one listing; retries
+    of an attempt share its key, and the attempt after a refusal takes a new one."""
     fake.listings.clear()
     fake.keyed.clear()
     fake.create_calls.clear()

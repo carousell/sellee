@@ -1,6 +1,5 @@
-"""A fake carousell.ai seller MCP server holding relay threads, registration mail, listings and
-checkout links, as bazaar serves them: proto field names, RFC 3339 times, at-least-once paging,
-and idempotency keys on the two create tools."""
+"""A fake carousell.ai seller MCP server: relay threads, registration mail, listings and checkout
+links as bazaar serves them, with at-least-once paging and keyed create tools."""
 
 from __future__ import annotations
 

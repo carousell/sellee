@@ -187,7 +187,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         if _is_refusal(exc):
             ctx.store.close_publish_attempt(item_id, attempt["key"])
             raise ToolError(str(exc)) from exc
-        # carousell.ai forgets a key after 24 hours, so a day is as far as the promise goes.
+        # carousell.ai forgets a key after 24 hours; a retry after that may make a second listing.
         raise ToolError(
             f"{exc} — carousell.ai may have made the listing; publishing again within a day "
             "gets that one back rather than a second"

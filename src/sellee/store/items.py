@@ -34,7 +34,7 @@ from sellee.store.helpers import (
     validated_size_bucket,
 )
 
-# The market whose publish carries an idempotency key: the rail's own, carousell.ai.
+# The only market whose publish carries an idempotency key.
 _RAIL_MARKET = "carousell-ai"
 
 
@@ -497,7 +497,7 @@ class ItemsMixin:
 
 
 def _close_publish_attempt_in_txn(conn, item_id: str, key: str | None = None) -> None:
-    # A key leaves a publish that already moved on to a newer one alone.
+    # With a key, only that attempt closes, not a newer one that replaced it.
     conn.execute(
         "UPDATE items SET publish_key = NULL, publish_requests = NULL "
         "WHERE id = ? AND (? IS NULL OR publish_key = ?)",
@@ -517,6 +517,6 @@ def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None
         (json.dumps(urls, sort_keys=True), _now(), item_id),
     )
     if market == _RAIL_MARKET:
-        # Listed, however it got there: a later republish must not reuse this publish's key.
+        # Any carousell.ai URL ends the publish under way, so a later republish gets a new key.
         _close_publish_attempt_in_txn(conn, item_id)
     _forget_thread_listings_in_txn(conn, market)

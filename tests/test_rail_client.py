@@ -135,7 +135,7 @@ def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:
 
 
 def test_the_create_tools_send_their_key_in_meta(fake_rail) -> None:
-    """The key rides `_meta["idempotency-key"]`, outside the request bazaar hashes."""
+    """The key goes in `_meta["idempotency-key"]`, outside the arguments bazaar hashes."""
     server, base = fake_rail
     sent = []
 
