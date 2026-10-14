@@ -20,6 +20,7 @@ from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail.client import RailToolRefused, RailUnprovisioned
 from sellee.store import SIZE_BUCKETS, StoreError
+from sellee.store.helpers import PublishAttempt
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -60,25 +61,30 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
         )
 
 
+def _says(exc: Exception, *answers: str) -> bool:
+    """Whether bazaar answered the call with an error naming one of `answers`."""
+    text = str(exc).lower()
+    return isinstance(exc, RailToolRefused) and any(answer in text for answer in answers)
+
+
 def _is_refusal(exc: Exception) -> bool:
     """Whether bazaar answered that it made nothing, so the next attempt may take a new key."""
-    if not isinstance(exc, RailToolRefused):
-        return False
-    text = str(exc).lower()
-    return not any(answer in text for answer in _NOT_FINAL)
+    return isinstance(exc, RailToolRefused) and not _says(exc, *_NOT_FINAL)
 
 
-def _create_listing(rail, args: dict, attempt: dict) -> dict:
-    """create_listing under the attempt's key. An item edited since an earlier call is refused as
-    a mismatch if bazaar holds that call; resending it gets its listing back."""
-    *earlier, last = (args, *(r for r in attempt["requests"] if r != args))
-    for request in earlier:
+def _create_listing(rail, args: dict, attempt: PublishAttempt) -> tuple[dict, dict]:
+    """create_listing under the attempt's key, as (listing, the request it answered). bazaar holds
+    one request per key and refuses the rest as a mismatch, so each earlier one is tried in turn."""
+    earlier = [request for request in attempt["requests"] if request != args]
+    in_order = [args, *earlier]
+    for request in in_order[:-1]:
         try:
-            return rail.create_listing(request, idempotency_key=attempt["key"])
+            return rail.create_listing(request, idempotency_key=attempt["key"]), request
         except RailToolRefused as exc:
-            if _MISMATCH not in str(exc):
+            if not _says(exc, _MISMATCH):
                 raise
-    return rail.create_listing(last, idempotency_key=attempt["key"])
+    last = in_order[-1]
+    return rail.create_listing(last, idempotency_key=attempt["key"]), last
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -166,8 +172,12 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # Recorded before the call: an answer lost after bazaar made the listing is recovered by a
     # retry under the same key, never by a second listing.
     attempt = ctx.store.open_publish_attempt(item_id, args)
+    if attempt is None:
+        # Another publish of this item finished since the check above.
+        url = ctx.store.get_item(item_id)["listing_urls"][_MARKET]
+        return {"listing_id": None, "url": url, "already_published": True}
     try:
-        listing = _create_listing(rail, args, attempt)
+        listing, sent = _create_listing(rail, args, attempt)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
     except RailUnprovisioned as exc:
         raise ToolError(
@@ -177,17 +187,24 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         if _is_refusal(exc):
             ctx.store.close_publish_attempt(item_id, attempt["key"])
             raise ToolError(str(exc)) from exc
+        # carousell.ai forgets a key after 24 hours, so a day is as far as the promise goes.
         raise ToolError(
-            f"{exc} — carousell.ai may have made the listing; publish again to get it back, "
-            "it will not be posted twice"
+            f"{exc} — carousell.ai may have made the listing; publishing again within a day "
+            "gets that one back rather than a second"
         ) from exc
 
     try:
-        ctx.store.record_listing_url(item_id, _MARKET, listing["url"], publish_key=attempt["key"])
+        ctx.store.record_listing_url(item_id, _MARKET, listing["url"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+    result = {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+    if sent != args:
+        result["note"] = (
+            "this listing went live with the details first sent, before the item's latest edit; "
+            "the listing does not show that edit"
+        )
+    return result
 
 
 register(

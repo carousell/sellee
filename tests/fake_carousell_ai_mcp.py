@@ -248,11 +248,11 @@ class FakeRelay:
             )
         held = self.keyed.get((tool, key)) if key else None
         if held is not None:
-            if held[0] != args:
+            if held["request"] != args:
                 call["outcome"] = "mismatch"
                 raise ToolFailure("idempotency_key already names a different request")
             call["outcome"] = "replay"
-            return held[1]
+            return held["response"]
         if step == "refused":
             call["outcome"] = "refused"
             raise ToolFailure("title is required")
@@ -264,7 +264,7 @@ class FakeRelay:
             self.checkouts.append(dict(args))
             result = {"checkout_url": f"{self.base}/checkout/c{len(self.checkouts)}"}
         if key:
-            self.keyed[(tool, key)] = (dict(args), result)
+            self.keyed[(tool, key)] = {"request": dict(args), "response": result}
         call["outcome"] = "made"
         return result
 

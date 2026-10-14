@@ -19,6 +19,7 @@ from sellee.store.helpers import (
     FloorRecord,
     ItemNotFound,
     ItemRecord,
+    PublishAttempt,
     ReviseAck,
     StoreError,
     _clamp_floor_in_txn,
@@ -32,6 +33,9 @@ from sellee.store.helpers import (
     validated_item_fields,
     validated_size_bucket,
 )
+
+# The market whose publish carries an idempotency key: the rail's own, carousell.ai.
+RAIL_MARKET = "carousell-ai"
 
 
 class ItemsMixin:
@@ -164,15 +168,20 @@ class ItemsMixin:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
-    def open_publish_attempt(self, item_id: str, request: dict) -> dict:
-        """The item's carousell.ai publish under way, or a new one under a fresh key, as
-        {key, requests}. `request` joins the requests sent under that key, before it is sent."""
+    def open_publish_attempt(self, item_id: str, request: dict) -> PublishAttempt | None:
+        """The item's carousell.ai publish under way, or a new one under a fresh key; None once
+        the item is listed there. `request` joins the requests sent under that key."""
         with self._db.transaction() as conn:
             row = conn.execute(
-                "SELECT publish_key, publish_requests FROM items WHERE id = ?", (item_id,)
+                "SELECT publish_key, publish_requests, listing_urls FROM items WHERE id = ?",
+                (item_id,),
             ).fetchone()
             if not row:
                 raise ItemNotFound(f"no item with id {item_id!r}")
+            # Checked here, not only by the caller: a publish that finished since would otherwise
+            # leave this one a fresh key, and a second listing.
+            if json.loads(row["listing_urls"]).get(RAIL_MARKET):
+                return None
             key = row["publish_key"] or uuid.uuid4().hex
             requests = json.loads(row["publish_requests"]) if row["publish_key"] else []
             if request not in requests:
@@ -188,9 +197,7 @@ class ItemsMixin:
         with self._db.transaction() as conn:
             _close_publish_attempt_in_txn(conn, item_id, key)
 
-    def record_listing_url(
-        self, item_id: str, market: str, url: str, *, publish_key: str | None = None
-    ) -> ItemRecord:
+    def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
         """Merge one verified listing URL into the item's listing_urls map — a live verify has
         already passed before this is called.
 
@@ -204,13 +211,9 @@ class ItemsMixin:
         is here and not only in adoption: it links an existing item to a listing the seller already
         had, outside adoption entirely, and a buyer already waiting in that conversation would
         otherwise never be looked at again.
-
-        `publish_key` closes the publish that made this listing in the same transaction.
         """
         with self._db.transaction() as conn:
             record_listing_url_in_txn(conn, item_id, market, url)
-            if publish_key:
-                _close_publish_attempt_in_txn(conn, item_id, publish_key)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     # --- Q&A bank ---------------------------------------------------------------------------
@@ -493,12 +496,12 @@ class ItemsMixin:
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
 
 
-def _close_publish_attempt_in_txn(conn, item_id: str, key: str) -> None:
-    # Keyed, so a publish that already moved on to a newer key keeps it.
+def _close_publish_attempt_in_txn(conn, item_id: str, key: str | None = None) -> None:
+    # A key leaves a publish that already moved on to a newer one alone.
     conn.execute(
         "UPDATE items SET publish_key = NULL, publish_requests = NULL "
-        "WHERE id = ? AND publish_key = ?",
-        (item_id, key),
+        "WHERE id = ? AND (? IS NULL OR publish_key = ?)",
+        (item_id, key, key),
     )
 
 
@@ -513,4 +516,7 @@ def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None
         "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
         (json.dumps(urls, sort_keys=True), _now(), item_id),
     )
+    if market == RAIL_MARKET:
+        # Listed, however it got there: a later republish must not reuse this publish's key.
+        _close_publish_attempt_in_txn(conn, item_id)
     _forget_thread_listings_in_txn(conn, market)

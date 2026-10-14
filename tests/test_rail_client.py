@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -142,7 +143,7 @@ def test_the_create_tools_send_their_key_in_meta(fake_rail) -> None:
         def do_POST(self):
             raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
             sent.append(json.loads(raw)["params"])
-            self.rfile = __import__("io").BytesIO(raw)
+            self.rfile = io.BytesIO(raw)
             _Handler.do_POST(self)
 
     server.RequestHandlerClass = _Recorder

@@ -161,9 +161,7 @@ class RailClient:
 
     def create_listing(self, args: dict, *, idempotency_key: str) -> dict:
         """Create a listing and return {listing_id, url}. Raises RailToolError when the response
-        carries no id. The currency is not read back: the request asserts the recorded one.
-
-        bazaar answers a repeat of the same request under the same key with the first listing."""
+        carries no id. The currency is not read back: the request asserts the recorded one."""
         result = self.call_tool("create_listing", args, meta=_keyed(idempotency_key))
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result
@@ -243,8 +241,7 @@ class RailClient:
 
     def create_checkout(self, args: dict, *, idempotency_key: str) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
-        RailToolError if the rail returns no URL (we never fabricate one). A repeat under the same
-        key returns the first link."""
+        RailToolError if the rail returns no URL (we never fabricate one)."""
         result = self.call_tool("create_checkout", args, meta=_keyed(idempotency_key))
         url = result.get("checkout_url") or result.get("url")
         if not url:
@@ -354,7 +351,8 @@ def listing_id_from_url(url) -> str:
 
 
 def _keyed(idempotency_key: str) -> dict:
-    """The `_meta` carrying a create call's key: metadata, so it is not part of the request."""
+    """The `_meta` carrying a create call's key. bazaar answers a repeat of the same request under
+    the same key with the first response, and refuses a different request."""
     return {"idempotency-key": idempotency_key}
 
 

@@ -11,7 +11,8 @@ from hypothesis import strategies as st
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
 from sellee.config import Config
-from sellee.rail.client import RailClient
+from sellee.rail.client import RailClient, RailToolError
+from sellee.store import StoreError
 from sellee.tools.registry import TIER_ATTENDED, ToolError, dispatch
 
 _PROPERTY = settings(
@@ -70,7 +71,7 @@ def _recorded(store, item) -> str:
 def test_a_lost_answer_gets_the_same_listing_back(ctx, store, fake) -> None:
     item = _item(store)
     fake.create_script = ["lost"]
-    with pytest.raises(ToolError, match="publish again"):
+    with pytest.raises(ToolError, match="publishing again within a day"):
         _publish(ctx, item)
 
     result = _publish(ctx, item)
@@ -140,11 +141,13 @@ def test_an_edit_after_a_lost_answer_still_gets_the_first_listing(ctx, store, fa
         _publish(ctx, item)
     store.update_item(item["id"], {"list_price": 95.0})
 
-    _publish(ctx, item)
+    result = _publish(ctx, item)
 
     assert list(fake.listings) == ["L1"]
     assert fake.listings["L1"]["price_cents"] == 8000
     assert _recorded(store, item) == f"{fake.base}/listing/L1"
+    # Live at the old price, so the caller is told rather than handed a plain success.
+    assert "does not show that edit" in result["note"]
 
 
 def test_an_edit_after_a_failure_that_made_nothing_publishes_the_edit(ctx, store, fake) -> None:
@@ -154,9 +157,82 @@ def test_an_edit_after_a_failure_that_made_nothing_publishes_the_edit(ctx, store
         _publish(ctx, item)
     store.update_item(item["id"], {"list_price": 95.0})
 
-    _publish(ctx, item)
+    result = _publish(ctx, item)
 
     assert [listing["price_cents"] for listing in fake.listings.values()] == [9500]
+    assert "note" not in result
+
+
+def test_a_page_not_live_yet_keeps_the_key(ctx, store, fake, monkeypatch) -> None:
+    item = _item(store)
+    real = RailClient.verify_listing_url
+    fails = ["once"]
+
+    def verify(self, url):
+        if fails:
+            fails.pop()
+            raise RailToolError("listing page returned HTTP 404")
+        real(self, url)
+
+    monkeypatch.setattr(RailClient, "verify_listing_url", verify)
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+
+    _publish(ctx, item)
+
+    first, retry = _keys(fake)
+    assert first == retry
+    assert list(fake.listings) == ["L1"]
+
+
+def test_a_crash_before_the_url_is_recorded_keeps_the_key(ctx, store, fake, monkeypatch) -> None:
+    item = _item(store)
+    real = store.record_listing_url
+
+    def crash(*args, **kwargs):
+        monkeypatch.setattr(store, "record_listing_url", real)
+        raise StoreError("database is locked")
+
+    monkeypatch.setattr(store, "record_listing_url", crash)
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+
+    _publish(ctx, item)
+
+    first, retry = _keys(fake)
+    assert first == retry
+    assert list(fake.listings) == ["L1"]
+
+
+def test_a_publish_that_finished_meanwhile_is_not_repeated(ctx, store, fake, monkeypatch) -> None:
+    """Two publishes of one item: the second passed the early check before the first recorded."""
+    item = _item(store)
+    url = f"{fake.base}/listing/L1"
+
+    def first_one_finishes(**_):
+        store.record_listing_url(item["id"], "carousell-ai", url)
+        return {"verdict": "go", "count": 0, "cap": 0, "delay_sec": 0}
+
+    monkeypatch.setattr(store, "reserve_action", first_one_finishes)
+
+    result = _publish(ctx, item)
+
+    assert result == {"listing_id": None, "url": url, "already_published": True}
+    assert _listing_calls(fake) == []
+
+
+def test_a_url_recorded_another_way_ends_the_publish_under_way(ctx, store, fake) -> None:
+    item = _item(store)
+    fake.create_script = ["http503"]
+    with pytest.raises(ToolError):
+        _publish(ctx, item)
+    store.record_listing_url(item["id"], "carousell-ai", f"{fake.base}/listing/L9")
+    store.archive_listing_url(item["id"], "carousell-ai")
+
+    _publish(ctx, item)
+
+    first, second = _keys(fake)
+    assert first != second
 
 
 def test_a_republish_after_the_listing_is_archived_is_a_new_attempt(ctx, store, fake) -> None:
