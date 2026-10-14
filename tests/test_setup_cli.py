@@ -855,7 +855,7 @@ def test_a_link_that_could_forge_a_terminal_line_is_never_printed(
 
 
 def test_a_re_run_for_a_seller_already_signed_in_sends_no_link(world, monkeypatch, capsys) -> None:
-    # A stored key means no guests call, and the rail's refusal to mint says the rest.
+    # A stored key means no guests call, and the rail refuses the mint for a seller.
     secrets.write_carousell_ai_api_key("guest-key")
     _real_rail_phase(monkeypatch, {"status": "ok", "provisioned": False, "source": "store"})
     _minting(monkeypatch, RailToolRefused("this account is already a seller"))

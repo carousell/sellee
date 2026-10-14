@@ -554,7 +554,7 @@ _SIGNIN_OFFER = (
 
 
 def _mint_signin(country: str) -> str | _NoLink:
-    """The sign-in link a buyer's payment waits on, or why there is none."""
+    """The seller's sign-in link, or why setup shows none."""
     from sellee.rail import signin
     from sellee.rail.client import RailClient, RailError
 

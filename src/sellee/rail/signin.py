@@ -1,8 +1,5 @@
 """The seller's carousell.ai sign-in link: email, then the ship-from ZIP that lets buyers pay.
-
-One mint for every caller, so each one refuses the same links: the URL hands over the seller's
-account, and a link that is not plainly on the carousell.ai sign-in page is never passed on.
-"""
+One mint for every caller, so each refuses the same links, since the URL hands over the account."""
 
 from __future__ import annotations
 
@@ -22,9 +19,7 @@ def _signin_base(web_base_url: str) -> str:
 
 def mint_signin_url(rail, web_base_url: str) -> str | None:
     """A fresh sign-in link for the account `rail` holds the key to, or None once it is a seller.
-
-    Raises RailError for anything else, OffBaseSigninLink included.
-    """
+    Raises RailError for anything else, OffBaseSigninLink included."""
     try:
         minted = rail.create_promotion_url()
     except RailToolError as exc:
