@@ -9,14 +9,14 @@ from __future__ import annotations
 from sellee.rail.client import RailError, RailToolError
 
 # The rail's refusal for an account that is past sign-in. A result, not a failure.
-ALREADY_A_SELLER = "already a seller"
+_ALREADY_A_SELLER = "already a seller"
 
 
 class OffBaseSigninLink(RailError):
     """The rail answered with a link that is not on the carousell.ai sign-in page."""
 
 
-def signin_base(web_base_url: str) -> str:
+def _signin_base(web_base_url: str) -> str:
     return web_base_url.rstrip("/") + "/signin"
 
 
@@ -28,11 +28,11 @@ def mint_signin_url(rail, web_base_url: str) -> str | None:
     try:
         minted = rail.create_promotion_url()
     except RailToolError as exc:
-        if ALREADY_A_SELLER in str(exc):
+        if _ALREADY_A_SELLER in str(exc):
             return None
         raise
     url = (minted.get("promotion_url") or "").strip()
-    base = signin_base(web_base_url)
+    base = _signin_base(web_base_url)
     # Exact base or a real `?`/`/` boundary, as one unbroken run of printable characters: a bare
     # prefix would also accept `/signinfoo`, and a control character could forge a terminal line.
     on_base = url == base or url.startswith((base + "?", base + "/"))
