@@ -21,6 +21,7 @@ from __future__ import annotations
 import hashlib
 
 from sellee.money import to_price_cents
+from sellee.rail import signin
 from sellee.rail.client import (
     RailError,
     RailToolError,
@@ -45,7 +46,6 @@ _MARKET = "carousell-ai"
 # copy; if it drifts, the mapping below stops firing and the raw rail text surfaces as before —
 # degraded (it still says the seller must sign in), never wrong.
 _GUEST_GATE_CLAUSE = "belongs to a guest account"
-_ALREADY_SIGNED_IN_CLAUSE = "already a seller"
 
 _GUEST_GATE_SELLER_GUIDANCE = (
     "the seller hasn't done their one-time carousell.ai sign-in yet, so checkout links are "
@@ -78,10 +78,6 @@ def _listing_id(item: dict) -> str:
 def _checkout_base(ctx: ToolContext) -> str:
     # the web origin, not the API origin: real checkout pages are served on www.carousell.ai
     return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/checkout"
-
-
-def _signin_base(ctx: ToolContext) -> str:
-    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/signin"
 
 
 def _rail(ctx: ToolContext):
@@ -220,26 +216,16 @@ register(
 
 
 def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
-    rail = _rail(ctx)
     try:
-        minted = rail.create_promotion_url()
-    except RailToolError as exc:
-        if _ALREADY_SIGNED_IN_CLAUSE in str(exc):
-            # a result, not an error — an error here would read as failure and invite re-mint loops
-            return {
-                "already_signed_in": True,
-                "note": "the seller has already signed in — create the checkout link now",
-            }
-        raise ToolError(str(exc)) from exc
+        url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
     except RailError as exc:
         raise ToolError(str(exc)) from exc
-
-    url = (minted.get("promotion_url") or "").strip()
-    base = _signin_base(ctx)
-    # fail closed — this URL hands over the seller's account. Exact base or a real `?`/`/`
-    # boundary; a bare prefix match would also accept a same-origin `/signinfoo`.
-    if url != base and not url.startswith((base + "?", base + "/")):
-        raise ToolError("sign-in link did not come from the expected carousell.ai sign-in base")
+    if url is None:
+        # a result, not an error — an error here would read as failure and invite re-mint loops
+        return {
+            "already_signed_in": True,
+            "note": "the seller has already signed in — create the checkout link now",
+        }
     return {"signin_url": url}
 
 
