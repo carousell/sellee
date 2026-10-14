@@ -36,7 +36,7 @@ class FakeRail:
         self.calls = 0
         self._checkout_error = checkout_error
 
-    def create_checkout(self, args):
+    def create_checkout(self, args, idempotency_key=None):
         self.calls += 1
         if self._checkout_error is not None:
             raise self._checkout_error

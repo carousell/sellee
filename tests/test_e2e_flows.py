@@ -24,13 +24,13 @@ _ZONES = [{"zone": "nationwide", "match": {"areas": ["__else__"]}, "fee": 5}]
 
 
 class FakeRail:
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/L1"}
 
     def verify_listing_url(self, url):
         return None
 
-    def create_checkout(self, args):
+    def create_checkout(self, args, idempotency_key=None):
         return {"checkout_url": "https://www.carousell.ai/checkout/deal-xyz"}
 
 

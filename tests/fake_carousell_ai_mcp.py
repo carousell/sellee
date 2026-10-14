@@ -1,5 +1,6 @@
-"""A fake carousell.ai seller MCP server holding relay threads and registration mail, as bazaar
-serves them: proto field names, RFC 3339 times, and at-least-once paging."""
+"""A fake carousell.ai seller MCP server holding relay threads, registration mail, listings and
+checkout links, as bazaar serves them: proto field names, RFC 3339 times, at-least-once paging,
+and idempotency keys on the two create tools."""
 
 from __future__ import annotations
 
@@ -47,6 +48,16 @@ class FakeRelay:
         self.registration_script: list = []
         # The seller's registration address, as get_registration_address mints it.
         self.registration_email = "seller-token@inbox.carousell.ai"
+        # Where serve() is listening, which is also where the listing and checkout pages sit.
+        self.base = ""
+        # What create_listing and create_checkout made, and the response held under each key.
+        self.listings: dict = {}
+        self.checkouts: list = []
+        self.keyed: dict = {}
+        self.create_calls: list = []
+        # One create outcome per call ("ok" once empty): http503, busy and refused make nothing;
+        # lost makes it, then drops the connection unanswered.
+        self.create_script: list = []
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -221,6 +232,42 @@ class FakeRelay:
             raise ToolFailure("internal server error")
         return {"sent_at": stored["sent_at"]}
 
+    def create(self, tool: str, args: dict, key, step: str) -> dict:
+        """Make a listing or checkout once per key, as bazaar's idempotency layer does: the same
+        request replays the first response, and a different one is refused."""
+        call = {"tool": tool, "args": dict(args), "key": key, "lost": step == "lost"}
+        self.create_calls.append(call)
+        if key is not None and not isinstance(key, str):
+            call["outcome"] = "refused"
+            raise ToolFailure("_meta idempotency-key must be a string")
+        if step == "busy":
+            call["outcome"] = "busy"
+            raise ToolFailure(
+                "a call with this idempotency_key is still in progress; "
+                "retry later with the same key"
+            )
+        held = self.keyed.get((tool, key)) if key else None
+        if held is not None:
+            if held[0] != args:
+                call["outcome"] = "mismatch"
+                raise ToolFailure("idempotency_key already names a different request")
+            call["outcome"] = "replay"
+            return held[1]
+        if step == "refused":
+            call["outcome"] = "refused"
+            raise ToolFailure("title is required")
+        if tool == "create_listing":
+            listing_id = f"L{len(self.listings) + 1}"
+            self.listings[listing_id] = dict(args)
+            result = {"listing": {"id": listing_id, "title": args.get("title", "")}}
+        else:
+            self.checkouts.append(dict(args))
+            result = {"checkout_url": f"{self.base}/checkout/c{len(self.checkouts)}"}
+        if key:
+            self.keyed[(tool, key)] = (dict(args), result)
+        call["outcome"] = "made"
+        return result
+
     def get_thread(self, args: dict) -> dict:
         thread_id = args["id"]
         if thread_id in self.broken:
@@ -242,6 +289,12 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass
 
+    def do_GET(self):
+        """A listing page, as the verify after create_listing reads it."""
+        relay: FakeRelay = self.server.relay  # type: ignore[attr-defined]
+        listing_id = self.path.rsplit("/listing/", 1)[-1] if "/listing/" in self.path else ""
+        self._send(200 if listing_id in relay.listings else 404, {})
+
     def do_POST(self):
         relay: FakeRelay = self.server.relay  # type: ignore[attr-defined]
         body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
@@ -261,6 +314,9 @@ class _Handler(BaseHTTPRequestHandler):
             status = int(relay.reply_script.pop(0)[4:])
             relay.reply_calls.append(dict(args))
             self._send(status, {"error": "unavailable"})
+            return
+        if name in ("create_listing", "create_checkout"):
+            self._create(relay, body, name, args)
             return
         if name == "send_registration_reply" and relay.registration_script[:1] == ["http503"]:
             relay.registration_script.pop(0)
@@ -286,6 +342,25 @@ class _Handler(BaseHTTPRequestHandler):
                 result = {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
         self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
 
+    def _create(self, relay: FakeRelay, body: dict, name: str, args: dict) -> None:
+        step = relay.create_script.pop(0) if relay.create_script else "ok"
+        key = (body["params"].get("_meta") or {}).get("idempotency-key")
+        if step == "http503":
+            relay.create_calls.append(
+                {"tool": name, "args": dict(args), "key": key, "outcome": "http503"}
+            )
+            self._send(503, {"error": "unavailable"})
+            return
+        try:
+            result = {"structuredContent": relay.create(name, args, key, step)}
+        except ToolFailure as exc:
+            result = {"isError": True, "content": [{"type": "text", "text": str(exc)}]}
+        if step == "lost":
+            # Made and never answered: the client sees the connection close.
+            self.close_connection = True
+            return
+        self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
+
     def _send(self, status, obj):
         payload = json.dumps(obj).encode()
         self.send_response(status)
@@ -303,6 +378,7 @@ def serve(relay: FakeRelay):
     """Start the fake on a free port; returns (base_url, shutdown)."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.relay = relay  # type: ignore[attr-defined]
+    relay.base = f"http://127.0.0.1:{server.server_port}"
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
 

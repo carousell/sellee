@@ -23,7 +23,7 @@ class FakeRail:
         self.minted: list = []
         self._error = error
 
-    def create_checkout(self, args):
+    def create_checkout(self, args, idempotency_key=None):
         if self._error is not None:
             raise self._error
         self.minted.append(args)

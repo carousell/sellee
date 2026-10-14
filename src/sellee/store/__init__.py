@@ -180,6 +180,8 @@ _SCOPE_GUARDED = {
     "revise_item": (("item_id", "item"),),
     "queue_listing_revision": (("item_id", "item"),),
     "record_listing_url": (("item_id", "item"),),
+    "open_publish_attempt": (("item_id", "item"),),
+    "close_publish_attempt": (("item_id", "item"),),
     "get_floor": (("item_id", "item"),),
     "set_floor": (("item_id", "item"),),
     "get_budget": (("want_id", "want"),),
@@ -235,7 +237,15 @@ _SCOPE_GUARDED = {
 # row return None; the transcript read returns []; a counting delete returns 0; row-required
 # writers raise the same NotFound.
 _SCOPE_MISS_NONE = frozenset(
-    {"get_item", "get_thread", "get_want", "get_floor", "get_budget", "newest_inbound_msg_id"}
+    {
+        "get_item",
+        "get_thread",
+        "get_want",
+        "get_floor",
+        "get_budget",
+        "newest_inbound_msg_id",
+        "close_publish_attempt",
+    }
 )
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
@@ -245,6 +255,7 @@ _SCOPE_MISS_NOTFOUND = {
     "revise_item": ("item", ItemNotFound),
     "queue_listing_revision": ("item", ItemNotFound),
     "record_listing_url": ("item", ItemNotFound),
+    "open_publish_attempt": ("item", ItemNotFound),
     "set_floor": ("item", ItemNotFound),
     "record_checkout": ("item", ItemNotFound),
     "create_thread": ("item", ItemNotFound),

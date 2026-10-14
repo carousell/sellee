@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from sellee.db import Database
 from sellee.store.helpers import (
@@ -163,7 +164,33 @@ class ItemsMixin:
             )
         return self.get_item(item_id)  # type: ignore[return-value]
 
-    def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
+    def open_publish_attempt(self, item_id: str, request: dict) -> dict:
+        """The item's carousell.ai publish under way, or a new one under a fresh key, as
+        {key, requests}. `request` joins the requests sent under that key, before it is sent."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT publish_key, publish_requests FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
+            if not row:
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            key = row["publish_key"] or uuid.uuid4().hex
+            requests = json.loads(row["publish_requests"]) if row["publish_key"] else []
+            if request not in requests:
+                requests.append(request)
+            conn.execute(
+                "UPDATE items SET publish_key = ?, publish_requests = ? WHERE id = ?",
+                (key, json.dumps(requests, sort_keys=True), item_id),
+            )
+        return {"key": key, "requests": requests}
+
+    def close_publish_attempt(self, item_id: str, key: str) -> None:
+        """End the publish under `key`, so the next one mints a new key."""
+        with self._db.transaction() as conn:
+            _close_publish_attempt_in_txn(conn, item_id, key)
+
+    def record_listing_url(
+        self, item_id: str, market: str, url: str, *, publish_key: str | None = None
+    ) -> ItemRecord:
         """Merge one verified listing URL into the item's listing_urls map — a live verify has
         already passed before this is called.
 
@@ -177,9 +204,13 @@ class ItemsMixin:
         is here and not only in adoption: it links an existing item to a listing the seller already
         had, outside adoption entirely, and a buyer already waiting in that conversation would
         otherwise never be looked at again.
+
+        `publish_key` closes the publish that made this listing in the same transaction.
         """
         with self._db.transaction() as conn:
             record_listing_url_in_txn(conn, item_id, market, url)
+            if publish_key:
+                _close_publish_attempt_in_txn(conn, item_id, publish_key)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     # --- Q&A bank ---------------------------------------------------------------------------
@@ -460,6 +491,15 @@ class ItemsMixin:
                 ),
             )
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
+
+
+def _close_publish_attempt_in_txn(conn, item_id: str, key: str) -> None:
+    # Keyed, so a publish that already moved on to a newer key keeps it.
+    conn.execute(
+        "UPDATE items SET publish_key = NULL, publish_requests = NULL "
+        "WHERE id = ? AND publish_key = ?",
+        (item_id, key),
+    )
 
 
 def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:

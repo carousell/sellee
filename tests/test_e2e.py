@@ -31,7 +31,7 @@ _LISTING_URL = "https://www.carousell.ai/listing/42-lamp"
 
 
 class FakeRail:
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         return {"listing_id": "L42", "url": _LISTING_URL}
 
     def verify_listing_url(self, url):

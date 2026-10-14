@@ -18,7 +18,7 @@ from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
-from sellee.rail.client import RailUnprovisioned
+from sellee.rail.client import RailToolRefused, RailUnprovisioned
 from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -38,6 +38,10 @@ _MARKET = "carousell-ai"
 _MEDIA_TYPE_IMAGE = 1
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
+# bazaar's answers that leave a listing possibly made: the key is held by a different request or
+# a call still running, or a fault that may have come after the write.
+_MISMATCH = "already names a different request"
+_NOT_FINAL = (_MISMATCH, "still in progress", "internal server error")
 
 
 def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
@@ -54,6 +58,27 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
             f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
             f"a different amount of money. Re-price the item in {expected} before publishing"
         )
+
+
+def _is_refusal(exc: Exception) -> bool:
+    """Whether bazaar answered that it made nothing, so the next attempt may take a new key."""
+    if not isinstance(exc, RailToolRefused):
+        return False
+    text = str(exc).lower()
+    return not any(answer in text for answer in _NOT_FINAL)
+
+
+def _create_listing(rail, args: dict, attempt: dict) -> dict:
+    """create_listing under the attempt's key. An item edited since an earlier call is refused as
+    a mismatch if bazaar holds that call; resending it gets its listing back."""
+    *earlier, last = (args, *(r for r in attempt["requests"] if r != args))
+    for request in earlier:
+        try:
+            return rail.create_listing(request, idempotency_key=attempt["key"])
+        except RailToolRefused as exc:
+            if _MISMATCH not in str(exc):
+                raise
+    return rail.create_listing(last, idempotency_key=attempt["key"])
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -138,18 +163,27 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
+    # Recorded before the call: an answer lost after bazaar made the listing is recovered by a
+    # retry under the same key, never by a second listing.
+    attempt = ctx.store.open_publish_attempt(item_id, args)
     try:
-        listing = rail.create_listing(args)
+        listing = _create_listing(rail, args, attempt)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
     except RailUnprovisioned as exc:
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
     except Exception as exc:  # RailError subclasses carry caller-safe, secret-free messages
-        raise ToolError(str(exc)) from exc
+        if _is_refusal(exc):
+            ctx.store.close_publish_attempt(item_id, attempt["key"])
+            raise ToolError(str(exc)) from exc
+        raise ToolError(
+            f"{exc} — carousell.ai may have made the listing; publish again to get it back, "
+            "it will not be posted twice"
+        ) from exc
 
     try:
-        ctx.store.record_listing_url(item_id, _MARKET, listing["url"])
+        ctx.store.record_listing_url(item_id, _MARKET, listing["url"], publish_key=attempt["key"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 

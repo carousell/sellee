@@ -183,7 +183,7 @@ def test_peek_reports_quiet_hours(store) -> None:
 
 
 class _FakeRail:
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/1"}
 
     def verify_listing_url(self, url):

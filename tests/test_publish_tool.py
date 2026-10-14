@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 
 import sellee.tools  # noqa: F401  registration
-from sellee.rail.client import RailToolError, RailUnprovisioned
+from sellee.rail.client import RailToolError, RailToolRefused, RailUnprovisioned
 from sellee.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
 
 
@@ -18,7 +18,7 @@ class FakeRail:
         self.args: dict = {}
         self.calls: list[str] = []
 
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         self.args = dict(args)
         self.calls.append(f"create:{args['price_cents']}")
         return {"listing_id": "L1", "url": self.url}
@@ -141,8 +141,8 @@ def test_a_backend_refusal_reaches_the_caller_in_its_own_words(make_ctx, store) 
     actionable one, so it is passed through rather than restated."""
 
     class RefusingRail(FakeRail):
-        def create_listing(self, args):
-            raise RailToolError("this seller's listings are priced in SGD; VND cannot be used")
+        def create_listing(self, args, idempotency_key=None):
+            raise RailToolRefused("this seller's listings are priced in SGD; VND cannot be used")
 
     _sells_in(store, "VN", "VND")
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: RefusingRail())

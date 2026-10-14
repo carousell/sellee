@@ -173,7 +173,10 @@ def mint_checkout_link(
         raise ToolError(str(exc)) from exc
 
     try:
-        minted = rail.create_checkout({"listing_id": listing_id, "agreed_price_cents": price_cents})
+        # The sale's own id is the key, so a retry after a lost answer gets the first link back.
+        minted = rail.create_checkout(
+            {"listing_id": listing_id, "agreed_price_cents": price_cents}, idempotency_key=sale_id
+        )
     except RailToolError as exc:
         if _GUEST_GATE_CLAUSE in str(exc):
             raise ToolError(_guest_gate_guidance(ctx)) from exc
