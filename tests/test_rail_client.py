@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import threading
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
@@ -11,10 +12,12 @@ import pytest
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
+    RailNetworkError,
     RailToolError,
     _text_content,
     listing_id_from_url,
 )
+from sellee.rail.mail_stream import StreamMissing
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -394,3 +397,86 @@ def test_offers_tool_reads_the_servers_tool_list():
         assert not client.offers_tool("create_photo_upload_url")
     finally:
         shutdown()
+
+
+# 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
+_REDIRECT_STATUSES = [301, 302, 303, 307, 308]
+
+
+def _drain(handler) -> None:
+    length = int(handler.headers.get("Content-Length", 0))
+    if length:
+        handler.rfile.read(length)
+
+
+class _Target(BaseHTTPRequestHandler):
+    """The host a redirect points at; it records anything that reaches it, and would answer."""
+
+    def log_message(self, *args):
+        pass
+
+    def _record(self):
+        _drain(self)
+        self.server.seen.append((self.command, self.path, self.headers.get("Authorization")))
+        payload = b'{"jsonrpc": "2.0", "id": 1, "result": {"structuredContent": {"evil": true}}}'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(payload)))
+        self.end_headers()
+        self.wfile.write(payload)
+
+    do_GET = do_POST = _record
+
+
+@contextmanager
+def _target():
+    server = ThreadingHTTPServer(("127.0.0.1", 0), _Target)
+    server.seen = []
+    thread = threading.Thread(target=server.serve_forever, args=(0.02,), daemon=True)
+    thread.start()
+    try:
+        yield server, f"http://127.0.0.1:{server.server_address[1]}"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def _redirecting(status: int, location: str):
+    class _Redirect(_Handler):
+        def _away(self):
+            _drain(self)
+            self.send_response(status)
+            self.send_header("Location", location + self.path)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_GET = do_POST = _away
+
+    return _Redirect
+
+
+@pytest.mark.parametrize("earlier_call", [False, True], ids=["first-request", "after-a-call"])
+@pytest.mark.parametrize("status", _REDIRECT_STATUSES)
+def test_a_redirect_from_mcp_is_never_followed(fake_rail, status, earlier_call) -> None:
+    server, base = fake_rail
+    server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+    with _target() as (target, elsewhere):
+        client = _client(base)
+        if earlier_call:
+            client.call_tool("create_listing", {"title": "x"})
+        server.RequestHandlerClass = _redirecting(status, elsewhere)
+        with pytest.raises(RailNetworkError) as raised:
+            client.call_tool("create_listing", {"title": "y"})
+        assert raised.value.status == status
+        assert target.seen == []
+
+
+@pytest.mark.parametrize("status", _REDIRECT_STATUSES)
+def test_a_redirect_from_the_mail_stream_is_never_followed(fake_rail, status) -> None:
+    server, base = fake_rail
+    with _target() as (target, elsewhere):
+        server.RequestHandlerClass = _redirecting(status, elsewhere)
+        stream = _client(base).open_mail_stream()
+        with pytest.raises(StreamMissing, match=str(status)):
+            list(stream.events())
+        assert target.seen == []
