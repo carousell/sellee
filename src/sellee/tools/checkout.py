@@ -59,6 +59,23 @@ _GUEST_GATE_REPLY_GUIDANCE = (
     "handles the link"
 )
 
+# A seller who signed in but never said where they ship from. Matched like the guest clause.
+_SHIP_FROM_GATE_CLAUSE = "has not set where they ship from"
+
+_SHIP_FROM_GATE_SELLER_GUIDANCE = (
+    "the seller hasn't added the ZIP code they ship from on carousell.ai, so checkout links are "
+    "refused. Mint a link with carousell_ai_create_signin_link and send it to the seller with a "
+    "one-line why; it takes them to the ZIP question. If it returns already_signed_in instead, "
+    "ask them to add the ZIP in their carousell.ai account under Shipping. Once they say it's "
+    "done, call this tool again"
+)
+_SHIP_FROM_GATE_REPLY_GUIDANCE = (
+    "the seller hasn't added the ZIP code they ship from on carousell.ai, so no checkout link can "
+    "be minted yet. Post the buyer a neutral holding line — never mention the seller or their "
+    "account — then escalate to the seller asking them to add it; the seller's own channel "
+    "handles the link"
+)
+
 _WITHDRAWN_SELLER_GUIDANCE = "this buyer backed out — tell the seller and offer who is next instead"
 _WITHDRAWN_REPLY_GUIDANCE = (
     "this buyer backed out, so no checkout link goes to them. If they want it after all, put the "
@@ -97,6 +114,13 @@ def _guest_gate_guidance(ctx: ToolContext) -> str:
     if ctx.session.tier == TIER_PASS_REPLY:
         return _GUEST_GATE_REPLY_GUIDANCE
     return _GUEST_GATE_SELLER_GUIDANCE
+
+
+def _ship_from_gate_guidance(ctx: ToolContext) -> str:
+    """Worded per tier, as for the guest gate."""
+    if ctx.session.tier == TIER_PASS_REPLY:
+        return _SHIP_FROM_GATE_REPLY_GUIDANCE
+    return _SHIP_FROM_GATE_SELLER_GUIDANCE
 
 
 def _withdrawn_guidance(ctx: ToolContext) -> str:
@@ -173,6 +197,8 @@ def mint_checkout_link(
     except RailToolError as exc:
         if _GUEST_GATE_CLAUSE in str(exc):
             raise ToolError(_guest_gate_guidance(ctx)) from exc
+        if _SHIP_FROM_GATE_CLAUSE in str(exc):
+            raise ToolError(_ship_from_gate_guidance(ctx)) from exc
         raise ToolError(str(exc)) from exc
     except RailError as exc:
         raise ToolError(str(exc)) from exc

@@ -148,6 +148,8 @@ mention the seller or their account status**. Then `escalate` the open question 
 links I need you to do a quick one-time sign-in to carousell.ai — want the link?") with
 `options: ["📩 Send me the sign-in link", "🤝 I'll handle it myself"]`. **Stop there.** The link is
 minted and delivered on the seller's own channel; this pass never sees it and must never ask for it.
+If the refusal says instead that the seller hasn't added the ZIP they ship from, do the same, asking
+"To send checkout links I need the ZIP code you ship from on carousell.ai — want the link?"
 
 ## 5. Escalation hygiene
 
