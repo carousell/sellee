@@ -361,8 +361,8 @@ def test_the_publish_pass_never_holds_a_signin_link(make_ctx, store) -> None:
 
 
 def test_a_failed_offer_still_publishes(make_ctx, store, caplog) -> None:
-    """The listing is live and recorded by then; a failure here must not read as a failed publish
-    and send the model round again. The log says why, so the miss can be traced."""
+    """The listing is live and recorded by then, so a failed mint must not fail the publish. The
+    log says why it failed."""
     rail = GuestRail(signin_error=RailNetworkError("rail unreachable"))
 
     result, item = _publish_as(make_ctx, store, rail)
@@ -393,8 +393,8 @@ def test_a_signin_link_that_could_forge_a_line_is_never_offered(make_ctx, store)
 
 
 def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
-    """The offer went out with the publish; a retry repeating it would be a second ask, and the
-    already-published read stays a no-op that touches nothing, paused or not."""
+    """The offer went out with the first publish, so a retry must not ask again or call the
+    rail."""
     rail = GuestRail()
     _sells_in(store, "US", "USD")
     item = _item(store, currency="USD")

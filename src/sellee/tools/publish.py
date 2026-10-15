@@ -66,17 +66,15 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
 
 
 def _signin_offer(ctx: ToolContext) -> str | None:
-    """The line offering the setup that lets a buyer pay, sent as a listing goes live: the moment
-    there is something to pay for, rather than once a buyer is already waiting. None when the
-    seller has done it, cannot take payments, or this session does not talk to them. The link
-    rides only inside the line, so the result holds one copy of it."""
+    """The line offering the setup that lets a buyer pay, with the link inside it. None when the
+    seller has done it, cannot take payments, or this session does not talk to them."""
     if ctx.session.tier not in SIGNIN_TIERS or ctx.store.seller_region() != signin.CHECKOUT_REGION:
         return None
     try:
         url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
     except (RailError, ToolError) as exc:
-        # The listing is live and recorded by now. A failed offer must not read as a failed
-        # publish and send the model round again; the first checkout asks instead.
+        # The listing is live and recorded by now, so a failed offer must not fail the publish
+        # and make the model retry it; the first checkout asks instead.
         log.warning("could not mint the sign-in offered at publish: %s", exc)
         return None
     if url is None:
