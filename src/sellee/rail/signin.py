@@ -5,6 +5,9 @@ from __future__ import annotations
 
 from sellee.rail.client import RailError, RailToolError
 
+# carousell.ai takes payments for sellers in the United States only, so only they need the sign-in.
+CHECKOUT_REGION = "US"
+
 # The rail's refusal for an account that is past sign-in. A result, not a failure.
 _ALREADY_A_SELLER = "already a seller"
 

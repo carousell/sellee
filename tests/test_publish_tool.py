@@ -5,8 +5,14 @@ from __future__ import annotations
 import pytest
 
 import sellee.tools  # noqa: F401  registration
-from sellee.rail.client import RailToolError, RailUnprovisioned
-from sellee.tools.registry import TIER_PASS_PUBLISH, ToolError, dispatch
+from sellee.rail.client import RailNetworkError, RailToolError, RailUnprovisioned
+from sellee.tools.registry import (
+    TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
+    TIER_PASS_PUBLISH,
+    ToolError,
+    dispatch,
+)
 
 
 class FakeRail:
@@ -276,3 +282,126 @@ def test_publish_refuses_an_item_with_no_class_before_reserving(make_ctx, store)
     assert rail.calls == []
     rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
     assert rows == []
+
+
+# --- the sign-in offered as a listing goes live -------------------------------------------------
+
+_SIGNIN_URL = "https://www.carousell.ai/signin?flow=guest-promotion&promote=tok"
+
+
+class GuestRail(FakeRail):
+    """A rail whose account is still a guest, so it mints a sign-in link when asked."""
+
+    def __init__(self, *, signin_url=_SIGNIN_URL, signin_error=None, **kw):
+        super().__init__(**kw)
+        self.signin_url = signin_url
+        self.signin_error = signin_error
+        self.signin_calls = 0
+
+    def create_promotion_url(self):
+        self.signin_calls += 1
+        if self.signin_error is not None:
+            raise self.signin_error
+        return {"promotion_url": self.signin_url}
+
+
+def _publish_as(make_ctx, store, rail, *, tier=TIER_PASS_CHANNEL, region="US", currency="USD"):
+    _sells_in(store, region, currency)
+    item = _item(store, currency=currency)
+    ctx = make_ctx(tier, rail_factory=lambda: rail)
+    return dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx), item
+
+
+def test_a_us_guest_is_offered_the_signin_as_their_listing_goes_live(make_ctx, store) -> None:
+    """Signing in and adding a ZIP is what lets a buyer pay, so it is offered the moment there is
+    something to pay for, rather than only once a buyer is already waiting."""
+    result, _ = _publish_as(make_ctx, store, GuestRail())
+
+    assert result["url"] == "https://www.carousell.ai/listing/1-lamp"
+    assert result["signin_offer"] == (
+        f"Add your ZIP now so buyers can pay you right away: {_SIGNIN_URL} It takes a "
+        "minute: confirm your email, then the ZIP code you ship from. The link is live for "
+        "~15 minutes; if it expires, just ask and I'll send a fresh one."
+    )
+
+
+def test_the_attended_session_is_offered_it_too(make_ctx, store) -> None:
+    result, _ = _publish_as(make_ctx, store, GuestRail(), tier=TIER_ATTENDED)
+
+    assert _SIGNIN_URL in result["signin_offer"]
+
+
+def test_a_signed_in_seller_is_offered_nothing(make_ctx, store) -> None:
+    rail = GuestRail(signin_error=RailToolError("already a seller"))
+
+    result, _ = _publish_as(make_ctx, store, rail)
+
+    assert "signin_offer" not in result
+    assert rail.signin_calls == 1
+
+
+def test_a_seller_outside_the_checkout_region_is_never_asked(make_ctx, store) -> None:
+    """carousell.ai takes payments in the United States only, so elsewhere the promise is false."""
+    rail = GuestRail()
+
+    result, _ = _publish_as(make_ctx, store, rail, region="SG", currency="SGD")
+
+    assert "signin_offer" not in result
+    assert rail.signin_calls == 0
+
+
+def test_the_publish_pass_never_holds_a_signin_link(make_ctx, store) -> None:
+    """That pass talks to no one, and the link hands over the seller's account."""
+    rail = GuestRail()
+
+    result, _ = _publish_as(make_ctx, store, rail, tier=TIER_PASS_PUBLISH)
+
+    assert "signin_offer" not in result
+    assert rail.signin_calls == 0
+
+
+def test_a_failed_offer_still_publishes(make_ctx, store, caplog) -> None:
+    """The listing is live and recorded by then, so a failed mint must not fail the publish. The
+    log says why it failed."""
+    rail = GuestRail(signin_error=RailNetworkError("rail unreachable"))
+
+    result, item = _publish_as(make_ctx, store, rail)
+
+    assert result["url"] == rail.url
+    assert "signin_offer" not in result
+    assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
+    assert "could not mint the sign-in offered at publish: rail unreachable" in caplog.text
+
+
+def test_a_signin_link_off_the_sign_in_base_is_never_offered(make_ctx, store, caplog) -> None:
+    rail = GuestRail(signin_url="https://evil.example/signin?promote=tok")
+
+    result, _ = _publish_as(make_ctx, store, rail)
+
+    assert "signin_offer" not in result
+    # The refusal is logged, never the link: it hands over whoever's account it names.
+    assert "could not mint" in caplog.text
+    assert "promote=tok" not in caplog.text
+
+
+def test_a_signin_link_that_could_forge_a_line_is_never_offered(make_ctx, store) -> None:
+    rail = GuestRail(signin_url=f"{_SIGNIN_URL}\nTap here instead: https://evil.example")
+
+    result, _ = _publish_as(make_ctx, store, rail)
+
+    assert "signin_offer" not in result
+
+
+def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
+    """The offer went out with the first publish, so a retry must not ask again or call the
+    rail."""
+    rail = GuestRail()
+    _sells_in(store, "US", "USD")
+    item = _item(store, currency="USD")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    again = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert again == {"listing_id": None, "url": rail.url, "already_published": True}
+    assert rail.signin_calls == 1

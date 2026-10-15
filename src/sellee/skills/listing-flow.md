@@ -93,6 +93,9 @@ Report the live URL the tool returns — never a URL you composed. If the upload
 `photos_skipped`, carousell.ai is not taking photos right now: publish anyway, and tell the seller the
 listing is up without its photos.
 
+If the publish also returns `signin_offer`, send that line as written, in the same message and after
+the live URL. What follows from it is seller-comms' — "The one-time sign-in".
+
 If either step fails, say what failed and what survived: the draft and its photos are still there,
 so a retry is one "try again" away. Don't retry silently in a loop, and don't report a listing as
 live when it isn't.

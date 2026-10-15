@@ -18,8 +18,10 @@ from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
-from sellee.rail.client import RailUnprovisioned
+from sellee.rail import signin
+from sellee.rail.client import RailError, RailUnprovisioned
 from sellee.store import SIZE_BUCKETS, StoreError
+from sellee.tools.checkout import SIGNIN_TIERS, _rail
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -36,6 +38,13 @@ log = logging.getLogger(__name__)
 _MARKET = "carousell-ai"
 # The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
 _MEDIA_TYPE_IMAGE = 1
+# Promises only what is true today: once set up, a buyer who agrees is sent a checkout link at once.
+# The link lapses in about 15 minutes, and a go-live message is often read later than that.
+_SIGNIN_OFFER = (
+    "Add your ZIP now so buyers can pay you right away: {url} It takes a minute: confirm your "
+    "email, then the ZIP code you ship from. The link is live for ~15 minutes; if it expires, "
+    "just ask and I'll send a fresh one."
+)
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
 
@@ -56,6 +65,23 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
         )
 
 
+def _signin_offer(ctx: ToolContext) -> str | None:
+    """The line offering the setup that lets a buyer pay, with the link inside it. None when the
+    seller has done it, cannot take payments, or this session does not talk to them."""
+    if ctx.session.tier not in SIGNIN_TIERS or ctx.store.seller_region() != signin.CHECKOUT_REGION:
+        return None
+    try:
+        url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
+    except (RailError, ToolError) as exc:
+        # The listing is live and recorded by now, so a failed offer must not fail the publish
+        # and make the model retry it; the first checkout asks instead.
+        log.warning("could not mint the sign-in offered at publish: %s", exc)
+        return None
+    if url is None:
+        return None
+    return _SIGNIN_OFFER.format(url=url)
+
+
 def _publish(ctx: ToolContext, params: dict) -> dict:
     item_id = params["item_id"]
     item = ctx.store.get_item(item_id)
@@ -64,7 +90,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
-        # Same keys a fresh publish returns: the shape must not depend on the attempt.
+        # The keys a fresh publish returns, less signin_offer: it went out with the publish, and a
+        # retry repeating it would be a second ask.
         return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a
@@ -153,14 +180,17 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
-    return {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+    result = {"listing_id": listing.get("listing_id"), "url": listing["url"]}
+    offer = _signin_offer(ctx)
+    return {**result, "signin_offer": offer} if offer else result
 
 
 register(
     ToolSpec(
         name="carousell_ai_publish_listing",
         description="Publish an item as a live carousell.ai listing and record its verified URL. "
-        "Idempotent: an already-published item returns its existing URL.",
+        "Idempotent: an already-published item returns its existing URL. A fresh publish may also "
+        "return signin_offer, a line for the seller to send as written after the live URL.",
         input_schema={
             "type": "object",
             "properties": {"item_id": {"type": "string"}},
