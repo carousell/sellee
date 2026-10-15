@@ -41,16 +41,12 @@ _MEDIA_TYPE_IMAGE = 1
 # carousell.ai takes payments for sellers in the United States only, so only they are offered the
 # setup that lets a buyer pay.
 _CHECKOUT_REGION = "US"
-# Whether a buyer can check out from the listing page on their own. Until then the offer promises
-# only what is already true: once set up, a buyer who agrees is sent a checkout link at once.
-BUY_NOW_LIVE = False
+# Promises only what is true today: once set up, a buyer who agrees is sent a checkout link at once.
+# The link lapses in about 15 minutes, and a go-live message is often read later than that.
 _SIGNIN_OFFER = (
     "Add your ZIP now so buyers can pay you right away: {url} It takes a minute: confirm your "
-    "email, then the ZIP code you ship from."
-)
-_SIGNIN_OFFER_BUY_NOW = (
-    "Add your ZIP now to enable Buy now on your listing: {url} It takes a minute: confirm your "
-    "email, then the ZIP code you ship from."
+    "email, then the ZIP code you ship from. The link is live for ~15 minutes; if it expires, "
+    "just ask and I'll send a fresh one."
 )
 # Pass statuses that mean an attempt is still coming — a second one would be a duplicate listing.
 _UNSETTLED = ("queued", "running")
@@ -88,8 +84,7 @@ def _signin_offer(ctx: ToolContext) -> str | None:
         return None
     if url is None:
         return None
-    template = _SIGNIN_OFFER_BUY_NOW if BUY_NOW_LIVE else _SIGNIN_OFFER
-    return template.format(url=url)
+    return _SIGNIN_OFFER.format(url=url)
 
 
 def _publish(ctx: ToolContext, params: dict) -> dict:
@@ -100,8 +95,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 
     existing = item["listing_urls"].get(_MARKET)
     if existing:
-        # Same keys a fresh publish returns: the shape must not depend on the attempt. No offer
-        # here: it went out with the publish, and a retry repeating it would be a second ask.
+        # The keys a fresh publish returns, less signin_offer: it went out with the publish, and a
+        # retry repeating it would be a second ask.
         return {"listing_id": None, "url": existing, "already_published": True}
 
     # A paused agent takes no marketplace action. The idempotent already-published read above is a

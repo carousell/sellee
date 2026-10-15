@@ -6,7 +6,6 @@ import pytest
 
 import sellee.tools  # noqa: F401  registration
 from sellee.rail.client import RailNetworkError, RailToolError, RailUnprovisioned
-from sellee.tools import publish
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -321,17 +320,8 @@ def test_a_us_guest_is_offered_the_signin_as_their_listing_goes_live(make_ctx, s
     assert result["url"] == "https://www.carousell.ai/listing/1-lamp"
     assert result["signin_offer"] == (
         f"Add your ZIP now so buyers can pay you right away: {_SIGNIN_URL} It takes a "
-        "minute: confirm your email, then the ZIP code you ship from."
-    )
-
-
-def test_the_offer_names_buy_now_once_buyers_can_check_out_alone(make_ctx, store, monkeypatch):
-    monkeypatch.setattr(publish, "BUY_NOW_LIVE", True)
-
-    result, _ = _publish_as(make_ctx, store, GuestRail())
-
-    assert result["signin_offer"].startswith(
-        f"Add your ZIP now to enable Buy now on your listing: {_SIGNIN_URL}"
+        "minute: confirm your email, then the ZIP code you ship from. The link is live for "
+        "~15 minutes; if it expires, just ask and I'll send a fresh one."
     )
 
 
@@ -370,9 +360,9 @@ def test_the_publish_pass_never_holds_a_signin_link(make_ctx, store) -> None:
     assert rail.signin_calls == 0
 
 
-def test_a_failed_offer_still_publishes(make_ctx, store) -> None:
+def test_a_failed_offer_still_publishes(make_ctx, store, caplog) -> None:
     """The listing is live and recorded by then; a failure here must not read as a failed publish
-    and send the model round again."""
+    and send the model round again. The log says why, so the miss can be traced."""
     rail = GuestRail(signin_error=RailNetworkError("rail unreachable"))
 
     result, item = _publish_as(make_ctx, store, rail)
@@ -380,6 +370,7 @@ def test_a_failed_offer_still_publishes(make_ctx, store) -> None:
     assert result["url"] == rail.url
     assert "signin_offer" not in result
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
+    assert "could not mint the sign-in offered at publish: rail unreachable" in caplog.text
 
 
 def test_a_signin_link_off_the_sign_in_base_is_never_offered(make_ctx, store, caplog) -> None:
@@ -391,6 +382,14 @@ def test_a_signin_link_off_the_sign_in_base_is_never_offered(make_ctx, store, ca
     # The refusal is logged, never the link: it hands over whoever's account it names.
     assert "could not mint" in caplog.text
     assert "promote=tok" not in caplog.text
+
+
+def test_a_signin_link_that_could_forge_a_line_is_never_offered(make_ctx, store) -> None:
+    rail = GuestRail(signin_url=f"{_SIGNIN_URL}\nTap here instead: https://evil.example")
+
+    result, _ = _publish_as(make_ctx, store, rail)
+
+    assert "signin_offer" not in result
 
 
 def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
