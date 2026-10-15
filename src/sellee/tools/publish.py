@@ -38,9 +38,6 @@ log = logging.getLogger(__name__)
 _MARKET = "carousell-ai"
 # The rail's media-kind discriminator; it refuses an entry without one ("media type must be image").
 _MEDIA_TYPE_IMAGE = 1
-# carousell.ai takes payments for sellers in the United States only, so only they are offered the
-# setup that lets a buyer pay.
-_CHECKOUT_REGION = "US"
 # Promises only what is true today: once set up, a buyer who agrees is sent a checkout link at once.
 # The link lapses in about 15 minutes, and a go-live message is often read later than that.
 _SIGNIN_OFFER = (
@@ -73,7 +70,7 @@ def _signin_offer(ctx: ToolContext) -> str | None:
     there is something to pay for, rather than once a buyer is already waiting. None when the
     seller has done it, cannot take payments, or this session does not talk to them. The link
     rides only inside the line, so the result holds one copy of it."""
-    if ctx.session.tier not in SIGNIN_TIERS or ctx.store.seller_region() != _CHECKOUT_REGION:
+    if ctx.session.tier not in SIGNIN_TIERS or ctx.store.seller_region() != signin.CHECKOUT_REGION:
         return None
     try:
         url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
@@ -194,7 +191,8 @@ register(
     ToolSpec(
         name="carousell_ai_publish_listing",
         description="Publish an item as a live carousell.ai listing and record its verified URL. "
-        "Idempotent: an already-published item returns its existing URL.",
+        "Idempotent: an already-published item returns its existing URL. A fresh publish may also "
+        "return signin_offer, a line for the seller to send as written after the live URL.",
         input_schema={
             "type": "object",
             "properties": {"item_id": {"type": "string"}},

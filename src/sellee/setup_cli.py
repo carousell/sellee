@@ -538,10 +538,6 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
     ui.note("re-run `sellee provision carousell-ai` when back online")
 
 
-# carousell.ai takes payments in the United States only, so only a seller there needs the sign-in.
-_CHECKOUT_REGION = "US"
-
-
 class _NoLink(Enum):
     NOT_NEEDED = "not needed"
     FAILED = "failed"
@@ -560,7 +556,7 @@ def _mint_signin(country: str, *, on_terminal: bool) -> str | _NoLink:
     from sellee.rail.client import RailClient, RailError
 
     key = secrets.read_carousell_ai_api_key()
-    if country != _CHECKOUT_REGION or not key:
+    if country != signin.CHECKOUT_REGION or not key:
         return _NoLink.NOT_NEEDED
     # The link hands over the account, so it is never minted into a pipe or a log.
     if not on_terminal:

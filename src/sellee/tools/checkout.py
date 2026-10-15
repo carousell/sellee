@@ -263,11 +263,10 @@ register(
     ToolSpec(
         name="carousell_ai_create_signin_link",
         description="Mint a fresh carousell.ai sign-in link for the seller's one-time setup (their "
-        "email, then the ZIP code they ship from) — required before checkout links can be created, "
-        "and offered when a listing goes live. Send it to the seller on their "
-        "own channel ONLY (never to a buyer, never into a listing or note). The link expires in "
-        "about 15 minutes; mint a fresh one any time. Returns already_signed_in when the account "
-        "no longer needs it.",
+        "email, then the ZIP code they ship from) — required before checkout links can be created. "
+        "Send it to the seller on their own channel ONLY (never to a buyer, never into a listing "
+        "or note). The link expires in about 15 minutes; mint a fresh one any time. Returns "
+        "already_signed_in when the account no longer needs it.",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_create_signin_link,
         tiers=SIGNIN_TIERS,

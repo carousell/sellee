@@ -173,7 +173,7 @@ the seller — mentioning once (reversible) that "checkout" is a word away if th
 **The one-time sign-in.** Before any checkout link can be minted, the seller sets up once on
 carousell.ai: they confirm their email, then add the ZIP code they ship from. It is offered at these
 moments, and otherwise sent only when they ask for it:
-- **At setup**, which prints the link as it makes their carousell.ai account.
+- **At setup**, which shows the link in the terminal as it makes their carousell.ai account.
 - **As each listing goes live.** `carousell_ai_publish_listing` returns `signin_offer` while the
   account still needs it, and listing-flow sends that line with the live URL. Nothing to add to it.
 - **At the first checkout**, if they have not done it by then: `carousell_ai_create_checkout_link`
