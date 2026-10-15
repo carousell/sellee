@@ -80,6 +80,10 @@ class Ui:
             getattr(self.stream, "isatty", lambda: False)()
         )
 
+    def on_terminal(self) -> bool:
+        """Whether what this prints reaches a person, not a pipe or a log file."""
+        return bool(getattr(self.stream, "isatty", lambda: False)())
+
     def _detect_color(self) -> bool:
         if os.environ.get("NO_COLOR"):
             return False

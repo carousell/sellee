@@ -779,14 +779,57 @@ def _minting(monkeypatch, outcome) -> list:
     return calls
 
 
-def _account(monkeypatch, country: str = "US", status: str = "ok") -> None:
-    """A carousell.ai guest account made for `country`, its key stored as provisioning stores it."""
+def _account(
+    monkeypatch, country: str = "US", status: str = "ok", *, terminal: bool = True
+) -> None:
+    """A carousell.ai guest account made for `country`, its key stored as provisioning stores it.
+    `terminal` says whether setup's output reaches a person rather than a pipe or a log."""
+    monkeypatch.setattr(setup_cli.Ui, "on_terminal", lambda self: terminal)
     if status == "ok":
         secrets.write_carousell_ai_api_key("guest-key")
         answer = {"status": "ok", "provisioned": True, "country": country, "notice": ""}
     else:
         answer = {"status": "error", "error": "guests API unreachable", "defer": True}
     _real_rail_phase(monkeypatch, answer)
+
+
+@pytest.mark.parametrize(
+    "args", [("--yes", "--manual", "--region", "US"), ("--yes", "--region", "US")]
+)
+def test_a_link_is_never_minted_when_no_one_is_watching(world, monkeypatch, capsys, args) -> None:
+    # Output that is piped or logged could hand the account to whoever reads the log.
+    _account(monkeypatch, terminal=False)
+    calls = _minting(monkeypatch, _LINK)
+
+    assert setup_main(*args) == 0
+
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "Add your ZIP" not in out
+    assert "run setup in a terminal" in out
+
+
+def test_a_container_setup_in_a_terminal_sends_the_link(
+    world, container, monkeypatch, capsys
+) -> None:
+    _account(monkeypatch)
+    _minting(monkeypatch, _LINK)
+
+    assert setup_main("--yes", "--region", "US") == 0
+
+    assert _OFFER in capsys.readouterr().out
+
+
+def test_a_container_setup_whose_output_is_logged_mints_no_link(
+    world, container, monkeypatch, capsys
+) -> None:
+    _account(monkeypatch, terminal=False)
+    calls = _minting(monkeypatch, _LINK)
+
+    assert setup_main("--yes", "--region", "US") == 0
+
+    assert calls == []
+    assert "Add your ZIP" not in capsys.readouterr().out
 
 
 def test_a_us_seller_is_sent_to_add_their_email_and_zip(world, monkeypatch, capsys) -> None:
@@ -857,6 +900,7 @@ def test_a_link_that_could_forge_a_terminal_line_is_never_printed(
 def test_a_re_run_for_a_seller_already_signed_in_sends_no_link(world, monkeypatch, capsys) -> None:
     # A stored key means no guests call, and the rail refuses the mint for a seller.
     secrets.write_carousell_ai_api_key("guest-key")
+    monkeypatch.setattr(setup_cli.Ui, "on_terminal", lambda self: True)
     _real_rail_phase(monkeypatch, {"status": "ok", "provisioned": False, "source": "store"})
     _minting(monkeypatch, RailToolRefused("this account is already a seller"))
 
@@ -905,19 +949,20 @@ _MINTS = st.one_of(
     country=st.sampled_from(["US", "SG", "VN", "GB"]),
     status=st.sampled_from(["ok", "error"]),
     outcome=_MINTS,
+    terminal=st.booleans(),
 )
 def test_any_mint_outcome_leaves_setup_whole_and_prints_only_a_safe_link(
-    world, monkeypatch, capsys, country, status, outcome
+    world, monkeypatch, capsys, country, status, outcome, terminal
 ) -> None:
     paths.carousell_ai_api_key_path().unlink(missing_ok=True)
-    _account(monkeypatch, country, status)
+    _account(monkeypatch, country, status, terminal=terminal)
     calls = _minting(monkeypatch, outcome)
 
     assert setup_main("--yes", "--manual", "--region", country) == 0
 
     out = capsys.readouterr().out
-    # Only a US seller whose account was made is ever minted for.
-    if country != "US" or status != "ok":
+    # Only a US seller whose account was made, and who is at a terminal, is ever minted for.
+    if country != "US" or status != "ok" or not terminal:
         assert calls == []
     # Setup goes on to the marketplaces whatever the mint did.
     assert "Other marketplaces" in out

@@ -522,7 +522,7 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
     ui.step("Setting up carousell.ai")
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
-        link = _mint_signin(str(region).upper())
+        link = _mint_signin(str(region).upper(), on_terminal=ui.on_terminal())
         if link is _NoLink.NOT_NEEDED:
             ui.say("ready — always enabled, with nothing to sign in to")
         else:
@@ -545,6 +545,7 @@ _CHECKOUT_REGION = "US"
 class _NoLink(Enum):
     NOT_NEEDED = "not needed"
     FAILED = "failed"
+    UNWATCHED = "unwatched"
 
 
 _SIGNIN_OFFER = (
@@ -553,7 +554,7 @@ _SIGNIN_OFFER = (
 )
 
 
-def _mint_signin(country: str) -> str | _NoLink:
+def _mint_signin(country: str, *, on_terminal: bool) -> str | _NoLink:
     """The seller's sign-in link, or why setup shows none."""
     from sellee.rail import signin
     from sellee.rail.client import RailClient, RailError
@@ -561,6 +562,9 @@ def _mint_signin(country: str) -> str | _NoLink:
     key = secrets.read_carousell_ai_api_key()
     if country != _CHECKOUT_REGION or not key:
         return _NoLink.NOT_NEEDED
+    # The link hands over the account, so it is never minted into a pipe or a log.
+    if not on_terminal:
+        return _NoLink.UNWATCHED
     cfg = config.load()
     rail = RailClient(
         api_base=cfg.carousell_ai_api_base, api_key=key, web_base_url=cfg.carousell_ai_web_base_url
@@ -574,6 +578,11 @@ def _mint_signin(country: str) -> str | _NoLink:
 
 def _offer_signin(ui: Ui, link: str | _NoLink) -> None:
     if link is _NoLink.NOT_NEEDED:
+        return
+    if link is _NoLink.UNWATCHED:
+        ui.note(
+            "run setup in a terminal for your carousell.ai sign-in link; Sellee offers it later too"
+        )
         return
     if link is _NoLink.FAILED:
         # The rail's words stay out of the terminal; the first checkout asks again regardless.
