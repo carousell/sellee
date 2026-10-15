@@ -241,6 +241,10 @@ register(
 )
 
 
+# The tiers that may hold a sign-in link: the ones talking to the seller on their own channel.
+SIGNIN_TIERS = frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL})
+
+
 def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
     try:
         url = signin.mint_signin_url(_rail(ctx), ctx.config.carousell_ai_web_base_url)
@@ -265,6 +269,6 @@ register(
         "no longer needs it.",
         input_schema={"type": "object", "properties": {}, "additionalProperties": False},
         handler=_create_signin_link,
-        tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
+        tiers=SIGNIN_TIERS,
     )
 )
