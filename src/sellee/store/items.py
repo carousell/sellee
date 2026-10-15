@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import uuid
 
 from sellee.db import Database
 from sellee.store.helpers import (
@@ -18,6 +19,7 @@ from sellee.store.helpers import (
     FloorRecord,
     ItemNotFound,
     ItemRecord,
+    PublishAttempt,
     ReviseAck,
     StoreError,
     _clamp_floor_in_txn,
@@ -31,6 +33,9 @@ from sellee.store.helpers import (
     validated_item_fields,
     validated_size_bucket,
 )
+
+# The only market whose publish carries an idempotency key.
+_RAIL_MARKET = "carousell-ai"
 
 
 class ItemsMixin:
@@ -162,6 +167,56 @@ class ItemsMixin:
                 (json.dumps(stamped), _now(), item_id),
             )
         return self.get_item(item_id)  # type: ignore[return-value]
+
+    def open_publish_attempt(self, item_id: str, request: dict) -> PublishAttempt | None:
+        """The item's carousell.ai publish under way, or a new one under a fresh key; None once
+        the item is listed there. `request` joins the requests sent under that key."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT publish_key, publish_requests, publish_started_ts, listing_urls "
+                "FROM items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if not row:
+                raise ItemNotFound(f"no item with id {item_id!r}")
+            # Checked here, not only by the caller: a publish that finished since would otherwise
+            # leave this one a fresh key, and a second listing.
+            if json.loads(row["listing_urls"]).get(_RAIL_MARKET):
+                return None
+            if row["publish_key"]:
+                key, started = row["publish_key"], row["publish_started_ts"]
+                requests = json.loads(row["publish_requests"])
+            else:
+                key, started, requests = uuid.uuid4().hex, _now(), []
+            if request not in requests:
+                requests.append(request)
+            conn.execute(
+                "UPDATE items SET publish_key = ?, publish_requests = ?, publish_started_ts = ? "
+                "WHERE id = ?",
+                (key, json.dumps(requests, sort_keys=True), started, item_id),
+            )
+        return {"key": key, "requests": requests, "started_ts": started}
+
+    def get_publish_attempt(self, item_id: str) -> PublishAttempt | None:
+        """The item's carousell.ai publish under way, if any, without adding to it."""
+        rows = self._db.query(
+            "SELECT publish_key, publish_requests, publish_started_ts FROM items "
+            "WHERE id = ? AND publish_key IS NOT NULL",
+            (item_id,),
+        )
+        if not rows:
+            return None
+        return {
+            "key": rows[0]["publish_key"],
+            "requests": json.loads(rows[0]["publish_requests"]),
+            "started_ts": rows[0]["publish_started_ts"],
+        }
+
+    def close_publish_attempt(self, item_id: str, key: str | None) -> bool:
+        """End the publish under `key`, or whichever is under way when None, so the next one
+        mints a new key. Answers whether there was one to end."""
+        with self._db.transaction() as conn:
+            return _close_publish_attempt_in_txn(conn, item_id, key)
 
     def record_listing_url(self, item_id: str, market: str, url: str) -> ItemRecord:
         """Merge one verified listing URL into the item's listing_urls map — a live verify has
@@ -462,6 +517,16 @@ class ItemsMixin:
         return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
 
 
+def _close_publish_attempt_in_txn(conn, item_id: str, key: str | None = None) -> bool:
+    # With a key, only that attempt closes, not a newer one that replaced it.
+    closed = conn.execute(
+        "UPDATE items SET publish_key = NULL, publish_requests = NULL, publish_started_ts = NULL "
+        "WHERE id = ? AND publish_key IS NOT NULL AND (? IS NULL OR publish_key = ?)",
+        (item_id, key, key),
+    )
+    return closed.rowcount > 0
+
+
 def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:
     """`record_listing_url` inside a caller's transaction, so a publish settles with its URL."""
     row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
@@ -473,4 +538,7 @@ def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None
         "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
         (json.dumps(urls, sort_keys=True), _now(), item_id),
     )
+    if market == _RAIL_MARKET:
+        # Any carousell.ai URL ends the publish under way, so a later republish gets a new key.
+        _close_publish_attempt_in_txn(conn, item_id)
     _forget_thread_listings_in_txn(conn, market)

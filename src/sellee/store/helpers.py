@@ -257,6 +257,15 @@ class ItemRecord(TypedDict):
     updated_ts: float
 
 
+class PublishAttempt(TypedDict):
+    """What `open_publish_attempt` returns: the key, every request sent under it, and when the
+    first was recorded."""
+
+    key: str
+    requests: list[dict]
+    started_ts: float
+
+
 class ReviseAck(TypedDict):
     """What `revise_item` returns. `floor_clamped` says the confidential floor moved down to the
     new price; like `FloorAck`, the shape has nowhere to put the value."""

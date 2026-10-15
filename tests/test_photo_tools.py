@@ -39,7 +39,7 @@ class FakeRail:
             raise RailToolError("photo upload returned HTTP 500")
         return f"enc-{len(self.uploads)}"
 
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         self.listing_args = args
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/1-lamp"}
 

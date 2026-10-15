@@ -135,8 +135,11 @@ class RailClient:
         tools = self._rpc("tools/list").get("tools") or []
         return any(isinstance(t, dict) and t.get("name") == name for t in tools)
 
-    def call_tool(self, name: str, arguments: dict) -> dict:
-        result = self._rpc("tools/call", {"name": name, "arguments": arguments})
+    def call_tool(self, name: str, arguments: dict, *, meta: dict | None = None) -> dict:
+        params: dict = {"name": name, "arguments": arguments}
+        if meta:
+            params["_meta"] = meta
+        result = self._rpc("tools/call", params)
         if result.get("isError"):
             raise RailToolRefused(_text_content(result) or f"{name} failed")
         structured = result.get("structuredContent")
@@ -156,10 +159,10 @@ class RailClient:
         """The listing's page URL, composed from the id the rail assigned it."""
         return self._web_base_url + _LISTING_PATH + str(listing_id)
 
-    def create_listing(self, args: dict) -> dict:
+    def create_listing(self, args: dict, *, idempotency_key: str) -> dict:
         """Create a listing and return {listing_id, url}. Raises RailToolError when the response
         carries no id. The currency is not read back: the request asserts the recorded one."""
-        result = self.call_tool("create_listing", args)
+        result = self.call_tool("create_listing", args, meta=_keyed(idempotency_key))
         listing = result.get("listing")
         listing = listing if isinstance(listing, dict) else result
         listing_id = listing.get("id") or listing.get("listing_id")
@@ -236,10 +239,10 @@ class RailClient:
             raise ValueError("update_listing needs at least one field to change")
         return self.call_tool("update_listing", {"id": str(listing_id), **present})
 
-    def create_checkout(self, args: dict) -> dict:
+    def create_checkout(self, args: dict, *, idempotency_key: str) -> dict:
         """Mint a checkout link for a listing at an agreed price. Returns {checkout_url}. Raises
         RailToolError if the rail returns no URL (we never fabricate one)."""
-        result = self.call_tool("create_checkout", args)
+        result = self.call_tool("create_checkout", args, meta=_keyed(idempotency_key))
         url = result.get("checkout_url") or result.get("url")
         if not url:
             raise RailToolError("create_checkout returned no checkout URL")
@@ -345,6 +348,12 @@ def listing_id_from_url(url) -> str:
     if _LISTING_PATH not in url:
         return ""
     return url.split(_LISTING_PATH, 1)[1].split("/", 1)[0].split("?", 1)[0].strip()
+
+
+def _keyed(idempotency_key: str) -> dict:
+    """The `_meta` carrying a create call's key. bazaar answers a repeat of the same request under
+    the same key with the first response, and refuses a different request."""
+    return {"idempotency-key": idempotency_key}
 
 
 def _text_content(result: dict) -> str:

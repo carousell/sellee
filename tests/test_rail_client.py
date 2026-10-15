@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -97,14 +98,14 @@ def test_initialize_and_create_listing(fake_rail) -> None:
     server.tool_result = {"structuredContent": {"listing_id": "L1", "url": url}}
     client = _client(base)
     client.initialize()
-    listing = client.create_listing({"title": "Lamp", "price_cents": 8000})
+    listing = client.create_listing({"title": "Lamp", "price_cents": 8000}, idempotency_key="k1")
     assert listing == {"listing_id": "L1", "url": url}
 
 
 def test_create_listing_from_text_content(fake_rail) -> None:
     server, base = fake_rail
     server.tool_result = {"content": [{"type": "text", "text": json.dumps({"id": "L2"})}]}
-    listing = _client(base).create_listing({"title": "x"})
+    listing = _client(base).create_listing({"title": "x"}, idempotency_key="k1")
     assert listing == {"listing_id": "L2", "url": f"{base}/listing/L2"}
 
 
@@ -114,7 +115,7 @@ def test_create_listing_reads_the_nested_listing_object(fake_rail) -> None:
     server.tool_result = {
         "structuredContent": {"listing": {"id": "L3", "status": "active", "images": []}}
     }
-    listing = _client(base).create_listing({"title": "x"})
+    listing = _client(base).create_listing({"title": "x"}, idempotency_key="k1")
     assert listing == {"listing_id": "L3", "url": f"{base}/listing/L3"}
 
 
@@ -122,7 +123,7 @@ def test_create_listing_ignores_the_currency_the_response_carries(fake_rail) -> 
     """The request asserts the recorded code, so nothing is read back off the listing."""
     server, base = fake_rail
     server.tool_result = {"structuredContent": {"listing": {"id": "L5", "currency": "VND"}}}
-    assert "currency" not in _client(base).create_listing({"title": "x"})
+    assert "currency" not in _client(base).create_listing({"title": "x"}, idempotency_key="k1")
 
 
 def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:
@@ -130,27 +131,54 @@ def test_create_listing_prefers_a_url_the_rail_supplies(fake_rail) -> None:
     server, base = fake_rail
     given = f"{base}/listing/L4-slug"
     server.tool_result = {"structuredContent": {"listing": {"id": "L4", "url": given}}}
-    assert _client(base).create_listing({"title": "x"})["url"] == given
+    assert _client(base).create_listing({"title": "x"}, idempotency_key="k1")["url"] == given
+
+
+def test_the_create_tools_send_their_key_in_meta(fake_rail) -> None:
+    """The key goes in `_meta["idempotency-key"]`, outside the arguments bazaar hashes."""
+    server, base = fake_rail
+    sent = []
+
+    class _Recorder(_Handler):
+        def do_POST(self):
+            raw = self.rfile.read(int(self.headers.get("Content-Length", 0)))
+            sent.append(json.loads(raw)["params"])
+            self.rfile = io.BytesIO(raw)
+            _Handler.do_POST(self)
+
+    server.RequestHandlerClass = _Recorder
+    server.tool_result = {"structuredContent": {"listing": {"id": "L1"}, "checkout_url": "u"}}
+    client = _client(base)
+    client.create_listing({"title": "x"}, idempotency_key="k1")
+    client.create_checkout({"listing_id": "L1"}, idempotency_key="sale1")
+    client.list_threads("", 5)
+
+    assert [p.get("_meta") for p in sent] == [
+        {"idempotency-key": "k1"},
+        {"idempotency-key": "sale1"},
+        None,
+    ]
+    assert [p["arguments"] for p in sent[:2]] == [{"title": "x"}, {"listing_id": "L1"}]
 
 
 def test_bad_key_raises_auth_error(fake_rail) -> None:
     _, base = fake_rail
     with pytest.raises(RailAuthError):
-        _client(base, key="wrong").create_listing({"title": "x"})
+        _client(base, key="wrong").create_listing({"title": "x"}, idempotency_key="k1")
 
 
 def test_create_listing_without_an_id_is_tool_error(fake_rail) -> None:
     server, base = fake_rail
     server.tool_result = {"structuredContent": {"listing": {"status": "active"}}}  # no id
     with pytest.raises(RailToolError, match="no listing id"):
-        _client(base).create_listing({"title": "x"})
+        _client(base).create_listing({"title": "x"}, idempotency_key="k1")
 
 
 def test_rail_reports_iserror_result(fake_rail) -> None:
     server, base = fake_rail
     server.tool_result = {"isError": True, "content": [{"type": "text", "text": "over quota"}]}
     with pytest.raises(RailToolError, match="over quota"):
-        _client(base).create_listing({"title": "x"})
+        _client(base).create_listing({"title": "x"}, idempotency_key="k1")
 
 
 def test_verify_listing_url_live_200(fake_rail) -> None:
@@ -378,7 +406,7 @@ def test_every_rpc_accepts_both_json_and_event_stream(fake_rail) -> None:
             _Handler.do_POST(self)
 
     server.RequestHandlerClass = _Recorder
-    _client(base).create_listing({"title": "x"})
+    _client(base).create_listing({"title": "x"}, idempotency_key="k1")
     assert "application/json" in seen["accept"]
     assert "text/event-stream" in seen["accept"]
 

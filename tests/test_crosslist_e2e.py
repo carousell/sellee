@@ -34,7 +34,7 @@ _MARKET_URL = "https://www.carousell.sg/p/teak-lamp-1328307791"
 
 
 class FakeRail:
-    def create_listing(self, args):
+    def create_listing(self, args, idempotency_key=None):
         return {"listing_id": "L1", "url": _RAIL_URL}
 
     def verify_listing_url(self, url):
