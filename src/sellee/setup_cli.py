@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from enum import Enum
 
 from sellee import (
     __version__,
@@ -521,15 +522,74 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
     ui.step("Setting up carousell.ai")
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
-        ui.say("ready — always enabled, with nothing to sign in to")
+        link = _mint_signin(str(region).upper(), on_terminal=ui.on_terminal())
+        if link is _NoLink.NOT_NEEDED:
+            ui.say("ready — always enabled, with nothing to sign in to")
+        else:
+            ui.say("ready — always enabled for listing")
         _record_currency(ui, port, token, str(status.get("currency") or ""))
         # Whether carousell.ai can pay this seller out is the backend's answer, printed as given.
         notice = str(status.get("notice") or "")
         if notice:
             ui.note(notice)
+        _offer_signin(ui, link)
         return
     ui.warn(f"carousell.ai setup did not complete: {status.get('error')}")
     ui.note("re-run `sellee provision carousell-ai` when back online")
+
+
+# carousell.ai takes payments in the United States only, so only a seller there needs the sign-in.
+_CHECKOUT_REGION = "US"
+
+
+class _NoLink(Enum):
+    NOT_NEEDED = "not needed"
+    FAILED = "failed"
+    UNWATCHED = "unwatched"
+
+
+_SIGNIN_OFFER = (
+    "Add your ZIP now so buyers can pay you as soon as you list: {url} It takes a minute: "
+    "confirm your email, then the ZIP code you ship from."
+)
+
+
+def _mint_signin(country: str, *, on_terminal: bool) -> str | _NoLink:
+    """The seller's sign-in link, or why setup shows none."""
+    from sellee.rail import signin
+    from sellee.rail.client import RailClient, RailError
+
+    key = secrets.read_carousell_ai_api_key()
+    if country != _CHECKOUT_REGION or not key:
+        return _NoLink.NOT_NEEDED
+    # The link hands over the account, so it is never minted into a pipe or a log.
+    if not on_terminal:
+        return _NoLink.UNWATCHED
+    cfg = config.load()
+    rail = RailClient(
+        api_base=cfg.carousell_ai_api_base, api_key=key, web_base_url=cfg.carousell_ai_web_base_url
+    )
+    try:
+        url = signin.mint_signin_url(rail, cfg.carousell_ai_web_base_url)
+    except RailError:
+        return _NoLink.FAILED
+    return _NoLink.NOT_NEEDED if url is None else url
+
+
+def _offer_signin(ui: Ui, link: str | _NoLink) -> None:
+    if link is _NoLink.NOT_NEEDED:
+        return
+    if link is _NoLink.UNWATCHED:
+        ui.note(
+            "run setup in a terminal for your carousell.ai sign-in link; Sellee offers it later too"
+        )
+        return
+    if link is _NoLink.FAILED:
+        # The rail's words stay out of the terminal; the first checkout asks again regardless.
+        ui.warn("could not make your carousell.ai sign-in link — Sellee offers one again later")
+        return
+    ui.say(_SIGNIN_OFFER.format(url=link))
+    ui.note("the link works for 15 minutes; Sellee offers a fresh one later if it lapses")
 
 
 def _record_currency(ui: Ui, port: int, token: str, currency: str) -> None:

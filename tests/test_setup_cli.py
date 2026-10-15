@@ -12,7 +12,10 @@ gates in test_installer_preflight.py, the systemd mapping in test_supervisor_lin
 from __future__ import annotations
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from tests.test_installer_basics_prompt import ZONE_TAB
+from tests.test_rail_client import fake_rail  # noqa: F401 -- a fixture
 from tests.test_supervisor import FakePlatform
 
 from sellee import (
@@ -31,6 +34,13 @@ from sellee import (
 from sellee.browser import markets as market_adapters
 from sellee.installer import checks, materialize, preflight
 from sellee.installer import region as region_guess
+from sellee.rail.client import (
+    RailAuthError,
+    RailClient,
+    RailNetworkError,
+    RailToolError,
+    RailToolRefused,
+)
 
 # Captured before any fixture stubs it out, so a test about the rail phase can put it back.
 _PROVISION_RAIL = setup_cli._provision_rail
@@ -743,6 +753,229 @@ def test_a_payable_country_is_told_nothing_extra(world, monkeypatch, capsys) -> 
     out = capsys.readouterr().out
     assert "cannot take payments" not in out
     assert "ready — always enabled" in out  # the phase still reports what it did
+
+
+# --- the sign-in link: email, then the ZIP buyers need ------------------------------------------
+
+_SIGNIN = "https://www.carousell.ai/signin"
+_LINK = f"{_SIGNIN}?flow=guest-promotion&promote=tok"
+_OFFER = (
+    f"Add your ZIP now so buyers can pay you as soon as you list: {_LINK} It takes a minute: "
+    "confirm your email, then the ZIP code you ship from."
+)
+
+
+def _minting(monkeypatch, outcome) -> list:
+    """The rail's answer to a sign-in mint, a URL or what it raises. Returns the calls it got."""
+    calls: list = []
+
+    def create_promotion_url(self):
+        calls.append(self)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return {"promotion_url": outcome}
+
+    monkeypatch.setattr(RailClient, "create_promotion_url", create_promotion_url)
+    return calls
+
+
+def _account(
+    monkeypatch, country: str = "US", status: str = "ok", *, terminal: bool = True
+) -> None:
+    """A carousell.ai guest account made for `country`, its key stored as provisioning stores it.
+    `terminal` says whether setup's output reaches a person rather than a pipe or a log."""
+    monkeypatch.setattr(setup_cli.Ui, "on_terminal", lambda self: terminal)
+    if status == "ok":
+        secrets.write_carousell_ai_api_key("guest-key")
+        answer = {"status": "ok", "provisioned": True, "country": country, "notice": ""}
+    else:
+        answer = {"status": "error", "error": "guests API unreachable", "defer": True}
+    _real_rail_phase(monkeypatch, answer)
+
+
+@pytest.mark.parametrize(
+    "args", [("--yes", "--manual", "--region", "US"), ("--yes", "--region", "US")]
+)
+def test_a_link_is_never_minted_when_no_one_is_watching(world, monkeypatch, capsys, args) -> None:
+    # Output that is piped or logged could hand the account to whoever reads the log.
+    _account(monkeypatch, terminal=False)
+    calls = _minting(monkeypatch, _LINK)
+
+    assert setup_main(*args) == 0
+
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "Add your ZIP" not in out
+    assert "run setup in a terminal" in out
+
+
+def test_a_container_setup_in_a_terminal_sends_the_link(
+    world, container, monkeypatch, capsys
+) -> None:
+    _account(monkeypatch)
+    _minting(monkeypatch, _LINK)
+
+    assert setup_main("--yes", "--region", "US") == 0
+
+    assert _OFFER in capsys.readouterr().out
+
+
+def test_a_container_setup_whose_output_is_logged_mints_no_link(
+    world, container, monkeypatch, capsys
+) -> None:
+    _account(monkeypatch, terminal=False)
+    calls = _minting(monkeypatch, _LINK)
+
+    assert setup_main("--yes", "--region", "US") == 0
+
+    assert calls == []
+    assert "Add your ZIP" not in capsys.readouterr().out
+
+
+def test_a_us_seller_is_sent_to_add_their_email_and_zip(world, monkeypatch, capsys) -> None:
+    _account(monkeypatch)
+    _minting(monkeypatch, _LINK)
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    out = capsys.readouterr().out
+    assert _OFFER in out
+    assert "15 minutes" in out
+    assert (
+        out.index("Setting up carousell.ai") < out.index(_OFFER) < out.index("Other marketplaces")
+    )
+    assert "nothing to sign in to" not in out
+    assert "ready — always enabled for listing" in out
+
+
+def test_the_mint_reaches_the_rail_with_the_key_setup_stored(
+    world,
+    monkeypatch,
+    capsys,
+    fake_rail,  # noqa: F811 -- the fixture imported above
+) -> None:
+    server, base = fake_rail
+    link = f"{base}/signin?flow=guest-promotion&promote=tok"
+    server.tool_result = {"structuredContent": {"promotion_url": link}}
+    config.merge_into_file({"carousell_ai_api_base": base, "carousell_ai_web_base_url": base})
+    _account(monkeypatch)
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    assert f"pay you as soon as you list: {link} It takes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize(
+    ("web_base", "link"),
+    [
+        ("https://www.carousell.ai/", _LINK),
+        ("https://www.carousell.ai", f"{_SIGNIN}/promote/tok"),
+    ],
+)
+def test_a_link_on_the_sign_in_page_is_printed(world, monkeypatch, capsys, web_base, link) -> None:
+    config.merge_into_file({"carousell_ai_web_base_url": web_base})
+    _account(monkeypatch)
+    _minting(monkeypatch, link)
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    assert f"pay you as soon as you list: {link} It takes" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("link", [f"{_SIGNIN}?promote=a b", f"{_SIGNIN}?promote=a\nwarn: forged"])
+def test_a_link_that_could_forge_a_terminal_line_is_never_printed(
+    world, monkeypatch, capsys, link
+) -> None:
+    _account(monkeypatch)
+    _minting(monkeypatch, link)
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    out = capsys.readouterr().out
+    assert "Add your ZIP" not in out
+    assert "forged" not in out
+    assert "warn: could not make your carousell.ai sign-in link" in out
+
+
+def test_a_re_run_for_a_seller_already_signed_in_sends_no_link(world, monkeypatch, capsys) -> None:
+    # A stored key means no guests call, and the rail refuses the mint for a seller.
+    secrets.write_carousell_ai_api_key("guest-key")
+    monkeypatch.setattr(setup_cli.Ui, "on_terminal", lambda self: True)
+    _real_rail_phase(monkeypatch, {"status": "ok", "provisioned": False, "source": "store"})
+    _minting(monkeypatch, RailToolRefused("this account is already a seller"))
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    out = capsys.readouterr().out
+    assert "Add your ZIP" not in out
+    assert "warn" not in out
+    assert "nothing to sign in to" in out
+
+
+def test_a_link_off_the_sign_in_page_is_never_printed(world, monkeypatch, capsys) -> None:
+    _account(monkeypatch)
+    _minting(monkeypatch, "https://evil.example/signin?promote=tok")
+
+    assert setup_main("--yes", "--manual", "--region", "US") == 0
+
+    out = capsys.readouterr().out
+    assert "evil.example" not in out
+    assert "warn: could not make your carousell.ai sign-in link" in out
+
+
+_MINTS = st.one_of(
+    st.builds(lambda tail: _SIGNIN + tail, st.text()),
+    st.text(),
+    # Non-string values a changed rail response could carry instead of a URL.
+    st.one_of(
+        st.integers(), st.lists(st.text()), st.dictionaries(st.text(), st.text()), st.booleans()
+    ),
+    st.sampled_from(
+        [
+            RailToolRefused("already a seller"),
+            RailToolRefused("rate limited"),
+            RailToolError("create_promotion_url returned no promotion URL"),
+            RailNetworkError("rail unreachable"),
+            RailAuthError("carousell.ai rejected the guest key"),
+        ]
+    ),
+)
+
+
+@settings(
+    max_examples=200, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    country=st.sampled_from(["US", "SG", "VN", "GB"]),
+    status=st.sampled_from(["ok", "error"]),
+    outcome=_MINTS,
+    terminal=st.booleans(),
+)
+def test_any_mint_outcome_leaves_setup_whole_and_prints_only_a_safe_link(
+    world, monkeypatch, capsys, country, status, outcome, terminal
+) -> None:
+    paths.carousell_ai_api_key_path().unlink(missing_ok=True)
+    _account(monkeypatch, country, status, terminal=terminal)
+    calls = _minting(monkeypatch, outcome)
+
+    assert setup_main("--yes", "--manual", "--region", country) == 0
+
+    out = capsys.readouterr().out
+    # Only a US seller whose account was made, and who is at a terminal, is ever minted for.
+    if country != "US" or status != "ok" or not terminal:
+        assert calls == []
+    # Setup goes on to the marketplaces whatever the mint did.
+    assert "Other marketplaces" in out
+    # A printed link is on the sign-in page, and one unbroken run of printable characters.
+    for line in out.splitlines():
+        if line.startswith("Add your ZIP"):
+            url = line.split(": ", 1)[1].split(" It takes", 1)[0]
+            assert url == _SIGNIN or url.startswith((_SIGNIN + "?", _SIGNIN + "/"))
+            assert url.isprintable() and not any(ch.isspace() for ch in url)
+    # Any mint but "already a seller" that printed no link says so.
+    signed_in = isinstance(outcome, RailToolError) and "already a seller" in str(outcome)
+    if calls and not signed_in and "Add your ZIP" not in out:
+        assert "warn: could not make your carousell.ai sign-in link" in out
 
 
 # --- marketplaces --------------------------------------------------------------------------------

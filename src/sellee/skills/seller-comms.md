@@ -165,7 +165,9 @@ zero fees to you). 🤝 Handle it myself — I hand the chat over and check in d
 `options: ["🔗 Send checkout link", "🤝 I'll handle it"]`
 On checkout, mint the link with `carousell_ai_create_checkout_link` and confirm: "✅ Checkout link
 sent to <buyer> for <price> — I'll ping you to ship once it's paid." If that mint is refused
-because the seller hasn't signed in yet, go to **First checkout — one-time sign-in** below. On
+because the seller hasn't signed in yet, go to **First checkout — one-time sign-in** below; if
+it is refused because they haven't added their ship-from ZIP, go to **Checkout refused — ZIP
+missing** below. On
 manual, post a brief hand-off line to the buyer, stop auto-replying on that thread, and confirm to
 the seller — mentioning once (reversible) that "checkout" is a word away if they change their mind.
 
@@ -189,6 +191,12 @@ Post **exactly the URL the tool returned** — never retype, shorten, or wrap it
 - The sign-in page said their Google email already has a carousell.ai account → only carousell.ai
   support can sort that. Say so plainly and offer the manual close ("🤝 hand the chat over") so the
   deal isn't stuck waiting on it.
+- **Checkout refused — ZIP missing.** A seller who signed in but skipped the ZIP question can't
+  be paid yet. Mint `carousell_ai_create_signin_link` and send it the same way, worded for this:
+  "📮 One quick step before I can send checkout links: add the ZIP code you ship from on
+  carousell.ai, so the buyer can be quoted shipping. <link>" If the tool returns
+  `already_signed_in` instead, there is no link to send: ask them to add it in their carousell.ai
+  account under Shipping. Either way, retry the checkout link once they say it's done.
 - **Don't nag.** One ask. If they haven't signed in yet the deal is simply waiting on them; answer
   when they come back.
 

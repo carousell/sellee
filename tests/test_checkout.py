@@ -27,6 +27,11 @@ _GUEST_REFUSAL = (
     "checkout is unavailable for this listing: it belongs to a guest account, and the seller must "
     "sign in before checkout links can be created"
 )
+# bazaar's refusal for a seller who signed in but never said where they ship from.
+_SHIP_FROM_REFUSAL = (
+    "checkout is unavailable for this listing: the seller has not set where they ship from yet. "
+    "The seller can add it in their carousell.ai account under Shipping."
+)
 _SIGNIN_URL = "https://www.carousell.ai/signin?flow=guest-promotion&promote=tok"
 
 
@@ -220,6 +225,29 @@ def test_guest_refusal_never_names_the_signin_tool_to_a_reply_pass(make_ctx, sto
 
 def test_guest_refusal_records_nothing_so_a_retry_mints_fresh(make_ctx, store) -> None:
     _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_GUEST_REFUSAL))
+    assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0
+
+
+@pytest.mark.parametrize("tier", [TIER_PASS_CHANNEL, TIER_ATTENDED])
+def test_ship_from_refusal_sends_the_seller_to_add_their_zip(make_ctx, store, tier) -> None:
+    message = _refused(make_ctx, store, tier, RailToolError(_SHIP_FROM_REFUSAL))
+    assert "carousell_ai_create_signin_link" in message
+    assert "ZIP" in message
+    # Before carousell.ai sends a signed-in seller to the ZIP page, the sign-in tool answers
+    # already_signed_in; retrying checkout then would only be refused again.
+    assert "already_signed_in" in message
+    assert "under Shipping" in message
+
+
+def test_ship_from_refusal_never_names_the_signin_tool_to_a_reply_pass(make_ctx, store) -> None:
+    message = _refused(make_ctx, store, TIER_PASS_REPLY, RailToolError(_SHIP_FROM_REFUSAL))
+    assert "carousell_ai_create_signin_link" not in message
+    assert "escalate" in message
+    assert "holding line" in message
+
+
+def test_ship_from_refusal_records_nothing_so_a_retry_mints_fresh(make_ctx, store) -> None:
+    _refused(make_ctx, store, TIER_PASS_CHANNEL, RailToolError(_SHIP_FROM_REFUSAL))
     assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0
 
 
