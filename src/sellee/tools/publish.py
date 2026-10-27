@@ -19,7 +19,7 @@ from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail import signin
-from sellee.rail.client import RailError, RailUnprovisioned
+from sellee.rail.client import RailError, RailPolicyRefused, RailUnprovisioned
 from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.checkout import SIGNIN_TIERS, _rail
 from sellee.tools.registry import (
@@ -63,6 +63,18 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
             f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
             f"a different amount of money. Re-price the item in {expected} before publishing"
         )
+
+
+def policy_refusal(rail, item: dict) -> dict | None:
+    """The answer for the seller when carousell.ai's item policy refuses this item, or None when
+    it takes it. No verdict fails the step, since the screen is what stops a refused upload."""
+    try:
+        verdict = rail.screen_listing(item["title"], item["description"] or "", item["category"])
+    except RailError as exc:  # caller-safe, secret-free messages
+        raise ToolError(str(exc)) from exc
+    if verdict["allowed"]:
+        return None
+    return {"refused": True, "message": verdict["message"]}
 
 
 def _signin_offer(ctx: ToolContext) -> str | None:
@@ -115,6 +127,12 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
+    rail = _rail(ctx)
+    # Before the pacing slot: an item carousell.ai will not take is not a publish attempt.
+    refusal = policy_refusal(rail, item)
+    if refusal:
+        return refusal
+
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
@@ -144,6 +162,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     }
     if currency:
         args["currency"] = currency
+    if item["category"]:
+        args["category"] = item["category"]
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
     # upload reference is skipped rather than blocking the publish; an item with no photos at all
@@ -156,18 +176,12 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     if media:
         args["media"] = {"urls": media}
 
-    if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
-    try:
-        rail = ctx.rail_factory()
-    except RailUnprovisioned as exc:
-        raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
-        ) from exc
-
     try:
         listing = rail.create_listing(args)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
+    except RailPolicyRefused as exc:
+        # The policy changed since the screen; the seller hears it as they would have then.
+        return {"refused": True, "message": str(exc)}
     except RailUnprovisioned as exc:
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"

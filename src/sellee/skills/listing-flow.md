@@ -110,6 +110,11 @@ listing is up without its photos.
 If the publish also returns `signin_offer`, send that line as written, in the same message and after
 the live URL. What follows from it is seller-comms' — "The one-time sign-in".
 
+If either step returns `refused`, carousell.ai won't take the item, and nothing was listed. Tell
+the seller in plain words, using the `message` (it names the category and links the policy), and
+that the item stays a draft. That answer is final: don't retry, and don't change the
+category or the wording to get it through.
+
 If either step fails, say what failed and what survived: the draft and its photos are still there,
 so a retry is one "try again" away. Don't retry silently in a loop, and don't report a listing as
 live when it isn't.

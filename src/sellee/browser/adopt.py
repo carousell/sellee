@@ -25,6 +25,7 @@ from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
+from sellee.rail.client import RailError
 from sellee.store import MAX_PHOTOS, StoreError
 from sellee.store.survey import (
     LISTING_ACCEPTED,
@@ -56,6 +57,7 @@ RAIL_FAILED_NOTICE = (
     "I couldn't get {title} onto {rail}, so for now it's only on {name}. I'm still answering "
     "buyers on it. Ask me and I'll have another go."
 )
+RAIL_REFUSED_NOTICE = "{rail} won't take {title}, so it stays only on {name}. {message}"
 SUMMARY_NOTICE = "Done with your {name} listings: {parts}."
 
 # The page one adoption costs: the listing's own.
@@ -433,6 +435,21 @@ def _settle_queued(deps) -> None:
         )
 
 
+def _policy_refusal(deps, item: dict) -> str | None:
+    """carousell.ai's words refusing this item, or None. A screen that cannot answer queues the
+    pass anyway: its own tools screen again, and fail closed there."""
+    if deps.rail_factory is None:
+        return None
+    try:
+        verdict = deps.rail_factory().screen_listing(
+            item["title"], item["description"] or "", item["category"]
+        )
+    except RailError as exc:
+        log.warning("could not screen an adopted listing before its publish: %s", exc)
+        return None
+    return None if verdict["allowed"] else verdict["message"]
+
+
 def _enqueue_owed(deps) -> None:
     """Start one owed carousell.ai publish, if the single publish slot is free.
 
@@ -452,6 +469,22 @@ def _enqueue_owed(deps) -> None:
     if item["listing_urls"].get(marketplaces.RAIL):
         # Already there — a publish that landed while we were not looking. Nothing owed.
         deps.store.set_rail_publish_state(row["market"], row["listing_id"], RAIL_DONE)
+        return
+    refusal = _policy_refusal(deps, item)
+    if refusal:
+        # Final: a pass would be refused the same way, so none is spent and none retried.
+        deps.store.set_rail_publish_state(
+            row["market"],
+            row["listing_id"],
+            RAIL_FAILED,
+            notice_text=RAIL_REFUSED_NOTICE.format(
+                title=item["title"],
+                rail=marketplaces.display_name(marketplaces.RAIL),
+                name=marketplaces.display_name(row["market"]),
+                message=refusal,
+            ),
+        )
+        deps.bus.publish("survey.relist_refused", {"market": row["market"], "item_id": item["id"]})
         return
     pass_id = deps.store.enqueue_pass(
         "publish", {"item_id": item["id"], "market": marketplaces.RAIL, "origin": ORIGIN}

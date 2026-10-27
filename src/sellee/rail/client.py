@@ -35,6 +35,8 @@ _POLICY_TIERS = ("allowed", "not_yet", "never")
 _POLICY_PATH = "/item-policy"
 # How carousell.ai refuses a category its policy does not list, which means ours is out of date.
 _UNKNOWN_CATEGORY = "is not a category the item policy lists"
+# The only mark of an item policy refusal: bazaar appends it to the tool error's text.
+_POLICY_REFUSED = "(code: item_policy_refused)"
 
 
 class RailError(Exception):
@@ -64,6 +66,11 @@ class RailToolError(RailError):
 
 class RailToolRefused(RailToolError):
     """The rail itself answered the call with an error, rather than an answer we could not read."""
+
+
+class RailPolicyRefused(RailToolRefused):
+    """carousell.ai's item policy refused the item. The message names its category, for the
+    seller."""
 
 
 class RailClient:
@@ -152,6 +159,8 @@ class RailClient:
             if _UNKNOWN_CATEGORY in text:
                 with _POLICY_LOCK:
                     _POLICIES.pop(self._endpoint, None)
+            if text.endswith(_POLICY_REFUSED):
+                raise RailPolicyRefused(text.removesuffix(_POLICY_REFUSED).rstrip())
             raise RailToolRefused(text or f"{name} failed")
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
@@ -210,6 +219,18 @@ class RailClient:
                 groups[group["token"]] = dict(group, tier=tier)
         _POLICIES[self._endpoint] = {"version": version, "groups": groups, "missed": set()}
         return _POLICIES[self._endpoint]
+
+    def screen_listing(self, title: str, description: str, category: str | None) -> dict:
+        """What create_listing would do with this item, as {allowed, group, message}. A refusal
+        is an answer here, not an error, and nothing is written."""
+        args = {"title": title, "description": description}
+        if category:
+            args["category"] = category
+        verdict = self.call_tool("screen_listing", args)
+        allowed = verdict.get("allowed")
+        if not isinstance(allowed, bool) or not (allowed or verdict.get("message")):
+            raise RailToolError("screen_listing returned no verdict")
+        return verdict
 
     def listing_url(self, listing_id: str) -> str:
         """The listing's page URL, composed from the id the rail assigned it."""
