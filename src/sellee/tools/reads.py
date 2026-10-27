@@ -7,6 +7,7 @@ import os
 import time
 
 from sellee import __version__, heartbeat, paths, secrets, settings
+from sellee.rail.client import RailError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -161,6 +162,30 @@ register(
         tiers=frozenset(
             {TIER_PASS_CHANNEL, TIER_ATTENDED, TIER_PASS_PUBLISH, TIER_PASS_REPLY, TIER_PASS_EDIT}
         ),
+    )
+)
+
+
+def _item_policy(ctx: ToolContext, params: dict) -> dict:
+    try:
+        if ctx.rail_factory is None:
+            raise RailError("carousell.ai is not available here")
+        rail = ctx.rail_factory()
+        policy = rail.item_policy()
+    except RailError as exc:
+        raise ToolError(f"carousell.ai's item policy can't be read right now ({exc})") from exc
+    return dict(policy, page=rail.item_policy_url())
+
+
+register(
+    ToolSpec(
+        name="carousell_ai_item_policy",
+        description="carousell.ai's item policy: every category token an item can carry, with its "
+        "title, what it covers, what it excepts, and its tier — allowed, not_yet (not taken yet) "
+        "or never.",
+        input_schema=_NO_PARAMS,
+        handler=_item_policy,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
 register(

@@ -10,6 +10,7 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 from __future__ import annotations
 
 import json
+import threading
 import urllib.error
 import urllib.request
 
@@ -25,6 +26,15 @@ _BROWSER_UA = (
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 _CLIENT_UA = "SELLEE-rail/1"
+
+# carousell.ai's item policy, per endpoint for the life of the process. No answer carries its
+# version, so it is read again only on a sign this copy is stale.
+_POLICY_LOCK = threading.RLock()
+_POLICIES: dict = {}
+_POLICY_TIERS = ("allowed", "not_yet", "never")
+_POLICY_PATH = "/item-policy"
+# How carousell.ai refuses a category its policy does not list, which means ours is out of date.
+_UNKNOWN_CATEGORY = "is not a category the item policy lists"
 
 
 class RailError(Exception):
@@ -138,7 +148,11 @@ class RailClient:
     def call_tool(self, name: str, arguments: dict) -> dict:
         result = self._rpc("tools/call", {"name": name, "arguments": arguments})
         if result.get("isError"):
-            raise RailToolRefused(_text_content(result) or f"{name} failed")
+            text = _text_content(result)
+            if _UNKNOWN_CATEGORY in text:
+                with _POLICY_LOCK:
+                    _POLICIES.pop(self._endpoint, None)
+            raise RailToolRefused(text or f"{name} failed")
         structured = result.get("structuredContent")
         if isinstance(structured, dict):
             return structured
@@ -151,6 +165,51 @@ class RailClient:
             if isinstance(parsed, dict):
                 return parsed
         raise RailToolError(f"{name} returned no usable content")
+
+    def item_policy(self) -> dict:
+        """carousell.ai's item policy as {version, categories}, each category a served group with
+        its tier: allowed, not_yet or never."""
+        with _POLICY_LOCK:
+            cached = _POLICIES.get(self._endpoint) or self._read_item_policy()
+            return {"version": cached["version"], "categories": list(cached["groups"].values())}
+
+    def item_policy_category(self, token: str) -> dict | None:
+        """The served group for a category token, with its tier, or None if the policy lacks it.
+        A missing token rereads the policy once per version, in case the token is new."""
+        with _POLICY_LOCK:
+            cached = _POLICIES.get(self._endpoint)
+            if cached is None:
+                cached = self._read_item_policy()
+            elif token not in cached["groups"] and token not in cached["missed"]:
+                fresh = self._read_item_policy()
+                if fresh["version"] == cached["version"]:
+                    fresh["missed"] = cached["missed"]
+                cached = fresh
+            group = cached["groups"].get(token)
+            if group is None:
+                cached["missed"].add(token)
+            return group
+
+    def item_policy_url(self) -> str:
+        """The page where carousell.ai explains its item policy to people."""
+        return self._web_base_url + _POLICY_PATH
+
+    def _read_item_policy(self) -> dict:
+        policy = self.call_tool("get_item_policy", {})
+        version = policy.get("version")
+        if not isinstance(version, str) or not version:
+            raise RailToolError("get_item_policy returned no version")
+        groups = {}
+        for tier in _POLICY_TIERS:
+            served = policy.get(tier)
+            if not isinstance(served, list):
+                raise RailToolError(f"get_item_policy returned no {tier} list")
+            for group in served:
+                if not isinstance(group, dict) or not isinstance(group.get("token"), str):
+                    raise RailToolError("get_item_policy returned a group with no token")
+                groups[group["token"]] = dict(group, tier=tier)
+        _POLICIES[self._endpoint] = {"version": version, "groups": groups, "missed": set()}
+        return _POLICIES[self._endpoint]
 
     def listing_url(self, listing_id: str) -> str:
         """The listing's page URL, composed from the id the rail assigned it."""

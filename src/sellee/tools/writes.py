@@ -7,6 +7,7 @@ set_floor's floor parameter is marked secret, so the dispatch path masks it befo
 
 from __future__ import annotations
 
+from sellee.rail.client import RailError
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -18,7 +19,31 @@ from sellee.tools.registry import (
 )
 
 
+def _check_category(ctx: ToolContext, token) -> None:
+    """Refuse a category token unless carousell.ai's item policy lists it. An empty one clears."""
+    if token is None or token == "":
+        return
+    if not isinstance(token, str):
+        raise ToolError("category must be a token string from carousell_ai_item_policy")
+    try:
+        if ctx.rail_factory is None:
+            raise RailError("carousell.ai is not available here")
+        rail = ctx.rail_factory()
+        group = rail.item_policy_category(token)
+    except RailError as exc:
+        raise ToolError(
+            f"carousell.ai's item policy can't be read right now ({exc}), so the category can't "
+            "be checked; leave it out and set it with update_item later"
+        ) from exc
+    if group is None:
+        raise ToolError(
+            f"category {token!r} is not in carousell.ai's item policy: carousell_ai_item_policy "
+            f"lists every token, and {rail.item_policy_url()} explains each"
+        )
+
+
 def _create_item(ctx: ToolContext, params: dict) -> dict:
+    _check_category(ctx, params.get("category"))
     try:
         return ctx.store.create_item(
             title=params["title"],
@@ -29,12 +54,14 @@ def _create_item(ctx: ToolContext, params: dict) -> dict:
             condition=params.get("condition"),
             photos=params.get("photos"),
             size_bucket=params.get("size_bucket"),
+            category=params.get("category"),
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
 
 def _update_item(ctx: ToolContext, params: dict) -> dict:
+    _check_category(ctx, params["fields"].get("category"))
     try:
         return ctx.store.update_item(params["item_id"], params["fields"])
     except StoreError as exc:
@@ -59,7 +86,9 @@ register(
         description="Create a draft item; the server assigns its id. Photos are paths already "
         "inside the media store — from a channel photo message, or from import_photos. "
         "size_bucket is the parcel size class carousell.ai ships by — one of s, m, l, xl — and a "
-        "listing cannot be published without it, so set it here when you can judge it.",
+        "listing cannot be published without it, so set it here when you can judge it. "
+        "category is the item's token in carousell.ai's item policy, from "
+        "carousell_ai_item_policy; any other value is refused.",
         input_schema={
             "type": "object",
             "properties": {
@@ -74,6 +103,7 @@ register(
                 "condition": {"type": "string"},
                 "photos": {"type": "array", "items": {"type": "string"}},
                 "size_bucket": {"type": "string"},
+                "category": {"type": "string"},
             },
             "required": ["title", "list_price"],
             "additionalProperties": False,
@@ -86,9 +116,10 @@ register(
     ToolSpec(
         name="update_item",
         description="Update a draft item's fields (title, description, condition, list_price, "
-        "currency, photos, size_bucket, and draft<->ready status). Photos are paths already "
-        "inside the media store. size_bucket is the parcel size class carousell.ai ships by — "
-        "one of s, m, l, xl — and a listing cannot be published without it. "
+        "currency, photos, size_bucket, category, and draft<->ready status). Photos are paths "
+        "already inside the media store. size_bucket is the parcel size class carousell.ai ships "
+        "by — one of s, m, l, xl — and a listing cannot be published without it. category is a "
+        'token from carousell_ai_item_policy, and "" clears it. '
         "Changes the record only, never a listing: on an item that is already listed it "
         "refuses anything a buyer sees — use update_live_listing for that. Listing URLs and sale "
         "states are not writable here.",
