@@ -47,6 +47,9 @@ class FakeRelay:
         self.registration_script: list = []
         # The seller's registration address, as get_registration_address mints it.
         self.registration_email = "seller-token@inbox.carousell.ai"
+        # The item policy get_item_policy serves, and how many times it has been read.
+        self.item_policy = item_policy()
+        self.policy_reads = 0
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -188,6 +191,23 @@ class FakeRelay:
     def get_registration_address(self, args: dict) -> dict:
         return {"registration_email": self.registration_email}
 
+    def get_item_policy(self, args: dict) -> dict:
+        self.policy_reads += 1
+        return json.loads(json.dumps(self.item_policy))
+
+    def screen_listing(self, args: dict) -> dict:
+        """The category half of bazaar's screen, with its unknown-token error text."""
+        token = args.get("category") or ""
+        tiers = {t: [g["token"] for g in self.item_policy[t]] for t in _POLICY_TIERS}
+        if token and not any(token in tokens for tokens in tiers.values()):
+            raise ToolFailure(
+                f"category {json.dumps(token)} is not a category the item policy lists; see "
+                "https://www.carousell.ai/item-policy"
+            )
+        if token and token not in tiers["allowed"]:
+            return {"allowed": False, "group": token, "message": f"{token} is refused"}
+        return {"allowed": True, "group": "", "message": ""}
+
     def send_registration_reply(self, args: dict) -> dict:
         """Send once per client_message_id, only to a correspondent, as bazaar does."""
         self.registration_calls.append(dict(args))
@@ -228,7 +248,37 @@ class FakeRelay:
         return {"thread": self._summary(thread_id), "messages": list(self.messages[thread_id])}
 
 
+_POLICY_TIERS = ("allowed", "not_yet", "never")
+
+
+def item_policy(
+    version="2026-10-10.b2c32a7a9a46",
+    *,
+    allowed=("electronics", "home_and_garden"),
+    not_yet=("too_big_to_ship",),
+    never=("weapons", "drugs_and_tobacco"),
+) -> dict:
+    """An item policy in get_item_policy's shape, with these tokens in its three tiers."""
+
+    def groups(tokens):
+        return [
+            {"token": t, "title": t.replace("_", " ").title(), "body": f"About {t}."}
+            for t in tokens
+        ]
+
+    return {
+        "version": version,
+        "updated": "2026-10-10",
+        "shipping_limits": {"max_pounds": 70, "max_side_inches": 30},
+        "allowed": groups(allowed),
+        "not_yet": groups(not_yet),
+        "never": [dict(g, allowed="Kitchen knives.") for g in groups(never)],
+    }
+
+
 _TOOLS = (
+    "get_item_policy",
+    "screen_listing",
     "list_threads",
     "get_thread",
     "reply_to_thread",
@@ -274,6 +324,8 @@ class _Handler(BaseHTTPRequestHandler):
             "list_registration_mail": relay.list_registration_mail,
             "send_registration_reply": relay.send_registration_reply,
             "get_registration_address": relay.get_registration_address,
+            "get_item_policy": relay.get_item_policy,
+            "screen_listing": relay.screen_listing,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}
