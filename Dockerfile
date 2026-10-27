@@ -3,7 +3,7 @@
 # Node is the base rather than an add-on: two of the three programs this runs are Node ones (the
 # `claude` CLI and the Playwright MCP server). Debian, not Alpine — the interpreter uv provisions
 # is a glibc build, and no musl triple exists for it.
-FROM node:26-trixie-slim
+FROM node:26.12.1-trixie-slim
 
 ARG CLAUDE_CODE_VERSION=2.1.220
 
