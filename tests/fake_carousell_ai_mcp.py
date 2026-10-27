@@ -50,6 +50,7 @@ class FakeRelay:
         # The item policy get_item_policy serves, and how many times it has been read.
         self.item_policy = item_policy()
         self.policy_reads = 0
+        self.screen_calls: list = []
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -196,16 +197,21 @@ class FakeRelay:
         return json.loads(json.dumps(self.item_policy))
 
     def screen_listing(self, args: dict) -> dict:
-        """The category half of bazaar's screen, with its unknown-token error text."""
+        """The category half of bazaar's screen, with its refusal and unknown-token texts."""
+        self.screen_calls.append(dict(args))
         token = args.get("category") or ""
-        tiers = {t: [g["token"] for g in self.item_policy[t]] for t in _POLICY_TIERS}
-        if token and not any(token in tokens for tokens in tiers.values()):
+        groups = {g["token"]: g for t in _POLICY_TIERS for g in self.item_policy[t]}
+        if token and token not in groups:
             raise ToolFailure(
                 f"category {json.dumps(token)} is not a category the item policy lists; see "
                 "https://www.carousell.ai/item-policy"
             )
-        if token and token not in tiers["allowed"]:
-            return {"allowed": False, "group": token, "message": f"{token} is refused"}
+        if token and token not in {g["token"] for g in self.item_policy["allowed"]}:
+            message = (
+                f"Items in “{groups[token]['title']}” can’t be listed on "
+                "carousell.ai. See https://www.carousell.ai/item-policy for what can be listed."
+            )
+            return {"allowed": False, "group": token, "message": message}
         return {"allowed": True, "group": "", "message": ""}
 
     def send_registration_reply(self, args: dict) -> dict:

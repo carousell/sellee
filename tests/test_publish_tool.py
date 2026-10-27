@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 import sellee.tools  # noqa: F401  registration
-from sellee.rail.client import RailNetworkError, RailToolError, RailUnprovisioned
+from sellee import paths
+from sellee.rail.client import (
+    RailNetworkError,
+    RailPolicyRefused,
+    RailToolError,
+    RailToolRefused,
+    RailUnprovisioned,
+)
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -23,6 +32,12 @@ class FakeRail:
         self.verify_ok = verify_ok
         self.args: dict = {}
         self.calls: list[str] = []
+        self.screened: list[tuple] = []
+
+    def screen_listing(self, title, description, category):
+        self.screened.append((title, description, category))
+        self.calls.append("screen")
+        return {"allowed": True, "group": "", "message": ""}
 
     def create_listing(self, args):
         self.args = dict(args)
@@ -58,7 +73,8 @@ def test_publish_composes_create_verify_record_in_order(make_ctx, store) -> None
     result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
 
     assert result == {"listing_id": "L1", "url": rail.url}
-    assert rail.calls == ["create:8000", f"verify:{rail.url}"]  # money in code, verify after
+    # Screened first, money in code, verify after.
+    assert rail.calls == ["screen", "create:8000", f"verify:{rail.url}"]
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
 
 
@@ -405,3 +421,193 @@ def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
 
     assert again == {"listing_id": None, "url": rail.url, "already_published": True}
     assert rail.signin_calls == 1
+
+
+# --- the item policy, screened before anything is uploaded ---------------------------------------
+
+# bazaar's refusal for a "never" group, worded the same by screen_listing and create_listing.
+_REFUSAL = (
+    "Items in “Weapons” can’t be listed on carousell.ai. "
+    "See https://www.carousell.ai/item-policy for what can be listed."
+)
+
+
+class ScreeningRail(FakeRail):
+    """A rail with a screen verdict and a photo host, recording every photo it is sent."""
+
+    def __init__(self, *, allowed=True, **kw):
+        super().__init__(**kw)
+        self.allowed = allowed
+        self.uploads: list = []
+
+    def screen_listing(self, title, description, category):
+        super().screen_listing(title, description, category)
+        if self.allowed:
+            return {"allowed": True, "group": "", "message": ""}
+        return {"allowed": False, "group": category or "weapons", "message": _REFUSAL}
+
+    def offers_tool(self, name):
+        return True
+
+    def upload_photo(self, data, content_type):
+        self.uploads.append(content_type)
+        return f"enc-{len(self.uploads)}"
+
+
+def _stored_photo(name: str) -> str:
+    path = paths.media_dir() / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xd8\xff\xe0jpegbytes")
+    return str(path)
+
+
+def _list_it(ctx, item_id) -> tuple:
+    """The listing flow's publish step: the photo upload, then the publish."""
+    uploaded = dispatch("carousell_ai_upload_photos", {"item_id": item_id}, ctx)
+    published = dispatch("carousell_ai_publish_listing", {"item_id": item_id}, ctx)
+    return uploaded, published
+
+
+_CATEGORIES = st.one_of(st.none(), st.sampled_from(["weapons", "too_big_to_ship", "electronics"]))
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    title=st.text(min_size=1, max_size=40).filter(str.strip),
+    description=st.text(max_size=80),
+    category=_CATEGORIES,
+    photos=st.integers(min_value=1, max_value=3),
+)
+def test_a_refused_screen_uploads_no_photo_and_creates_nothing(
+    make_ctx, store, xdg_tmp, title, description, category, photos
+) -> None:
+    """Screen first: whatever the item, a refusal stops both steps before anything leaves."""
+    rail = ScreeningRail(allowed=False)
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    item = _item(
+        store,
+        title=title,
+        description=description,
+        category=category,
+        photos=[_stored_photo(f"p{i}.jpg") for i in range(photos)],
+    )
+
+    uploaded, published = _list_it(ctx, item["id"])
+
+    assert rail.uploads == []
+    assert not any(call.startswith("create") for call in rail.calls)
+    assert uploaded == published == {"refused": True, "message": _REFUSAL}
+    after = store.get_item(item["id"])
+    assert after["listing_urls"] == {}
+    assert not any(p.get("uploaded_url") for p in after["photos"])
+
+
+def test_the_screen_is_asked_about_the_item_as_it_will_be_listed(make_ctx, store, xdg_tmp):
+    rail = ScreeningRail()
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    item = _item(
+        store,
+        title="Chef's knife",
+        description="Barely used",
+        category="electronics",
+        photos=[_stored_photo("k.jpg")],
+    )
+
+    _list_it(ctx, item["id"])
+
+    assert rail.screened == [("Chef's knife", "Barely used", "electronics")] * 2
+    assert rail.uploads == ["image/jpeg"]
+
+
+def test_an_allowed_item_publishes_with_its_category(make_ctx, store) -> None:
+    rail = ScreeningRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, category="electronics")
+
+    result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert result == {"listing_id": "L1", "url": rail.url}
+    assert rail.args["category"] == "electronics"
+    assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
+
+
+def test_an_item_without_a_category_is_screened_and_sent_without_one(make_ctx, store) -> None:
+    """A draft from before categories, or one made while the policy could not be read."""
+    rail = ScreeningRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store)
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert rail.screened == [("Lamp", "", None)]
+    assert "category" not in rail.args
+
+
+def test_a_refused_screen_spends_no_pacing_slot(make_ctx, store) -> None:
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: ScreeningRail(allowed=False))
+    item = _item(store, category="weapons")
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
+    assert rows == []
+
+
+def test_a_refusal_from_create_listing_leaves_the_item_a_draft(make_ctx, store) -> None:
+    """The policy changed between the screen and the create: the seller hears it the same way."""
+
+    class LateRefusal(ScreeningRail):
+        def create_listing(self, args):
+            self.calls.append("create")
+            raise RailPolicyRefused(_REFUSAL)
+
+    rail = LateRefusal()
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    item = _item(store, category="electronics")
+
+    result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert result == {"refused": True, "message": _REFUSAL}
+    assert "create" in rail.calls
+    assert store.get_item(item["id"])["listing_urls"] == {}
+
+
+def test_another_refusal_from_create_listing_is_still_a_failure(make_ctx, store) -> None:
+    class Refusing(ScreeningRail):
+        def create_listing(self, args):
+            raise RailToolRefused("title is required")
+
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: Refusing())
+    item = _item(store)
+
+    with pytest.raises(ToolError, match="title is required"):
+        dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+
+def test_uploading_a_missing_item_is_refused_before_any_screen(make_ctx) -> None:
+    rail = ScreeningRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    with pytest.raises(ToolError, match="no item with id 'item_nope'"):
+        dispatch("carousell_ai_upload_photos", {"item_id": "item_nope"}, ctx)
+    assert rail.calls == []
+
+
+@pytest.mark.parametrize("tool", ["carousell_ai_upload_photos", "carousell_ai_publish_listing"])
+def test_an_unanswered_screen_fails_closed(make_ctx, store, xdg_tmp, tool) -> None:
+    """No verdict is not a yes: nothing is uploaded or created, and the step fails."""
+
+    class Unreachable(ScreeningRail):
+        def screen_listing(self, title, description, category):
+            raise RailNetworkError("rail unreachable: TimeoutError")
+
+    rail = Unreachable()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, photos=[_stored_photo("u.jpg")])
+
+    with pytest.raises(ToolError, match="unreachable"):
+        dispatch(tool, {"item_id": item["id"]}, ctx)
+
+    assert rail.uploads == []
+    assert rail.calls == []

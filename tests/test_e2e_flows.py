@@ -24,6 +24,9 @@ _ZONES = [{"zone": "nationwide", "match": {"areas": ["__else__"]}, "fee": 5}]
 
 
 class FakeRail:
+    def screen_listing(self, title, description, category):
+        return {"allowed": True, "group": "", "message": ""}
+
     def create_listing(self, args):
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/L1"}
 

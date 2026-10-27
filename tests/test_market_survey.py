@@ -26,6 +26,7 @@ from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
 from sellee.config import Config
 from sellee.engines import pacing
+from sellee.rail.client import RailNetworkError
 from sellee.store.survey import RAIL_DONE, RAIL_FAILED, RAIL_OWED
 
 _MARKET = "carousell"
@@ -621,6 +622,82 @@ def test_a_publish_that_recorded_no_url_is_retried_then_reported_honestly(
     # And the door back the notice promises actually works.
     assert store.decide_discovered_listings(_MARKET, decision="retry") == 1
     assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == RAIL_OWED
+
+
+_REFUSAL = (
+    "Items in “Weapons, ammunition, and accessories” can’t be listed on carousell.ai. "
+    "See https://www.carousell.ai/item-policy for what can be listed."
+)
+
+
+class ScreeningRail:
+    """carousell.ai's screen_listing, answering one verdict, or raising when it cannot answer."""
+
+    def __init__(self, *, allowed=True, error=None):
+        self.allowed = allowed
+        self.error = error
+        self.screened: list = []
+
+    def screen_listing(self, title, description, category):
+        self.screened.append((title, description, category))
+        if self.error is not None:
+            raise self.error
+        if self.allowed:
+            return {"allowed": True, "group": "", "message": ""}
+        return {"allowed": False, "group": "weapons", "message": _REFUSAL}
+
+
+@pytest.mark.parametrize("description", ["Fixed blade, with sheath", ""])
+def test_an_adopted_listing_carousell_ai_refuses_is_reported_once_and_never_queued(
+    store, bus, monkeypatch, xdg_tmp, description
+) -> None:
+    """A refusal is final: no pass is spent on it, and the seller hears the policy's own words."""
+    row = _adopted(store, bus, monkeypatch)
+    # Arranged directly: the store refuses a buyer-visible edit to an item live on Carousell.
+    with store._db.transaction() as conn:  # noqa: SLF001
+        conn.execute(
+            "UPDATE items SET description = ?, category = ? WHERE id = ?",
+            (description, "weapons", row["item_id"]),
+        )
+    item = store.get_item(row["item_id"])
+    rail = ScreeningRail(allowed=False)
+    deps = _deps(store, bus, StubClient(), rail_factory=lambda: rail)
+
+    adopt.rail_publish_phase(deps)
+    adopt.rail_publish_phase(deps)
+
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["rail_state"] == RAIL_FAILED
+    assert row["rail_pass_id"] is None
+    assert store.publish_pass_index() == []
+    assert rail.screened == [(item["title"], description, "weapons")]
+    told = [n["text"] for n in store.list_queued_notices() if _REFUSAL in n["text"]]
+    assert told == [
+        f"Carousell.ai won't take {item['title']}, so it stays only on Carousell. {_REFUSAL}"
+    ]
+    assert not any("couldn't get" in n["text"] for n in store.list_queued_notices())
+    refused = _events(bus, "survey.relist_refused")
+    assert [e.payload for e in refused] == [{"market": _MARKET, "item_id": item["id"]}]
+
+
+def test_an_adopted_listing_carousell_ai_takes_is_queued(store, bus, monkeypatch, xdg_tmp) -> None:
+    _adopted(store, bus, monkeypatch)
+    rail = ScreeningRail()
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), rail_factory=lambda: rail))
+
+    assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
+    assert len(rail.screened) == 1
+
+
+def test_an_unanswered_screen_still_queues_the_publish(store, bus, monkeypatch, xdg_tmp) -> None:
+    """The pass screens again, and fails closed there; holding the row here would strand it."""
+    _adopted(store, bus, monkeypatch)
+    rail = ScreeningRail(error=RailNetworkError("rail unreachable: TimeoutError"))
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), rail_factory=lambda: rail))
+
+    assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
 
 
 def test_a_vanished_publish_pass_is_re_owed_not_stranded(store, bus, monkeypatch, xdg_tmp) -> None:
