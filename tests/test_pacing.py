@@ -183,9 +183,6 @@ def test_peek_reports_quiet_hours(store) -> None:
 
 
 class _FakeRail:
-    def screen_listing(self, title, description, category):
-        return {"allowed": True, "group": "", "message": ""}
-
     def create_listing(self, args):
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/1"}
 

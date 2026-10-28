@@ -39,9 +39,6 @@ class FakeRail:
             raise RailToolError("photo upload returned HTTP 500")
         return f"enc-{len(self.uploads)}"
 
-    def screen_listing(self, title, description, category):
-        return {"allowed": True, "group": "", "message": ""}
-
     def create_listing(self, args):
         self.listing_args = args
         return {"listing_id": "L1", "url": "https://www.carousell.ai/listing/1-lamp"}

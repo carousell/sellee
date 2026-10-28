@@ -34,9 +34,6 @@ _MARKET_URL = "https://www.carousell.sg/p/teak-lamp-1328307791"
 
 
 class FakeRail:
-    def screen_listing(self, title, description, category):
-        return {"allowed": True, "group": "", "message": ""}
-
     def create_listing(self, args):
         return {"listing_id": "L1", "url": _RAIL_URL}
 

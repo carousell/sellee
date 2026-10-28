@@ -31,9 +31,6 @@ _LISTING_URL = "https://www.carousell.ai/listing/42-lamp"
 
 
 class FakeRail:
-    def screen_listing(self, title, description, category):
-        return {"allowed": True, "group": "", "message": ""}
-
     def create_listing(self, args):
         return {"listing_id": "L42", "url": _LISTING_URL}
 

@@ -15,6 +15,7 @@ from sellee.rail.client import (
     RailToolError,
     RailToolRefused,
     _text_content,
+    category_refusal,
     listing_id_from_url,
 )
 
@@ -181,42 +182,45 @@ def test_another_code_is_not_an_item_policy_refusal(fake_rail) -> None:
     assert str(caught.value) == text
 
 
-def test_screen_listing_returns_the_verdict(fake_rail) -> None:
-    server, base = fake_rail
-    verdict = {"allowed": False, "group": "weapons", "message": _REFUSAL}
-    server.tool_result = {"structuredContent": verdict}
-    assert _client(base).screen_listing("Hunting knife", "", "weapons") == verdict
-
-
-@pytest.mark.parametrize(
-    "answer", [{}, {"allowed": "false"}, {"allowed": None}, {"allowed": False, "message": ""}]
-)
-def test_screen_listing_without_a_verdict_is_a_tool_error(fake_rail, answer) -> None:
-    server, base = fake_rail
-    server.tool_result = {"structuredContent": answer}
-    with pytest.raises(RailToolError, match="no verdict"):
-        _client(base).screen_listing("Lamp", "", None)
-
-
-def test_screen_listing_against_carousell_ai() -> None:
+def test_the_category_check_reads_only_the_cached_policy() -> None:
     from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
     relay = FakeRelay()
     base, shutdown = serve(relay)
     try:
         client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
-        refused = client.screen_listing("Hunting knife", "Fixed blade", "weapons")
-        allowed = client.screen_listing("Lamp", "", None)
-        with pytest.raises(RailToolRefused, match="is not a category the item policy lists"):
-            client.screen_listing("Lamp", "", "crafts")
+        answers = [category_refusal(client, t) for t in ("weapons", "too_big_to_ship", None)]
+        answers.append(category_refusal(client, "electronics"))
+        with pytest.raises(RailToolError, match="'crafts' is no longer in carousell.ai's item"):
+            category_refusal(client, "crafts")
     finally:
         shutdown()
-    assert refused == {"allowed": False, "group": "weapons", "message": _REFUSAL}
-    assert allowed == {"allowed": True, "group": "", "message": ""}
-    assert relay.screen_calls[:2] == [
-        {"title": "Hunting knife", "description": "Fixed blade", "category": "weapons"},
-        {"title": "Lamp", "description": ""},
+    assert answers == [
+        "Items in “Weapons” can’t be listed on carousell.ai. "
+        "See https://www.carousell.ai/item-policy for what can be listed.",
+        "Items in “Too Big To Ship” can’t be listed on carousell.ai yet. "
+        "See https://www.carousell.ai/item-policy for what can be listed.",
+        None,
+        None,
     ]
+    # One read, plus the one an unknown token costs; nothing else is asked.
+    assert relay.tool_calls == ["get_item_policy", "get_item_policy"]
+
+
+def test_create_listing_refused_by_carousell_ai() -> None:
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    relay = FakeRelay()
+    relay.refused_terms = {"taser": "weapons"}
+    base, shutdown = serve(relay)
+    try:
+        client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
+        with pytest.raises(RailPolicyRefused) as caught:
+            client.create_listing({"title": "Taser, new in box", "category": "electronics"})
+    finally:
+        shutdown()
+    assert str(caught.value) == _REFUSAL
+    assert relay.listings == []
 
 
 def test_verify_listing_url_live_200(fake_rail) -> None:

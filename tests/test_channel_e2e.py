@@ -48,9 +48,6 @@ class FakeRail:
         self.uploads.append((data, content_type))
         return f"enc-{len(self.uploads)}"
 
-    def screen_listing(self, title, description, category):
-        return {"allowed": True, "group": "", "message": ""}
-
     def create_listing(self, args):
         self.listing_args = args
         return {"listing_id": "L1", "url": _LISTING_URL}

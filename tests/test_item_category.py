@@ -19,7 +19,7 @@ from sellee.config import Config
 from sellee.db import Database
 from sellee.events import EventBus, EventStore
 from sellee.rail import client as rail_client
-from sellee.rail.client import RailClient, RailToolRefused, RailUnprovisioned
+from sellee.rail.client import RailClient, RailPolicyRefused, RailToolRefused, RailUnprovisioned
 from sellee.store import Store
 from sellee.tools.registry import TIER_ATTENDED, Session, ToolContext, ToolError, dispatch
 
@@ -180,7 +180,7 @@ def test_carousell_ai_calling_a_token_unknown_reads_the_policy_again(ctx, rail):
     _create(ctx, category="weapons")
     rail.item_policy = item_policy("2026-11-01.new", never=("drugs_and_tobacco",))
     with pytest.raises(RailToolRefused, match="is not a category the item policy lists"):
-        _factory(rail)().call_tool("screen_listing", {"title": "Knife", "category": "weapons"})
+        _factory(rail)().call_tool("create_listing", {"title": "Knife", "category": "weapons"})
     with pytest.raises(ToolError, match="'weapons'"):
         _create(ctx, category="weapons")
     assert rail.policy_reads == 2
@@ -276,9 +276,11 @@ class ItemCategories(RuleBasedStateMachine):
         )
 
     @rule(token=st.sampled_from(_TOKENS))
-    def carousell_ai_screens(self, token):
+    def carousell_ai_creates_a_listing(self, token):
         try:
-            self.ctx.rail_factory().call_tool("screen_listing", {"title": "x", "category": token})
+            self.ctx.rail_factory().call_tool("create_listing", {"title": "x", "category": token})
+        except RailPolicyRefused:
+            pass  # a refusal says nothing about the cached copy
         except RailToolRefused:
             self.cached, self.missed = None, set()
 

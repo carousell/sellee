@@ -50,7 +50,11 @@ class FakeRelay:
         # The item policy get_item_policy serves, and how many times it has been read.
         self.item_policy = item_policy()
         self.policy_reads = 0
-        self.screen_calls: list = []
+        # Terms create_listing refuses, each under a group token, and the listings it created.
+        self.refused_terms: dict = {}
+        self.listings: list = []
+        # Every tool called, by name, in order.
+        self.tool_calls: list = []
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -196,9 +200,8 @@ class FakeRelay:
         self.policy_reads += 1
         return json.loads(json.dumps(self.item_policy))
 
-    def screen_listing(self, args: dict) -> dict:
-        """The category half of bazaar's screen, with its refusal and unknown-token texts."""
-        self.screen_calls.append(dict(args))
+    def create_listing(self, args: dict) -> dict:
+        """bazaar's item policy check at create, with its unknown-token and refusal texts."""
         token = args.get("category") or ""
         groups = {g["token"]: g for t in _POLICY_TIERS for g in self.item_policy[t]}
         if token and token not in groups:
@@ -206,13 +209,21 @@ class FakeRelay:
                 f"category {json.dumps(token)} is not a category the item policy lists; see "
                 "https://www.carousell.ai/item-policy"
             )
-        if token and token not in {g["token"] for g in self.item_policy["allowed"]}:
-            message = (
-                f"Items in “{groups[token]['title']}” can’t be listed on "
-                "carousell.ai. See https://www.carousell.ai/item-policy for what can be listed."
+        text = f"{args.get('title', '')} {args.get('description', '')}".lower()
+        refusing = next((g for t, g in self.refused_terms.items() if t in text), None)
+        allowed = {g["token"] for g in self.item_policy["allowed"]}
+        if refusing is None and token and token not in allowed:
+            refusing = token
+        if refusing is not None:
+            yet = " yet" if any(g["token"] == refusing for g in self.item_policy["not_yet"]) else ""
+            raise ToolFailure(
+                f"Items in “{groups[refusing]['title']}” can’t be listed on carousell.ai{yet}. "
+                "See https://www.carousell.ai/item-policy for what can be listed. "
+                "(code: item_policy_refused)"
             )
-            return {"allowed": False, "group": token, "message": message}
-        return {"allowed": True, "group": "", "message": ""}
+        self.listings.append(dict(args))
+        listing_id = f"L{len(self.listings)}"
+        return {"listing": {"id": listing_id, "url": f"{_LISTING_BASE}{listing_id}"}}
 
     def send_registration_reply(self, args: dict) -> dict:
         """Send once per client_message_id, only to a correspondent, as bazaar does."""
@@ -255,6 +266,7 @@ class FakeRelay:
 
 
 _POLICY_TIERS = ("allowed", "not_yet", "never")
+_LISTING_BASE = "https://www.carousell.ai/listing/"
 
 
 def item_policy(
@@ -284,7 +296,7 @@ def item_policy(
 
 _TOOLS = (
     "get_item_policy",
-    "screen_listing",
+    "create_listing",
     "list_threads",
     "get_thread",
     "reply_to_thread",
@@ -313,6 +325,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = body["params"]["name"]
         args = body["params"].get("arguments") or {}
+        relay.tool_calls.append(name)
         if name == "reply_to_thread" and relay.reply_script[:1] in (["http503"], ["http429"]):
             status = int(relay.reply_script.pop(0)[4:])
             relay.reply_calls.append(dict(args))
@@ -331,7 +344,7 @@ class _Handler(BaseHTTPRequestHandler):
             "send_registration_reply": relay.send_registration_reply,
             "get_registration_address": relay.get_registration_address,
             "get_item_policy": relay.get_item_policy,
-            "screen_listing": relay.screen_listing,
+            "create_listing": relay.create_listing,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}
