@@ -10,6 +10,7 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 
 from __future__ import annotations
 
+import dataclasses
 import functools
 import hashlib
 import json
@@ -37,6 +38,11 @@ _LEGACY = "2025-06-18"
 _LEGACY_VERSIONS = ("2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05")
 # JSON-RPC errors only a 2026-07-28 server sends, so a probe answered with one met a modern server.
 _MODERN_ERRORS = (-32020, -32021)
+_UNSUPPORTED_VERSION = -32022
+# go-sdk v1.6.1 and v1.8.0 refuse a version header with this text, before dispatching anything.
+_GO_SDK_VERSION_REFUSAL = "Bad Request: Unsupported protocol version"
+# A modern server's own refusals, so a modern call refused with one met a server still modern.
+_MODERN_REFUSALS = (*_MODERN_ERRORS, _UNSUPPORTED_VERSION)
 # A modern server answers a method it lacks with HTTP 404 and this code; a legacy one uses 200.
 _METHOD_NOT_FOUND = -32601
 _MODERN_META = {
@@ -87,6 +93,8 @@ class _Era:
     modern: bool
     version: str
     session_id: str = ""
+    # Modern only: the versions the server's discover result listed, when it listed any.
+    supported: tuple = ()
 
 
 # The legacy era before initialize: its first request carries no version header.
@@ -157,6 +165,19 @@ class RailClient:
                 # The server dropped our session. Open a new one for the next call, but never resend
                 # this one: the 404 cannot prove the call did not run.
                 self._renew_session(era)
+                raise _http_error(exc) from exc
+            modern_refusal = era.modern and _rpc_error_code(exc.body) in _MODERN_REFUSALS
+            if exc.status != 400 or modern_refusal:
+                raise _http_error(exc) from exc
+            refused = exc
+        # A 400 may mean the server left this era, so probe for later calls. Resend only when the
+        # 400 itself refused the version, which happens before the call runs.
+        fresh = self._reprobe(era)
+        if not (_refused_the_version(refused) and _left(era, fresh)):
+            raise _http_error(refused)
+        try:
+            return self._request(method, params, fresh)[0]
+        except _HTTPAnswer as exc:
             raise _http_error(exc) from exc
 
     def _era(self) -> _Era:
@@ -190,8 +211,19 @@ class RailClient:
         else:
             versions = result.get("supportedVersions")
             if isinstance(versions, list) and _MODERN in versions:
-                return self._cache(_MODERN_ERA)
+                listed = tuple(v for v in versions if isinstance(v, str))
+                return self._cache(dataclasses.replace(_MODERN_ERA, supported=listed))
         return self._initialize()
+
+    def _reprobe(self, stale: _Era) -> _Era:
+        """Probe again after a 400 in `stale`, unless another thread already has."""
+        with self._era_lock():
+            current = _ERAS.get(self._era_key)
+            if current is not None and current is not stale:
+                return current
+            _ERAS.pop(self._era_key, None)
+            _TOOL_LISTS.pop(self._era_key, None)
+            return self._probe()
 
     def _renew_session(self, stale: _Era) -> None:
         """Re-initialize once for a dropped session, unless another thread already has."""
@@ -219,6 +251,8 @@ class RailClient:
         return self._cache(era)
 
     def _cache(self, era: _Era) -> _Era:
+        # A fresh object per write, so a thread can tell another thread's probe from its own era.
+        era = dataclasses.replace(era)
         _ERAS[self._era_key] = era
         return era
 
@@ -538,6 +572,21 @@ def _text_content(result: dict) -> str:
         if isinstance(block, dict) and block.get("type") == "text":
             parts.append(block.get("text", ""))
     return "".join(parts)
+
+
+def _refused_the_version(answer: _HTTPAnswer) -> bool:
+    """Whether a 400 refused the request's protocol version: JSON -32022, or go-sdk's plain text."""
+    if _rpc_error_code(answer.body) == _UNSUPPORTED_VERSION:
+        return True
+    return answer.body.startswith(_GO_SDK_VERSION_REFUSAL)
+
+
+def _left(stale: _Era, fresh: _Era) -> bool:
+    """Whether the server has left the era `stale` was sent in: a modern era found legacy, or a
+    modern server whose listed versions no longer include the legacy version in use."""
+    if stale.modern:
+        return not fresh.modern
+    return fresh.modern and bool(fresh.supported) and stale.version not in fresh.supported
 
 
 def _http_error(answer: _HTTPAnswer) -> RailNetworkError:

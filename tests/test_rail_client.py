@@ -725,6 +725,164 @@ def test_concurrent_misses_fetch_the_tool_list_once() -> None:
         assert state.eras.count("tools/list") == 1
 
 
+# --- a server that changes era under a running client --------------------------------------------
+
+
+def _switch(log, era: str) -> None:
+    log.era = "modern" if era in ("modern", "modern_only") else "legacy"
+    log.modern_only = era == "modern_only"
+
+
+def test_a_server_that_drops_the_new_era_is_reprobed_and_the_call_runs_once() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "legacy")
+        client.create_listing({"title": "y"})
+        assert server.eras.executed == 2
+        assert server.eras.count("server/discover") == 2
+        assert server.eras.count("initialize") == 1
+
+
+@pytest.mark.parametrize("json_rejections", [False, True])
+def test_a_server_that_drops_the_legacy_era_is_reprobed_and_the_call_runs_once(
+    json_rejections,
+) -> None:
+    """go-sdk rejects a dropped version in plain text; the spec asks for JSON -32022. Either way the
+    probe's listed versions show the legacy one is gone."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        server.eras.json_rejections = json_rejections
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "modern_only")
+        client.create_listing({"title": "y"})
+        assert server.eras.executed == 2
+        assert server.eras.count("server/discover") == 2
+        assert _headers(server.eras.calls()[-1])["mcp-protocol-version"] == MODERN
+
+
+def test_a_failure_that_is_not_an_era_change_is_raised_and_never_resent() -> None:
+    with _relay("modern", None) as (state, base):
+        client = _client(base)
+        client.list_threads("", 10)
+        state.down = True
+        with pytest.raises(RailNetworkError):
+            client.list_threads("", 10)
+        state.down = False
+        client.list_threads("", 10)
+        assert state.eras.count("server/discover") == 1
+
+
+def test_a_modern_error_on_a_modern_call_is_not_an_era_change() -> None:
+    """A header mismatch is the server speaking the new era; it is never cause to re-probe."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.refuse_calls = -32020
+        with pytest.raises(RailNetworkError):
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert server.eras.count("server/discover") == 1
+        assert server.eras.executed == 1
+
+
+@settings(max_examples=40, deadline=None)
+@given(steps=st.lists(st.sampled_from(["legacy", "modern", "modern_only"]), min_size=1, max_size=6))
+def test_every_call_runs_once_whatever_the_era_switches(steps) -> None:
+    """Each era switch the server makes is either compatible or refused before any tool runs, so
+    every call runs exactly once and each refusal costs exactly one re-probe."""
+    with _serving(steps[0] if steps[0] != "modern_only" else "modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client_modern = None
+        contradictions = 0
+        for step in steps:
+            _switch(server.eras, step)
+            if client_modern is not None:
+                if (client_modern and step == "legacy") or (
+                    not client_modern and step == "modern_only"
+                ):
+                    contradictions += 1
+                    client_modern = step != "legacy"
+            else:
+                client_modern = step != "legacy"
+            _client(base).create_listing({"title": "x"})
+        assert server.eras.executed == len(steps)
+        assert server.eras.count("server/discover") == 1 + contradictions
+
+
+def test_a_400_from_a_server_still_in_the_era_is_raised_and_never_resent() -> None:
+    """A modern server that refuses a call in plain text is probed, found modern still, and the
+    call is not sent again: the 400 cannot prove the call did not run."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        server.eras.refuse_calls = "plain"
+        with pytest.raises(RailNetworkError) as raised:
+            client.create_listing({"title": "y"})
+        assert raised.value.status == 400
+        assert len(server.eras.calls()) == 2
+        assert server.eras.count("server/discover") == 2
+
+
+def test_a_legacy_400_from_a_dual_era_server_is_raised_and_never_resent() -> None:
+    """The server still lists the legacy version, so the 400 was not about the era."""
+    with _serving("legacy") as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        client.create_listing({"title": "x"})
+        _switch(server.eras, "modern")
+        server.eras.refuse_calls = "plain"
+        with pytest.raises(RailNetworkError):
+            client.create_listing({"title": "y"})
+        assert len(server.eras.calls()) == 2
+
+
+@pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])
+def test_a_400_that_is_not_a_version_refusal_is_never_resent(start, found) -> None:
+    """A backend that ran the call and then failed with a plain 400, while the probe reaches a
+    server in the other era, as during a rolling deploy."""
+
+    class _RanThenFailed(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            eras = self.server.eras
+            if body.get("method") == "tools/call" and not self.server.failed_once:
+                self.server.failed_once = True
+                self.server.ran += 1
+                eras.era, eras.modern_only = (
+                    ("modern", True) if found == "modern_only" else (found, False)
+                )
+                payload = b"Bad Request"
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(payload)))
+                self.end_headers()
+                self.wfile.write(payload)
+                return
+            if answer(self, body, eras):
+                return
+            if body.get("method") == "tools/call":
+                self.server.ran += 1
+            self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": self.server.tool_result})
+
+    with _serving(start) as (server, base):
+        server.tool_result = {"structuredContent": {"listing": {"id": "L1"}}}
+        client = _client(base)
+        assert client.offers_tool("create_listing") or True
+        server.RequestHandlerClass = _RanThenFailed
+        server.failed_once, server.ran = False, 0
+        with pytest.raises(RailNetworkError) as raised:
+            client.call_tool("create_listing", {"title": "x"})
+        assert raised.value.status == 400
+        assert server.ran == 1
+        # The probe still moved the cache, so the next call goes out in the server's era.
+        assert client.call_tool("create_listing", {"title": "y"}) == {"listing": {"id": "L1"}}
+        assert server.ran == 2
+
+
 # 307 and 308 to a POST were refused before the fix too; they pin the property, not the change.
 _REDIRECT_STATUSES = [301, 302, 303, 307, 308]
 
