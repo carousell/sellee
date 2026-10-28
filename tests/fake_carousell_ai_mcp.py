@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+from tests.fake_mcp_eras import EraLog, answer
+
 
 def rfc3339(ts: float) -> str:
     return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat().replace("+00:00", "Z")
@@ -47,6 +49,10 @@ class FakeRelay:
         self.registration_script: list = []
         # The seller's registration address, as get_registration_address mints it.
         self.registration_email = "seller-token@inbox.carousell.ai"
+        # The protocol era the server speaks, and every MCP request it saw.
+        self.eras = EraLog()
+        # The ttlMs the server puts on tools/list in either era; None leaves the field out.
+        self.tools_ttl_ms = None
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -248,9 +254,13 @@ class _Handler(BaseHTTPRequestHandler):
         if relay.down:
             self._send(503, {"error": "unavailable"})
             return
+        if answer(self, body, relay.eras):
+            return
         if body.get("method") == "tools/list":
-            tools = [{"name": n} for n in _TOOLS]
-            self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {"tools": tools}})
+            result: dict = {"tools": [{"name": n} for n in _TOOLS]}
+            if relay.tools_ttl_ms is not None:
+                result["ttlMs"] = relay.tools_ttl_ms
+            self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": result})
             return
         if body.get("method") != "tools/call":
             self._send(200, {"jsonrpc": "2.0", "id": body.get("id"), "result": {}})
@@ -303,7 +313,8 @@ def serve(relay: FakeRelay):
     """Start the fake on a free port; returns (base_url, shutdown)."""
     server = ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
     server.relay = relay  # type: ignore[attr-defined]
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    # A short poll: shutdown() waits for the next wake, which a test starting many servers pays.
+    thread = threading.Thread(target=server.serve_forever, args=(0.02,), daemon=True)
     thread.start()
 
     def shutdown():

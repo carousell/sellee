@@ -25,6 +25,15 @@ _REAL_CONFIG_DIR = paths.config_dir()
 
 
 @pytest.fixture(autouse=True)
+def _forget_rail_eras():
+    """Each test probes its fake servers again: a fake can reuse an earlier test's port, and the
+    rail client caches the protocol era per endpoint and key for the life of the process."""
+    from sellee.rail.client import _forget_eras
+
+    _forget_eras()
+
+
+@pytest.fixture(autouse=True)
 def _never_write_real_secrets(monkeypatch):
     """Fail any test that writes a secret into the developer's real config directory.
 
