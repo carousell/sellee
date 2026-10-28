@@ -220,18 +220,6 @@ class RailClient:
         _POLICIES[self._endpoint] = {"version": version, "groups": groups, "missed": set()}
         return _POLICIES[self._endpoint]
 
-    def screen_listing(self, title: str, description: str, category: str | None) -> dict:
-        """What create_listing would do with this item, as {allowed, group, message}. A refusal
-        is an answer here, not an error, and nothing is written."""
-        args = {"title": title, "description": description}
-        if category:
-            args["category"] = category
-        verdict = self.call_tool("screen_listing", args)
-        allowed = verdict.get("allowed")
-        if not isinstance(allowed, bool) or not (allowed or verdict.get("message")):
-            raise RailToolError("screen_listing returned no verdict")
-        return verdict
-
     def listing_url(self, listing_id: str) -> str:
         """The listing's page URL, composed from the id the rail assigned it."""
         return self._web_base_url + _LISTING_PATH + str(listing_id)
@@ -425,6 +413,26 @@ def listing_id_from_url(url) -> str:
     if _LISTING_PATH not in url:
         return ""
     return url.split(_LISTING_PATH, 1)[1].split("/", 1)[0].split("?", 1)[0].strip()
+
+
+def category_refusal(rail, token: str | None) -> str | None:
+    """carousell.ai's refusal of an item in this category, in bazaar's words, or None when it takes
+    it. Reads the cached policy; raises RailToolError for a token the policy no longer lists."""
+    if not token:
+        return None
+    group = rail.item_policy_category(token)
+    if group is None:
+        raise RailToolError(
+            f"category {token!r} is no longer in carousell.ai's item policy; give the item one "
+            "carousell_ai_item_policy lists with update_item"
+        )
+    if group["tier"] == "allowed":
+        return None
+    yet = " yet" if group["tier"] == "not_yet" else ""
+    return (
+        f"Items in “{group['title']}” can’t be listed on carousell.ai{yet}. "
+        f"See {rail.item_policy_url()} for what can be listed."
+    )
 
 
 def _text_content(result: dict) -> str:

@@ -19,7 +19,7 @@ from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail import signin
-from sellee.rail.client import RailError, RailPolicyRefused, RailUnprovisioned
+from sellee.rail.client import RailError, RailPolicyRefused, RailUnprovisioned, category_refusal
 from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.checkout import SIGNIN_TIERS, _rail
 from sellee.tools.registry import (
@@ -65,16 +65,22 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
         )
 
 
-def policy_refusal(rail, item: dict) -> dict | None:
-    """The answer for the seller when carousell.ai's item policy refuses this item, or None when
-    it takes it. No verdict fails the step, since the screen is what stops a refused upload."""
+def _refused(ctx: ToolContext, message: str) -> dict:
+    """The answer for a refused item. Inside a pass the refusal is also noted on the pass row, so
+    whatever queued it settles it once instead of retrying."""
+    if ctx.session.pass_id:
+        ctx.store.note_pass_refused(ctx.session.pass_id, message)
+    return {"refused": True, "message": message}
+
+
+def category_check(ctx: ToolContext, item: dict) -> dict | None:
+    """The refusal when the cached item policy refuses the item's category, or None. Fails closed:
+    an unreadable policy fails the step rather than letting a refused item through."""
     try:
-        verdict = rail.screen_listing(item["title"], item["description"] or "", item["category"])
+        message = category_refusal(_rail(ctx), item["category"]) if item["category"] else None
     except RailError as exc:  # caller-safe, secret-free messages
         raise ToolError(str(exc)) from exc
-    if verdict["allowed"]:
-        return None
-    return {"refused": True, "message": verdict["message"]}
+    return None if message is None else _refused(ctx, message)
 
 
 def _signin_offer(ctx: ToolContext) -> str | None:
@@ -127,9 +133,8 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
-    rail = _rail(ctx)
     # Before the pacing slot: an item carousell.ai will not take is not a publish attempt.
-    refusal = policy_refusal(rail, item)
+    refusal = category_check(ctx, item)
     if refusal:
         return refusal
 
@@ -176,12 +181,21 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     if media:
         args["media"] = {"urls": media}
 
+    if ctx.rail_factory is None:
+        raise ToolError("the carousell.ai rail is not available in this session")
+    try:
+        rail = ctx.rail_factory()
+    except RailUnprovisioned as exc:
+        raise ToolError(
+            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+        ) from exc
+
     try:
         listing = rail.create_listing(args)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
     except RailPolicyRefused as exc:
-        # The policy changed since the screen; the seller hears it as they would have then.
-        return {"refused": True, "message": str(exc)}
+        # A term in the text, or a policy changed since the cache: final, never retried.
+        return _refused(ctx, str(exc))
     except RailUnprovisioned as exc:
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
