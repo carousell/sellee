@@ -2,22 +2,26 @@
 
 from __future__ import annotations
 
+import io
 import json
 import string
 import threading
+import time
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
-from tests.fake_mcp_eras import MODERN, EraLog, answer
+from tests.fake_mcp_eras import MODERN, EraLog, answer, decode, write_rpc
 
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
     RailNetworkError,
     RailToolError,
+    RailToolRefused,
+    _event_response,
     _forget_eras,
     _text_content,
     listing_id_from_url,
@@ -65,6 +69,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(b"ok" if status == 200 else b"no")
 
     def _send(self, status, obj):
+        if "jsonrpc" in obj:
+            write_rpc(self, status, obj, self.server.eras.sse)
+            return
         payload = json.dumps(obj).encode()
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
@@ -573,7 +580,13 @@ def test_call_tool_returns_the_structured_content_in_either_era(era, structured)
         assert _client(base).call_tool("get_thread", {"id": "t1"}) == structured
 
 
-_tool_names = st.text(alphabet=string.ascii_letters + string.digits + "_-", min_size=1, max_size=40)
+# Any name a server could list, including non-ASCII, padded and sentinel-shaped ones.
+_tool_names = st.one_of(
+    st.text(alphabet=string.ascii_letters + string.digits + "_-", min_size=1, max_size=40),
+    st.text(min_size=1, max_size=20).filter(lambda n: "\x00" not in n),
+    st.builds(lambda inner: f"=?base64?{inner}?=", st.text(string.ascii_letters, max_size=8)),
+    st.builds(lambda inner: f" {inner} ", st.text(string.ascii_letters, max_size=8)),
+)
 
 
 @settings(max_examples=40, deadline=None)
@@ -589,7 +602,7 @@ def test_modern_headers_match_the_body(name, arguments) -> None:
             meta = request["params"]["_meta"]
             assert meta["io.modelcontextprotocol/protocolVersion"] == MODERN
         (call,) = server.eras.calls()
-        assert _headers(call)["mcp-name"] == call["params"]["name"] == name
+        assert decode(_headers(call)["mcp-name"]) == call["params"]["name"] == name
         assert call["params"]["arguments"] == arguments
 
 
@@ -781,8 +794,9 @@ def test_a_modern_error_on_a_modern_call_is_not_an_era_change() -> None:
         server.tool_result = {"structuredContent": {}}
         _client(base).call_tool("get_thread", {"id": "t1"})
         server.eras.refuse_calls = -32020
-        with pytest.raises(RailNetworkError):
+        with pytest.raises(RailToolRefused, match="-32020"):
             _client(base).call_tool("get_thread", {"id": "t1"})
+        assert server.eras.count("tools/list") == 1
         assert server.eras.count("server/discover") == 1
         assert server.eras.executed == 1
 
@@ -837,6 +851,377 @@ def test_a_legacy_400_from_a_dual_era_server_is_raised_and_never_resent() -> Non
         with pytest.raises(RailNetworkError):
             client.create_listing({"title": "y"})
         assert len(server.eras.calls()) == 2
+
+
+# --- Mcp-Param-* headers mirror a tool's x-mcp-header arguments ---------------------------------
+
+
+def _annotated_tool(header="Region", kind="string", nested=False) -> dict:
+    prop = {"type": kind, "x-mcp-header": header}
+    properties = (
+        {"where": {"type": "object", "properties": {"region": prop}}}
+        if nested
+        else {"region": prop}
+    )
+    return {
+        "name": "execute",
+        "inputSchema": {
+            "type": "object",
+            "properties": {**properties, "query": {"type": "string"}},
+        },
+    }
+
+
+def _region(arguments: dict, nested: bool):
+    return (arguments.get("where") or {}).get("region") if nested else arguments.get("region")
+
+
+_header_values = st.one_of(
+    st.none(),
+    st.booleans(),
+    st.integers(min_value=-(2**53) + 1, max_value=2**53 - 1),
+    st.text(max_size=20).filter(lambda t: "\x00" not in t),
+)
+
+
+@settings(max_examples=50, deadline=None)
+@given(value=_header_values, nested=st.booleans())
+def test_mcp_param_headers_carry_every_annotated_argument(value, nested) -> None:
+    """The modern fake refuses a call whose Mcp-Param-* headers do not decode to the body, so a
+    served call is the proof; the header is also read back here."""
+    kind = (
+        "boolean" if isinstance(value, bool) else "integer" if isinstance(value, int) else "string"
+    )
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool(kind=kind, nested=nested)]
+        client = _client(base)
+        client.offers_tool("execute")
+        args = {"where": {"region": value}} if nested else {"region": value}
+        assert client.call_tool("execute", {**args, "query": "q"}) == {"ok": True}
+        (call,) = server.eras.calls()
+        header = _headers(call).get("mcp-param-region")
+        if _region(call["params"]["arguments"], nested) is None:
+            assert header is None
+        else:
+            text = ("true" if value else "false") if isinstance(value, bool) else str(value)
+            assert decode(header) == text
+
+
+def test_a_header_mismatch_refreshes_the_tool_list_and_retries_once() -> None:
+    """The server added an annotation after the client cached its tool list."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [{"name": "execute", "inputSchema": {"type": "object"}}]
+        client = _client(base)
+        client.offers_tool("execute")
+        server.eras.tools = [_annotated_tool()]
+        assert client.call_tool("execute", {"region": "us-west1"}) == {"ok": True}
+        assert server.eras.count("tools/list") == 2
+        assert len(server.eras.calls()) == 2
+        assert server.eras.executed == 1
+        assert _headers(server.eras.calls()[-1])["mcp-param-region"] == "us-west1"
+
+
+@pytest.mark.parametrize(
+    "schema",
+    [
+        {"type": "object", "properties": {"r": {"type": "number", "x-mcp-header": "R"}}},
+        {"type": "object", "properties": {"r": {"type": "string", "x-mcp-header": ""}}},
+        {"type": "object", "properties": {"r": {"type": "string", "x-mcp-header": "Bad Name"}}},
+        {
+            "type": "object",
+            "properties": {
+                "a": {"type": "string", "x-mcp-header": "Same"},
+                "b": {"type": "string", "x-mcp-header": "same"},
+            },
+        },
+        {
+            "type": "object",
+            "properties": {
+                "l": {"type": "array", "items": {"type": "string", "x-mcp-header": "Item"}}
+            },
+        },
+    ],
+)
+def test_a_tool_with_an_invalid_header_annotation_is_left_out(schema) -> None:
+    with _serving("modern") as (server, base):
+        server.eras.tools = [
+            {"name": "broken", "inputSchema": schema},
+            {"name": "fine", "inputSchema": {"type": "object"}},
+        ]
+        client = _client(base)
+        assert client.offers_tool("fine")
+        assert not client.offers_tool("broken")
+
+
+@pytest.mark.parametrize(
+    ("value", "sent"),
+    [
+        ("us-west1", "us-west1"),
+        ("Hello, 世界", "=?base64?SGVsbG8sIOS4lueVjA==?="),
+        (" padded ", "=?base64?IHBhZGRlZCA=?="),
+        ("line1\nline2", "=?base64?bGluZTEKbGluZTI=?="),
+        ("=?base64?literal?=", "=?base64?PT9iYXNlNjQ/bGl0ZXJhbD89?="),
+        ("a\tb", "=?base64?YQli?="),
+    ],
+)
+def test_param_values_are_encoded_as_the_spec_shows(value, sent) -> None:
+    """The spec's own encoding table, plus an inner tab, which is a control character."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool()]
+        client = _client(base)
+        client.offers_tool("execute")
+        client.call_tool("execute", {"region": value})
+        assert _headers(server.eras.calls()[-1])["mcp-param-region"] == sent
+
+
+@pytest.mark.parametrize(("value", "sent"), [(5.0, "5"), (True, "true"), (42, "42")])
+def test_param_values_take_their_header_form(value, sent) -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.tools = [_annotated_tool(kind="integer")]
+        client = _client(base)
+        client.offers_tool("execute")
+        try:
+            client.call_tool("execute", {"region": value})
+        except RailToolRefused:
+            pass
+        assert _headers(server.eras.calls()[0])["mcp-param-region"] == sent
+
+
+def test_a_non_ascii_tool_name_against_go_sdk_fails_after_one_refresh() -> None:
+    """go-sdk v1.8.0 compares Mcp-Name undecoded, so the Base64 name the spec requires is refused;
+    the client reads the tool list once, sends once more, then raises."""
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.literal_names = True
+        with pytest.raises(RailToolRefused, match="-32020"):
+            _client(base).call_tool("café", {})
+        assert len(server.eras.calls()) == 2
+        assert server.eras.count("tools/list") == 1
+        assert server.eras.executed == 0
+
+
+# --- results and errors read the same in either era ----------------------------------------------
+
+_ERAS_AND_STREAMS = [("legacy", False), ("legacy", True), ("modern", False), ("modern", True)]
+
+_results = st.one_of(
+    st.builds(
+        lambda d: ("ok", {"structuredContent": d}),
+        st.dictionaries(st.text(max_size=6), _json_values, max_size=3),
+    ),
+    st.builds(
+        lambda d: ("ok", {"content": [{"type": "text", "text": json.dumps(d)}]}),
+        st.dictionaries(st.text(max_size=6), _json_values, min_size=1, max_size=3),
+    ),
+    st.just(("tool_error", {"content": [{"type": "text", "text": "not json"}]})),
+    st.just(("refused", {"isError": True, "content": [{"type": "text", "text": "over quota"}]})),
+    st.just(("refused", {"resultType": "input_required", "inputRequests": {}})),
+    st.just(("tool_error", {})),
+)
+
+
+@settings(max_examples=60, deadline=None)
+@given(era_stream=st.sampled_from(_ERAS_AND_STREAMS), case=_results)
+def test_call_tool_answers_the_same_in_either_era(era_stream, case) -> None:
+    era, sse = era_stream
+    outcome, result = case
+    with _serving(era) as (server, base):
+        server.eras.sse = sse
+        server.tool_result = result
+        if outcome == "ok":
+            expected = result.get("structuredContent")
+            if expected is None:
+                expected = json.loads(result["content"][0]["text"])
+            assert _client(base).call_tool("get_thread", {"id": "t1"}) == expected
+        else:
+            kind = RailToolRefused if outcome == "refused" else RailToolError
+            with pytest.raises(kind) as raised:
+                _client(base).call_tool("get_thread", {"id": "t1"})
+            if outcome == "tool_error":
+                assert not isinstance(raised.value, RailToolRefused)
+
+
+@settings(max_examples=40, deadline=None)
+@given(
+    era=st.sampled_from(["legacy", "modern"]),
+    status=st.sampled_from([401, 403, 404, 405, 409, 429, 500, 502, 503]),
+)
+def test_call_tool_fails_the_same_in_either_era(era, status) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.call_status = status
+        kind = RailAuthError if status in (401, 403) else RailNetworkError
+        with pytest.raises(kind) as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        if kind is RailNetworkError:
+            assert raised.value.status == status
+
+
+@pytest.mark.parametrize("era", ["legacy", "modern"])
+def test_a_stalled_server_is_a_network_error(era) -> None:
+    with _serving(era) as (server, base):
+        server.tool_result = {"structuredContent": {}}
+        _client(base).call_tool("get_thread", {"id": "t1"})
+        server.eras.stall = 0.5
+        stalled = RailClient(api_base=base, api_key="guest-key", web_base_url=base, timeout_sec=0.1)
+        with pytest.raises(RailNetworkError) as raised:
+            stalled.call_tool("get_thread", {"id": "t1"})
+        assert raised.value.status is None
+
+
+def test_a_refused_connection_is_a_network_error() -> None:
+    with _serving("legacy") as (_server, base):
+        pass
+    with pytest.raises(RailNetworkError) as raised:
+        _client(base).call_tool("get_thread", {"id": "t1"})
+    assert raised.value.status is None
+
+
+def test_a_json_rpc_error_names_its_code() -> None:
+    with _serving("legacy") as (server, base):
+
+        class _Erroring(_Handler):
+            def do_POST(self):
+                length = int(self.headers.get("Content-Length", 0))
+                body = json.loads(self.rfile.read(length))
+                if answer(self, body, self.server.eras):
+                    return
+                error = {"code": -32603, "message": "internal error"}
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "error": error})
+
+        server.RequestHandlerClass = _Erroring
+        with pytest.raises(RailToolRefused, match=r"^internal error .*-32603") as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert raised.value.code == -32603
+
+
+def test_a_server_speaking_no_version_sellee_speaks_is_a_network_error() -> None:
+    with _serving("modern") as (server, base):
+        server.eras.only_versions = ("2099-01-01",)
+        server.eras.json_rejections = True
+        with pytest.raises(RailNetworkError) as raised:
+            _client(base).call_tool("get_thread", {"id": "t1"})
+        assert raised.value.status == 400
+        assert server.eras.count("initialize") == 0
+
+
+def test_an_unsupported_modern_version_with_a_legacy_one_listed_initializes() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"structuredContent": {"ok": True}}
+        server.eras.only_versions = ("2099-01-01", "2025-06-18")
+        server.eras.json_rejections = True
+        assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
+        assert server.eras.count("initialize") == 1
+
+
+def _stream(text: str) -> io.BytesIO:
+    return io.BytesIO(text.encode())
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_an_event_stream_is_read_whatever_its_line_endings(newline) -> None:
+    note = '{"jsonrpc": "2.0", "method": "notifications/progress"}'
+    reply = '{"jsonrpc": "2.0", "id": 7, "result": {"ok": true}}'
+    text = newline.join(
+        [": a comment", f"data: {note}", "", "event: message", f"data: {reply}", ""]
+    )
+    assert _event_response(_stream(text + newline), 7) == json.loads(reply)
+
+
+def test_an_event_stream_joins_multi_line_data_and_strips_one_space() -> None:
+    text = 'data: {"jsonrpc": "2.0", "id": 3,\ndata:  "result": {"v": " x"}}\n\n'
+    assert _event_response(_stream(text), 3) == {"jsonrpc": "2.0", "id": 3, "result": {"v": " x"}}
+
+
+def test_an_event_stream_skips_data_that_is_not_json_and_events_without_data() -> None:
+    reply = '{"jsonrpc": "2.0", "id": 1, "result": {}}'
+    text = f"data: not json\n\nevent: ping\n\nid: 4\n\ndata: {reply}\n\n"
+    assert _event_response(_stream(text), 1) == json.loads(reply)
+
+
+def test_an_event_stream_matches_a_string_echo_of_the_request_id() -> None:
+    text = 'data: {"jsonrpc": "2.0", "id": "5", "result": {"ok": 1}}\n\n'
+    assert _event_response(_stream(text), 5)["result"] == {"ok": 1}
+
+
+def test_an_event_stream_skips_responses_to_other_requests() -> None:
+    other = '{"jsonrpc": "2.0", "id": 8, "result": {"other": 1}}'
+    text = f"data: {other}\n\n"
+    with pytest.raises(RailNetworkError, match="ended without a response"):
+        _event_response(_stream(text), 9)
+
+
+def test_an_event_stream_with_an_oversized_event_is_a_network_error() -> None:
+    text = "data: " + "x" * (9 * 1024 * 1024) + "\n\n"
+    with pytest.raises(RailNetworkError, match="too large"):
+        _event_response(_stream(text), 1)
+
+
+def test_a_stream_kept_open_after_its_response_is_answered_without_waiting() -> None:
+    release = threading.Event()
+
+    class _Open(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            if body.get("method") != "tools/call" and answer(self, body, self.server.eras):
+                return
+            reply = {"jsonrpc": "2.0", "id": body["id"], "result": {"structuredContent": {"a": 1}}}
+            self.send_response(200)
+            self.send_header("Content-Type", "text/event-stream")
+            self.end_headers()
+            self.wfile.write(f"data: {json.dumps(reply)}\n\n".encode())
+            self.wfile.flush()
+            release.wait(5)
+
+    with _serving("modern") as (server, base):
+        server.RequestHandlerClass = _Open
+        client = RailClient(api_base=base, api_key="guest-key", web_base_url=base, timeout_sec=3)
+        started = time.monotonic()
+        try:
+            assert client.call_tool("get_thread", {"id": "t1"}) == {"a": 1}
+        finally:
+            release.set()
+        assert time.monotonic() - started < 1
+
+
+@pytest.mark.parametrize(
+    ("listed", "initializes"), [(["2099-01-01"], False), (["2025-06-18"], True)]
+)
+def test_an_unsupported_version_at_http_200_is_read_like_one_at_400(listed, initializes) -> None:
+    class _At200(_Handler):
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            if body.get("method") == "server/discover":
+                data = {"supported": listed, "requested": MODERN}
+                error = {"code": -32022, "message": "unsupported protocol version", "data": data}
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "error": error})
+            elif not answer(self, body, self.server.eras):
+                result = self.server.tool_result
+                self._send(200, {"jsonrpc": "2.0", "id": body["id"], "result": result})
+
+    with _serving("legacy") as (server, base):
+        server.RequestHandlerClass = _At200
+        server.eras.lenient = True
+        server.tool_result = {"structuredContent": {"ok": True}}
+        if initializes:
+            assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
+        else:
+            with pytest.raises(RailNetworkError):
+                _client(base).call_tool("get_thread", {"id": "t1"})
+        assert (server.eras.count("initialize") == 1) is initializes
+
+
+def test_a_null_result_type_is_a_complete_result() -> None:
+    with _serving("modern") as (server, base):
+        server.tool_result = {"resultType": None, "structuredContent": {"ok": True}}
+        assert _client(base).call_tool("get_thread", {"id": "t1"}) == {"ok": True}
 
 
 @pytest.mark.parametrize(("start", "found"), [("legacy", "modern_only"), ("modern", "legacy")])
