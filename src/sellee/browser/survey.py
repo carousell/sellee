@@ -91,6 +91,8 @@ class SurveyDeps:
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
+    # Screens an adopted listing before its carousell.ai publish is queued; None skips the screen.
+    rail_factory: Callable[[], object] | None = None
 
 
 # The pages one look costs: the selling page, and the profile page the listings are on.

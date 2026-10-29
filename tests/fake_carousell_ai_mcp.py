@@ -47,6 +47,14 @@ class FakeRelay:
         self.registration_script: list = []
         # The seller's registration address, as get_registration_address mints it.
         self.registration_email = "seller-token@inbox.carousell.ai"
+        # The item policy get_item_policy serves, and how many times it has been read.
+        self.item_policy = item_policy()
+        self.policy_reads = 0
+        # Terms create_listing refuses, each under a group token, and the listings it created.
+        self.refused_terms: dict = {}
+        self.listings: list = []
+        # Every tool called, by name, in order.
+        self.tool_calls: list = []
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -188,6 +196,59 @@ class FakeRelay:
     def get_registration_address(self, args: dict) -> dict:
         return {"registration_email": self.registration_email}
 
+    def get_item_policy(self, args: dict) -> dict:
+        self.policy_reads += 1
+        return json.loads(json.dumps(self.item_policy))
+
+    def _policy_groups(self, token: str) -> dict:
+        groups = {g["token"]: g for t in _POLICY_TIERS for g in self.item_policy[t]}
+        if token not in groups:
+            raise ToolFailure(
+                f"category {json.dumps(token)} is not a category the item policy lists; see "
+                f"{_POLICY_PAGE}"
+            )
+        return groups
+
+    def create_listing(self, args: dict) -> dict:
+        """bazaar's item policy check at create, with its required, unknown-token and refusal
+        texts."""
+        token = args.get("category") or ""
+        if not token:
+            raise ToolFailure(
+                "category is required: the item's category from the item policy; see "
+                f"{_POLICY_PAGE}"
+            )
+        groups = self._policy_groups(token)
+        text = f"{args.get('title', '')} {args.get('description', '')}".lower()
+        refusing = next((g for t, g in self.refused_terms.items() if t in text), None)
+        allowed = {g["token"] for g in self.item_policy["allowed"]}
+        if refusing is None and token not in allowed:
+            refusing = token
+        if refusing is not None:
+            yet = " yet" if any(g["token"] == refusing for g in self.item_policy["not_yet"]) else ""
+            raise ToolFailure(
+                f"Items in “{groups[refusing]['title']}” can’t be listed on carousell.ai{yet}. "
+                "See https://www.carousell.ai/item-policy for what can be listed. "
+                "(code: item_policy_refused)"
+            )
+        self.listings.append(dict(args))
+        listing_id = f"L{len(self.listings)}"
+        return {"listing": {"id": listing_id, "url": f"{_LISTING_BASE}{listing_id}"}}
+
+    def update_listing(self, args: dict) -> dict:
+        """bazaar's update: a category left out keeps the stored one; an empty one is refused."""
+        if args.get("category") == "":
+            raise ToolFailure(
+                "category cannot be cleared; give the item's category from the item policy"
+            )
+        if "category" in args:
+            self._policy_groups(args["category"])
+        number = str(args.get("id", "")).removeprefix("L")
+        if not number.isdigit() or not 0 < int(number) <= len(self.listings):
+            raise LookupError(args.get("id"))
+        self.listings[int(number) - 1].update({k: v for k, v in args.items() if k != "id"})
+        return {"listing": {"id": args["id"], "url": f"{_LISTING_BASE}{args['id']}"}}
+
     def send_registration_reply(self, args: dict) -> dict:
         """Send once per client_message_id, only to a correspondent, as bazaar does."""
         self.registration_calls.append(dict(args))
@@ -228,7 +289,40 @@ class FakeRelay:
         return {"thread": self._summary(thread_id), "messages": list(self.messages[thread_id])}
 
 
+_POLICY_TIERS = ("allowed", "not_yet", "never")
+_LISTING_BASE = "https://www.carousell.ai/listing/"
+_POLICY_PAGE = "https://www.carousell.ai/item-policy"
+
+
+def item_policy(
+    version="2026-10-10.b2c32a7a9a46",
+    *,
+    allowed=("electronics", "home_and_garden"),
+    not_yet=("too_big_to_ship",),
+    never=("weapons", "drugs_and_tobacco"),
+) -> dict:
+    """An item policy in get_item_policy's shape, with these tokens in its three tiers."""
+
+    def groups(tokens):
+        return [
+            {"token": t, "title": t.replace("_", " ").title(), "body": f"About {t}."}
+            for t in tokens
+        ]
+
+    return {
+        "version": version,
+        "updated": "2026-10-10",
+        "shipping_limits": {"max_pounds": 70, "max_side_inches": 30},
+        "allowed": groups(allowed),
+        "not_yet": groups(not_yet),
+        "never": [dict(g, allowed="Kitchen knives.") for g in groups(never)],
+    }
+
+
 _TOOLS = (
+    "get_item_policy",
+    "create_listing",
+    "update_listing",
     "list_threads",
     "get_thread",
     "reply_to_thread",
@@ -257,6 +351,7 @@ class _Handler(BaseHTTPRequestHandler):
             return
         name = body["params"]["name"]
         args = body["params"].get("arguments") or {}
+        relay.tool_calls.append(name)
         if name == "reply_to_thread" and relay.reply_script[:1] in (["http503"], ["http429"]):
             status = int(relay.reply_script.pop(0)[4:])
             relay.reply_calls.append(dict(args))
@@ -274,6 +369,9 @@ class _Handler(BaseHTTPRequestHandler):
             "list_registration_mail": relay.list_registration_mail,
             "send_registration_reply": relay.send_registration_reply,
             "get_registration_address": relay.get_registration_address,
+            "get_item_policy": relay.get_item_policy,
+            "create_listing": relay.create_listing,
+            "update_listing": relay.update_listing,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}

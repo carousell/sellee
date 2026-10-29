@@ -37,6 +37,12 @@ class FakeRail:
     def verify_listing_url(self, url):
         return None  # verify passes
 
+    def item_policy_category(self, token):
+        return {"token": token, "title": token.title(), "tier": "allowed"}
+
+    def item_policy_url(self):
+        return "https://www.carousell.ai/item-policy"
+
 
 # A fake harness process: reads the workspace .mcp.json for its endpoint + per-pass token, then
 # drives the real MCP endpoint over HTTP and emits matching stream-json. Uses only our MCP server.
@@ -126,7 +132,9 @@ def _post(server, path, body, token):
 
 def test_fake_harness_publishes_end_to_end(wired, tmp_path) -> None:
     server, bus, store = wired
-    item = store.create_item(title="Lamp", list_price=80.0, currency="SGD", size_bucket="m")
+    item = store.create_item(
+        title="Lamp", list_price=80.0, currency="SGD", size_bucket="m", category="lamps"
+    )
     store.set_floor(item["id"], 60.0, "seller")
 
     script = tmp_path / "e2e_harness.py"
@@ -184,6 +192,7 @@ def test_attended_session_shape(wired) -> None:
                 "list_price": 50.0,
                 "currency": "SGD",
                 "size_bucket": "m",
+                "category": "furniture",
             },
         },
         _ATTENDED,

@@ -13,20 +13,33 @@ The shape under test is what makes the feature safe rather than merely working:
 
 from __future__ import annotations
 
+import shutil
+import tempfile
 import time
 from datetime import datetime
+from pathlib import Path
 
 import pytest
+from hypothesis import HealthCheck
+from hypothesis import settings as hypothesis_settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 from tests.conftest import seed_setting
 
-from sellee import settings
+import sellee.tools  # noqa: F401  registration
+from sellee import migrations, settings
 from sellee.browser import adopt, survey
 from sellee.browser.client import BrowserToolError, BrowserUnavailable
 from sellee.browser.markets import carousell as carousell_market
 from sellee.channel import fastpaths
 from sellee.config import Config
+from sellee.db import Database
 from sellee.engines import pacing
+from sellee.events import EventBus, EventStore
+from sellee.rail.client import RailNetworkError, RailPolicyRefused
+from sellee.store import Store
 from sellee.store.survey import RAIL_DONE, RAIL_FAILED, RAIL_OWED
+from sellee.tools.registry import TIER_PASS_PUBLISH, Session, ToolContext, dispatch
 
 _MARKET = "carousell"
 _LISTINGS_URL = "https://www.carousell.sg/manage-listings/"
@@ -547,7 +560,7 @@ def _at_local_hour(hour: int) -> float:
     return datetime(2026, 3, 1, hour, 30).timestamp()
 
 
-def _adopted(store, bus, monkeypatch):
+def _adopted(store, bus, monkeypatch, *, category="electronics"):
     _accepted(store, bus)
     _fetches(monkeypatch, [_media_photo()])
     adopt.adopt_phase(_deps(store, bus, StubClient(detail=_detail())))
@@ -555,7 +568,11 @@ def _adopted(store, bus, monkeypatch):
     # every test below would pass or fail on the hour the suite happened to run. Tests about the
     # window turn it back on and pass a fixed clock.
     seed_setting(store, "quiet_hours", [0, 0])
-    return store.list_discovered_listings(_MARKET)[0]
+    row = store.list_discovered_listings(_MARKET)[0]
+    if category:
+        # An adopted listing arrives with none; the seller's agent gives it one.
+        store.update_item(row["item_id"], {"category": category})
+    return row
 
 
 def test_an_owed_publish_waits_for_the_slot_and_is_never_lost(
@@ -621,6 +638,241 @@ def test_a_publish_that_recorded_no_url_is_retried_then_reported_honestly(
     # And the door back the notice promises actually works.
     assert store.decide_discovered_listings(_MARKET, decision="retry") == 1
     assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == RAIL_OWED
+
+
+_POLICY_URL = "https://www.carousell.ai/item-policy"
+_REFUSAL = (
+    "Items in “Weapons, ammunition, and accessories” can’t be listed on carousell.ai. "
+    f"See {_POLICY_URL} for what can be listed."
+)
+_GROUPS = {
+    "electronics": {"token": "electronics", "title": "Electronics", "tier": "allowed"},
+    "weapons": {
+        "token": "weapons",
+        "title": "Weapons, ammunition, and accessories",
+        "tier": "never",
+    },
+}
+
+
+class PolicyRail:
+    """carousell.ai's cached item policy, or a policy that cannot be read; and a create_listing
+    that refuses as bazaar does for a term in the text."""
+
+    def __init__(self, *, error=None):
+        self.error = error
+        self.calls: list = []
+
+    def item_policy_category(self, token):
+        self.calls.append(f"policy:{token}")
+        if self.error is not None:
+            raise self.error
+        return _GROUPS.get(token)
+
+    def item_policy_url(self):
+        return _POLICY_URL
+
+    def create_listing(self, args):
+        self.calls.append("create")
+        raise RailPolicyRefused(_REFUSAL)
+
+
+def _categorised(store, item_id, category) -> dict:
+    # Arranged directly: the store refuses a buyer-visible edit to an item live on Carousell.
+    with store._db.transaction() as conn:  # noqa: SLF001
+        conn.execute(
+            "UPDATE items SET category = ?, size_bucket = 'm' WHERE id = ?", (category, item_id)
+        )
+    return store.get_item(item_id)
+
+
+def _refusal_notice(title: str) -> str:
+    return f"Carousell.ai won't take {title}, so it stays only on Carousell. {_REFUSAL}"
+
+
+def test_an_adopted_listing_in_a_refused_category_is_reported_once_and_never_queued(
+    store, bus, monkeypatch, xdg_tmp
+) -> None:
+    """A refusal is final: no pass is spent on it, and the seller hears the policy's own words."""
+    row = _adopted(store, bus, monkeypatch)
+    item = _categorised(store, row["item_id"], "weapons")
+    rail = PolicyRail()
+    deps = _deps(store, bus, StubClient(), rail_factory=lambda: rail)
+
+    adopt.rail_publish_phase(deps)
+    adopt.rail_publish_phase(deps)
+
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["rail_state"] == RAIL_FAILED
+    assert row["rail_pass_id"] is None
+    assert store.publish_pass_index() == []
+    assert rail.calls == ["policy:weapons"]
+    told = [n["text"] for n in store.list_queued_notices() if _REFUSAL in n["text"]]
+    assert told == [_refusal_notice(item["title"])]
+    assert not any("couldn't get" in n["text"] for n in store.list_queued_notices())
+    refused = _events(bus, "survey.relist_refused")
+    assert [e.payload for e in refused] == [{"market": _MARKET, "item_id": item["id"]}]
+
+
+def test_an_adopted_listing_carousell_ai_takes_is_queued(store, bus, monkeypatch, xdg_tmp) -> None:
+    row = _adopted(store, bus, monkeypatch)
+    _categorised(store, row["item_id"], "electronics")
+    rail = PolicyRail()
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), rail_factory=lambda: rail))
+
+    assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
+    assert rail.calls == ["policy:electronics"]
+
+
+def test_an_adopted_listing_with_no_category_fails_without_spending_a_pass(
+    store, bus, monkeypatch, xdg_tmp
+) -> None:
+    """A publish pass cannot give it one, so every attempt would fail; the seller's retry can."""
+    row = _adopted(store, bus, monkeypatch, category=None)
+    rail = PolicyRail()
+    deps = _deps(store, bus, StubClient(), rail_factory=lambda: rail)
+
+    adopt.rail_publish_phase(deps)
+    adopt.rail_publish_phase(deps)
+
+    settled = store.list_discovered_listings(_MARKET)[0]
+    assert settled["rail_state"] == RAIL_FAILED
+    assert settled["rail_pass_id"] is None
+    assert store.publish_pass_index() == []
+    assert rail.calls == []
+    assert sum("couldn't get" in n["text"] for n in store.list_queued_notices()) == 1
+    failed = _events(bus, "survey.relist_failed")
+    assert [e.payload for e in failed] == [{"market": _MARKET, "item_id": row["item_id"]}]
+
+
+def test_an_unreadable_policy_still_queues_the_publish(store, bus, monkeypatch, xdg_tmp) -> None:
+    """The pass checks again, and fails closed there; holding the row here would strand it."""
+    row = _adopted(store, bus, monkeypatch)
+    _categorised(store, row["item_id"], "weapons")
+    rail = PolicyRail(error=RailNetworkError("rail unreachable: TimeoutError"))
+
+    adopt.rail_publish_phase(_deps(store, bus, StubClient(), rail_factory=lambda: rail))
+
+    assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
+
+
+def _run_publish_pass(store, bus, outcome: str) -> None:
+    """The queued relist pass runs to a clean exit. "refused": create_listing refuses it through
+    the real publish tool; "published": it records a URL; "nothing": it records nothing."""
+    claimed = store.claim_queued_pass()
+    item_id = claimed.payload["item_id"]
+    if outcome == "refused":
+        ctx = ToolContext(
+            session=Session(tier=TIER_PASS_PUBLISH, pass_id=claimed.pass_id),
+            store=store,
+            bus=bus,
+            config=Config(),
+            rail_factory=PolicyRail,
+        )
+        assert dispatch("carousell_ai_publish_listing", {"item_id": item_id}, ctx)["refused"]
+    elif outcome == "published":
+        store.record_listing_url(item_id, "carousell-ai", "https://www.carousell.ai/listing/9")
+    store.finish_pass(claimed.pass_id, status="done", rc=0, cls="ok", summary="ok")
+
+
+def test_a_relist_create_listing_refuses_is_settled_once_and_never_retried(
+    store, bus, monkeypatch, xdg_tmp
+) -> None:
+    row = _adopted(store, bus, monkeypatch)
+    item = _categorised(store, row["item_id"], "electronics")
+    deps = _deps(store, bus, StubClient())
+
+    adopt.rail_publish_phase(deps)
+    _run_publish_pass(store, bus, "refused")
+    for _ in range(adopt.RAIL_MAX_ATTEMPTS):
+        adopt.rail_publish_phase(deps)
+
+    row = store.list_discovered_listings(_MARKET)[0]
+    assert row["rail_state"] == RAIL_FAILED
+    assert len(store.publish_pass_index()) == 1
+    notices = [n["text"] for n in store.list_queued_notices()]
+    assert [n for n in notices if _REFUSAL in n] == [_refusal_notice(item["title"])]
+    assert not any("couldn't get" in n for n in notices)
+    assert _events(bus, "survey.relist_retry") == []
+
+
+class AdoptLaneRelists(RuleBasedStateMachine):
+    """An adopted listing's relist passes end any way, between ticks of the lane. Refusal is
+    final: once create_listing refuses, no pass is queued again and the seller is told once."""
+
+    def __init__(self):
+        super().__init__()
+        self.mp = pytest.MonkeyPatch()
+        self.tmp = Path(tempfile.mkdtemp())
+        for var in ("HOME", "XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CONFIG_HOME"):
+            self.mp.setenv(var, str(self.tmp / var.lower()))
+        data_db, events_db = Database(self.tmp / "sellee.db"), Database(self.tmp / "events.db")
+        migrations.run_startup_migrations(
+            data_db=data_db, events_db=events_db, backups_dir=self.tmp / "b", backups_keep=1
+        )
+        self.dbs = (data_db, events_db)
+        self.store, self.bus = Store(data_db), EventBus(EventStore(events_db))
+        seed_setting(self.store, "connected_markets", ["carousell"])
+        row = _adopted(self.store, self.bus, self.mp)
+        self.title = _categorised(self.store, row["item_id"], None)["title"]
+        self.deps = _deps(self.store, self.bus, StubClient())
+        self.refused = False
+        self.passes_at_refusal = 0
+        self.ticked_since = False
+
+    def teardown(self):
+        self.mp.undo()
+        for db in self.dbs:
+            db.close()
+        shutil.rmtree(self.tmp, ignore_errors=True)
+
+    def _passes(self) -> int:
+        return len(self.store.publish_pass_index())
+
+    def _queued(self) -> bool:
+        return any(r["status"] == "queued" for r in self.store.publish_pass_index())
+
+    @rule()
+    def tick(self):
+        adopt.rail_publish_phase(self.deps)
+        self.ticked_since = True
+
+    @precondition(lambda self: self._queued())
+    @rule(outcome=st.sampled_from(["refused", "nothing", "published"]))
+    def the_pass_ends(self, outcome):
+        _run_publish_pass(self.store, self.bus, outcome)
+        if outcome == "refused" and not self.refused:
+            self.refused, self.passes_at_refusal, self.ticked_since = True, self._passes(), False
+
+    @invariant()
+    def a_refusal_is_never_retried(self):
+        if self.refused:
+            assert self._passes() == self.passes_at_refusal
+
+    @invariant()
+    def a_refusal_is_told_once_in_the_policys_words(self):
+        notices = [n["text"] for n in self.store.list_queued_notices()]
+        told = [n for n in notices if _REFUSAL in n]
+        assert len(told) <= 1
+        if self.refused and self.ticked_since:
+            row = self.store.list_discovered_listings(_MARKET)[0]
+            assert row["rail_state"] == RAIL_FAILED
+            assert told == [_refusal_notice(self.title)]
+            assert not any("couldn't get" in n for n in notices)
+
+    @invariant()
+    def attempts_stay_bounded(self):
+        assert self._passes() <= adopt.RAIL_MAX_ATTEMPTS
+
+
+AdoptLaneRelists.TestCase.settings = hypothesis_settings(
+    max_examples=30,
+    stateful_step_count=12,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+test_adopt_lane_relists = AdoptLaneRelists.TestCase
 
 
 def test_a_vanished_publish_pass_is_re_owed_not_stranded(store, bus, monkeypatch, xdg_tmp) -> None:

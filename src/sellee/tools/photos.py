@@ -18,11 +18,12 @@ import shutil
 import uuid
 from pathlib import Path
 
-from sellee import images, paths
+from sellee import images, marketplaces, paths
 from sellee.platform import get_platform
 from sellee.platform.base import ImageToolUnavailable, UnsupportedPlatform
 from sellee.rail.client import RailUnprovisioned
 from sellee.store import MAX_PHOTOS, StoreError
+from sellee.tools.publish import category_check
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -144,6 +145,19 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
     return {"count": len(uploaded)}
 
 
+def _check_then_upload(ctx: ToolContext, params: dict) -> dict:
+    """The upload a listing starts with: no photo of an item in a refused category is uploaded.
+    Revise uploads through `_upload_photos` directly, for a listing already live."""
+    item = ctx.store.get_item(params["item_id"])
+    if item is None:
+        raise ToolError(f"no item with id {params['item_id']!r}")
+    # An item already on carousell.ai is not refused here: a refusal would read as never listed.
+    refusal = None if item["listing_urls"].get(marketplaces.RAIL) else category_check(ctx, item)
+    if refusal:
+        return refusal
+    return _upload_photos(ctx, params)
+
+
 register(
     ToolSpec(
         name="import_photos",
@@ -175,7 +189,7 @@ register(
             "required": ["item_id"],
             "additionalProperties": False,
         },
-        handler=_upload_photos,
+        handler=_check_then_upload,
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL, TIER_PASS_PUBLISH}),
     )
 )

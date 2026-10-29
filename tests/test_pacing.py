@@ -173,6 +173,19 @@ def test_peek_answers_the_verdict_without_taking_the_slot(store) -> None:
     )
 
 
+def test_release_gives_back_only_the_slot_it_names(store) -> None:
+    cfg = pacing.resolve(Config(max_actions_per_hour=2, reply_delay_sec=[0, 0]), quiet_hours=[0, 0])
+    now = _noon_on()
+    store.reserve_action(marketplace="fb", kind="publish", cfg=cfg, now=now - 1)
+    store.reserve_action(marketplace="fb", kind="publish", cfg=cfg, now=now)
+    store.release_action(marketplace="fb", kind="publish", ts=now)
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace='fb'")
+    assert [r["ts"] for r in rows] == [now - 1]
+    assert (
+        store.reserve_action(marketplace="fb", kind="publish", cfg=cfg, now=now)["verdict"] == "go"
+    )
+
+
 def test_peek_reports_quiet_hours(store) -> None:
     cfg = pacing.resolve(Config(reply_delay_sec=[0, 0]), quiet_hours=[2300, 800])
     peeked = store.peek_action(marketplace="fb", kind="publish", cfg=cfg, now=_midnight_ish())
@@ -189,12 +202,22 @@ class _FakeRail:
     def verify_listing_url(self, url):
         return None
 
+    def item_policy_category(self, token):
+        return {"token": token, "title": token.title(), "tier": "allowed"}
+
+    def item_policy_url(self):
+        return "https://www.carousell.ai/item-policy"
+
 
 def test_publish_reserves_and_caps(make_ctx, store) -> None:
     cfg_obj = Config(max_actions_per_hour=1)
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: _FakeRail(), config=cfg_obj)
-    first = store.create_item(title="A", list_price=80.0, currency="SGD", size_bucket="m")
-    second = store.create_item(title="B", list_price=90.0, currency="SGD", size_bucket="m")
+    first = store.create_item(
+        title="A", list_price=80.0, currency="SGD", size_bucket="m", category="lamps"
+    )
+    second = store.create_item(
+        title="B", list_price=90.0, currency="SGD", size_bucket="m", category="lamps"
+    )
     dispatch("carousell_ai_publish_listing", {"item_id": first["id"]}, ctx)
     with pytest.raises(ToolError, match="paced"):
         dispatch("carousell_ai_publish_listing", {"item_id": second["id"]}, ctx)
