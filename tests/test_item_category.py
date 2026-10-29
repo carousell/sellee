@@ -107,6 +107,19 @@ def test_an_update_sets_the_category_and_never_clears_it(ctx):
     assert (kept["category"], kept["title"]) == ("home_and_garden", "Lamp")
 
 
+def test_a_null_category_is_refused_like_an_empty_one(ctx):
+    item = _create(ctx, category="electronics")
+    with pytest.raises(ToolError, match="cannot be cleared.*carousell_ai_item_policy"):
+        _update(ctx, item["id"], category=None, title="Teak lamp")
+    kept = dispatch("get_item", {"item_id": item["id"]}, ctx)
+    assert (kept["category"], kept["title"]) == ("electronics", "Lamp")
+
+
+def test_an_update_without_a_category_keeps_it(ctx):
+    item = _create(ctx, category="electronics")
+    assert _update(ctx, item["id"], title="Teak lamp")["category"] == "electronics"
+
+
 def test_an_empty_category_is_refused_at_create(ctx, store):
     with pytest.raises(ToolError, match="carousell_ai_item_policy"):
         _create(ctx, category="")

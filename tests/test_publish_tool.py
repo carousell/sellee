@@ -635,6 +635,24 @@ def test_a_refusal_from_create_listing_leaves_the_item_a_draft(make_ctx, store) 
     assert after["status"] == item["status"]
 
 
+def test_a_refusal_from_create_listing_gives_its_pacing_slot_back(make_ctx, store) -> None:
+    """A refused item is not a publish attempt, so it leaves the hourly count where it was."""
+    published = _item(store, title="Lamp")
+    dispatch(
+        "carousell_ai_publish_listing",
+        {"item_id": published["id"]},
+        make_ctx(TIER_PASS_CHANNEL, rail_factory=PolicyRail),
+    )
+    count = "SELECT COUNT(*) AS n FROM pacing_actions WHERE marketplace = 'carousell-ai'"
+    assert store._db.query(count)[0]["n"] == 1
+
+    refused = _item(store, title="Taser, new in box")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=RefusingRail)
+    assert dispatch("carousell_ai_publish_listing", {"item_id": refused["id"]}, ctx)["refused"]
+
+    assert store._db.query(count)[0]["n"] == 1
+
+
 def test_a_refusal_inside_a_pass_is_noted_on_the_pass(make_ctx, store) -> None:
     """What lets the lane that queued the pass settle it once, instead of retrying it."""
     item = _item(store, title="Taser, new in box")
