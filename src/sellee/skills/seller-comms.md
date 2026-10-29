@@ -254,7 +254,8 @@ waiting on them). `decide_discovered_listings` records the answer:
 - **inbox only** — "answer buyers on them, but don't repost them anywhere": `manage: "inbox"`.
   The default a button gives is `relist`, which also puts them on carousell.ai.
 - **not those** — `decline`. It leaves the listings exactly as they are; nothing is taken down.
-- **another go** — after a carousell.ai listing failed: `retry`.
+- **another go** — after a carousell.ai listing failed: `retry`. If the item has no category, give
+  it one with `update_item` first (listing-flow, "Give it a category"): the retry stops without it.
 
 Two things to be honest about. The work happens in the background, so say it has started, never
 that a listing is up — the link comes as its own message. And a listing whose price I could not

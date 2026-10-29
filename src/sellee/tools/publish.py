@@ -75,9 +75,15 @@ def _refused(ctx: ToolContext, message: str) -> dict:
 
 def category_check(ctx: ToolContext, item: dict) -> dict | None:
     """The refusal when the cached item policy refuses the item's category, or None. Fails closed:
-    an unreadable policy fails the step rather than letting a refused item through."""
+    no category or an unreadable policy fails the step rather than let a refused item through."""
+    if not item["category"]:
+        # carousell.ai refuses a listing without one; named here so the fix comes with it.
+        raise ToolError(
+            "item has no category; carousell.ai lists nothing without one. Set the item's token "
+            "from carousell_ai_item_policy as category with update_item first"
+        )
     try:
-        message = category_refusal(_rail(ctx), item["category"]) if item["category"] else None
+        message = category_refusal(_rail(ctx), item["category"])
     except RailError as exc:  # caller-safe, secret-free messages
         raise ToolError(str(exc)) from exc
     return None if message is None else _refused(ctx, message)
@@ -164,11 +170,10 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         "description": item["description"] or "",
         "price_cents": price_cents,
         "parcel_bucket": f"PARCEL_BUCKET_{item['size_bucket'].upper()}",
+        "category": item["category"],
     }
     if currency:
         args["currency"] = currency
-    if item["category"]:
-        args["category"] = item["category"]
     # Only uploaded photos can be attached — a local path means nothing to the rail. Display order
     # is the item's order, so the first photo is the listing's cover. A photo still without an
     # upload reference is skipped rather than blocking the publish; an item with no photos at all

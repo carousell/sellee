@@ -424,19 +424,22 @@ def _settle_queued(deps) -> None:
                 },
             )
             continue
-        deps.store.set_rail_publish_state(
-            row["market"],
-            row["listing_id"],
-            RAIL_FAILED,
-            notice_text=RAIL_FAILED_NOTICE.format(
-                title=title,
-                rail=marketplaces.display_name(marketplaces.RAIL),
-                name=marketplaces.display_name(row["market"]),
-            ),
-        )
-        deps.bus.publish(
-            "survey.relist_failed", {"market": row["market"], "item_id": row["item_id"]}
-        )
+        _settle_failed(deps, row, title)
+
+
+def _settle_failed(deps, row, title: str) -> None:
+    """Settle a publish that will not be tried again until the seller asks."""
+    deps.store.set_rail_publish_state(
+        row["market"],
+        row["listing_id"],
+        RAIL_FAILED,
+        notice_text=RAIL_FAILED_NOTICE.format(
+            title=title,
+            rail=marketplaces.display_name(marketplaces.RAIL),
+            name=marketplaces.display_name(row["market"]),
+        ),
+    )
+    deps.bus.publish("survey.relist_failed", {"market": row["market"], "item_id": row["item_id"]})
 
 
 def _settle_refused(deps, row, title: str, message: str) -> None:
@@ -459,7 +462,7 @@ def _settle_refused(deps, row, title: str, message: str) -> None:
 def _category_refusal(deps, item: dict) -> str | None:
     """The cached item policy's refusal of this item's category, or None. A policy that cannot be
     read queues the pass anyway: its tools check again, and fail closed there."""
-    if deps.rail_factory is None or not item["category"]:
+    if deps.rail_factory is None:
         return None
     try:
         return category_refusal(deps.rail_factory(), item["category"])
@@ -487,6 +490,10 @@ def _enqueue_owed(deps) -> None:
     if item["listing_urls"].get(marketplaces.RAIL):
         # Already there — a publish that landed while we were not looking. Nothing owed.
         deps.store.set_rail_publish_state(row["market"], row["listing_id"], RAIL_DONE)
+        return
+    if not item["category"]:
+        # A publish pass cannot set one, so it would fail every attempt; the seller's ask can.
+        _settle_failed(deps, row, item["title"])
         return
     refusal = _category_refusal(deps, item)
     if refusal:

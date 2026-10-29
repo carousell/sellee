@@ -20,9 +20,14 @@ from sellee.tools.registry import (
 
 
 def _check_category(ctx: ToolContext, token) -> None:
-    """Refuse a category token unless carousell.ai's item policy lists it. An empty one clears."""
-    if token is None or token == "":
+    """Refuse a category token unless carousell.ai's item policy lists it. An empty one is refused
+    rather than clearing it: carousell.ai lists nothing without a category."""
+    if token is None:
         return
+    if token == "":
+        raise ToolError(
+            "category cannot be cleared; give the item's token from carousell_ai_item_policy"
+        )
     if not isinstance(token, str):
         raise ToolError("category must be a token string from carousell_ai_item_policy")
     try:
@@ -88,7 +93,8 @@ register(
         "size_bucket is the parcel size class carousell.ai ships by — one of s, m, l, xl — and a "
         "listing cannot be published without it, so set it here when you can judge it. "
         "category is the item's token in carousell.ai's item policy, from "
-        "carousell_ai_item_policy; any other value is refused.",
+        "carousell_ai_item_policy; any other value is refused, and a listing cannot be published "
+        "without one.",
         input_schema={
             "type": "object",
             "properties": {
@@ -119,7 +125,8 @@ register(
         "currency, photos, size_bucket, category, and draft<->ready status). Photos are paths "
         "already inside the media store. size_bucket is the parcel size class carousell.ai ships "
         "by — one of s, m, l, xl — and a listing cannot be published without it. category is a "
-        'token from carousell_ai_item_policy, and "" clears it. '
+        "token from carousell_ai_item_policy; it cannot be cleared, and a listing cannot be "
+        "published without it. "
         "Changes the record only, never a listing: on an item that is already listed it "
         "refuses anything a buyer sees — use update_live_listing for that. Listing URLs and sale "
         "states are not writable here.",
