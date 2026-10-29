@@ -18,6 +18,8 @@ from sellee.tools.registry import (
     register,
 )
 
+_CANNOT_CLEAR = "category cannot be cleared; give the item's token from carousell_ai_item_policy"
+
 
 def _check_category(ctx: ToolContext, token) -> None:
     """Refuse a category token unless carousell.ai's item policy lists it. An empty one is refused
@@ -25,9 +27,7 @@ def _check_category(ctx: ToolContext, token) -> None:
     if token is None:
         return
     if token == "":
-        raise ToolError(
-            "category cannot be cleared; give the item's token from carousell_ai_item_policy"
-        )
+        raise ToolError(_CANNOT_CLEAR)
     if not isinstance(token, str):
         raise ToolError("category must be a token string from carousell_ai_item_policy")
     try:
@@ -66,7 +66,11 @@ def _create_item(ctx: ToolContext, params: dict) -> dict:
 
 
 def _update_item(ctx: ToolContext, params: dict) -> dict:
-    _check_category(ctx, params["fields"].get("category"))
+    fields = params["fields"]
+    # A null category would clear it as surely as an empty one; leaving it out keeps it.
+    if "category" in fields and fields["category"] is None:
+        raise ToolError(_CANNOT_CLEAR)
+    _check_category(ctx, fields.get("category"))
     try:
         return ctx.store.update_item(params["item_id"], params["fields"])
     except StoreError as exc:

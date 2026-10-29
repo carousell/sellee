@@ -147,13 +147,13 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
-    cfg = pacing_engine.resolve(
-        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
-    )
+    now = time.time()
+    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store), now=now)
     paced = ctx.store.reserve_action(
         marketplace=_MARKET,
         kind="publish",
         cfg=cfg,
+        now=now,
         interactive=ctx.session.tier == TIER_ATTENDED,
     )
     if paced["verdict"] != "go":
@@ -199,7 +199,9 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         listing = rail.create_listing(args)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
     except RailPolicyRefused as exc:
-        # A term in the text, or a policy changed since the cache: final, never retried.
+        # A term in the text, or a policy changed since the cache: final, never retried. Nothing
+        # was listed, so the slot goes back.
+        ctx.store.release_action(marketplace=_MARKET, kind="publish", ts=now)
         return _refused(ctx, str(exc))
     except RailUnprovisioned as exc:
         raise ToolError(
