@@ -43,10 +43,16 @@ class FakeRail:
         if not self.verify_ok:
             raise RailToolError("listing page returned HTTP 404")
 
+    def item_policy_category(self, token):
+        return _GROUPS.get(token)
 
-def _item(store, *, size_bucket="m", **kw):
-    """A publishable item: a draft carrying the parcel size class publish requires."""
-    base = {"title": "Lamp", "list_price": 80.0, "size_bucket": size_bucket}
+    def item_policy_url(self):
+        return _URL
+
+
+def _item(store, *, size_bucket="m", category="electronics", **kw):
+    """A publishable item: a draft carrying the parcel size class and category publish requires."""
+    base = {"title": "Lamp", "list_price": 80.0, "size_bucket": size_bucket, "category": category}
     base.update(kw)
     return store.create_item(**base)
 
@@ -522,16 +528,25 @@ def test_an_allowed_item_publishes_with_its_category(make_ctx, store, xdg_tmp) -
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
 
 
-def test_an_item_without_a_category_is_sent_without_one(make_ctx, store) -> None:
-    """A draft from before categories, or one made while the policy could not be read."""
+@pytest.mark.parametrize("tool", ["carousell_ai_upload_photos", "carousell_ai_publish_listing"])
+def test_an_item_without_a_category_is_stopped_before_anything_goes_up(
+    make_ctx, store, xdg_tmp, tool
+) -> None:
+    """A draft from before categories, or one made while the policy could not be read:
+    carousell.ai refuses a listing without one, so the step names the fix instead."""
     rail = PolicyRail()
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
-    item = _item(store)
+    item = _item(store, category=None, photos=[_stored_photo("n.jpg")])
 
-    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+    with pytest.raises(ToolError, match="no category") as exc:
+        dispatch(tool, {"item_id": item["id"]}, ctx)
 
-    assert not any(call.startswith("policy:") for call in rail.calls)
-    assert "category" not in rail.args
+    assert "carousell_ai_item_policy" in str(exc.value)
+    assert "update_item" in str(exc.value)
+    assert rail.uploads == []
+    assert rail.calls == []
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
+    assert rows == []
 
 
 def test_a_refused_category_spends_no_pacing_slot(make_ctx, store) -> None:

@@ -97,10 +97,46 @@ def test_an_update_to_an_unlisted_token_is_refused_and_changes_nothing(ctx):
     assert (kept["category"], kept["title"]) == ("electronics", "Lamp")
 
 
-def test_an_update_sets_and_clears_the_category(ctx):
+def test_an_update_sets_the_category_and_never_clears_it(ctx):
+    """carousell.ai lists nothing without one, as its own update refuses to clear it."""
     item = _create(ctx)
     assert _update(ctx, item["id"], category="home_and_garden")["category"] == "home_and_garden"
-    assert _update(ctx, item["id"], category="")["category"] is None
+    with pytest.raises(ToolError, match="cannot be cleared.*carousell_ai_item_policy"):
+        _update(ctx, item["id"], category="", title="Teak lamp")
+    kept = dispatch("get_item", {"item_id": item["id"]}, ctx)
+    assert (kept["category"], kept["title"]) == ("home_and_garden", "Lamp")
+
+
+def test_an_empty_category_is_refused_at_create(ctx, store):
+    with pytest.raises(ToolError, match="carousell_ai_item_policy"):
+        _create(ctx, category="")
+    assert store.list_items() == []
+
+
+def test_a_publish_sends_carousell_ai_the_category_it_requires(ctx, rail, monkeypatch):
+    monkeypatch.setattr(RailClient, "verify_listing_url", lambda self, url: None)
+    item = _create(ctx, category="electronics", size_bucket="m")
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert [listing["category"] for listing in rail.listings] == ["electronics"]
+
+
+def test_carousell_ai_refuses_a_listing_without_a_category(rail):
+    client = _factory(rail)()
+    for args in ({"title": "Lamp"}, {"title": "Lamp", "category": ""}):
+        with pytest.raises(RailToolRefused, match="category is required"):
+            client.call_tool("create_listing", args)
+    assert rail.listings == []
+
+
+def test_carousell_ai_keeps_a_listing_category_and_refuses_to_clear_it(rail):
+    client = _factory(rail)()
+    client.call_tool("create_listing", {"title": "Lamp", "category": "electronics"})
+    client.update_listing("L1", title="Teak lamp")
+    with pytest.raises(RailToolRefused, match="category cannot be cleared"):
+        client.call_tool("update_listing", {"id": "L1", "category": ""})
+    assert rail.listings == [{"title": "Teak lamp", "category": "electronics"}]
 
 
 def test_a_category_on_a_listed_item_changes_the_record(ctx, store):

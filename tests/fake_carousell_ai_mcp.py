@@ -200,19 +200,29 @@ class FakeRelay:
         self.policy_reads += 1
         return json.loads(json.dumps(self.item_policy))
 
-    def create_listing(self, args: dict) -> dict:
-        """bazaar's item policy check at create, with its unknown-token and refusal texts."""
-        token = args.get("category") or ""
+    def _policy_groups(self, token: str) -> dict:
         groups = {g["token"]: g for t in _POLICY_TIERS for g in self.item_policy[t]}
-        if token and token not in groups:
+        if token not in groups:
             raise ToolFailure(
                 f"category {json.dumps(token)} is not a category the item policy lists; see "
-                "https://www.carousell.ai/item-policy"
+                f"{_POLICY_PAGE}"
             )
+        return groups
+
+    def create_listing(self, args: dict) -> dict:
+        """bazaar's item policy check at create, with its required, unknown-token and refusal
+        texts."""
+        token = args.get("category") or ""
+        if not token:
+            raise ToolFailure(
+                "category is required: the item's category from the item policy; see "
+                f"{_POLICY_PAGE}"
+            )
+        groups = self._policy_groups(token)
         text = f"{args.get('title', '')} {args.get('description', '')}".lower()
         refusing = next((g for t, g in self.refused_terms.items() if t in text), None)
         allowed = {g["token"] for g in self.item_policy["allowed"]}
-        if refusing is None and token and token not in allowed:
+        if refusing is None and token not in allowed:
             refusing = token
         if refusing is not None:
             yet = " yet" if any(g["token"] == refusing for g in self.item_policy["not_yet"]) else ""
@@ -224,6 +234,20 @@ class FakeRelay:
         self.listings.append(dict(args))
         listing_id = f"L{len(self.listings)}"
         return {"listing": {"id": listing_id, "url": f"{_LISTING_BASE}{listing_id}"}}
+
+    def update_listing(self, args: dict) -> dict:
+        """bazaar's update: a category left out keeps the stored one; an empty one is refused."""
+        if args.get("category") == "":
+            raise ToolFailure(
+                "category cannot be cleared; give the item's category from the item policy"
+            )
+        if "category" in args:
+            self._policy_groups(args["category"])
+        number = str(args.get("id", "")).removeprefix("L")
+        if not number.isdigit() or not 0 < int(number) <= len(self.listings):
+            raise LookupError(args.get("id"))
+        self.listings[int(number) - 1].update({k: v for k, v in args.items() if k != "id"})
+        return {"listing": {"id": args["id"], "url": f"{_LISTING_BASE}{args['id']}"}}
 
     def send_registration_reply(self, args: dict) -> dict:
         """Send once per client_message_id, only to a correspondent, as bazaar does."""
@@ -267,6 +291,7 @@ class FakeRelay:
 
 _POLICY_TIERS = ("allowed", "not_yet", "never")
 _LISTING_BASE = "https://www.carousell.ai/listing/"
+_POLICY_PAGE = "https://www.carousell.ai/item-policy"
 
 
 def item_policy(
@@ -297,6 +322,7 @@ def item_policy(
 _TOOLS = (
     "get_item_policy",
     "create_listing",
+    "update_listing",
     "list_threads",
     "get_thread",
     "reply_to_thread",
@@ -345,6 +371,7 @@ class _Handler(BaseHTTPRequestHandler):
             "get_registration_address": relay.get_registration_address,
             "get_item_policy": relay.get_item_policy,
             "create_listing": relay.create_listing,
+            "update_listing": relay.update_listing,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}

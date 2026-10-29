@@ -560,7 +560,7 @@ def _at_local_hour(hour: int) -> float:
     return datetime(2026, 3, 1, hour, 30).timestamp()
 
 
-def _adopted(store, bus, monkeypatch):
+def _adopted(store, bus, monkeypatch, *, category="electronics"):
     _accepted(store, bus)
     _fetches(monkeypatch, [_media_photo()])
     adopt.adopt_phase(_deps(store, bus, StubClient(detail=_detail())))
@@ -568,7 +568,11 @@ def _adopted(store, bus, monkeypatch):
     # every test below would pass or fail on the hour the suite happened to run. Tests about the
     # window turn it back on and pass a fixed clock.
     seed_setting(store, "quiet_hours", [0, 0])
-    return store.list_discovered_listings(_MARKET)[0]
+    row = store.list_discovered_listings(_MARKET)[0]
+    if category:
+        # An adopted listing arrives with none; the seller's agent gives it one.
+        store.update_item(row["item_id"], {"category": category})
+    return row
 
 
 def test_an_owed_publish_waits_for_the_slot_and_is_never_lost(
@@ -710,18 +714,36 @@ def test_an_adopted_listing_in_a_refused_category_is_reported_once_and_never_que
     assert [e.payload for e in refused] == [{"market": _MARKET, "item_id": item["id"]}]
 
 
-@pytest.mark.parametrize("category", ["electronics", None])
-def test_an_adopted_listing_carousell_ai_takes_is_queued(
-    store, bus, monkeypatch, xdg_tmp, category
-) -> None:
+def test_an_adopted_listing_carousell_ai_takes_is_queued(store, bus, monkeypatch, xdg_tmp) -> None:
     row = _adopted(store, bus, monkeypatch)
-    _categorised(store, row["item_id"], category)
+    _categorised(store, row["item_id"], "electronics")
     rail = PolicyRail()
 
     adopt.rail_publish_phase(_deps(store, bus, StubClient(), rail_factory=lambda: rail))
 
     assert store.list_discovered_listings(_MARKET)[0]["rail_state"] == "queued"
-    assert rail.calls == ([f"policy:{category}"] if category else [])
+    assert rail.calls == ["policy:electronics"]
+
+
+def test_an_adopted_listing_with_no_category_fails_without_spending_a_pass(
+    store, bus, monkeypatch, xdg_tmp
+) -> None:
+    """A publish pass cannot give it one, so every attempt would fail; the seller's retry can."""
+    row = _adopted(store, bus, monkeypatch, category=None)
+    rail = PolicyRail()
+    deps = _deps(store, bus, StubClient(), rail_factory=lambda: rail)
+
+    adopt.rail_publish_phase(deps)
+    adopt.rail_publish_phase(deps)
+
+    settled = store.list_discovered_listings(_MARKET)[0]
+    assert settled["rail_state"] == RAIL_FAILED
+    assert settled["rail_pass_id"] is None
+    assert store.publish_pass_index() == []
+    assert rail.calls == []
+    assert sum("couldn't get" in n["text"] for n in store.list_queued_notices()) == 1
+    failed = _events(bus, "survey.relist_failed")
+    assert [e.payload for e in failed] == [{"market": _MARKET, "item_id": row["item_id"]}]
 
 
 def test_an_unreadable_policy_still_queues_the_publish(store, bus, monkeypatch, xdg_tmp) -> None:
@@ -758,7 +780,7 @@ def test_a_relist_create_listing_refuses_is_settled_once_and_never_retried(
     store, bus, monkeypatch, xdg_tmp
 ) -> None:
     row = _adopted(store, bus, monkeypatch)
-    item = _categorised(store, row["item_id"], None)
+    item = _categorised(store, row["item_id"], "electronics")
     deps = _deps(store, bus, StubClient())
 
     adopt.rail_publish_phase(deps)

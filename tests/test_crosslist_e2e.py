@@ -40,6 +40,12 @@ class FakeRail:
     def verify_listing_url(self, url):
         return None  # verify passes
 
+    def item_policy_category(self, token):
+        return {"token": token, "title": token.title(), "tier": "allowed"}
+
+    def item_policy_url(self):
+        return "https://www.carousell.ai/item-policy"
+
 
 # A fake publish pass: reads its workspace .mcp.json for the endpoint and per-pass token, then
 # records the live listing URL over the real MCP surface — the way a browser publish's result
@@ -177,7 +183,13 @@ def test_the_fan_out_end_to_end(wired, bus, store, make_ctx, tmp_path, xdg_tmp) 
     ctx = make_ctx(TIER_PASS_CHANNEL, pass_id="p_chan", rail_factory=FakeRail)
     item = dispatch(
         "create_item",
-        {"title": "Teak lamp", "list_price": 80.0, "currency": "SGD", "size_bucket": "m"},
+        {
+            "title": "Teak lamp",
+            "list_price": 80.0,
+            "currency": "SGD",
+            "size_bucket": "m",
+            "category": "lamps",
+        },
         ctx,
     )
     dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
