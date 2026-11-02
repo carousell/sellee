@@ -866,6 +866,7 @@ def run_daemon(*, once: bool) -> int:
         config=cfg,
         browser_factory=browser_factory,
         governor=governor,
+        rail_factory=rail_factory,
     )
     scheduler.register(
         Task(

@@ -55,6 +55,12 @@ class FakeRail:
     def verify_listing_url(self, url):
         return None
 
+    def item_policy_category(self, token):
+        return {"token": token, "title": token.title(), "tier": "allowed"}
+
+    def item_policy_url(self):
+        return "https://www.carousell.ai/item-policy"
+
 
 # A fake channel-pass harness: reads its per-pass token from the workspace .mcp.json, then drives
 # the real MCP endpoint — create_item -> set_floor -> send_message — as the pass:channel tier.
@@ -108,7 +114,7 @@ photos = re.findall(r"^\\s+(/\\S+\\.jpg)$", prompt, re.M)
 assert photos, prompt
 item = call("create_item",
     {"title":"Desk lamp","list_price":80.0,"currency":"SGD","photos":photos,
-     "size_bucket":"m"}, 2)
+     "size_bucket":"m","category":"lamps"}, 2)
 call("carousell_ai_upload_photos", {"item_id": item["id"]}, 3)
 published = call("carousell_ai_publish_listing", {"item_id": item["id"]}, 4)
 call("send_message", {"text": "Live: " + published["url"]}, 5)

@@ -3,9 +3,18 @@
 from __future__ import annotations
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
 import sellee.tools  # noqa: F401  registration
-from sellee.rail.client import RailNetworkError, RailToolError, RailUnprovisioned
+from sellee import paths
+from sellee.rail.client import (
+    RailNetworkError,
+    RailPolicyRefused,
+    RailToolError,
+    RailToolRefused,
+    RailUnprovisioned,
+)
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -34,10 +43,16 @@ class FakeRail:
         if not self.verify_ok:
             raise RailToolError("listing page returned HTTP 404")
 
+    def item_policy_category(self, token):
+        return _GROUPS.get(token)
 
-def _item(store, *, size_bucket="m", **kw):
-    """A publishable item: a draft carrying the parcel size class publish requires."""
-    base = {"title": "Lamp", "list_price": 80.0, "size_bucket": size_bucket}
+    def item_policy_url(self):
+        return _URL
+
+
+def _item(store, *, size_bucket="m", category="electronics", **kw):
+    """A publishable item: a draft carrying the parcel size class and category publish requires."""
+    base = {"title": "Lamp", "list_price": 80.0, "size_bucket": size_bucket, "category": category}
     base.update(kw)
     return store.create_item(**base)
 
@@ -405,3 +420,279 @@ def test_a_repeated_publish_does_not_ask_again(make_ctx, store) -> None:
 
     assert again == {"listing_id": None, "url": rail.url, "already_published": True}
     assert rail.signin_calls == 1
+
+
+# --- the item policy, checked before anything is uploaded --------------------------------------
+
+_URL = "https://www.carousell.ai/item-policy"
+_GROUPS = {
+    "electronics": {"token": "electronics", "title": "Electronics", "tier": "allowed"},
+    "too_big_to_ship": {"token": "too_big_to_ship", "title": "Too big to ship", "tier": "not_yet"},
+    "weapons": {
+        "token": "weapons",
+        "title": "Weapons, ammunition, and accessories",
+        "tier": "never",
+    },
+}
+_REFUSALS = {
+    "weapons": "Items in “Weapons, ammunition, and accessories” can’t be listed on carousell.ai. "
+    f"See {_URL} for what can be listed.",
+    "too_big_to_ship": "Items in “Too big to ship” can’t be listed on carousell.ai yet. "
+    f"See {_URL} for what can be listed.",
+}
+
+
+class PolicyRail(FakeRail):
+    """A rail with a cached item policy and a photo host, recording every call it is sent."""
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.uploads: list = []
+
+    def item_policy_category(self, token):
+        self.calls.append(f"policy:{token}")
+        return _GROUPS.get(token)
+
+    def item_policy_url(self):
+        return _URL
+
+    def offers_tool(self, name):
+        self.calls.append(f"offers:{name}")
+        return True
+
+    def upload_photo(self, data, content_type):
+        self.uploads.append(content_type)
+        return f"enc-{len(self.uploads)}"
+
+
+def _stored_photo(name: str) -> str:
+    path = paths.media_dir() / name
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(b"\xff\xd8\xff\xe0jpegbytes")
+    return str(path)
+
+
+def _list_it(ctx, item_id) -> tuple:
+    """The listing flow's publish step: the photo upload, then the publish."""
+    uploaded = dispatch("carousell_ai_upload_photos", {"item_id": item_id}, ctx)
+    published = dispatch("carousell_ai_publish_listing", {"item_id": item_id}, ctx)
+    return uploaded, published
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    title=st.text(min_size=1, max_size=40).filter(str.strip),
+    description=st.text(max_size=80),
+    category=st.sampled_from(sorted(_REFUSALS)),
+    photos=st.integers(min_value=1, max_value=3),
+    tier=st.sampled_from([TIER_ATTENDED, TIER_PASS_CHANNEL, TIER_PASS_PUBLISH]),
+)
+def test_a_refused_category_uploads_no_photo_and_creates_nothing(
+    make_ctx, store, xdg_tmp, title, description, category, photos, tier
+) -> None:
+    """Category first: whatever the item, a refused category stops both steps, and the check
+    asks the rail nothing beyond the cached policy."""
+    rail = PolicyRail()
+    ctx = make_ctx(tier, rail_factory=lambda: rail)
+    item = _item(
+        store,
+        title=title,
+        description=description,
+        category=category,
+        photos=[_stored_photo(f"p{i}.jpg") for i in range(photos)],
+    )
+
+    uploaded, published = _list_it(ctx, item["id"])
+
+    assert rail.uploads == []
+    assert rail.calls == [f"policy:{category}"] * 2
+    assert uploaded == published == {"refused": True, "message": _REFUSALS[category]}
+    after = store.get_item(item["id"])
+    assert after["listing_urls"] == {}
+    assert not any(p.get("uploaded_url") for p in after["photos"])
+
+
+def test_an_allowed_item_publishes_with_its_category(make_ctx, store, xdg_tmp) -> None:
+    rail = PolicyRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, category="electronics", photos=[_stored_photo("k.jpg")])
+
+    uploaded, published = _list_it(ctx, item["id"])
+
+    assert uploaded == {"count": 1}
+    assert published == {"listing_id": "L1", "url": rail.url}
+    assert rail.args["category"] == "electronics"
+    assert rail.args["media"] == {"urls": [{"url": "enc-1", "type": 1}]}
+    assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
+
+
+@pytest.mark.parametrize("tool", ["carousell_ai_upload_photos", "carousell_ai_publish_listing"])
+def test_an_item_without_a_category_is_stopped_before_anything_goes_up(
+    make_ctx, store, xdg_tmp, tool
+) -> None:
+    """A draft from before categories, or one made while the policy could not be read:
+    carousell.ai refuses a listing without one, so the step names the fix instead."""
+    rail = PolicyRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, category=None, photos=[_stored_photo("n.jpg")])
+
+    with pytest.raises(ToolError, match="no category") as exc:
+        dispatch(tool, {"item_id": item["id"]}, ctx)
+
+    assert "carousell_ai_item_policy" in str(exc.value)
+    assert "update_item" in str(exc.value)
+    assert rail.uploads == []
+    assert rail.calls == []
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
+    assert rows == []
+
+
+def test_a_refused_category_spends_no_pacing_slot(make_ctx, store) -> None:
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=PolicyRail)
+    item = _item(store, category="weapons")
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    rows = store._db.query("SELECT ts FROM pacing_actions WHERE marketplace = ?", ("carousell-ai",))
+    assert rows == []
+
+
+@pytest.mark.parametrize("tool", ["carousell_ai_upload_photos", "carousell_ai_publish_listing"])
+def test_a_category_the_policy_no_longer_lists_fails_the_step(make_ctx, store, xdg_tmp, tool):
+    rail = PolicyRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, category="crafts", photos=[_stored_photo("c.jpg")])
+
+    with pytest.raises(ToolError, match="'crafts' is no longer in carousell.ai's item policy"):
+        dispatch(tool, {"item_id": item["id"]}, ctx)
+
+    assert rail.uploads == []
+    assert rail.calls == ["policy:crafts"]
+
+
+@pytest.mark.parametrize("tool", ["carousell_ai_upload_photos", "carousell_ai_publish_listing"])
+def test_an_unreadable_policy_fails_closed(make_ctx, store, xdg_tmp, tool) -> None:
+    """No policy is not a yes: nothing is uploaded or created, and the step fails."""
+
+    class Unreachable(PolicyRail):
+        def item_policy_category(self, token):
+            raise RailNetworkError("rail unreachable: TimeoutError")
+
+    rail = Unreachable()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, category="electronics", photos=[_stored_photo("u.jpg")])
+
+    with pytest.raises(ToolError, match="unreachable"):
+        dispatch(tool, {"item_id": item["id"]}, ctx)
+
+    assert rail.uploads == []
+    assert rail.calls == []
+
+
+def test_an_item_already_on_carousell_ai_is_not_refused_at_upload(make_ctx, store, xdg_tmp):
+    """Its category refused since it went live: the upload must not tell the seller it never was."""
+    rail = PolicyRail()
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    item = _item(store, category="weapons", photos=[_stored_photo("w.jpg")])
+    store.record_listing_url(item["id"], "carousell-ai", rail.url)
+
+    assert dispatch("carousell_ai_upload_photos", {"item_id": item["id"]}, ctx) == {"count": 1}
+    assert not any(call.startswith("policy:") for call in rail.calls)
+
+
+def test_uploading_a_missing_item_is_refused_before_any_check(make_ctx) -> None:
+    rail = PolicyRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    with pytest.raises(ToolError, match="no item with id 'item_nope'"):
+        dispatch("carousell_ai_upload_photos", {"item_id": "item_nope"}, ctx)
+    assert rail.calls == []
+
+
+# --- a refusal at create is final ---------------------------------------------------------------
+
+
+class RefusingRail(PolicyRail):
+    """create_listing refuses as bazaar does for a term in the text."""
+
+    def create_listing(self, args):
+        self.calls.append("create")
+        raise RailPolicyRefused(_REFUSALS["weapons"])
+
+
+def test_a_refusal_from_create_listing_leaves_the_item_a_draft(make_ctx, store) -> None:
+    rail = RefusingRail()
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail)
+    item = _item(store, title="Taser, new in box", category="electronics")
+
+    result = dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert result == {"refused": True, "message": _REFUSALS["weapons"]}
+    assert rail.calls.count("create") == 1
+    after = store.get_item(item["id"])
+    assert after["listing_urls"] == {}
+    assert after["status"] == item["status"]
+
+
+def test_a_refusal_from_create_listing_gives_its_pacing_slot_back(make_ctx, store) -> None:
+    """A refused item is not a publish attempt, so it leaves the hourly count where it was."""
+    published = _item(store, title="Lamp")
+    dispatch(
+        "carousell_ai_publish_listing",
+        {"item_id": published["id"]},
+        make_ctx(TIER_PASS_CHANNEL, rail_factory=PolicyRail),
+    )
+    count = "SELECT COUNT(*) AS n FROM pacing_actions WHERE marketplace = 'carousell-ai'"
+    assert store._db.query(count)[0]["n"] == 1
+
+    refused = _item(store, title="Taser, new in box")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=RefusingRail)
+    assert dispatch("carousell_ai_publish_listing", {"item_id": refused["id"]}, ctx)["refused"]
+
+    assert store._db.query(count)[0]["n"] == 1
+
+
+def test_a_refusal_inside_a_pass_is_noted_on_the_pass(make_ctx, store) -> None:
+    """What lets the lane that queued the pass settle it once, instead of retrying it."""
+    item = _item(store, title="Taser, new in box")
+    pass_id = store.enqueue_pass("publish", {"item_id": item["id"], "market": "carousell-ai"})
+    ctx = make_ctx(TIER_PASS_PUBLISH, pass_id=pass_id, rail_factory=RefusingRail)
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert store.get_pass(pass_id)["payload"]["refused"] == _REFUSALS["weapons"]
+
+
+def test_a_refused_category_inside_a_pass_is_noted_on_the_pass(make_ctx, store, xdg_tmp):
+    item = _item(store, category="too_big_to_ship", photos=[_stored_photo("s.jpg")])
+    pass_id = store.enqueue_pass("publish", {"item_id": item["id"], "market": "carousell-ai"})
+    ctx = make_ctx(TIER_PASS_PUBLISH, pass_id=pass_id, rail_factory=PolicyRail)
+
+    dispatch("carousell_ai_upload_photos", {"item_id": item["id"]}, ctx)
+
+    assert store.get_pass(pass_id)["payload"]["refused"] == _REFUSALS["too_big_to_ship"]
+
+
+def test_a_published_item_notes_no_refusal(make_ctx, store) -> None:
+    item = _item(store, category="electronics")
+    pass_id = store.enqueue_pass("publish", {"item_id": item["id"], "market": "carousell-ai"})
+    ctx = make_ctx(TIER_PASS_PUBLISH, pass_id=pass_id, rail_factory=PolicyRail)
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    assert "refused" not in store.get_pass(pass_id)["payload"]
+
+
+def test_another_refusal_from_create_listing_is_still_a_failure(make_ctx, store) -> None:
+    class Refusing(PolicyRail):
+        def create_listing(self, args):
+            raise RailToolRefused("title is required")
+
+    item = _item(store)
+    pass_id = store.enqueue_pass("publish", {"item_id": item["id"], "market": "carousell-ai"})
+    ctx = make_ctx(TIER_PASS_PUBLISH, pass_id=pass_id, rail_factory=Refusing)
+
+    with pytest.raises(ToolError, match="title is required"):
+        dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+    assert "refused" not in store.get_pass(pass_id)["payload"]

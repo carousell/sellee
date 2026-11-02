@@ -607,6 +607,16 @@ class SendMixin:
         result["marketplace"] = marketplace
         return result
 
+    def release_action(self, *, marketplace: str, kind: str, ts: float) -> None:
+        """Give back one slot `reserve_action` took at `ts`, for an action the marketplace refused
+        before it happened, so the refusal does not count against the hourly cap."""
+        with self._db.transaction() as conn:
+            conn.execute(
+                "DELETE FROM pacing_actions WHERE rowid = (SELECT rowid FROM pacing_actions "
+                "WHERE marketplace = ? AND kind = ? AND ts = ? LIMIT 1)",
+                (marketplace, kind, ts),
+            )
+
     def peek_action(self, *, marketplace: str, kind: str, cfg, now: float | None = None) -> dict:
         """The verdict `reserve_action` would give right now, without taking the slot.
 

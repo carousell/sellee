@@ -64,6 +64,7 @@ class ItemsMixin:
         condition: str | None = None,
         photos: list | None = None,
         size_bucket: str | None = None,
+        category: str | None = None,
     ) -> ItemRecord:
         if not title or not title.strip():
             raise StoreError("title must be non-empty")
@@ -82,6 +83,7 @@ class ItemsMixin:
                 condition=condition,
                 photos=stored_photos,
                 size_bucket=bucket,
+                category=category,
                 now=ts,
             )
         return self.get_item(item_id)  # type: ignore[return-value]

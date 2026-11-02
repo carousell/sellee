@@ -25,6 +25,7 @@ from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserDetached, BrowserError, BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
+from sellee.rail.client import RailError, category_refusal
 from sellee.store import MAX_PHOTOS, StoreError
 from sellee.store.survey import (
     LISTING_ACCEPTED,
@@ -56,6 +57,7 @@ RAIL_FAILED_NOTICE = (
     "I couldn't get {title} onto {rail}, so for now it's only on {name}. I'm still answering "
     "buyers on it. Ask me and I'll have another go."
 )
+RAIL_REFUSED_NOTICE = "{rail} won't take {title}, so it stays only on {name}. {message}"
 SUMMARY_NOTICE = "Done with your {name} listings: {parts}."
 
 # The page one adoption costs: the listing's own.
@@ -407,6 +409,10 @@ def _settle_queued(deps) -> None:
                 {"market": row["market"], "item_id": row["item_id"], "url": url},
             )
             continue
+        refused = (pass_row or {}).get("payload", {}).get("refused")
+        if refused:
+            _settle_refused(deps, row, title, refused)
+            continue
         if row["rail_attempts"] < RAIL_MAX_ATTEMPTS:
             deps.store.set_rail_publish_state(row["market"], row["listing_id"], RAIL_OWED)
             deps.bus.publish(
@@ -418,19 +424,51 @@ def _settle_queued(deps) -> None:
                 },
             )
             continue
-        deps.store.set_rail_publish_state(
-            row["market"],
-            row["listing_id"],
-            RAIL_FAILED,
-            notice_text=RAIL_FAILED_NOTICE.format(
-                title=title,
-                rail=marketplaces.display_name(marketplaces.RAIL),
-                name=marketplaces.display_name(row["market"]),
-            ),
-        )
-        deps.bus.publish(
-            "survey.relist_failed", {"market": row["market"], "item_id": row["item_id"]}
-        )
+        _settle_failed(deps, row, title)
+
+
+def _settle_failed(deps, row, title: str) -> None:
+    """Settle a publish that will not be tried again until the seller asks."""
+    deps.store.set_rail_publish_state(
+        row["market"],
+        row["listing_id"],
+        RAIL_FAILED,
+        notice_text=RAIL_FAILED_NOTICE.format(
+            title=title,
+            rail=marketplaces.display_name(marketplaces.RAIL),
+            name=marketplaces.display_name(row["market"]),
+        ),
+    )
+    deps.bus.publish("survey.relist_failed", {"market": row["market"], "item_id": row["item_id"]})
+
+
+def _settle_refused(deps, row, title: str, message: str) -> None:
+    """Settle a publish carousell.ai's item policy refuses, once and in its words: a retry would be
+    refused the same way."""
+    deps.store.set_rail_publish_state(
+        row["market"],
+        row["listing_id"],
+        RAIL_FAILED,
+        notice_text=RAIL_REFUSED_NOTICE.format(
+            title=title,
+            rail=marketplaces.display_name(marketplaces.RAIL),
+            name=marketplaces.display_name(row["market"]),
+            message=message,
+        ),
+    )
+    deps.bus.publish("survey.relist_refused", {"market": row["market"], "item_id": row["item_id"]})
+
+
+def _category_refusal(deps, item: dict) -> str | None:
+    """The cached item policy's refusal of this item's category, or None. A policy that cannot be
+    read queues the pass anyway: its tools check again, and fail closed there."""
+    if deps.rail_factory is None:
+        return None
+    try:
+        return category_refusal(deps.rail_factory(), item["category"])
+    except RailError as exc:
+        log.warning("could not check an adopted listing's category before its publish: %s", exc)
+        return None
 
 
 def _enqueue_owed(deps) -> None:
@@ -452,6 +490,15 @@ def _enqueue_owed(deps) -> None:
     if item["listing_urls"].get(marketplaces.RAIL):
         # Already there — a publish that landed while we were not looking. Nothing owed.
         deps.store.set_rail_publish_state(row["market"], row["listing_id"], RAIL_DONE)
+        return
+    if not item["category"]:
+        # A publish pass cannot set one, so it would fail every attempt; the seller's ask can.
+        _settle_failed(deps, row, item["title"])
+        return
+    refusal = _category_refusal(deps, item)
+    if refusal:
+        # No pass is spent on an item the policy refuses.
+        _settle_refused(deps, row, item["title"], refusal)
         return
     pass_id = deps.store.enqueue_pass(
         "publish", {"item_id": item["id"], "market": marketplaces.RAIL, "origin": ORIGIN}

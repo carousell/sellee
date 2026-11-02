@@ -74,6 +74,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 30),
         ("data", 31),
         ("data", 32),
+        # 33 is the publish-key work, in flight on its own branch, and reserved the same way.
+        ("data", 34),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -138,6 +140,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         30,
         31,
         32,
+        34,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -529,3 +532,20 @@ def test_0031_anchors_a_buyer_already_withdrawn_on_their_newest_message(
 
     rows = data_db.query("SELECT thread_id, msg_id FROM buyer_withdrawals")
     assert [(r["thread_id"], r["msg_id"]) for r in rows] == [("fb:gone", "m2")]
+
+
+def test_0034_leaves_an_existing_item_without_a_category(tmp_path, monkeypatch) -> None:
+    real_data, root = _withhold(tmp_path, monkeypatch, "0034")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO items (id, title, status, created_ts, updated_ts)"
+            " VALUES ('item_old', 'Lamp', 'draft', 1.0, 1.0)"
+        )
+
+    shutil.copy(real_data / "0034_item_category.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    item = store.Store(data_db).get_item("item_old")
+    assert item is not None and item["category"] is None

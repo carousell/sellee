@@ -19,7 +19,7 @@ from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
 from sellee.money import to_price_cents
 from sellee.rail import signin
-from sellee.rail.client import RailError, RailUnprovisioned
+from sellee.rail.client import RailError, RailPolicyRefused, RailUnprovisioned, category_refusal
 from sellee.store import SIZE_BUCKETS, StoreError
 from sellee.tools.checkout import SIGNIN_TIERS, _rail
 from sellee.tools.registry import (
@@ -63,6 +63,30 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
             f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
             f"a different amount of money. Re-price the item in {expected} before publishing"
         )
+
+
+def _refused(ctx: ToolContext, message: str) -> dict:
+    """The answer for a refused item. Inside a pass the refusal is also noted on the pass row, so
+    whatever queued it settles it once instead of retrying."""
+    if ctx.session.pass_id:
+        ctx.store.note_pass_refused(ctx.session.pass_id, message)
+    return {"refused": True, "message": message}
+
+
+def category_check(ctx: ToolContext, item: dict) -> dict | None:
+    """The refusal when the cached item policy refuses the item's category, or None. Fails closed:
+    no category or an unreadable policy fails the step rather than let a refused item through."""
+    if not item["category"]:
+        # carousell.ai refuses a listing without one; named here so the fix comes with it.
+        raise ToolError(
+            "item has no category; carousell.ai lists nothing without one. Set the item's token "
+            "from carousell_ai_item_policy as category with update_item first"
+        )
+    try:
+        message = category_refusal(_rail(ctx), item["category"])
+    except RailError as exc:  # caller-safe, secret-free messages
+        raise ToolError(str(exc)) from exc
+    return None if message is None else _refused(ctx, message)
 
 
 def _signin_offer(ctx: ToolContext) -> str | None:
@@ -115,16 +139,21 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
+    # Before the pacing slot: an item carousell.ai will not take is not a publish attempt.
+    refusal = category_check(ctx, item)
+    if refusal:
+        return refusal
+
     # Every outbound marketplace action reserves through the pacing gate first — a publish is a
     # real action on the carousell-ai account, jitter-free (a slow human-paced form), but it still
     # counts against the per-marketplace hourly cap and quiet hours.
-    cfg = pacing_engine.resolve(
-        ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
-    )
+    now = time.time()
+    cfg = pacing_engine.resolve(ctx.config, settings.quiet_window_minutes(ctx.store), now=now)
     paced = ctx.store.reserve_action(
         marketplace=_MARKET,
         kind="publish",
         cfg=cfg,
+        now=now,
         interactive=ctx.session.tier == TIER_ATTENDED,
     )
     if paced["verdict"] != "go":
@@ -141,6 +170,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         "description": item["description"] or "",
         "price_cents": price_cents,
         "parcel_bucket": f"PARCEL_BUCKET_{item['size_bucket'].upper()}",
+        "category": item["category"],
     }
     if currency:
         args["currency"] = currency
@@ -168,6 +198,11 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     try:
         listing = rail.create_listing(args)
         rail.verify_listing_url(listing["url"])  # fail-closed: raises if not live under /listing/
+    except RailPolicyRefused as exc:
+        # A term in the text, or a policy changed since the cache: final, never retried. Nothing
+        # was listed, so the slot goes back.
+        ctx.store.release_action(marketplace=_MARKET, kind="publish", ts=now)
+        return _refused(ctx, str(exc))
     except RailUnprovisioned as exc:
         raise ToolError(
             "carousell.ai is not provisioned — run `sellee provision carousell-ai`"

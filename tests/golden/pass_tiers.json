@@ -4,6 +4,7 @@
     "buyer_withdrew",
     "carousell_ai_create_checkout_link",
     "carousell_ai_create_signin_link",
+    "carousell_ai_item_policy",
     "carousell_ai_publish_listing",
     "carousell_ai_update_listing",
     "carousell_ai_upload_photos",

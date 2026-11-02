@@ -30,6 +30,12 @@ class FakeRail:
     def verify_listing_url(self, url):
         return None
 
+    def item_policy_category(self, token):
+        return {"token": token, "title": token.title(), "tier": "allowed"}
+
+    def item_policy_url(self):
+        return "https://www.carousell.ai/item-policy"
+
     def create_checkout(self, args):
         return {"checkout_url": "https://www.carousell.ai/checkout/deal-xyz"}
 
@@ -51,7 +57,13 @@ def test_sell_path_end_to_end_no_secret_leak(make_ctx, store, bus) -> None:
 
     item = dispatch(
         "create_item",
-        {"title": "Vintage lamp", "list_price": 9000.0, "currency": "SGD", "size_bucket": "m"},
+        {
+            "title": "Vintage lamp",
+            "list_price": 9000.0,
+            "currency": "SGD",
+            "size_bucket": "m",
+            "category": "lamps",
+        },
         ctx,
     )
     iid = item["id"]

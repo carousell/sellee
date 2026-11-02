@@ -28,6 +28,7 @@ _ITEM_WRITABLE = (
     "currency",
     "status",
     "size_bucket",
+    "category",
     "photos",
 )
 _ITEM_STATUSES = ("draft", "ready")
@@ -38,8 +39,8 @@ SIZE_BUCKETS = ("s", "m", "l", "xl")
 # up. Narrower than _ITEM_WRITABLE on purpose, and each absence has a reason:
 #
 #   * status — bookkeeping; no marketplace renders it.
-#   * size_bucket — the class the listing was published with. Changing it here would change the
-#     record and not the listing.
+#   * size_bucket, category — what the listing was published with. Changing either here would
+#     change the record and not the listing.
 #   * currency — carousell.ai's update verb has no currency argument at all (it is fixed at
 #     create), so the change could not be pushed anywhere it matters. It would also strand the
 #     stored floor, which snapshots its currency and is compared unit-blind: re-reading that
@@ -251,6 +252,7 @@ class ItemRecord(TypedDict):
     currency: str | None
     status: str
     size_bucket: str | None
+    category: str | None
     listing_urls: dict[str, str]
     photos: list
     created_ts: float
@@ -576,6 +578,7 @@ def _item_from_row(row: sqlite3.Row) -> ItemRecord:
         "currency": row["currency"],
         "status": row["status"],
         "size_bucket": row["size_bucket"],
+        "category": row["category"],
         "listing_urls": json.loads(row["listing_urls"]),
         "photos": json.loads(row["photos"]),
         "created_ts": row["created_ts"],
@@ -663,6 +666,8 @@ def validated_item_fields(fields: dict, writable=_ITEM_WRITABLE) -> dict:
         )
     if "size_bucket" in fields:
         fields = dict(fields, size_bucket=validated_size_bucket(fields["size_bucket"]))
+    if "category" in fields:
+        fields = dict(fields, category=fields["category"] or None)
     if not fields:
         raise StoreError("no fields to update")
     if "list_price" in fields:
@@ -1014,6 +1019,7 @@ def _insert_item_in_txn(
     photos: list,
     now: float,
     size_bucket: str | None = None,
+    category: str | None = None,
     status: str = "draft",
     listing_urls: dict | None = None,
 ) -> str:
@@ -1031,8 +1037,8 @@ def _insert_item_in_txn(
     conn.execute(
         "INSERT INTO items "
         "(id, title, description, condition, list_price, currency, status, size_bucket, "
-        " listing_urls, photos, created_ts, updated_ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        " category, listing_urls, photos, created_ts, updated_ts) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (
             item_id,
             title.strip(),
@@ -1042,6 +1048,7 @@ def _insert_item_in_txn(
             currency,
             status,
             size_bucket,
+            category or None,
             json.dumps(listing_urls or {}, sort_keys=True),
             json.dumps(photos),
             now,

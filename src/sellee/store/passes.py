@@ -144,6 +144,22 @@ class PassesMixin:
             )
         return out
 
+    def note_pass_refused(self, pass_id: str, message: str) -> None:
+        """Record that carousell.ai's item policy refused this pass's item, in its words. A pass id
+        with no row is ignored."""
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT payload FROM passes WHERE pass_id = ?", (pass_id,)
+            ).fetchone()
+            if row is None:
+                return
+            payload = json.loads(row["payload"])
+            payload["refused"] = message
+            conn.execute(
+                "UPDATE passes SET payload = ? WHERE pass_id = ?",
+                (json.dumps(payload, sort_keys=True), pass_id),
+            )
+
     def note_review_checked(self, pass_id: str, ts: float) -> None:
         """Record that an in-review publish was looked for and still has no link."""
         with self._db.transaction() as conn:

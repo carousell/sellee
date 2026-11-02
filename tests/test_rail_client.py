@@ -11,8 +11,11 @@ import pytest
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
+    RailPolicyRefused,
     RailToolError,
+    RailToolRefused,
     _text_content,
+    category_refusal,
     listing_id_from_url,
 )
 
@@ -151,6 +154,73 @@ def test_rail_reports_iserror_result(fake_rail) -> None:
     server.tool_result = {"isError": True, "content": [{"type": "text", "text": "over quota"}]}
     with pytest.raises(RailToolError, match="over quota"):
         _client(base).create_listing({"title": "x"})
+
+
+_REFUSAL = (
+    "Items in “Weapons” can’t be listed on carousell.ai. "
+    "See https://www.carousell.ai/item-policy for what can be listed."
+)
+
+
+def test_an_item_policy_refusal_is_raised_as_one_without_its_code(fake_rail) -> None:
+    """bazaar marks the refusal only by the code it appends to the tool error's text."""
+    server, base = fake_rail
+    text = f"{_REFUSAL} (code: item_policy_refused)"
+    server.tool_result = {"isError": True, "content": [{"type": "text", "text": text}]}
+    with pytest.raises(RailPolicyRefused) as caught:
+        _client(base).create_listing({"title": "Hunting knife", "category": "weapons"})
+    assert str(caught.value) == _REFUSAL
+
+
+def test_another_code_is_not_an_item_policy_refusal(fake_rail) -> None:
+    server, base = fake_rail
+    text = "this account cannot list yet (code: state_blocked)"
+    server.tool_result = {"isError": True, "content": [{"type": "text", "text": text}]}
+    with pytest.raises(RailToolRefused) as caught:
+        _client(base).create_listing({"title": "x"})
+    assert not isinstance(caught.value, RailPolicyRefused)
+    assert str(caught.value) == text
+
+
+def test_the_category_check_reads_only_the_cached_policy() -> None:
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    relay = FakeRelay()
+    base, shutdown = serve(relay)
+    try:
+        client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
+        answers = [category_refusal(client, t) for t in ("weapons", "too_big_to_ship", None)]
+        answers.append(category_refusal(client, "electronics"))
+        with pytest.raises(RailToolError, match="'crafts' is no longer in carousell.ai's item"):
+            category_refusal(client, "crafts")
+    finally:
+        shutdown()
+    assert answers == [
+        "Items in “Weapons” can’t be listed on carousell.ai. "
+        "See https://www.carousell.ai/item-policy for what can be listed.",
+        "Items in “Too Big To Ship” can’t be listed on carousell.ai yet. "
+        "See https://www.carousell.ai/item-policy for what can be listed.",
+        None,
+        None,
+    ]
+    # One read, plus the one an unknown token costs; nothing else is asked.
+    assert relay.tool_calls == ["get_item_policy", "get_item_policy"]
+
+
+def test_create_listing_refused_by_carousell_ai() -> None:
+    from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+    relay = FakeRelay()
+    relay.refused_terms = {"taser": "weapons"}
+    base, shutdown = serve(relay)
+    try:
+        client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
+        with pytest.raises(RailPolicyRefused) as caught:
+            client.create_listing({"title": "Taser, new in box", "category": "electronics"})
+    finally:
+        shutdown()
+    assert str(caught.value) == _REFUSAL
+    assert relay.listings == []
 
 
 def test_verify_listing_url_live_200(fake_rail) -> None:
