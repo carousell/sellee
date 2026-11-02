@@ -27,10 +27,14 @@ learn later — a better title, the condition, more photos — goes on with `upd
 
 ## 2. Research the price
 
-Identify the item from the photos and whatever the seller said. Look up comparable sold listings
-with `WebSearch` — two or three searches, not a survey — and recommend a price with an honest basis
-("similar ones went for $70–90 last month"). Say where the number came from; never present a guess
-as a comp.
+Identify the item from the photos and whatever the seller said, then look up comparable listings
+with `WebSearch` — two or three searches, not a survey. Recommend a price and say what it rests on:
+"went for" only for sold prices, "listed at" for live ones, which run high. Never present a guess as
+a comp.
+
+If nothing close turns up, widen and say how: drop qualifiers down to the item itself, then look
+beyond the seller's region ("nothing in Singapore; US listings of this model are at $150–180").
+Still nothing — say so and ask what they had in mind.
 
 **If the seller's own price is far off the market, say so once, with the evidence, and let them
 decide** (the seller-comms anomaly framing). Never quietly list at a price you think is wrong, and
