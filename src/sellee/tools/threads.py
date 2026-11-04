@@ -11,6 +11,7 @@ their own tools, never this generic writer.
 from __future__ import annotations
 
 from sellee.store import IMPORTED_THREAD_SOURCES, StoreError
+from sellee.tools import escalations
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -84,6 +85,7 @@ def _hold_thread(ctx: ToolContext, params: dict) -> dict:
 
 
 def _release_thread(ctx: ToolContext, params: dict) -> dict:
+    escalations.refuse_answering_a_scam_confirmation(ctx.store, params["thread_id"])
     try:
         return ctx.store.release_thread(params["thread_id"])
     except StoreError as exc:

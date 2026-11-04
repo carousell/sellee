@@ -83,7 +83,7 @@ _THREAD_SIDES = ("sell", "buy")
 # The sources the inboxes file a thread they read off a marketplace under. Only such a thread shows
 # a buyer came through that marketplace, so nothing else may file one.
 IMPORTED_THREAD_SOURCES = frozenset({"browser_read", "registration_read", "relay_read"})
-# The escalation kind whose answers code acts on (answer_scam_confirmation), not the model.
+# The ask that settles a held scam; only answer_scam_confirmation closes it.
 SCAM_CONFIRMATION = "scam_confirmation"
 # Thread transcript reads are capped so a huge thread can't blow a pass's context.
 _TRANSCRIPT_DEFAULT_CAP = 100
