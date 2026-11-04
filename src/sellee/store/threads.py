@@ -8,6 +8,7 @@ from sellee.db import Database
 from sellee.store.helpers import (
     _THREAD_SIDES,
     _TRANSCRIPT_DEFAULT_CAP,
+    SCAM_CONFIRMATION,
     ItemNotFound,
     MessageRecord,
     StoreError,
@@ -343,3 +344,50 @@ class ThreadsMixin:
                 (restored, _now(), thread_id),
             )
         return self.get_thread(thread_id)  # type: ignore[return-value]
+
+    def release_not_a_scam(self, thread_id: str) -> dict:
+        """The seller's *Not a scam*: resolve the open scam confirmation, lower each `scam`
+        verdict on the thread to `suspicious`, and put back the status from before hold and ask."""
+        ts = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, held_from_status, escalated_from_status FROM threads "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            if not row:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            asked = conn.execute(
+                "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open' AND kind = ?",
+                (thread_id, SCAM_CONFIRMATION),
+            ).fetchone()
+            if asked is None:
+                raise StoreError(f"thread {thread_id!r} has no scam confirmation open")
+            conn.execute(
+                "UPDATE escalations SET status = 'resolved', resolution = 'not a scam', "
+                "resolved_ts = ? WHERE id = ?",
+                (ts, asked["id"]),
+            )
+            lowered = conn.execute(
+                "UPDATE thread_messages SET scam_verdict = 'suspicious' "
+                "WHERE thread_id = ? AND scam_verdict = 'scam'",
+                (thread_id,),
+            ).rowcount
+            status = row["status"]
+            # Hold and ask stack in either order, so unwind both.
+            for _ in range(2):
+                if status == "held":
+                    status = row["held_from_status"] or "active"
+                elif status == "escalated":
+                    status = row["escalated_from_status"] or "active"
+            conn.execute(
+                "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
+                "escalated_from_status = NULL, updated_ts = ? WHERE thread_id = ?",
+                (status, ts, thread_id),
+            )
+        return {
+            "thread_id": thread_id,
+            "status": status,
+            "escalation_id": asked["id"],
+            "lowered": lowered,
+        }
