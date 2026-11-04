@@ -121,13 +121,12 @@ buyer in line when there is one. Its taps:
 **Scam confirmation.** The chat is already held and nothing was sent or clicked — say so, so the
 seller knows there's no fire. The one decision left is theirs: is this a scam? Describe the move in
 plain terms ("offered to 'arrange delivery', then sent a link to 'receive the money'"), show any
-link **defanged only** (`hxxps://payout[.]site` — never retype or open it), and offer: not a scam —
-resume / keep held.
-`options: ["👍 Not a scam — resume", "🛑 Keep it held"]`
-On carousell.ai, code makes the options not a scam / scam — block and report; answer with
-`answer_scam_confirmation` (`not_scam`, `scam`, or `keep_held` for an older ask). After `reported`, record the signature (`seller_confirm`). On `report_failed`, tell the
-seller the report did not reach carousell.ai and they can tap Scam again. Elsewhere, "not a scam" is
-`release_thread`; reporting is the seller's to do in the app, so never promise to file it.
+link **defanged only** (`hxxps://payout[.]site` — never retype or open it).
+Off carousell.ai: `options: ["👍 Not a scam — resume", "🛑 Keep it held"]`; "not a scam" is
+`release_thread`, and reporting is the seller's to do in the app, so never promise to file it.
+On carousell.ai, code sets the buttons (not a scam / scam — block, report): pass the answer to
+`answer_scam_confirmation` (`keep_held` only for an older ask). After `reported`, record the
+signature (`seller_confirm`). On `report_failed`, tell the seller its `detail`; a retap is safe.
 
 **Unconfirmed send — say nothing.** When `send_reply` returns `send_unverified` (`delivered:
 "unknown"`), the page took the message and the read-back could not see it. **Do not tell the seller,
