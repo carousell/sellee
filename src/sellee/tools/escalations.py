@@ -9,7 +9,7 @@ update_thread (escalated->active).
 
 from __future__ import annotations
 
-from sellee import reply_prompt
+from sellee import marketplaces, reply_prompt
 from sellee.channel import asks
 from sellee.engines import scam as scam_engine
 from sellee.store import StoreError
@@ -63,6 +63,26 @@ def _carousell_ai_label(store, thread_id: str) -> tuple:
         risk = scam_engine.higher_verdict(risk, row["carousell_ai_risk"])
     flags = [flag for row in inbound for flag in row["carousell_ai_flags"]]
     return risk, list(dict.fromkeys(flags))
+
+
+def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
+    thread_id = params["thread_id"]
+    thread = ctx.store.get_thread(thread_id, message_cap=0)
+    if thread is None:
+        raise ToolError(f"no thread with id {thread_id!r}")
+    if thread["market"] != marketplaces.RAIL:
+        raise ToolError(
+            "only a carousell.ai scam confirmation is answered here; on other markets release "
+            "the thread with release_thread"
+        )
+    try:
+        result = ctx.store.release_not_a_scam(thread_id)
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    ctx.bus.publish(
+        "escalation.resolved", {"id": result["escalation_id"]}, pass_id=ctx.session.pass_id
+    )
+    return result
 
 
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:
@@ -139,6 +159,27 @@ register(
             "additionalProperties": False,
         },
         handler=_resolve_escalation,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="answer_scam_confirmation",
+        description="The seller's answer to a carousell.ai scam confirmation (an escalation of "
+        "kind scam_confirmation). not_scam resolves it, lowers the thread's scam verdicts to "
+        "suspicious so replies are no longer refused, and restores the thread's status; nothing "
+        "is sent to carousell.ai. Refuses, changing nothing, when no confirmation is open.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "answer": {"type": "string", "enum": ["not_scam"]},
+            },
+            "required": ["thread_id", "answer"],
+            "additionalProperties": False,
+        },
+        handler=_answer_scam_confirmation,
+        # The seller's own decision, so only where their answer arrives.
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )

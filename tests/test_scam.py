@@ -1,13 +1,39 @@
 """The scam engine + its tools: scoring, the merged registry+bank view, the bank state machine,
-and the record/retract/scan tools over the store."""
+the record/retract/scan tools over the store, and the seller's answer to a carousell.ai scam
+confirmation."""
 
 from __future__ import annotations
 
-import pytest
+import itertools
+import shutil
+import tempfile
+from pathlib import Path
 
+import pytest
+from hypothesis import HealthCheck, settings
+from hypothesis import strategies as st
+from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
+from tests.conftest import seed_setting
+from tests.fake_carousell_ai_mcp import FakeRelay, serve
+
+from sellee import migrations
+from sellee.config import Config
+from sellee.db import Database
 from sellee.engines import hosts, scam
-from sellee.store import StoreError
-from sellee.tools.registry import ToolError, dispatch
+from sellee.events import EventBus, EventStore
+from sellee.rail import inbox as relay
+from sellee.rail.client import RailClient
+from sellee.rail.sink import RelayReplySink
+from sellee.store import SCAM_CONFIRMATION, Store, StoreError
+from sellee.tools.registry import (
+    TIER_ATTENDED,
+    TIER_PASS_REPLY,
+    Session,
+    ToolContext,
+    ToolError,
+    all_specs,
+    dispatch,
+)
 
 BASE = "https://www.carousell.ai/checkout"
 
@@ -233,3 +259,254 @@ def test_record_then_scan_hits_then_retract(store, make_ctx) -> None:
     assert removed["removed"] == 1
     after, _ = store.merged_scam_signatures()
     assert "fastpay.top" not in {m["value"] for m in after}
+
+
+# --- the carousell.ai scam confirmation ----------------------------------------------------------
+
+_WEB = "https://www.carousell.ai"
+_FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
+# A buyer text for each verdict Sellee's own scan gives.
+_LOCAL = {
+    "clean": "Is the lamp still available?",
+    "suspicious": "check this out https://randomsite.top/deal",
+    "scam": "I'll arrange the courier, click https://fastpay-sg.top/claim to receive the money",
+}
+
+
+class _Relay:
+    """One carousell.ai thread on a fresh store, with the carousell.ai fake behind it."""
+
+    def __init__(self, root: Path):
+        data_db, events_db = Database(root / "sellee.db"), Database(root / "events.db")
+        migrations.run_startup_migrations(
+            data_db=data_db, events_db=events_db, backups_dir=root / "b", backups_keep=1
+        )
+        self.dbs = (data_db, events_db)
+        self.store = Store(data_db)
+        seed_setting(self.store, "quiet_hours", [0, 0])
+        self.bus = EventBus(EventStore(events_db))
+        self.fake = FakeRelay()
+        self.fake.base, self._shutdown = serve(self.fake)
+        made = self.store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
+        self.store.record_listing_url(made["id"], "carousell-ai", f"{_WEB}/listing/L1")
+        self.fake.add_thread("t1", listing_id="L1")
+        self.thread_id = "carousell-ai:t1"
+        self._ids = itertools.count(1)
+
+    def client(self) -> RailClient:
+        return RailClient(api_base=self.fake.base, api_key="k", web_base_url=_WEB)
+
+    def ctx(self, tier: str = TIER_ATTENDED) -> ToolContext:
+        sink = RelayReplySink(
+            client=self.client(), store=self.store, bus=self.bus, retry_delays_sec=(0, 0, 0)
+        )
+        return ToolContext(
+            session=Session(tier=tier),
+            store=self.store,
+            bus=self.bus,
+            config=_FAST,
+            rail_factory=self.client,
+            reply_sink=lambda _market: sink,
+        )
+
+    def buyer_writes(self, *, local: str = "clean", risk: str = "", flags=()) -> str:
+        msg_id = f"m{next(self._ids)}"
+        self.fake.add_message("t1", msg_id, "buyer", _LOCAL[local], risk=risk, flags=flags)
+        relay.relay_lane(
+            relay.RelayDeps(
+                store=self.store, bus=self.bus, config=Config(), rail_factory=self.client
+            )
+        )
+        return msg_id
+
+    def confirm(self, *, hold_first: bool = True) -> None:
+        """The scam guard's handling: hold the thread and ask the seller."""
+        ctx = self.ctx()
+        hold = ("hold_thread", {"thread_id": self.thread_id, "reason": "scam"})
+        ask = (
+            "escalate",
+            {
+                "thread_id": self.thread_id,
+                "open_question": "This buyer sent a payment link. Is it a scam?",
+                "kind": SCAM_CONFIRMATION,
+                "options": ["👍 Not a scam — resume", "🛑 Keep it held"],
+            },
+        )
+        for name, params in (hold, ask) if hold_first else (ask, hold):
+            dispatch(name, params, ctx)
+
+    def answer(self, answer: str) -> dict:
+        return dispatch(
+            "answer_scam_confirmation", {"thread_id": self.thread_id, "answer": answer}, self.ctx()
+        )
+
+    def reply(self, msg_id: str) -> dict:
+        return dispatch(
+            "send_reply",
+            {"thread_id": self.thread_id, "text": "Yes, still here.", "in_msg_id": msg_id},
+            self.ctx(),
+        )
+
+    def messages(self) -> list:
+        return self.store.get_thread_messages(self.thread_id)
+
+    def close(self) -> None:
+        self._shutdown()
+        for db in self.dbs:
+            db.close()
+
+
+@pytest.fixture
+def relay_thread(tmp_path, xdg_tmp):
+    made = _Relay(tmp_path)
+    yield made
+    made.close()
+
+
+def test_not_a_scam_lets_sellee_answer_the_buyer_again(relay_thread) -> None:
+    msg_id = relay_thread.buyer_writes(risk="scam", flags=["platform_impersonation"])
+    relay_thread.confirm()
+    assert relay_thread.reply(msg_id)["status"] == "scam_held"
+    calls = list(relay_thread.fake.tool_calls)
+
+    result = relay_thread.answer("not_scam")
+
+    assert result["status"] == "active"
+    assert relay_thread.fake.tool_calls == calls
+    [row] = relay_thread.messages()
+    assert (row["scam_verdict"], row["carousell_ai_risk"]) == ("suspicious", "scam")
+    assert row["carousell_ai_flags"] == ["platform_impersonation"]
+    assert relay_thread.store.list_open_escalations() == []
+    assert relay_thread.reply(msg_id)["status"] == "sent"
+
+
+def test_not_a_scam_leaves_messages_that_were_not_scam_as_they_were(relay_thread) -> None:
+    relay_thread.buyer_writes(local="clean", risk="clean")
+    relay_thread.buyer_writes(local="suspicious")
+    relay_thread.buyer_writes(local="scam", risk="clean")
+    relay_thread.confirm(hold_first=False)
+
+    relay_thread.answer("not_scam")
+
+    assert [(r["scam_verdict"], r["carousell_ai_risk"]) for r in relay_thread.messages()] == [
+        ("clean", "clean"),
+        ("suspicious", None),
+        ("suspicious", "clean"),
+    ]
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
+
+
+def test_an_answer_with_no_confirmation_open_changes_nothing(relay_thread) -> None:
+    msg_id = relay_thread.buyer_writes(risk="scam")
+    relay_thread.store.hold_thread(relay_thread.thread_id, "scam")
+
+    with pytest.raises(ToolError, match="no scam confirmation"):
+        relay_thread.answer("not_scam")
+
+    assert relay_thread.messages()[0]["scam_verdict"] == "scam"
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "held"
+    assert relay_thread.reply(msg_id)["status"] == "scam_held"
+
+
+def test_another_markets_confirmation_is_not_answered_here(store, make_ctx) -> None:
+    _sell_thread(store)
+    store.append_thread_message(
+        "fb:1", msg_id="m1", direction="in", text="x", ts=1.0, scam_verdict="scam"
+    )
+    store.escalate("fb:1", open_question="Scam?", kind=SCAM_CONFIRMATION)
+
+    with pytest.raises(ToolError, match="carousell.ai"):
+        dispatch(
+            "answer_scam_confirmation",
+            {"thread_id": "fb:1", "answer": "not_scam"},
+            make_ctx("attended"),
+        )
+
+    assert store.get_thread_messages("fb:1")[0]["scam_verdict"] == "scam"
+
+
+def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
+    [spec] = [s for s in all_specs() if s.name == "answer_scam_confirmation"]
+    assert TIER_PASS_REPLY not in spec.tiers
+
+
+_VERDICTS = ("clean", "suspicious", "scam")
+
+
+class NotAScam(RuleBasedStateMachine):
+    """Buyer mail, confirmations and answers in any order on one carousell.ai thread. After
+    *Not a scam* no message reads `scam`, and no reply to any of them is refused as one."""
+
+    def __init__(self):
+        super().__init__()
+        self.root = Path(tempfile.mkdtemp())
+        self.relay = _Relay(self.root)
+        self.served: dict = {}
+        self.open = False
+
+    def teardown(self):
+        self.relay.close()
+        shutil.rmtree(self.root, ignore_errors=True)
+
+    @rule(
+        local=st.sampled_from(_VERDICTS),
+        risk=st.sampled_from(("", "clean", "suspicious", "scam")),
+        flags=st.lists(st.sampled_from(("scam_phrase", "off_platform_link")), max_size=2),
+    )
+    def buyer_writes(self, local, risk, flags):
+        msg_id = self.relay.buyer_writes(local=local, risk=risk, flags=flags)
+        self.served[msg_id] = risk or None
+
+    @precondition(lambda self: self.served and not self.open)
+    @rule(hold_first=st.booleans())
+    def sellee_asks_the_seller(self, hold_first):
+        self.relay.confirm(hold_first=hold_first)
+        self.open = True
+
+    @precondition(lambda self: self.open)
+    @rule()
+    def seller_answers_not_a_scam(self):
+        before = {row["msg_id"]: row["scam_verdict"] for row in self.relay.messages()}
+        calls = list(self.relay.fake.tool_calls)
+
+        self.relay.answer("not_scam")
+        self.open = False
+
+        assert self.relay.fake.tool_calls == calls
+        after = {row["msg_id"]: row["scam_verdict"] for row in self.relay.messages()}
+        assert after == {
+            msg_id: "suspicious" if verdict == "scam" else verdict
+            for msg_id, verdict in before.items()
+        }
+        for msg_id in self.served:
+            assert self.relay.reply(msg_id)["status"] != "scam_held"
+
+    @precondition(lambda self: not self.open)
+    @rule()
+    def seller_answers_with_nothing_asked(self):
+        before = self.relay.messages()
+        with pytest.raises(ToolError):
+            self.relay.answer("not_scam")
+        assert self.relay.messages() == before
+
+    @invariant()
+    def carousell_ais_risk_is_kept_as_the_record(self):
+        stored = {
+            row["msg_id"]: row["carousell_ai_risk"]
+            for row in self.relay.messages()
+            if row["dir"] == "in"
+        }
+        assert stored == self.served
+
+
+NotAScam.TestCase.settings = settings(
+    max_examples=20,
+    stateful_step_count=8,
+    deadline=None,
+    suppress_health_check=[HealthCheck.too_slow],
+)
+
+
+@pytest.mark.usefixtures("xdg_tmp")
+class TestNotAScam(NotAScam.TestCase):
+    pass
