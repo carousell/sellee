@@ -367,8 +367,8 @@ class ThreadsMixin:
 
     def settle_scam_confirmation(self, thread_id: str, answer: str) -> dict:
         """`not_scam` lowers each `scam` verdict to `suspicious` and restores the status from
-        before hold and ask; `keep_held` leaves the verdicts and holds the thread."""
-        if answer not in ("not_scam", "keep_held"):
+        before hold and ask; `keep_held` holds the thread, and `scam` closes it."""
+        if answer not in ("not_scam", "keep_held", "scam"):
             raise StoreError(f"unknown scam confirmation answer {answer!r}")
         ts = _now()
         with self._db.transaction() as conn:
@@ -397,7 +397,15 @@ class ThreadsMixin:
             if status in ("held", "escalated"):
                 status = "active"
             lowered = 0
-            if answer == "keep_held":
+            if answer == "scam":
+                conn.execute(
+                    "UPDATE threads SET status = 'closed', closed_ts = ?, held_reason = NULL, "
+                    "held_from_status = NULL, escalated_from_status = NULL, updated_ts = ? "
+                    "WHERE thread_id = ?",
+                    (ts, ts, thread_id),
+                )
+                status = "closed"
+            elif answer == "keep_held":
                 conn.execute(
                     "UPDATE threads SET status = 'held', held_from_status = ?, "
                     "held_reason = COALESCE(held_reason, 'scam'), escalated_from_status = NULL, "

@@ -16,13 +16,14 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, 
 from tests.conftest import seed_setting
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
-from sellee import migrations, reply_prompt
+from sellee import migrations, reply_prompt, skills
+from sellee.channel import asks
 from sellee.config import Config
 from sellee.db import Database
 from sellee.engines import hosts, scam
 from sellee.events import EventBus, EventStore
 from sellee.rail import inbox as relay
-from sellee.rail.client import RailClient
+from sellee.rail.client import RailClient, RailToolError
 from sellee.rail.sink import RelayReplySink
 from sellee.store import SCAM_CONFIRMATION, Store, StoreError
 from sellee.tools.registry import (
@@ -180,8 +181,29 @@ def test_store_illegal_transition_refused(store) -> None:
     added = store.add_scam_signature(
         kind="domain", value="evil.win", marketplace="fb", thread_id="fb:1", context="x"
     )
+    store.transition_scam_signature(added["id"], "dismissed")
     with pytest.raises(StoreError):
-        store.transition_scam_signature(added["id"], "shared")  # observed -> shared is illegal
+        store.transition_scam_signature(added["id"], "confirmed")  # dismissed is final
+
+
+def test_shared_is_no_longer_a_signature_status(store) -> None:
+    added = store.add_scam_signature(
+        kind="domain",
+        value="evil.win",
+        marketplace="fb",
+        thread_id="fb:1",
+        context="x",
+        detected_by="seller_confirm",
+    )
+    with pytest.raises(StoreError, match="unknown scam status"):
+        store.transition_scam_signature(added["id"], "shared")
+
+
+def test_the_scam_guard_says_a_carousell_ai_scam_is_reported() -> None:
+    text = " ".join(skills.load("scam-guard").split())
+    assert "blocks and reports the buyer to carousell.ai" in text
+    assert "no tool here files a report" not in text
+    assert "nothing you record travels" not in text.lower()
 
 
 def test_registry_unreadable_degrades_to_bank_only(store, monkeypatch) -> None:
@@ -515,6 +537,124 @@ def test_another_markets_confirmation_is_not_answered_here(store, make_ctx) -> N
     dispatch("release_thread", {"thread_id": "fb:1"}, make_ctx("attended"))
 
 
+def test_scam_blocks_and_reports_the_buyer_in_one_tap(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam", flags=["platform_impersonation"])
+    relay_thread.confirm()
+
+    result = relay_thread.answer("scam")
+
+    assert result["status"] == "reported"
+    assert relay_thread.fake.block_calls == [{"id": "t1", "reason": "scam"}]
+    assert relay_thread.fake.reports == {"t1": "scam"}
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "closed"
+    assert relay_thread.store.list_open_escalations() == []
+    recorded = dispatch(
+        "record_scam_signature",
+        {
+            "kind": "link",
+            "value": "fastpay-sg.top",
+            "market": "carousell-ai",
+            "thread_id": relay_thread.thread_id,
+            "context": "seller confirmed",
+            "source": "seller_confirm",
+        },
+        relay_thread.ctx(),
+    )
+    assert recorded["deduped"] is False
+    assert len(relay_thread.fake.block_calls) == 1
+
+
+@pytest.mark.parametrize("failure", ["http503", "internal"])
+def test_a_report_that_does_not_reach_carousell_ai_keeps_the_thread_held(
+    relay_thread, failure
+) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm()
+    relay_thread.fake.block_script = [failure]
+
+    failed = relay_thread.answer("scam")
+
+    assert failed["status"] == "report_failed"
+    assert "did not reach carousell.ai" in failed["detail"]
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "escalated"
+    assert len(relay_thread.store.list_open_escalations()) == 1
+    assert relay_thread.messages()[0]["scam_verdict"] == "scam"
+    assert relay_thread.answer("scam")["status"] == "reported"
+    assert relay_thread.fake.block_calls == [{"id": "t1", "reason": "scam"}] * 2
+
+
+def test_an_unprovisioned_rail_reports_nothing_and_keeps_the_thread_held(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm()
+    ctx = relay_thread.ctx()
+    ctx.rail_factory = None
+
+    result = dispatch(
+        "answer_scam_confirmation", {"thread_id": relay_thread.thread_id, "answer": "scam"}, ctx
+    )
+
+    assert result["status"] == "report_failed"
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "escalated"
+
+
+@pytest.mark.parametrize("source", ["detect", "seller_confirm"])
+def test_recording_a_signature_sends_no_report(relay_thread, source) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    dispatch(
+        "record_scam_signature",
+        {
+            "kind": "pattern",
+            "value": "receive the money",
+            "market": "carousell-ai",
+            "thread_id": relay_thread.thread_id,
+            "context": "x",
+            "source": source,
+        },
+        relay_thread.ctx(),
+    )
+
+    assert relay_thread.fake.block_calls == []
+
+
+def test_a_carousell_ai_scam_confirmation_offers_block_and_report(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm()
+
+    [esc] = relay_thread.store.list_open_escalations()
+    assert esc["options"] == list(asks.CAROUSELL_AI_SCAM_OPTIONS)
+    assert asks.validate_options(list(asks.CAROUSELL_AI_SCAM_OPTIONS))
+
+
+def test_another_markets_scam_confirmation_is_unchanged(store, make_ctx) -> None:
+    _sell_thread(store)
+    store.append_thread_message(
+        "fb:1", msg_id="m1", direction="in", text="x", ts=1.0, scam_verdict="scam"
+    )
+    options = ["👍 Not a scam — resume", "🛑 Keep it held"]
+    dispatch(
+        "escalate",
+        {"thread_id": "fb:1", "open_question": "Scam?", "options": options},
+        make_ctx("attended"),
+    )
+
+    [esc] = store.list_open_escalations()
+    assert (esc["kind"], esc["options"]) == (None, options)
+    with pytest.raises(ToolError, match="carousell.ai"):
+        dispatch(
+            "answer_scam_confirmation",
+            {"thread_id": "fb:1", "answer": "scam"},
+            make_ctx("attended"),
+        )
+
+
+@pytest.mark.parametrize("reason", ["", "SCAM", "fraud", None])
+def test_the_rail_client_sends_no_block_without_a_known_reason(relay_thread, reason) -> None:
+    with pytest.raises(RailToolError, match="reason"):
+        relay_thread.client().block_buyer("t1", reason)
+
+    assert relay_thread.fake.block_calls == []
+
+
 def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
     [spec] = [s for s in all_specs() if s.name == "answer_scam_confirmation"]
     assert TIER_PASS_REPLY not in spec.tiers
@@ -523,9 +663,10 @@ def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
 _VERDICTS = ("clean", "suspicious", "scam")
 
 
-class NotAScam(RuleBasedStateMachine):
+class ScamConfirmation(RuleBasedStateMachine):
     """Buyer mail, confirmations and answers in any order on one carousell.ai thread. After
-    *Not a scam* no message reads `scam`, and no reply to any of them is refused as one."""
+    *Not a scam* no message reads `scam` and no reply is refused as one; each *Scam* tap sends
+    exactly one `block_buyer` with `scam`, and recording a signature sends none."""
 
     def __init__(self):
         super().__init__()
@@ -533,6 +674,7 @@ class NotAScam(RuleBasedStateMachine):
         self.relay = _Relay(self.root)
         self.served: dict = {}
         self.open = False
+        self.closed = False
 
     def teardown(self):
         self.relay.close()
@@ -547,7 +689,7 @@ class NotAScam(RuleBasedStateMachine):
         msg_id = self.relay.buyer_writes(local=local, risk=risk, flags=flags)
         self.served[msg_id] = risk or None
 
-    @precondition(lambda self: self.served)
+    @precondition(lambda self: self.served and not self.closed)
     @rule(hold_first=st.booleans())
     def sellee_asks_the_seller(self, hold_first):
         self.relay.confirm(hold_first=hold_first)
@@ -582,6 +724,45 @@ class NotAScam(RuleBasedStateMachine):
         assert self.relay.messages() == before
         assert self.relay.store.list_open_escalations() == []
 
+    @precondition(lambda self: self.open)
+    @rule(failure=st.sampled_from([None, "http503", "internal"]))
+    def seller_answers_scam(self, failure):
+        before = (self.relay.messages(), self.relay.store.get_thread(self.relay.thread_id))
+        calls = len(self.relay.fake.block_calls)
+        self.relay.fake.block_script = [failure] if failure else []
+
+        result = self.relay.answer("scam")
+
+        assert self.relay.fake.block_calls[calls:] == [{"id": "t1", "reason": "scam"}]
+        if failure:
+            assert result["status"] == "report_failed"
+            assert (self.relay.messages(), self.relay.store.get_thread(self.relay.thread_id)) == (
+                before
+            )
+            return
+        assert result["status"] == "reported"
+        assert self.relay.store.get_thread(self.relay.thread_id)["status"] == "closed"
+        assert self.relay.store.list_open_escalations() == []
+        self.open, self.closed = False, True
+
+    @precondition(lambda self: self.served)
+    @rule(source=st.sampled_from(["detect", "seller_confirm"]))
+    def a_signature_is_recorded(self, source):
+        calls = list(self.relay.fake.block_calls)
+        dispatch(
+            "record_scam_signature",
+            {
+                "kind": "pattern",
+                "value": "receive the money",
+                "market": "carousell-ai",
+                "thread_id": self.relay.thread_id,
+                "context": "x",
+                "source": source,
+            },
+            self.relay.ctx(),
+        )
+        assert self.relay.fake.block_calls == calls
+
     @precondition(lambda self: not self.open)
     @rule()
     def seller_answers_with_nothing_asked(self):
@@ -600,7 +781,7 @@ class NotAScam(RuleBasedStateMachine):
         assert stored == self.served
 
 
-NotAScam.TestCase.settings = settings(
+ScamConfirmation.TestCase.settings = settings(
     max_examples=20,
     stateful_step_count=8,
     deadline=None,
@@ -609,5 +790,5 @@ NotAScam.TestCase.settings = settings(
 
 
 @pytest.mark.usefixtures("xdg_tmp")
-class TestNotAScam(NotAScam.TestCase):
+class TestScamConfirmation(ScamConfirmation.TestCase):
     pass

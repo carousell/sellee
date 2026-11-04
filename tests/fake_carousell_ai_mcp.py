@@ -55,6 +55,11 @@ class FakeRelay:
         self.listings: list = []
         # Every tool called, by name, in order.
         self.tool_calls: list = []
+        # One block_buyer outcome per call ("ok" once empty): http503 and internal block nothing.
+        self.block_script: list = []
+        self.block_calls: list = []
+        # The first reason each thread's buyer was reported for, as bazaar keeps it.
+        self.reports: dict = {}
 
     def tick(self) -> float:
         self._clock += 1.0
@@ -146,6 +151,21 @@ class FakeRelay:
         if step == "no_id":
             return {}
         return {"message_id": msg_id}
+
+    def block_buyer(self, args: dict) -> dict:
+        """Block and report a thread's buyer, as bazaar does: the reason is one of four, the
+        first report stands, and a repeat blocks nothing more."""
+        step = self.block_script.pop(0) if self.block_script else "ok"
+        if step == "internal":
+            raise ToolFailure("internal server error")
+        if args.get("reason") not in ("scam", "spam", "abuse", "other"):
+            raise ToolFailure("reason is required: one of scam, spam, abuse, other")
+        thread_id = args.get("id")
+        if thread_id not in self.threads:
+            raise LookupError(thread_id)
+        self.reports.setdefault(thread_id, args["reason"])
+        self.block(thread_id)
+        return {}
 
     def _summary(self, thread_id) -> dict:
         t = self.threads[thread_id]
@@ -342,6 +362,7 @@ _TOOLS = (
     "list_registration_mail",
     "send_registration_reply",
     "get_registration_address",
+    "block_buyer",
 )
 
 
@@ -370,6 +391,12 @@ class _Handler(BaseHTTPRequestHandler):
             relay.reply_calls.append(dict(args))
             self._send(status, {"error": "unavailable"})
             return
+        if name == "block_buyer":
+            relay.block_calls.append(dict(args))
+            if relay.block_script[:1] == ["http503"]:
+                relay.block_script.pop(0)
+                self._send(503, {"error": "unavailable"})
+                return
         if name == "send_registration_reply" and relay.registration_script[:1] == ["http503"]:
             relay.registration_script.pop(0)
             relay.registration_calls.append(dict(args))
@@ -385,6 +412,7 @@ class _Handler(BaseHTTPRequestHandler):
             "get_item_policy": relay.get_item_policy,
             "create_listing": relay.create_listing,
             "update_listing": relay.update_listing,
+            "block_buyer": relay.block_buyer,
         }.get(name)
         if handler is None:
             result = {"isError": True, "content": [{"type": "text", "text": f"no tool {name}"}]}

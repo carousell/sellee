@@ -46,6 +46,9 @@ MAX_OPTIONS = 4
 # rows by, so a label that passes here is one the renderer can seat.
 MAX_OPTION_LABEL_COLS = 24
 
+# A carousell.ai scam confirmation's two answers, set in code for answer_scam_confirmation.
+CAROUSELL_AI_SCAM_OPTIONS = ("👍 Not a scam — resume", "🛑 Scam — block, report")
+
 
 def validate_options(options) -> list:
     """Check an option list from a tool call and return it as a plain list of labels.
