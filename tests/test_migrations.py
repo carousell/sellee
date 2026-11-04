@@ -76,6 +76,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 32),
         # 33 is the publish-key work, in flight on its own branch, and reserved the same way.
         ("data", 34),
+        ("data", 35),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -141,6 +142,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         31,
         32,
         34,
+        35,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -549,3 +551,35 @@ def test_0034_leaves_an_existing_item_without_a_category(tmp_path, monkeypatch) 
 
     item = store.Store(data_db).get_item("item_old")
     assert item is not None and item["category"] is None
+
+
+def test_0035_leaves_an_existing_message_without_a_carousell_ai_label(
+    tmp_path, monkeypatch
+) -> None:
+    real_data, root = _withhold(tmp_path, monkeypatch, "0035")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO items (id, title, status, created_ts, updated_ts)"
+            " VALUES ('item_x', 'Lamp', 'ready', 1.0, 1.0)"
+        )
+        conn.execute(
+            "INSERT INTO threads (thread_id, side, market, item_id, counterpart_handle, status,"
+            " created_ts, updated_ts) VALUES ('carousell-ai:t1', 'sell', 'carousell-ai',"
+            " 'item_x', 'bob', 'active', 1.0, 1.0)"
+        )
+        conn.execute(
+            "INSERT INTO thread_messages (thread_id, msg_id, dir, text, ts, scam_verdict)"
+            " VALUES ('carousell-ai:t1', 'm1', 'in', 'hi', 1.0, 'clean')"
+        )
+
+    shutil.copy(real_data / "0035_carousell_ai_risk.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    [row] = store.Store(data_db).get_thread_messages("carousell-ai:t1")
+    assert (row["scam_verdict"], row["carousell_ai_risk"], row["carousell_ai_flags"]) == (
+        "clean",
+        None,
+        [],
+    )

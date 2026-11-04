@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 from sellee.db import Database
 from sellee.store.helpers import (
     _THREAD_SIDES,
@@ -133,6 +135,8 @@ class ThreadsMixin:
         ts: float | None = None,
         source: str | None = None,
         scam_verdict: str | None = None,
+        carousell_ai_risk: str | None = None,
+        carousell_ai_flags: list | None = None,
     ) -> bool:
         """Fold one transcript row into a thread, deduped by (thread_id, msg_id). Returns True if
         it was newly inserted, False if the constraint dropped a duplicate — dedup by the schema,
@@ -146,8 +150,8 @@ class ThreadsMixin:
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
             cur = conn.execute(
                 "INSERT OR IGNORE INTO thread_messages "
-                "(thread_id, msg_id, dir, text, ts, source, scam_verdict) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
+                "(thread_id, msg_id, dir, text, ts, source, scam_verdict, carousell_ai_risk, "
+                " carousell_ai_flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     thread_id,
                     msg_id,
@@ -156,6 +160,8 @@ class ThreadsMixin:
                     ts if ts is not None else _now(),
                     source,
                     scam_verdict,
+                    carousell_ai_risk,
+                    json.dumps(carousell_ai_flags) if carousell_ai_flags else None,
                 ),
             )
             return cur.rowcount > 0
@@ -190,15 +196,18 @@ class ThreadsMixin:
         self, thread_id: str, *, limit: int | None = None
     ) -> list[MessageRecord]:
         """The transcript in chronological order, capped to the most recent `limit` rows."""
+        columns = (
+            "msg_id, dir, text, ts, source, scam_verdict, carousell_ai_risk, carousell_ai_flags"
+        )
         if limit is None:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
+                f"SELECT {columns} FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts ASC, rowid ASC",
                 (thread_id,),
             )
         else:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
+                f"SELECT {columns} FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (thread_id, limit),
             )
@@ -211,6 +220,8 @@ class ThreadsMixin:
                 "ts": r["ts"],
                 "source": r["source"],
                 "scam_verdict": r["scam_verdict"],
+                "carousell_ai_risk": r["carousell_ai_risk"],
+                "carousell_ai_flags": json.loads(r["carousell_ai_flags"] or "[]"),
             }
             for r in rows
         ]

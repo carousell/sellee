@@ -47,14 +47,20 @@ _CLOSING_BOUNDARY = (
 )
 
 
+def carousell_ai_note(flags) -> str:
+    """What carousell.ai flagged, as the seller and the model read it; "" for nothing."""
+    return f"flagged by carousell.ai: {', '.join(flags)}" if flags else ""
+
+
 def _message_line(message: dict) -> str:
     if message["dir"] != "in":
         return f"  [you] {prompt_data.as_data(message['text'])}"
     # The id is what a tool taking `in_msg_id` binds to, so it has to be on the line it names.
     suffix = f"   (id {prompt_data.one_line(message.get('msg_id'))})"
-    note = _VERDICT_NOTES.get(message.get("scam_verdict") or "")
-    if note:
-        suffix += f"   [{note}]"
+    notes = [_VERDICT_NOTES.get(message.get("scam_verdict") or "")]
+    notes.append(carousell_ai_note(message.get("carousell_ai_flags")))
+    if any(notes):
+        suffix += f"   [{'; '.join(note for note in notes if note)}]"
     return f"  [buyer] {prompt_data.as_data(message['text'])}{suffix}"
 
 

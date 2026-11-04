@@ -9,6 +9,7 @@ update_thread (escalated->active).
 
 from __future__ import annotations
 
+from sellee import reply_prompt
 from sellee.channel import asks
 from sellee.store import StoreError
 from sellee.tools.registry import (
@@ -29,10 +30,14 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
             options = asks.validate_options(options)
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
+    question = params["open_question"]
+    note = reply_prompt.carousell_ai_note(_carousell_ai_flags(ctx.store, params["thread_id"]))
+    if note:
+        question = f"{question} ({note})"
     try:
         result = ctx.store.escalate(
             params["thread_id"],
-            open_question=params["open_question"],
+            open_question=question,
             kind=params.get("kind"),
             context_summary=params.get("context_summary"),
             options=options,
@@ -46,6 +51,13 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
             pass_id=ctx.session.pass_id,
         )
     return result
+
+
+def _carousell_ai_flags(store, thread_id: str) -> list:
+    """Every relay flag carousell.ai put on the buyer's messages in this thread, in order."""
+    rows = store.get_thread_messages(thread_id)
+    flags = [flag for row in rows if row["dir"] == "in" for flag in row["carousell_ai_flags"]]
+    return list(dict.fromkeys(flags))
 
 
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:
