@@ -307,9 +307,8 @@ class FloorRecord(TypedDict):
 
 
 class MessageRecord(TypedDict):
-    """One transcript row (see `get_thread_messages`). scam_verdict is stamped by the daemon's
-    pre-scan on marketplace inbound; None on rows that arrived by another path. On a carousell.ai
-    buyer message, carousell.ai's own risk and relay flags sit beside it."""
+    """One transcript row. scam_verdict is the daemon's pre-scan of marketplace inbound, None
+    otherwise; the carousell_ai_* fields hold carousell.ai's own label on its buyer messages."""
 
     msg_id: str
     dir: str
