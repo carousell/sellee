@@ -67,8 +67,11 @@ def _holds_a_scam(store, thread_id: str) -> bool:
 
 
 def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
-    """Raise when the thread's open ask is a scam confirmation, which only
+    """Raise when a carousell.ai thread's open ask is a scam confirmation, which only
     answer_scam_confirmation settles, so the reply gate is cleared with it."""
+    thread = store.get_thread(thread_id, message_cap=0)
+    if thread is None or thread["market"] != marketplaces.RAIL:
+        return
     if any(
         esc["thread_id"] == thread_id and esc["kind"] == SCAM_CONFIRMATION
         for esc in store.list_open_escalations()
