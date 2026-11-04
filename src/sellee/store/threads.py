@@ -359,9 +359,8 @@ class ThreadsMixin:
         return rows[0]["id"] if rows else None
 
     def settle_scam_confirmation(self, thread_id: str, answer: str) -> dict:
-        """The seller's answer to the open scam confirmation. `not_scam` lowers each `scam`
-        verdict to `suspicious` and restores the status from before hold and ask; `keep_held`
-        leaves the verdicts and holds the thread."""
+        """`not_scam` lowers each `scam` verdict to `suspicious` and restores the status from
+        before hold and ask; `keep_held` leaves the verdicts and holds the thread."""
         if answer not in ("not_scam", "keep_held"):
             raise StoreError(f"unknown scam confirmation answer {answer!r}")
         ts = _now()
