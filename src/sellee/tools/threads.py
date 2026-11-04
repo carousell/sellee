@@ -55,7 +55,8 @@ def _carousell_ai_block_buyer(ctx: ToolContext, params: dict) -> dict:
         return {"thread_id": thread_id, "status": "block_failed", "detail": _BLOCK_NOT_CONFIRMED}
     # A held or escalated thread closes once released, as the relay lane does for any block.
     ctx.store.close_blocked_relay_thread(thread_id)
-    return {"thread_id": thread_id, "status": "blocked", "reason": reason}
+    # bazaar keeps a buyer's first report, so the reason sent is not echoed as the one recorded.
+    return {"thread_id": thread_id, "status": "blocked"}
 
 
 def _create_thread(ctx: ToolContext, params: dict) -> dict:
@@ -243,7 +244,8 @@ register(
         "or other. Use it only when the seller explicitly asks you to block this buyer, with the "
         "reason they gave. A scam is never reported here: that goes through the seller's answer "
         "to the scam confirmation. blocked means carousell.ai drops the buyer's further mail to "
-        "this seller; block_failed means carousell.ai did not confirm, and asking again is safe.",
+        "this seller; a buyer reported before keeps that first report's reason. block_failed "
+        "means carousell.ai did not confirm, and asking again is safe.",
         input_schema={
             "type": "object",
             "properties": {

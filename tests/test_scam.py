@@ -688,6 +688,16 @@ def test_the_seller_can_block_a_buyer_for_spam(relay_thread) -> None:
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "closed"
 
 
+def test_a_second_block_claims_no_reason_bazaar_did_not_record(relay_thread) -> None:
+    relay_thread.buyer_writes()
+    _block(relay_thread, "spam")
+
+    again = _block(relay_thread, "abuse")
+
+    assert again == {"thread_id": relay_thread.thread_id, "status": "blocked"}
+    assert relay_thread.fake.reports == {"t1": "spam"}
+
+
 @pytest.mark.parametrize("reason", ["scam", "SCAM", "fraud", ""])
 def test_the_block_tool_refuses_scam_and_unknown_reasons(relay_thread, reason) -> None:
     relay_thread.buyer_writes()
