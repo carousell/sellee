@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from sellee import reply_prompt
 from sellee.channel import asks
+from sellee.engines import scam as scam_engine
 from sellee.store import StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -31,7 +32,7 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
     question = params["open_question"]
-    note = reply_prompt.carousell_ai_note(_carousell_ai_flags(ctx.store, params["thread_id"]))
+    note = reply_prompt.carousell_ai_note(*_carousell_ai_label(ctx.store, params["thread_id"]))
     if note:
         question = f"{question} ({note})"
     try:
@@ -53,11 +54,15 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
     return result
 
 
-def _carousell_ai_flags(store, thread_id: str) -> list:
-    """Every relay flag carousell.ai put on the buyer's messages in this thread, in order."""
-    rows = store.get_thread_messages(thread_id)
-    flags = [flag for row in rows if row["dir"] == "in" for flag in row["carousell_ai_flags"]]
-    return list(dict.fromkeys(flags))
+def _carousell_ai_label(store, thread_id: str) -> tuple:
+    """carousell.ai's highest risk on the buyer's messages in this thread, and every relay flag
+    it put on them, in order."""
+    inbound = [row for row in store.get_thread_messages(thread_id) if row["dir"] == "in"]
+    risk = "clean"
+    for row in inbound:
+        risk = scam_engine.higher_verdict(risk, row["carousell_ai_risk"])
+    flags = [flag for row in inbound for flag in row["carousell_ai_flags"]]
+    return risk, list(dict.fromkeys(flags))
 
 
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:

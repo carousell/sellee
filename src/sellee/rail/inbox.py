@@ -139,6 +139,10 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
             inbound = author == "buyer"
             # carousell.ai's label is read once, here, and can only raise our own verdict.
             risk = (message.get("risk") or None) if inbound else None
+            verdict = None
+            if inbound:
+                local = _scan(deps, message["text"], history)["verdict"]
+                verdict = scam_engine.higher_verdict(local, risk)
             deps.store.append_thread_message(
                 thread_id,
                 msg_id=message["id"],
@@ -146,11 +150,7 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
                 text=message["text"],
                 ts=ts,
                 source="marketplace" if inbound else _OWN_AUTHORS[author],
-                scam_verdict=scam_engine.higher_verdict(
-                    _scan(deps, message["text"], history)["verdict"], risk
-                )
-                if inbound
-                else None,
+                scam_verdict=verdict,
                 carousell_ai_risk=risk,
                 carousell_ai_flags=message.get("flags") if inbound else None,
             )
