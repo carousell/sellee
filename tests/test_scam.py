@@ -10,7 +10,7 @@ import tempfile
 from pathlib import Path
 
 import pytest
-from hypothesis import HealthCheck, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, rule
 from tests.conftest import seed_setting
@@ -28,12 +28,16 @@ from sellee.rail.sink import RelayReplySink
 from sellee.store import SCAM_CONFIRMATION, Store, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
+    TIER_PASS_EDIT,
+    TIER_PASS_PUBLISH,
     TIER_PASS_REPLY,
     Session,
     ToolContext,
     ToolError,
     all_specs,
     dispatch,
+    tools_for_tier,
 )
 
 BASE = "https://www.carousell.ai/checkout"
@@ -660,6 +664,96 @@ def test_the_rail_client_sends_no_block_without_a_known_reason(relay_thread, rea
 def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
     [spec] = [s for s in all_specs() if s.name == "answer_scam_confirmation"]
     assert TIER_PASS_REPLY not in spec.tiers
+
+
+# --- the attended block tool --------------------------------------------------------------------
+
+
+def _block(relay_thread, reason, tier: str = TIER_ATTENDED) -> dict:
+    return dispatch(
+        "carousell_ai_block_buyer",
+        {"thread_id": relay_thread.thread_id, "reason": reason},
+        relay_thread.ctx(tier),
+    )
+
+
+def test_the_seller_can_block_a_buyer_for_spam(relay_thread) -> None:
+    relay_thread.buyer_writes()
+
+    result = _block(relay_thread, "spam")
+
+    assert result["status"] == "blocked"
+    assert relay_thread.fake.block_calls == [{"id": "t1", "reason": "spam"}]
+    assert relay_thread.fake.reports == {"t1": "spam"}
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "closed"
+
+
+@pytest.mark.parametrize("reason", ["scam", "SCAM", "fraud", ""])
+def test_the_block_tool_refuses_scam_and_unknown_reasons(relay_thread, reason) -> None:
+    relay_thread.buyer_writes()
+
+    with pytest.raises(ToolError):
+        _block(relay_thread, reason)
+
+    assert relay_thread.fake.block_calls == []
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
+
+
+def test_a_block_carousell_ai_did_not_confirm_changes_nothing(relay_thread) -> None:
+    relay_thread.buyer_writes()
+    relay_thread.fake.block_script = ["http503"]
+
+    result = _block(relay_thread, "abuse")
+
+    assert result["status"] == "block_failed"
+    assert "did not confirm" in result["detail"]
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
+
+
+def test_another_markets_buyer_is_not_blocked_here(store, make_ctx) -> None:
+    _sell_thread(store)
+
+    with pytest.raises(ToolError, match="carousell.ai"):
+        dispatch(
+            "carousell_ai_block_buyer",
+            {"thread_id": "fb:1", "reason": "spam"},
+            make_ctx("attended"),
+        )
+
+
+@pytest.mark.parametrize(
+    "tier", [TIER_PASS_CHANNEL, TIER_PASS_REPLY, TIER_PASS_PUBLISH, TIER_PASS_EDIT]
+)
+def test_unattended_tiers_cannot_see_the_block_tool(tier) -> None:
+    assert "carousell_ai_block_buyer" not in {spec.name for spec in tools_for_tier(tier)}
+    assert "carousell_ai_block_buyer" in {spec.name for spec in tools_for_tier(TIER_ATTENDED)}
+
+
+@settings(
+    max_examples=60,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+@given(
+    reason=st.sampled_from(["scam", "spam", "abuse", "other", "Scam", " scam", "scam "])
+    | st.text(max_size=8)
+)
+def test_property_the_block_tool_never_sends_scam(relay_thread, reason) -> None:
+    """Property: whatever the reason, no block_buyer carries `scam`, and one is sent exactly
+    when the reason is spam, abuse or other."""
+    if relay_thread.store.get_thread(relay_thread.thread_id) is None:
+        relay_thread.buyer_writes()
+    sent = len(relay_thread.fake.block_calls)
+    try:
+        _block(relay_thread, reason)
+    except ToolError:
+        pass
+
+    calls = relay_thread.fake.block_calls[sent:]
+    assert all(call["reason"] != "scam" for call in relay_thread.fake.block_calls)
+    assert calls == (
+        [{"id": "t1", "reason": reason}] if reason in ("spam", "abuse", "other") else []
+    )
 
 
 _VERDICTS = ("clean", "suspicious", "scam")

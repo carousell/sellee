@@ -10,6 +10,8 @@ their own tools, never this generic writer.
 
 from __future__ import annotations
 
+from sellee import marketplaces
+from sellee.rail.client import RailError, RailUnprovisioned
 from sellee.store import IMPORTED_THREAD_SOURCES, StoreError
 from sellee.tools import escalations
 from sellee.tools.registry import (
@@ -22,6 +24,38 @@ from sellee.tools.registry import (
     register,
 )
 from sellee.tools.verify import verify_market_url
+
+# `scam` is not here: a scam report goes only through the seller's scam confirmation.
+_BLOCK_REASONS = ("spam", "abuse", "other")
+# A failed call can still have landed (a timeout after bazaar committed), so claim no outcome.
+_BLOCK_NOT_CONFIRMED = (
+    "carousell.ai did not confirm the block; nothing changed here, and asking again is safe "
+    "even if the first one landed"
+)
+
+
+def _carousell_ai_block_buyer(ctx: ToolContext, params: dict) -> dict:
+    reason = params["reason"]
+    if reason not in _BLOCK_REASONS:
+        raise ToolError(
+            f"reason must be one of {', '.join(_BLOCK_REASONS)}; a scam is reported only through "
+            "the seller's answer to the scam confirmation"
+        )
+    thread_id = params["thread_id"]
+    thread = ctx.store.get_thread(thread_id, message_cap=0)
+    if thread is None:
+        raise ToolError(f"no thread with id {thread_id!r}")
+    if thread["market"] != marketplaces.RAIL:
+        raise ToolError("only a carousell.ai buyer can be blocked here")
+    try:
+        if ctx.rail_factory is None:
+            raise RailUnprovisioned("no carousell.ai connection")
+        ctx.rail_factory().block_buyer(thread_id.split(":", 1)[1], reason)
+    except RailError:
+        return {"thread_id": thread_id, "status": "block_failed", "detail": _BLOCK_NOT_CONFIRMED}
+    # A held or escalated thread closes once released, as the relay lane does for any block.
+    ctx.store.close_blocked_relay_thread(thread_id)
+    return {"thread_id": thread_id, "status": "blocked", "reason": reason}
 
 
 def _create_thread(ctx: ToolContext, params: dict) -> dict:
@@ -200,5 +234,27 @@ register(
         },
         handler=_release_thread,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="carousell_ai_block_buyer",
+        description="Block a carousell.ai buyer and report them to carousell.ai for spam, abuse "
+        "or other. Use it only when the seller explicitly asks you to block this buyer, with the "
+        "reason they gave. A scam is never reported here: that goes through the seller's answer "
+        "to the scam confirmation. blocked means carousell.ai drops the buyer's further mail to "
+        "this seller; block_failed means carousell.ai did not confirm, and asking again is safe.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "reason": {"type": "string", "enum": list(_BLOCK_REASONS)},
+            },
+            "required": ["thread_id", "reason"],
+            "additionalProperties": False,
+        },
+        handler=_carousell_ai_block_buyer,
+        # Only an attended session, where the seller is present to ask for it.
+        tiers=frozenset({TIER_ATTENDED}),
     )
 )
