@@ -10,6 +10,7 @@ precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit u
 from __future__ import annotations
 
 import json
+import re
 import threading
 import urllib.error
 import urllib.request
@@ -37,6 +38,8 @@ _POLICY_PATH = "/item-policy"
 _UNKNOWN_CATEGORY = "is not a category the item policy lists"
 # The only mark of an item policy refusal: bazaar appends it to the tool error's text.
 _POLICY_REFUSED = "(code: item_policy_refused)"
+_RELAY_RISKS = ("clean", "suspicious", "scam")
+_RELAY_FLAG_RE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 
 
 class RailError(Exception):
@@ -339,11 +342,17 @@ class RailClient:
         }
 
     def get_thread(self, thread_id: str) -> dict:
-        """One relay thread and all its messages in the order bazaar stored them."""
+        """One relay thread and all its messages in the order bazaar stored them. Each message's
+        `risk` is carousell.ai's label, or "" when it is unscreened or not one we know, and its
+        `flags` are the well-formed relay flag names, deduplicated."""
         result = self.call_tool("get_thread", {"id": str(thread_id)})
         if not isinstance(result.get("thread"), dict):
             raise RailToolError("get_thread returned no thread")
-        return {"thread": result["thread"], "messages": result.get("messages") or []}
+        messages = result.get("messages") or []
+        for message in messages:
+            if isinstance(message, dict):
+                message["risk"], message["flags"] = _relay_label(message)
+        return {"thread": result["thread"], "messages": messages}
 
     def reply_to_thread(self, thread_id: str, text: str, client_message_id: str) -> dict:
         """Reply to the buyer on a relay thread. bazaar stores one reply per client_message_id,
@@ -433,6 +442,16 @@ def category_refusal(rail, token: str | None) -> str | None:
         f"Items in “{group['title']}” can’t be listed on carousell.ai{yet}. "
         f"See {rail.item_policy_url()} for what can be listed."
     )
+
+
+def _relay_label(message: dict) -> tuple:
+    """(risk, flags) off one get_thread message. A flag name reaches the seller and the prompt as
+    text, so only a short lowercase token passes."""
+    risk = message.get("risk")
+    risk = risk if risk in _RELAY_RISKS else ""
+    flags = message.get("flags")
+    names = [f for f in flags if isinstance(f, str)] if isinstance(flags, list) else []
+    return risk, list(dict.fromkeys(f for f in names if _RELAY_FLAG_RE.fullmatch(f)))
 
 
 def _text_content(result: dict) -> str:
