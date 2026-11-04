@@ -342,9 +342,8 @@ class RailClient:
         }
 
     def get_thread(self, thread_id: str) -> dict:
-        """One relay thread and all its messages in the order bazaar stored them. Each message's
-        `risk` is carousell.ai's label, or "" when it is unscreened or not one we know, and its
-        `flags` are the well-formed relay flag names, deduplicated."""
+        """One relay thread and its messages in stored order. A message's `risk` is "" when
+        unscreened or unknown, and its `flags` keep only well-formed names, once each."""
         result = self.call_tool("get_thread", {"id": str(thread_id)})
         if not isinstance(result.get("thread"), dict):
             raise RailToolError("get_thread returned no thread")
