@@ -575,7 +575,9 @@ def test_a_report_that_does_not_reach_carousell_ai_keeps_the_thread_held(
     failed = relay_thread.answer("scam")
 
     assert failed["status"] == "report_failed"
-    assert "did not reach carousell.ai" in failed["detail"]
+    # A timeout can follow a block bazaar committed, so the seller is told only what is known.
+    assert "did not confirm" in failed["detail"]
+    assert "not blocked" not in failed["detail"]
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "escalated"
     assert len(relay_thread.store.list_open_escalations()) == 1
     assert relay_thread.messages()[0]["scam_verdict"] == "scam"
