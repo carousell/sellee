@@ -462,6 +462,11 @@ def test_another_markets_confirmation_is_not_answered_here(store, make_ctx) -> N
         )
 
     assert store.get_thread_messages("fb:1")[0]["scam_verdict"] == "scam"
+    [esc] = store.list_open_escalations()
+    dispatch(
+        "resolve_escalation", {"escalation_id": esc["id"], "resolution": "no"}, make_ctx("attended")
+    )
+    dispatch("release_thread", {"thread_id": "fb:1"}, make_ctx("attended"))
 
 
 def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
