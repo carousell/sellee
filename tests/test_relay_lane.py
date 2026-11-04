@@ -556,6 +556,17 @@ def test_a_carousell_ai_scam_is_held_and_its_escalation_names_the_flags(
     )
 
 
+def test_a_carousell_ai_scam_without_flags_is_named_by_its_risk(make_ctx, store, bus, fake, item):
+    tid, _ = _labelled(store, bus, fake, risk="scam")
+
+    prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
+    assert "flagged as a scam by the automatic scan; flagged by carousell.ai as scam]" in prompt
+    esc = dispatch("escalate", {"thread_id": tid, "open_question": "Scam?"}, make_ctx("attended"))
+    assert store.get_escalation(esc["id"])["open_question"] == (
+        "Scam? (flagged by carousell.ai as scam)"
+    )
+
+
 def test_a_carousell_ai_suspicious_message_is_cautioned_and_still_answered(
     make_ctx, store, bus, fake, item
 ):
