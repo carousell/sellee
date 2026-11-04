@@ -72,10 +72,7 @@ def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
     thread = store.get_thread(thread_id, message_cap=0)
     if thread is None or thread["market"] != marketplaces.RAIL:
         return
-    if any(
-        esc["thread_id"] == thread_id and esc["kind"] == SCAM_CONFIRMATION
-        for esc in store.list_open_escalations()
-    ):
+    if store.open_scam_confirmation(thread_id) is not None:
         raise ToolError(
             "this thread waits on the seller's answer to a scam confirmation; settle it with "
             "answer_scam_confirmation"
@@ -104,7 +101,7 @@ def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
             "the thread with release_thread"
         )
     try:
-        result = ctx.store.release_not_a_scam(thread_id)
+        result = ctx.store.settle_scam_confirmation(thread_id, params["answer"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     ctx.bus.publish(
@@ -198,13 +195,14 @@ register(
         name="answer_scam_confirmation",
         description="The seller's answer to a carousell.ai scam confirmation (an escalation of "
         "kind scam_confirmation). not_scam resolves it, lowers the thread's scam verdicts to "
-        "suspicious so replies are no longer refused, and restores the thread's status; nothing "
-        "is sent to carousell.ai. Refuses, changing nothing, when no confirmation is open.",
+        "suspicious so replies are no longer refused, and restores the thread's status; "
+        "keep_held resolves it and keeps the thread held. Nothing is sent to carousell.ai. "
+        "Refuses, changing nothing, when no confirmation is open.",
         input_schema={
             "type": "object",
             "properties": {
                 "thread_id": {"type": "string"},
-                "answer": {"type": "string", "enum": ["not_scam"]},
+                "answer": {"type": "string", "enum": ["not_scam", "keep_held"]},
             },
             "required": ["thread_id", "answer"],
             "additionalProperties": False,

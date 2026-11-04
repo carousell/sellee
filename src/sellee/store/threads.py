@@ -352,9 +352,25 @@ class ThreadsMixin:
             )
         return self.get_thread(thread_id)  # type: ignore[return-value]
 
-    def release_not_a_scam(self, thread_id: str) -> dict:
-        """The seller's *Not a scam*: resolve the open scam confirmation, lower each `scam`
-        verdict on the thread to `suspicious`, and put back the status from before hold and ask."""
+    # The open ask a seller's scam answer settles: one opened as the scam confirmation, or one
+    # opened before that kind existed on a thread that still holds a scam.
+    _OPEN_SCAM_CONFIRMATION_SQL = (
+        "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open' AND (kind = ? OR "
+        "EXISTS (SELECT 1 FROM thread_messages WHERE thread_id = escalations.thread_id "
+        "AND scam_verdict = 'scam'))"
+    )
+
+    def open_scam_confirmation(self, thread_id: str) -> str | None:
+        """The id of the thread's open scam confirmation, or None."""
+        rows = self._db.query(self._OPEN_SCAM_CONFIRMATION_SQL, (thread_id, SCAM_CONFIRMATION))
+        return rows[0]["id"] if rows else None
+
+    def settle_scam_confirmation(self, thread_id: str, answer: str) -> dict:
+        """The seller's answer to the open scam confirmation. `not_scam` lowers each `scam`
+        verdict to `suspicious` and restores the status from before hold and ask; `keep_held`
+        leaves the verdicts and holds the thread."""
+        if answer not in ("not_scam", "keep_held"):
+            raise StoreError(f"unknown scam confirmation answer {answer!r}")
         ts = _now()
         with self._db.transaction() as conn:
             row = conn.execute(
@@ -365,21 +381,15 @@ class ThreadsMixin:
             if not row:
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
             asked = conn.execute(
-                "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open' AND kind = ?",
-                (thread_id, SCAM_CONFIRMATION),
+                self._OPEN_SCAM_CONFIRMATION_SQL, (thread_id, SCAM_CONFIRMATION)
             ).fetchone()
             if asked is None:
                 raise StoreError(f"thread {thread_id!r} has no scam confirmation open")
             conn.execute(
-                "UPDATE escalations SET status = 'resolved', resolution = 'not a scam', "
-                "resolved_ts = ? WHERE id = ?",
-                (ts, asked["id"]),
+                "UPDATE escalations SET status = 'resolved', resolution = ?, resolved_ts = ? "
+                "WHERE id = ?",
+                (answer.replace("_", " "), ts, asked["id"]),
             )
-            lowered = conn.execute(
-                "UPDATE thread_messages SET scam_verdict = 'suspicious' "
-                "WHERE thread_id = ? AND scam_verdict = 'scam'",
-                (thread_id,),
-            ).rowcount
             status, seen = row["status"], set()
             # A repeated hold over an ask can point the two back at each other, so stop on a loop.
             while status in ("held", "escalated") and status not in seen:
@@ -387,11 +397,26 @@ class ThreadsMixin:
                 status = row[f"{status}_from_status"] or "active"
             if status in ("held", "escalated"):
                 status = "active"
-            conn.execute(
-                "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
-                "escalated_from_status = NULL, updated_ts = ? WHERE thread_id = ?",
-                (status, ts, thread_id),
-            )
+            lowered = 0
+            if answer == "keep_held":
+                conn.execute(
+                    "UPDATE threads SET status = 'held', held_from_status = ?, "
+                    "held_reason = COALESCE(held_reason, 'scam'), escalated_from_status = NULL, "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (status, ts, thread_id),
+                )
+                status = "held"
+            else:
+                lowered = conn.execute(
+                    "UPDATE thread_messages SET scam_verdict = 'suspicious' "
+                    "WHERE thread_id = ? AND scam_verdict = 'scam'",
+                    (thread_id,),
+                ).rowcount
+                conn.execute(
+                    "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
+                    "escalated_from_status = NULL, updated_ts = ? WHERE thread_id = ?",
+                    (status, ts, thread_id),
+                )
         return {
             "thread_id": thread_id,
             "status": status,

@@ -418,6 +418,28 @@ def test_an_ask_on_a_thread_holding_a_scam_is_a_scam_confirmation(relay_thread) 
     assert relay_thread.answer("not_scam")["status"] == "active"
 
 
+def test_an_ask_opened_before_the_kind_existed_is_still_answered(relay_thread) -> None:
+    msg_id = relay_thread.buyer_writes(risk="scam")
+    relay_thread.store.hold_thread(relay_thread.thread_id, "scam")
+    relay_thread.store.escalate(relay_thread.thread_id, open_question="Scam?")
+
+    assert relay_thread.answer("not_scam")["status"] == "active"
+    assert relay_thread.reply(msg_id)["status"] == "sent"
+
+
+def test_keep_it_held_closes_the_ask_and_keeps_the_hold(relay_thread) -> None:
+    msg_id = relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm(hold_first=False)
+
+    assert relay_thread.answer("keep_held")["status"] == "held"
+
+    assert relay_thread.store.list_open_escalations() == []
+    assert relay_thread.messages()[0]["scam_verdict"] == "scam"
+    assert relay_thread.reply(msg_id)["status"] == "scam_held"
+    dispatch("release_thread", {"thread_id": relay_thread.thread_id}, relay_thread.ctx())
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
+
+
 @pytest.mark.parametrize("tool", ["release_thread", "resolve_escalation"])
 def test_a_scam_confirmation_is_answered_only_by_its_own_tool(relay_thread, tool) -> None:
     relay_thread.buyer_writes(risk="scam")
@@ -524,6 +546,17 @@ class NotAScam(RuleBasedStateMachine):
         }
         for msg_id in self.served:
             assert self.relay.reply(msg_id)["status"] != "scam_held"
+
+    @precondition(lambda self: self.open)
+    @rule()
+    def seller_answers_keep_it_held(self):
+        before = self.relay.messages()
+
+        assert self.relay.answer("keep_held")["status"] == "held"
+        self.open = False
+
+        assert self.relay.messages() == before
+        assert self.relay.store.list_open_escalations() == []
 
     @precondition(lambda self: not self.open)
     @rule()

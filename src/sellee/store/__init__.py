@@ -214,7 +214,8 @@ _SCOPE_GUARDED = {
     "update_thread": (("thread_id", "thread"),),
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
-    "release_not_a_scam": (("thread_id", "thread"),),
+    "settle_scam_confirmation": (("thread_id", "thread"),),
+    "open_scam_confirmation": (("thread_id", "thread"),),
     "escalate": (("thread_id", "thread"),),
     "checkout_floor_gate": (("item_id", "item"),),
     "reserve_reply": (("thread_id", "thread"),),
@@ -256,6 +257,7 @@ _SCOPE_MISS_NONE = frozenset(
         "newest_inbound_msg_id",
         "owed_offer",
         "checkin_thread",
+        "open_scam_confirmation",
     }
 )
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search", "seller_handled_threads"})
@@ -279,7 +281,7 @@ _SCOPE_MISS_NOTFOUND = {
     "update_thread": ("thread", ThreadNotFound),
     "hold_thread": ("thread", ThreadNotFound),
     "release_thread": ("thread", ThreadNotFound),
-    "release_not_a_scam": ("thread", ThreadNotFound),
+    "settle_scam_confirmation": ("thread", ThreadNotFound),
     "escalate": ("thread", ThreadNotFound),
     "checkout_floor_gate": ("item", ItemNotFound),
     "reserve_reply": ("thread", ThreadNotFound),
