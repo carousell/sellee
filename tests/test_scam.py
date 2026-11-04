@@ -715,7 +715,7 @@ def test_a_block_carousell_ai_did_not_confirm_changes_nothing(relay_thread) -> N
 
     result = _block(relay_thread, "abuse")
 
-    assert result["status"] == "block_failed"
+    assert (result["thread_id"], result["status"]) == (relay_thread.thread_id, "block_failed")
     assert "did not confirm" in result["detail"]
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
 
