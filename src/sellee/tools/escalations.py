@@ -12,7 +12,7 @@ from __future__ import annotations
 from sellee import marketplaces, reply_prompt
 from sellee.channel import asks
 from sellee.engines import scam as scam_engine
-from sellee.store import StoreError
+from sellee.store import SCAM_CONFIRMATION, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -35,11 +35,15 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
     note = reply_prompt.carousell_ai_note(*_carousell_ai_label(ctx.store, params["thread_id"]))
     if note:
         question = f"{question} ({note})"
+    kind = params.get("kind")
+    if _holds_a_scam(ctx.store, params["thread_id"]):
+        # Replies stay refused until the seller answers, so the ask is the scam confirmation.
+        kind = SCAM_CONFIRMATION
     try:
         result = ctx.store.escalate(
             params["thread_id"],
             open_question=question,
-            kind=params.get("kind"),
+            kind=kind,
             context_summary=params.get("context_summary"),
             options=options,
         )
@@ -48,10 +52,31 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
     if not result["idempotent"]:
         ctx.bus.publish(
             "escalation.open",
-            {"id": result["id"], "thread_id": params["thread_id"], "kind": params.get("kind")},
+            {"id": result["id"], "thread_id": params["thread_id"], "kind": kind},
             pass_id=ctx.session.pass_id,
         )
     return result
+
+
+def _holds_a_scam(store, thread_id: str) -> bool:
+    """Whether a carousell.ai thread has a buyer message whose merged verdict is `scam`."""
+    thread = store.get_thread(thread_id, message_cap=0)
+    if thread is None or thread["market"] != marketplaces.RAIL:
+        return False
+    return any(row["scam_verdict"] == "scam" for row in store.get_thread_messages(thread_id))
+
+
+def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
+    """Raise when the thread's open ask is a scam confirmation, which only
+    answer_scam_confirmation settles, so the reply gate is cleared with it."""
+    if any(
+        esc["thread_id"] == thread_id and esc["kind"] == SCAM_CONFIRMATION
+        for esc in store.list_open_escalations()
+    ):
+        raise ToolError(
+            "this thread waits on the seller's answer to a scam confirmation; settle it with "
+            "answer_scam_confirmation"
+        )
 
 
 def _carousell_ai_label(store, thread_id: str) -> tuple:
@@ -86,6 +111,9 @@ def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
 
 
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:
+    esc = ctx.store.get_escalation(params["escalation_id"])
+    if esc is not None and esc["status"] == "open":
+        refuse_answering_a_scam_confirmation(ctx.store, esc["thread_id"])
     try:
         result = ctx.store.resolve_escalation(
             params["escalation_id"],

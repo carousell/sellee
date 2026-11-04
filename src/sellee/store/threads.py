@@ -380,13 +380,13 @@ class ThreadsMixin:
                 "WHERE thread_id = ? AND scam_verdict = 'scam'",
                 (thread_id,),
             ).rowcount
-            status = row["status"]
-            # Hold and ask stack in either order, so unwind both.
-            for _ in range(2):
-                if status == "held":
-                    status = row["held_from_status"] or "active"
-                elif status == "escalated":
-                    status = row["escalated_from_status"] or "active"
+            status, seen = row["status"], set()
+            # A repeated hold over an ask can point the two back at each other, so stop on a loop.
+            while status in ("held", "escalated") and status not in seen:
+                seen.add(status)
+                status = row[f"{status}_from_status"] or "active"
+            if status in ("held", "escalated"):
+                status = "active"
             conn.execute(
                 "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
                 "escalated_from_status = NULL, updated_ts = ? WHERE thread_id = ?",

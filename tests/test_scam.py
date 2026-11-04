@@ -396,6 +396,45 @@ def test_not_a_scam_leaves_messages_that_were_not_scam_as_they_were(relay_thread
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
 
 
+def test_not_a_scam_resumes_after_the_scam_was_handled_twice(relay_thread) -> None:
+    msg_id = relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm()
+    relay_thread.confirm()
+
+    assert relay_thread.answer("not_scam")["status"] == "active"
+    assert relay_thread.reply(msg_id)["status"] == "sent"
+
+
+def test_an_ask_on_a_thread_holding_a_scam_is_a_scam_confirmation(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    dispatch(
+        "escalate",
+        {"thread_id": relay_thread.thread_id, "open_question": "Scam?"},
+        relay_thread.ctx(),
+    )
+
+    [esc] = relay_thread.store.list_open_escalations()
+    assert esc["kind"] == SCAM_CONFIRMATION
+    assert relay_thread.answer("not_scam")["status"] == "active"
+
+
+@pytest.mark.parametrize("tool", ["release_thread", "resolve_escalation"])
+def test_a_scam_confirmation_is_answered_only_by_its_own_tool(relay_thread, tool) -> None:
+    relay_thread.buyer_writes(risk="scam")
+    relay_thread.confirm()
+    [esc] = relay_thread.store.list_open_escalations()
+    params = {
+        "release_thread": {"thread_id": relay_thread.thread_id},
+        "resolve_escalation": {"escalation_id": esc["id"], "resolution": "fine"},
+    }[tool]
+
+    with pytest.raises(ToolError, match="answer_scam_confirmation"):
+        dispatch(tool, params, relay_thread.ctx())
+
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "escalated"
+    assert relay_thread.store.list_open_escalations() == [esc]
+
+
 def test_an_answer_with_no_confirmation_open_changes_nothing(relay_thread) -> None:
     msg_id = relay_thread.buyer_writes(risk="scam")
     relay_thread.store.hold_thread(relay_thread.thread_id, "scam")
@@ -457,7 +496,7 @@ class NotAScam(RuleBasedStateMachine):
         msg_id = self.relay.buyer_writes(local=local, risk=risk, flags=flags)
         self.served[msg_id] = risk or None
 
-    @precondition(lambda self: self.served and not self.open)
+    @precondition(lambda self: self.served)
     @rule(hold_first=st.booleans())
     def sellee_asks_the_seller(self, hold_first):
         self.relay.confirm(hold_first=hold_first)
