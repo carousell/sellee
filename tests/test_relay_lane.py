@@ -567,6 +567,24 @@ def test_a_carousell_ai_scam_without_flags_is_named_by_its_risk(make_ctx, store,
     )
 
 
+def test_the_escalation_names_carousell_ais_highest_risk_across_the_thread(
+    make_ctx, store, bus, fake, item
+):
+    tid, _ = _labelled(store, bus, fake, risk="scam")
+    native = tid.split(":", 1)[1]
+    fake.add_message(native, "m2", "buyer", "Is it still available?", risk="suspicious")
+    fake.add_message(native, "m3", "buyer", "Hello?", risk="clean")
+    relay.relay_lane(_deps(store, bus, fake))
+
+    prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
+    m2 = next(line for line in prompt.splitlines() if "(id m2)" in line)
+    assert m2.endswith("; flagged by carousell.ai as suspicious]")
+    esc = dispatch("escalate", {"thread_id": tid, "open_question": "Scam?"}, make_ctx("attended"))
+    assert store.get_escalation(esc["id"])["open_question"] == (
+        "Scam? (flagged by carousell.ai as scam)"
+    )
+
+
 def test_a_carousell_ai_suspicious_message_is_cautioned_and_still_answered(
     make_ctx, store, bus, fake, item
 ):
