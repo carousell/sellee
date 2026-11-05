@@ -289,3 +289,13 @@ def test_command_bodies_keep_their_frontmatter() -> None:
     where a skill's is not."""
     for name in skills.available_commands():
         assert skills.command_path(name).read_text().startswith("---\n")
+
+
+def test_the_availability_opener_adds_only_item_facts_from_the_items_own_rows() -> None:
+    text = skills.load("buyer-conversation")
+    # search_qa_bank also returns the seller's global rows, which carry pickup and payment facts.
+    assert "never a global row" in text
+    assert "Never a delivery, pickup, location or payment fact" in text
+    # Nothing records how often a question is asked, so the copy must not promise "most asked".
+    assert "most often" not in text
+    assert "at most one per reply" in text
