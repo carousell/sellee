@@ -98,14 +98,15 @@ def _answer_block_confirmation(ctx: ToolContext, params: dict) -> dict:
     thread_id, reason = asked
     rows = ctx.store.inbox_for_pass(ctx.session.pass_id) if ctx.session.pass_id else []
     tap = next((row for row in rows if _is_block_tap(row, notice_id)), None)
-    if tap is None:
+    thread = _rail_thread(ctx, thread_id)
+    # Spent before the call, and only one caller can spend it, so a tap sends at most one block.
+    if tap is None or not ctx.store.spend_claimed_inbox(
+        tap["id"], ctx.session.pass_id, "answer_block_confirmation"
+    ):
         raise ToolError(
             "the seller has not tapped Block on that ask in the messages to handle now; only "
             "their tap sends a block"
         )
-    thread = _rail_thread(ctx, thread_id)
-    # Spent before the call, so one tap sends at most one block.
-    ctx.store.mark_inbox_handled([tap["id"]], "answer_block_confirmation")
     result = _send_block(ctx, thread_id, reason, _TAP_NOT_CONFIRMED)
     if result["status"] == "block_failed":
         # The tapped message lost its buttons on the tap, so a retry needs a fresh ask.
