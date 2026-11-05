@@ -831,6 +831,21 @@ def test_the_sellers_tap_sends_one_block_for_the_buyer_and_reason_asked(
     assert len(relay_thread.fake.block_calls) == 1
 
 
+def test_two_answers_racing_on_one_tap_send_one_block(relay_thread, monkeypatch) -> None:
+    relay_thread.buyer_writes()
+    notice_id = _ask_from_chat(relay_thread, "spam")
+    relay_thread.seller_taps(notice_id)
+    # The second answer read the tap before the first one spent it.
+    seen = relay_thread.store.inbox_for_pass(relay_thread.pass_id)
+    _answer(relay_thread, notice_id)
+    monkeypatch.setattr(relay_thread.store, "inbox_for_pass", lambda _pass_id: seen)
+
+    with pytest.raises(ToolError, match="tap"):
+        _answer(relay_thread, notice_id)
+
+    assert relay_thread.fake.block_calls == [{"id": "t1", "reason": "spam"}]
+
+
 def test_a_chat_block_refuses_scam_before_asking(relay_thread) -> None:
     relay_thread.buyer_writes()
     relay_thread.seller_types("block that scammer")
