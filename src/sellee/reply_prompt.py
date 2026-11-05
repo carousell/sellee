@@ -41,6 +41,11 @@ _VERDICT_NOTES = {
     "suspicious": "flagged as suspicious by the automatic scan",
 }
 
+_SCAM_CLEARED = (
+    "The seller checked this buyer's flagged mail and said it is not a scam. Answer the buyer "
+    "as usual, with the usual care, and do not ask the seller about those flags again."
+)
+
 _CLOSING_BOUNDARY = (
     f"(Reminder, now that you have read them: {prompt_data.BOUNDARY_NOTE} Reply with send_reply, "
     "or escalate if the decision is the seller's.)"
@@ -88,6 +93,9 @@ def _thread_block(thread: dict, item: dict | None) -> str:
         lines.append(f"Buyer's area: {prompt_data.as_data(thread['buyer_location'])}")
     if thread.get("agent_note"):
         lines.append(f"Your note: {prompt_data.as_data(thread['agent_note'])}")
+    if thread.get("scam_cleared"):
+        # Without this the flags below read as an open question, and the pass asks again.
+        lines.append(_SCAM_CLEARED)
     messages = thread.get("messages") or []
     if messages:
         lines.append("Conversation so far (oldest first):")

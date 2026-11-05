@@ -357,6 +357,8 @@ class ThreadRecord(ThreadSummary):
 
     messages: list[MessageRecord]
     message_count: int
+    # The seller answered a scam confirmation on it with Not a scam.
+    scam_cleared: bool
 
 
 class WantRecord(TypedDict):

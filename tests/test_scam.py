@@ -16,7 +16,7 @@ from hypothesis.stateful import RuleBasedStateMachine, invariant, precondition, 
 from tests.conftest import seed_setting
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
-from sellee import migrations
+from sellee import migrations, reply_prompt
 from sellee.config import Config
 from sellee.db import Database
 from sellee.engines import hosts, scam
@@ -378,6 +378,30 @@ def test_not_a_scam_lets_sellee_answer_the_buyer_again(relay_thread) -> None:
     assert row["carousell_ai_flags"] == ["platform_impersonation"]
     assert relay_thread.store.list_open_escalations() == []
     assert relay_thread.reply(msg_id)["status"] == "sent"
+
+
+def test_the_reply_prompt_says_the_seller_called_it_not_a_scam(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam", flags=["platform_impersonation"])
+    relay_thread.confirm()
+    thread = relay_thread.store.get_thread
+    held = reply_prompt.build_reply_prompt([thread(relay_thread.thread_id)], {})
+    assert "said it is not a scam" not in held
+
+    relay_thread.answer("not_scam")
+    relay_thread.buyer_writes(local="clean", risk="clean")
+
+    prompt = reply_prompt.build_reply_prompt([thread(relay_thread.thread_id)], {})
+    assert "said it is not a scam" in prompt
+    assert "do not ask the seller about those flags again" in prompt
+
+
+def test_keep_it_held_does_not_say_the_seller_cleared_it(relay_thread) -> None:
+    relay_thread.buyer_writes(risk="scam", flags=["platform_impersonation"])
+    relay_thread.confirm()
+
+    relay_thread.answer("keep_held")
+
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["scam_cleared"] is False
 
 
 def test_not_a_scam_leaves_messages_that_were_not_scam_as_they_were(relay_thread) -> None:

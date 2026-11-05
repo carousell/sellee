@@ -106,6 +106,13 @@ class ThreadsMixin:
             **_thread_from_row(rows[0]),
             "messages": self.get_thread_messages(thread_id, limit=message_cap),
             "message_count": message_count,
+            "scam_cleared": bool(
+                self._db.query(
+                    "SELECT 1 FROM escalations WHERE thread_id = ? AND status = 'resolved' "
+                    "AND resolution = 'not scam' LIMIT 1",
+                    (thread_id,),
+                )
+            ),
         }
         return record
 
