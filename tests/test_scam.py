@@ -796,6 +796,7 @@ def test_a_chat_block_asks_the_seller_and_sends_nothing(relay_thread, reason) ->
     assert relay_thread.fake.block_calls == []
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
     notice = _ask_notice(relay_thread, result["notice_id"])
+    assert notice["pass_id"] == relay_thread.pass_id  # the ask is this pass's answer
     assert notice["text"].startswith("Block and report Alice (Carousell.ai · Teak lamp) to ")
     assert f"for {reason}?" in notice["text"]
     assert [label for label, _ in notice["controls"]] == [
@@ -811,6 +812,18 @@ def test_a_block_buttons_names_the_buyer_and_fits_a_phone(handle) -> None:
         assert asks.validate_options([block, "Don't block"])
         assert block.startswith("🚫 Block ") and block.endswith(f": {reason}")
         assert handle[:3] in block
+
+
+def test_a_handle_that_just_fits_is_not_cut() -> None:
+    assert asks.block_options("spam", "abcdefghi")[0] == "🚫 Block abcdefghi: spam"
+    assert asks.block_options("spam", "abcdefghij")[0] == "🚫 Block abcdefg…: spam"
+
+
+def test_an_answer_naming_no_notice_is_refused(relay_thread) -> None:
+    relay_thread.seller_types("hi")
+
+    with pytest.raises(ToolError, match="block ask"):
+        _answer(relay_thread, 9999)
 
 
 @pytest.mark.parametrize("reason", ["spam", "abuse", "other"])
