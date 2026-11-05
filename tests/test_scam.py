@@ -796,8 +796,21 @@ def test_a_chat_block_asks_the_seller_and_sends_nothing(relay_thread, reason) ->
     assert relay_thread.fake.block_calls == []
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
     notice = _ask_notice(relay_thread, result["notice_id"])
-    assert reason in notice["text"] and "Teak lamp" in notice["text"]
-    assert [label for label, _ in notice["controls"]] == [f"🚫 Block for {reason}", "Don't block"]
+    assert notice["text"].startswith("Block and report Alice (Carousell.ai · Teak lamp) to ")
+    assert f"for {reason}?" in notice["text"]
+    assert [label for label, _ in notice["controls"]] == [
+        f"🚫 Block Alice: {reason}",
+        "Don't block",
+    ]
+
+
+@pytest.mark.parametrize("handle", ["a" * 40, "李" * 20, "Bob"])
+def test_a_block_buttons_names_the_buyer_and_fits_a_phone(handle) -> None:
+    for reason in ("spam", "abuse", "other"):
+        block, _ = asks.block_options(reason, handle)
+        assert asks.validate_options([block, "Don't block"])
+        assert block.startswith("🚫 Block ") and block.endswith(f": {reason}")
+        assert handle[:3] in block
 
 
 @pytest.mark.parametrize("reason", ["spam", "abuse", "other"])
@@ -903,19 +916,70 @@ def test_the_model_cannot_write_a_block_ask_of_its_own(relay_thread) -> None:
     assert relay_thread.store.list_queued_notices() == []
 
 
-def test_a_tapped_block_carousell_ai_did_not_confirm_can_be_tapped_again(relay_thread) -> None:
+def test_a_failed_block_sends_a_fresh_ask_whose_tap_sends_it_again(relay_thread) -> None:
     relay_thread.buyer_writes()
     notice_id = _ask_from_chat(relay_thread, "abuse")
     relay_thread.seller_taps(notice_id)
     relay_thread.fake.block_script = ["http503"]
+    before = {n["id"] for n in relay_thread.store.list_queued_notices()}
 
     failed = _answer(relay_thread, notice_id)
 
     assert (failed["status"], failed["thread_id"]) == ("block_failed", relay_thread.thread_id)
-    assert "tap" in failed["detail"]
+    assert "new ask" in failed["detail"]
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
-    relay_thread.seller_taps(notice_id)
-    assert _answer(relay_thread, notice_id)["status"] == "blocked"
+    [fresh] = [n for n in relay_thread.store.list_queued_notices() if n["id"] not in before]
+    first = _ask_notice(relay_thread, notice_id)
+    assert (fresh["ref"], fresh["text"]) == (first["ref"], first["text"])
+    assert [label for label, _ in fresh["controls"]] == [label for label, _ in first["controls"]]
+    relay_thread.seller_taps(fresh["id"])
+    assert _answer(relay_thread, fresh["id"])["status"] == "blocked"
+    assert relay_thread.fake.block_calls[-1] == {"id": "t1", "reason": "abuse"}
+
+
+def test_an_escalation_on_a_lookalike_thread_is_not_a_block_ask(relay_thread) -> None:
+    relay_thread.buyer_writes()
+    relay_thread.seller_types("hi")
+    ctx = relay_thread.ctx(TIER_PASS_CHANNEL, relay_thread.pass_id)
+    # An escalation's notice takes its thread's id as its ref, and the model names threads.
+    lookalike = f"block:spam:{relay_thread.thread_id}"
+    dispatch(
+        "create_thread",
+        {
+            "thread_id": lookalike,
+            "side": "sell",
+            "market": "block",
+            "counterpart_handle": "x",
+            "item_id": relay_thread.store.list_items()[0]["id"],
+        },
+        ctx,
+    )
+    dispatch(
+        "escalate",
+        {
+            "thread_id": lookalike,
+            "open_question": "Want the lamp photos?",
+            "options": ["Yes please", "No thanks"],
+        },
+        ctx,
+    )
+    _deliver_escalations(relay_thread)
+    [notice] = [n for n in relay_thread.store.list_queued_notices() if n["ref"] == lookalike]
+    relay_thread.seller_taps(notice["id"])
+
+    with pytest.raises(ToolError, match="block ask"):
+        _answer(relay_thread, notice["id"])
+
+    assert relay_thread.fake.block_calls == []
+
+
+def _deliver_escalations(relay_thread) -> None:
+    """Queue each open escalation's notice, as the channel's escalation listener does."""
+    from sellee.channel import outbound
+
+    on_open = outbound.escalation_notifier(relay_thread.store)
+    for esc in relay_thread.store.list_open_escalations():
+        on_open(type("E", (), {"kind": "escalation.open", "payload": {"id": esc["id"]}})())
 
 
 @settings(
