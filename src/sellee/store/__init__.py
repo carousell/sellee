@@ -212,6 +212,7 @@ _SCOPE_GUARDED = {
     "qa_add": (("item_id", "item"),),
     "qa_search": (("item_id", "item"),),
     "qa_questions": (("item_id", "item"),),
+    "qa_listing_answers": (("item_id", "item"),),
     "update_thread": (("thread_id", "thread"),),
     "hold_thread": (("thread_id", "thread"),),
     "release_thread": (("thread_id", "thread"),),
@@ -262,7 +263,13 @@ _SCOPE_MISS_NONE = frozenset(
     }
 )
 _SCOPE_MISS_EMPTY = frozenset(
-    {"get_thread_messages", "qa_search", "qa_questions", "seller_handled_threads"}
+    {
+        "get_thread_messages",
+        "qa_search",
+        "qa_questions",
+        "qa_listing_answers",
+        "seller_handled_threads",
+    }
 )
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {

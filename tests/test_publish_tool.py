@@ -77,6 +77,22 @@ def test_publish_composes_create_verify_record_in_order(make_ctx, store) -> None
     assert store.get_item(item["id"])["listing_urls"]["carousell-ai"] == rail.url
 
 
+def test_publish_sends_the_listing_time_answers_and_keeps_the_stored_description(
+    make_ctx, store
+) -> None:
+    rail = FakeRail()
+    ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
+    item = _item(store, description="Barely used.")
+    store.qa_add(item["id"], "Any marks?", "None at all", "seller", on_listing=True)
+    store.qa_add(item["id"], "Can you deliver?", "Weekends only", "seller")
+
+    dispatch("carousell_ai_publish_listing", {"item_id": item["id"]}, ctx)
+
+    sent = "Barely used.\n\nCommon questions\nQ: Any marks?\nA: None at all"
+    assert rail.args["description"] == sent
+    assert store.get_item(item["id"])["description"] == "Barely used."
+
+
 def test_publish_fail_closed_verify_records_nothing(make_ctx, store) -> None:
     rail = FakeRail(verify_ok=False)
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)

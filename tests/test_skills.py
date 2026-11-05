@@ -316,3 +316,5 @@ def test_the_listing_confirmation_offers_suggested_questions_without_blocking() 
     # Banked exactly as offered, so the tool leaves an answered question out next time.
     spec = next(s for s in tools_for_tier("attended") if s.name == "suggested_questions")
     assert "word for word" in spec.description
+    # And marked, so the answer is shown on the listing.
+    assert "on_listing true" in spec.description

@@ -43,9 +43,9 @@ register(
         "seller as optional when confirming a new listing: at most 3, leaving out any already "
         "banked word for word, for this item or for everything the seller sells. Empty means say "
         "nothing about them. Drop one that plainly doesn't fit the item (a battery question for a "
-        "wired speaker). Bank each answer the seller gives with add_qa_entry on this item, the "
-        "question word for word as returned and the answer as they said it, never one you read "
-        "off the photos. A skipped question is not banked.",
+        "wired speaker). Bank each answer the seller gives with add_qa_entry on this item, "
+        "on_listing true, the question word for word as returned and the answer as they said it, "
+        "never one you read off the photos. A skipped question is not banked.",
         input_schema={
             "type": "object",
             "properties": {"item_id": {"type": "string"}},

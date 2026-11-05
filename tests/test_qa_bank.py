@@ -6,6 +6,7 @@ import pytest
 
 from sellee.config import Config
 from sellee.store import Scope, ScopedStore
+from sellee.tools import suggested_questions
 from sellee.tools.registry import Session, ToolContext, ToolError, UnknownTool, dispatch
 
 _FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
@@ -155,6 +156,56 @@ def test_the_query_ranks_the_bank_and_never_hides_a_row(make_ctx, store) -> None
 
     unrelated = dispatch("search_qa_bank", {"item_id": item["id"], "query": "colour"}, ctx)
     assert unrelated["count"] == 2
+
+
+def _offered(store):
+    """An item and a question suggested_questions offers for its category."""
+    category, questions = next(iter(suggested_questions.questions_by_category().items()))
+    item = store.create_item(title="Phone", list_price=80.0, category=category)
+    return item, questions[0]
+
+
+def test_a_listing_time_answer_is_marked_for_the_listing(make_ctx, store) -> None:
+    item, question = _offered(store)
+    entry = {"item_id": item["id"], "question": question, "answer": "Yes", "source": "seller"}
+    dispatch("add_qa_entry", {**entry, "on_listing": True}, make_ctx("attended"))
+    assert store.qa_listing_answers(item["id"]) == [{"question": question, "answer": "Yes"}]
+
+
+def test_without_the_flag_an_answer_stays_off_the_listing(make_ctx, store) -> None:
+    item, question = _offered(store)
+    entry = {"item_id": item["id"], "question": question, "answer": "Yes", "source": "seller"}
+    dispatch("add_qa_entry", entry, make_ctx("attended"))
+    assert store.qa_listing_answers(item["id"]) == []
+    assert [e["answer"] for e in store.qa_search(item["id"])] == ["Yes"]
+
+
+def test_only_an_offered_question_can_go_on_the_listing(make_ctx, store) -> None:
+    """An escalated buyer question stays in the bank only, so the flag is refused for it."""
+    item, _ = _offered(store)
+    entry = {"item_id": item["id"], "question": "Can you deliver?", "answer": "No"}
+    with pytest.raises(ToolError, match="suggested_questions"):
+        dispatch(
+            "add_qa_entry", {**entry, "source": "seller", "on_listing": True}, make_ctx("attended")
+        )
+    assert store.qa_search(item["id"]) == []
+
+
+def test_an_item_without_a_category_has_no_question_to_put_on_its_listing(make_ctx, store) -> None:
+    item = _item(store)  # no category, so suggested_questions offered nothing
+    _, question = _offered(store)
+    entry = {"item_id": item["id"], "question": question, "answer": "Yes", "source": "seller"}
+    with pytest.raises(ToolError, match="suggested_questions"):
+        dispatch("add_qa_entry", {**entry, "on_listing": True}, make_ctx("attended"))
+    assert store.qa_search(item["id"]) == []
+
+
+def test_a_global_answer_cannot_go_on_a_listing(make_ctx, store) -> None:
+    _, question = _offered(store)
+    entry = {"item_id": "*", "question": question, "answer": "Yes", "source": "seller"}
+    with pytest.raises(ToolError, match="one item"):
+        dispatch("add_qa_entry", {**entry, "on_listing": True}, make_ctx("attended"))
+    assert store.qa_search("*") == []
 
 
 # --- the take-down ------------------------------------------------------------------------------

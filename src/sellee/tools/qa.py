@@ -26,6 +26,7 @@ from sellee.tools.registry import (
     ToolSpec,
     register,
 )
+from sellee.tools.suggested_questions import questions_by_category
 
 
 def _search_qa_bank(ctx: ToolContext, params: dict) -> dict:
@@ -33,10 +34,28 @@ def _search_qa_bank(ctx: ToolContext, params: dict) -> dict:
     return {"entries": entries, "count": len(entries)}
 
 
+def _require_an_offered_question(ctx: ToolContext, item_id: str, question: str) -> None:
+    # Only a suggested question goes on the listing; an escalated buyer question stays in the bank.
+    item = ctx.store.get_item(item_id)
+    offered = questions_by_category().get((item or {}).get("category") or "", [])
+    if question.strip() not in offered:
+        raise ToolError(
+            "on_listing is only for a question suggested_questions offered for this item, word "
+            "for word; bank any other answer without it"
+        )
+
+
 def _add_qa_entry(ctx: ToolContext, params: dict) -> dict:
+    on_listing = bool(params.get("on_listing"))
+    if on_listing and params["item_id"] != QA_GLOBAL_ITEM:
+        _require_an_offered_question(ctx, params["item_id"], params["question"])
     try:
         return ctx.store.qa_add(
-            params["item_id"], params["question"], params["answer"], params["source"]
+            params["item_id"],
+            params["question"],
+            params["answer"],
+            params["source"],
+            on_listing=on_listing,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
@@ -68,7 +87,9 @@ register(
         name="add_qa_entry",
         description="Bank an answer the seller gave, so the same buyer question answers itself "
         f"next time. Scope it to one item, or use {QA_GLOBAL_ITEM!r} for something true of "
-        "everything they sell. Only ever record what the seller actually said.",
+        "everything they sell. Only ever record what the seller actually said. on_listing true "
+        "also shows the answer at the end of the item's listing description; set it only for a "
+        "question suggested_questions offered.",
         input_schema={
             "type": "object",
             "properties": {
@@ -76,6 +97,7 @@ register(
                 "question": {"type": "string"},
                 "answer": {"type": "string"},
                 "source": {"type": "string", "enum": ["seller"]},
+                "on_listing": {"type": "boolean"},
             },
             "required": ["item_id", "question", "answer", "source"],
             "additionalProperties": False,

@@ -80,6 +80,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 36),
         ("data", 37),
         ("data", 38),
+        ("data", 39),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -151,6 +152,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         36,
         37,
         38,
+        39,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -621,3 +623,25 @@ def test_0038_dates_a_live_item_from_its_creation_and_leaves_the_rest_unlisted(
         "item_draft": None,
         "item_live": 5.0,
     }
+
+
+def test_0039_leaves_existing_answers_off_the_listing(tmp_path, monkeypatch) -> None:
+    real_data, root = _withhold(tmp_path, monkeypatch, "0039")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        conn.execute(
+            "INSERT INTO items (id, title, status, created_ts, updated_ts)"
+            " VALUES ('item_old', 'Lamp', 'draft', 1.0, 1.0)"
+        )
+        conn.execute(
+            "INSERT INTO qa_bank (item_id, question, answer, source, created_ts)"
+            " VALUES ('item_old', 'Any marks?', 'None', 'seller', 1.0)"
+        )
+
+    shutil.copy(real_data / "0039_qa_on_listing.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    s = store.Store(data_db)
+    assert s.qa_listing_answers("item_old") == []
+    assert [e["answer"] for e in s.qa_search("item_old")] == ["None"]
