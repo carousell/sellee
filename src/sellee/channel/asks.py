@@ -49,6 +49,34 @@ MAX_OPTION_LABEL_COLS = 24
 # A carousell.ai scam confirmation's two answers, set in code for answer_scam_confirmation.
 CAROUSELL_AI_SCAM_OPTIONS = ("👍 Not a scam — resume", "🛑 Scam — block, report")
 
+# A block ask's ref names its buyer and reason; only code writes it (send_message refuses it).
+BLOCK_ASK_REF_PREFIX = "block:"
+
+
+def block_ask_ref(thread_id: str, reason: str) -> str:
+    return f"{BLOCK_ASK_REF_PREFIX}{reason}:{thread_id}"
+
+
+def block_ask(notice) -> tuple | None:
+    """The (thread_id, reason) a block ask names, or None for any other notice."""
+    ref = (notice or {}).get("ref") or ""
+    if not ref.startswith(BLOCK_ASK_REF_PREFIX):
+        return None
+    reason, _, thread_id = ref[len(BLOCK_ASK_REF_PREFIX) :].partition(":")
+    return thread_id, reason
+
+
+def block_options(reason: str) -> tuple:
+    return (f"🚫 Block for {reason}", "Don't block")
+
+
+def block_question(reason: str, reference: str) -> str:
+    about = f" ({reference})" if reference else ""
+    return (
+        f"Block this buyer{about} and report them to carousell.ai for {reason}? carousell.ai "
+        "will drop their mail to you."
+    )
+
 
 def validate_options(options) -> list:
     """Check an option list from a tool call and return it as a plain list of labels.

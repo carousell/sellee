@@ -394,6 +394,10 @@ class ChannelMixin:
                 return {"label": label, "text": rows[0]["text"]}
         return None
 
+    def get_notice(self, notice_id: int) -> NoticeRecord | None:
+        rows = self._db.query("SELECT * FROM notices WHERE id = ?", (notice_id,))
+        return _notice_from_row(rows[0]) if rows else None
+
     def claim_queued_notices(self, limit: int, *, in_quiet: bool = False) -> list[NoticeRecord]:
         """The oldest queued notices, FIFO — the drain lane delivers them in order. During quiet
         hours (`in_quiet`) holdable notices are skipped so only seller-facing/immediate ones go out;
