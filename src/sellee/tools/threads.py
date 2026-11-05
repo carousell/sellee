@@ -10,7 +10,7 @@ their own tools, never this generic writer.
 
 from __future__ import annotations
 
-from sellee import marketplaces
+from sellee import marketplaces, prompt_data
 from sellee.channel import asks, refs
 from sellee.rail.client import RailError, RailUnprovisioned
 from sellee.store import IMPORTED_THREAD_SOURCES, StoreError
@@ -34,8 +34,8 @@ _BLOCK_NOT_CONFIRMED = (
     "even if the first one landed"
 )
 _TAP_NOT_CONFIRMED = (
-    "carousell.ai did not confirm the block; nothing changed here, and tapping Block again "
-    "sends it again, which is safe even if the first one landed"
+    "carousell.ai did not confirm the block; nothing changed here, and a new ask was sent: "
+    "tapping Block on it sends it again, which is safe even if the first one landed"
 )
 _BLOCK_ANSWER = "a0"  # the token of a block ask's first button, "Block"
 
@@ -71,17 +71,23 @@ def _carousell_ai_block_buyer(ctx: ToolContext, params: dict) -> dict:
             "the seller's answer to the scam confirmation"
         )
     thread_id = params["thread_id"]
-    _rail_thread(ctx, thread_id)
+    thread = _rail_thread(ctx, thread_id)
     if ctx.session.tier != TIER_PASS_CHANNEL:
         return _send_block(ctx, thread_id, reason, _BLOCK_NOT_CONFIRMED)
     # In chat the pass may be reading a buyer, so only the seller's tap on this ask blocks.
-    notice_id = ctx.store.queue_notice(
-        asks.block_question(reason, refs.thread_reference(ctx.store, thread_id)),
-        ref=asks.block_ask_ref(thread_id, reason),
-        pass_id=ctx.session.pass_id,
-        options=list(asks.block_options(reason)),
-    )
+    notice_id = _queue_block_ask(ctx, thread, reason)
     return {"thread_id": thread_id, "status": "asked", "notice_id": notice_id}
+
+
+def _queue_block_ask(ctx: ToolContext, thread: dict, reason: str) -> int:
+    handle = prompt_data.one_line(thread["counterpart_handle"]) or "this buyer"
+    reference = refs.thread_reference(ctx.store, thread["thread_id"], unless_named_in=handle)
+    return ctx.store.queue_notice(
+        asks.block_question(reason, handle, reference),
+        ref=asks.block_ask_ref(thread["thread_id"], reason),
+        pass_id=ctx.session.pass_id,
+        options=list(asks.block_options(reason, handle)),
+    )
 
 
 def _answer_block_confirmation(ctx: ToolContext, params: dict) -> dict:
@@ -97,10 +103,14 @@ def _answer_block_confirmation(ctx: ToolContext, params: dict) -> dict:
             "the seller has not tapped Block on that ask in the messages to handle now; only "
             "their tap sends a block"
         )
-    # Spent before the call, so one tap sends at most one block; a retap sends another.
+    thread = _rail_thread(ctx, thread_id)
+    # Spent before the call, so one tap sends at most one block.
     ctx.store.mark_inbox_handled([tap["id"]], "answer_block_confirmation")
-    _rail_thread(ctx, thread_id)
-    return _send_block(ctx, thread_id, reason, _TAP_NOT_CONFIRMED)
+    result = _send_block(ctx, thread_id, reason, _TAP_NOT_CONFIRMED)
+    if result["status"] == "block_failed":
+        # The tapped message lost its buttons on the tap, so a retry needs a fresh ask.
+        _queue_block_ask(ctx, thread, reason)
+    return result
 
 
 def _is_block_tap(row, notice_id: int) -> bool:
@@ -323,8 +333,8 @@ register(
         description="The seller tapped a button on a block ask that carousell_ai_block_buyer "
         "sent; pass that ask's notice id. Only a tap on Block in the messages to handle now "
         "blocks and reports the buyer it named, once per tap; blocked closes the thread, and "
-        "block_failed means carousell.ai did not confirm and a retap is safe. A Don't block tap "
-        "needs no call.",
+        "block_failed means carousell.ai did not confirm and a new ask was sent for a retap. A "
+        "Don't block tap needs no call.",
         input_schema={
             "type": "object",
             "properties": {"notice_id": {"type": "integer"}},
