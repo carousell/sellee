@@ -322,12 +322,12 @@ class _Relay:
     def client(self) -> RailClient:
         return RailClient(api_base=self.fake.base, api_key="k", web_base_url=_WEB)
 
-    def ctx(self, tier: str = TIER_ATTENDED) -> ToolContext:
+    def ctx(self, tier: str = TIER_ATTENDED, pass_id: str | None = None) -> ToolContext:
         sink = RelayReplySink(
             client=self.client(), store=self.store, bus=self.bus, retry_delays_sec=(0, 0, 0)
         )
         return ToolContext(
-            session=Session(tier=tier),
+            session=Session(tier=tier, pass_id=pass_id),
             store=self.store,
             bus=self.bus,
             config=_FAST,
@@ -344,6 +344,19 @@ class _Relay:
             )
         )
         return msg_id
+
+    def seller_says(self, *texts: str, tapped: bool = False) -> str:
+        """The seller's Telegram or Discord messages, claimed into a new channel pass."""
+        payload = {"answers_notice_id": 1, "answers_text": "Block them?"} if tapped else {}
+        start = next(self._ids) * 100
+        self.store.ingest_updates(
+            [
+                {"event_id": start + i, "kind": "text", "text": text, "payload": payload}
+                for i, text in enumerate(texts)
+            ],
+            start + len(texts),
+        )
+        return self.store.enqueue_channel_pass()
 
     def confirm(self, *, hold_first: bool = True) -> None:
         """The scam guard's handling: hold the thread and ask the seller."""
@@ -669,12 +682,24 @@ def test_the_reply_pass_cannot_answer_a_scam_confirmation() -> None:
 # --- the attended block tool --------------------------------------------------------------------
 
 
-def _block(relay_thread, reason, tier: str = TIER_ATTENDED) -> dict:
+def _block(relay_thread, reason, tier: str = TIER_ATTENDED, **params) -> dict:
+    pass_id = params.pop("pass_id", None)
     return dispatch(
         "carousell_ai_block_buyer",
-        {"thread_id": relay_thread.thread_id, "reason": reason},
-        relay_thread.ctx(tier),
+        {"thread_id": relay_thread.thread_id, "reason": reason, **params},
+        relay_thread.ctx(tier, pass_id),
     )
+
+
+def _block_from_chat(relay_thread, reason, request: str, *, said: str | None = None, **kw):
+    """A channel-pass block, quoting `request` from what the seller said (`said`) this turn."""
+    pass_id = relay_thread.seller_says(request if said is None else said, **kw)
+    try:
+        return _block(
+            relay_thread, reason, TIER_PASS_CHANNEL, seller_request=request, pass_id=pass_id
+        )
+    finally:
+        relay_thread.store.finish_pass(pass_id, status="done", cls="ok")
 
 
 def test_the_seller_can_block_a_buyer_for_spam(relay_thread) -> None:
@@ -731,12 +756,78 @@ def test_another_markets_buyer_is_not_blocked_here(store, make_ctx) -> None:
         )
 
 
-@pytest.mark.parametrize(
-    "tier", [TIER_PASS_CHANNEL, TIER_PASS_REPLY, TIER_PASS_PUBLISH, TIER_PASS_EDIT]
-)
+@pytest.mark.parametrize("tier", [TIER_PASS_REPLY, TIER_PASS_PUBLISH, TIER_PASS_EDIT])
 def test_unattended_tiers_cannot_see_the_block_tool(tier) -> None:
     assert "carousell_ai_block_buyer" not in {spec.name for spec in tools_for_tier(tier)}
-    assert "carousell_ai_block_buyer" in {spec.name for spec in tools_for_tier(TIER_ATTENDED)}
+    for seller_tier in (TIER_ATTENDED, TIER_PASS_CHANNEL):
+        assert "carousell_ai_block_buyer" in {spec.name for spec in tools_for_tier(seller_tier)}
+
+
+@pytest.mark.parametrize("reason", ["spam", "abuse", "other"])
+def test_the_seller_can_block_a_buyer_from_their_chat(relay_thread, reason) -> None:
+    relay_thread.buyer_writes()
+
+    result = _block_from_chat(
+        relay_thread,
+        reason,
+        "block this guy",
+        said="That lamp buyer keeps spamming me. Block   this guy!",
+    )
+
+    assert result == {"thread_id": relay_thread.thread_id, "status": "blocked"}
+    assert relay_thread.fake.block_calls == [{"id": "t1", "reason": reason}]
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "closed"
+
+
+@pytest.mark.parametrize(
+    ("request_", "said", "tapped"),
+    [
+        # No quote at all, or one that is only spaces.
+        ("", "block them", False),
+        ("   ", "block them", False),
+        # The buyer's words, which the pass read through the thread, not the seller's.
+        ("block me now", "how much is the lamp?", False),
+        # A tapped button's label is the agent's text, and its ask may quote a buyer.
+        ("Block them", "Block them", True),
+    ],
+)
+def test_a_chat_block_needs_the_sellers_own_words_this_turn(
+    relay_thread, request_, said, tapped
+) -> None:
+    relay_thread.buyer_writes()
+
+    with pytest.raises(ToolError, match="seller"):
+        _block_from_chat(relay_thread, "spam", request_, said=said, tapped=tapped)
+
+    assert relay_thread.fake.block_calls == []
+    assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
+
+
+def test_a_chat_block_cannot_quote_an_earlier_turn(relay_thread) -> None:
+    relay_thread.buyer_writes()
+    earlier = relay_thread.seller_says("block that spammer")
+    relay_thread.store.finish_pass(earlier, status="done", cls="ok")
+    now = relay_thread.seller_says("how is the lamp doing?")
+
+    with pytest.raises(ToolError, match="seller"):
+        _block(
+            relay_thread,
+            "spam",
+            TIER_PASS_CHANNEL,
+            seller_request="block that spammer",
+            pass_id=now,
+        )
+
+    assert relay_thread.fake.block_calls == []
+
+
+def test_a_chat_block_outside_a_pass_is_refused(relay_thread) -> None:
+    relay_thread.buyer_writes()
+
+    with pytest.raises(ToolError, match="seller"):
+        _block(relay_thread, "spam", TIER_PASS_CHANNEL, seller_request="block them")
+
+    assert relay_thread.fake.block_calls == []
 
 
 @settings(
@@ -746,16 +837,20 @@ def test_unattended_tiers_cannot_see_the_block_tool(tier) -> None:
 )
 @given(
     reason=st.sampled_from(["scam", "spam", "abuse", "other", "Scam", " scam", "scam "])
-    | st.text(max_size=8)
+    | st.text(max_size=8),
+    tier=st.sampled_from([TIER_ATTENDED, TIER_PASS_CHANNEL]),
 )
-def test_property_the_block_tool_never_sends_scam(relay_thread, reason) -> None:
-    """Property: whatever the reason, no block_buyer carries `scam`, and one is sent exactly
-    when the reason is spam, abuse or other."""
+def test_property_the_block_tool_never_sends_scam(relay_thread, reason, tier) -> None:
+    """Property: on either tier and whatever the reason, no block_buyer carries `scam`, and one
+    is sent exactly when the reason is spam, abuse or other."""
     if relay_thread.store.get_thread(relay_thread.thread_id) is None:
         relay_thread.buyer_writes()
     sent = len(relay_thread.fake.block_calls)
     try:
-        _block(relay_thread, reason)
+        if tier == TIER_PASS_CHANNEL:
+            _block_from_chat(relay_thread, reason, f"block them for {reason}")
+        else:
+            _block(relay_thread, reason)
     except ToolError:
         pass
 
