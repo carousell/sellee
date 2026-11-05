@@ -204,6 +204,9 @@ def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, s
             cfg=cfg,
             interactive=interactive,
             pass_id=ctx.session.pass_id,
+            # The channel pass sends the seller's own words, and the attended session is the
+            # seller at their terminal; only the reply lane answers a buyer unprompted.
+            autonomous=ctx.session.tier == TIER_PASS_REPLY,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
