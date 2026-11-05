@@ -299,3 +299,20 @@ def test_the_availability_opener_adds_only_item_facts_from_the_items_own_rows() 
     # Nothing records how often a question is asked, so the copy must not promise "most asked".
     assert "most often" not in text
     assert "at most one per reply" in text
+
+
+def test_the_listing_confirmation_offers_suggested_questions_without_blocking() -> None:
+    from sellee.tools import tools_for_tier
+
+    text = skills.load("listing-flow")
+    assert "`suggested_questions`" in text
+    # The listing conversation runs on the channel pass, which must be able to call and bank them.
+    channel = {s.name for s in tools_for_tier(passes.PASS_TYPES["channel"].tier)}
+    assert {"suggested_questions", "add_qa_entry"} <= channel
+    assert "as optional" in text
+    assert "never re-ask a skipped one" in text
+    # The questions ride the confirmation; its one-tap publish still needs nothing else.
+    assert "A tapped **✅ List it** is a complete answer: publish" in text
+    # Banked exactly as offered, so the tool leaves an answered question out next time.
+    spec = next(s for s in tools_for_tier("attended") if s.name == "suggested_questions")
+    assert "word for word" in spec.description

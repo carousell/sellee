@@ -1,0 +1,9 @@
+{
+  "small_electronics": [
+    "What's the battery health?",
+    "Does it come with the charger?",
+    "Any scratches or dents?",
+    "Is it locked to an account?"
+  ],
+  "fashion": ["What size is it?"]
+}

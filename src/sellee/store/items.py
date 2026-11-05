@@ -206,6 +206,13 @@ class ItemsMixin:
             entry_id = cur.lastrowid
         return {"id": entry_id, "item_id": item_id, "source": source, "created_ts": ts}
 
+    def qa_questions(self, item_id: str) -> set:
+        """Every question banked for the item or globally, uncapped, as qa_add stored it."""
+        rows = self._db.query(
+            "SELECT question FROM qa_bank WHERE item_id IN (?, ?)", (item_id, QA_GLOBAL_ITEM)
+        )
+        return {r["question"] for r in rows}
+
     def qa_search(self, item_id: str, query: str | None = None, limit: int = _QA_SEARCH_CAP):
         """The item's entries plus the global ones, capped — the whole bank, for the model to match.
 

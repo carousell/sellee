@@ -94,6 +94,9 @@ each time." Record the answer with `set_floor`.
 who gives a price and ignores the floor has answered enough: publish, and the floor simply holds at
 the list price. Don't ask twice, and don't withhold the listing over it.
 
+**Offer the buyer questions from `suggested_questions`** in the same message, as optional. Bank
+each answer as `suggested_questions` describes; never re-ask a skipped one.
+
 **Give the confirmation buttons:** `options: ["✅ List it", "✏️ Change something"]` on the
 `send_message` that carries it. The floor stays a typed answer — it is a number, and no button can
 hold one — so the buttons are the fast way to say yes when they have nothing to change.

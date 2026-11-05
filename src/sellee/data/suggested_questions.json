@@ -1,0 +1,58 @@
+{
+  "small_electronics": [
+    "Does everything work as it should?",
+    "Any scratches, dents or cracks?",
+    "What comes with it: charger, cables, box?",
+    "If it has a battery, how well does it hold a charge?"
+  ],
+  "small_appliances": [
+    "Does it work as it should?",
+    "What comes with it: attachments, manual, box?",
+    "How much has it been used?"
+  ],
+  "fashion": [
+    "What size is it, and how does it fit?",
+    "Any stains, marks or wear?",
+    "Is it authentic, and do you have the receipt or tags?"
+  ],
+  "jewelry_and_watches": [
+    "Is it authentic, and do you have the receipt, box or papers?",
+    "What is it made of?",
+    "Any scratches or wear?"
+  ],
+  "home_and_decor": [
+    "What are the dimensions?",
+    "Any marks, chips or wear?",
+    "What is it made of?"
+  ],
+  "books_and_media": [
+    "What condition is it in: any markings, missing pages or scratches?",
+    "Is it complete, with its case, inserts or every volume?",
+    "Which edition or version is it?"
+  ],
+  "toys_games_and_hobbies": [
+    "Is it complete, with every piece?",
+    "Does it work as it should?",
+    "Does it come with the box?"
+  ],
+  "sports_and_fitness": [
+    "What size is it?",
+    "How much has it been used?",
+    "Any damage or wear?"
+  ],
+  "musical_instruments": [
+    "Does it play as it should?",
+    "Any damage, repairs or wear?",
+    "What comes with it: case, accessories?"
+  ],
+  "collectibles": [
+    "Is it authentic?",
+    "What condition is it in?",
+    "Does it come with its original packaging?"
+  ],
+  "too_big_to_ship": [
+    "What are the dimensions?",
+    "Any damage or wear?",
+    "Does it come apart for moving?"
+  ]
+}
