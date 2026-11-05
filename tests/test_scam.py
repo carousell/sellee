@@ -345,13 +345,13 @@ class _Relay:
         )
         return msg_id
 
-    def seller_says(self, *texts: str, tapped: bool = False) -> str:
+    def seller_says(self, *texts: str, tapped: bool = False, kind: str = "text") -> str:
         """The seller's Telegram or Discord messages, claimed into a new channel pass."""
         payload = {"answers_notice_id": 1, "answers_text": "Block them?"} if tapped else {}
         start = next(self._ids) * 100
         self.store.ingest_updates(
             [
-                {"event_id": start + i, "kind": "text", "text": text, "payload": payload}
+                {"event_id": start + i, "kind": kind, "text": text, "payload": payload}
                 for i, text in enumerate(texts)
             ],
             start + len(texts),
@@ -780,24 +780,28 @@ def test_the_seller_can_block_a_buyer_from_their_chat(relay_thread, reason) -> N
 
 
 @pytest.mark.parametrize(
-    ("request_", "said", "tapped"),
+    ("request_", "said", "tapped", "kind"),
     [
         # No quote at all, or one that is only spaces.
-        ("", "block them", False),
-        ("   ", "block them", False),
+        ("", "block them", False, "text"),
+        ("   ", "block them", False, "text"),
+        # Words the seller did type, but not asking for a block.
+        ("the", "how is the lamp doing?", False, "text"),
+        ("lamp doing", "how is the lamp doing?", False, "text"),
         # The buyer's words, which the pass read through the thread, not the seller's.
-        ("block me now", "how much is the lamp?", False),
+        ("block me now", "how much is the lamp?", False, "text"),
         # A tapped button's label is the agent's text, and its ask may quote a buyer.
-        ("Block them", "Block them", True),
+        ("Block them", "Block them", True, "text"),
+        ("Block them", "Block them", False, "action"),
     ],
 )
 def test_a_chat_block_needs_the_sellers_own_words_this_turn(
-    relay_thread, request_, said, tapped
+    relay_thread, request_, said, tapped, kind
 ) -> None:
     relay_thread.buyer_writes()
 
-    with pytest.raises(ToolError, match="seller"):
-        _block_from_chat(relay_thread, "spam", request_, said=said, tapped=tapped)
+    with pytest.raises(ToolError, match="seller_request must quote"):
+        _block_from_chat(relay_thread, "spam", request_, said=said, tapped=tapped, kind=kind)
 
     assert relay_thread.fake.block_calls == []
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
@@ -809,7 +813,7 @@ def test_a_chat_block_cannot_quote_an_earlier_turn(relay_thread) -> None:
     relay_thread.store.finish_pass(earlier, status="done", cls="ok")
     now = relay_thread.seller_says("how is the lamp doing?")
 
-    with pytest.raises(ToolError, match="seller"):
+    with pytest.raises(ToolError, match="seller_request must quote"):
         _block(
             relay_thread,
             "spam",
@@ -824,7 +828,7 @@ def test_a_chat_block_cannot_quote_an_earlier_turn(relay_thread) -> None:
 def test_a_chat_block_outside_a_pass_is_refused(relay_thread) -> None:
     relay_thread.buyer_writes()
 
-    with pytest.raises(ToolError, match="seller"):
+    with pytest.raises(ToolError, match="seller_request must quote"):
         _block(relay_thread, "spam", TIER_PASS_CHANNEL, seller_request="block them")
 
     assert relay_thread.fake.block_calls == []
@@ -859,6 +863,34 @@ def test_property_the_block_tool_never_sends_scam(relay_thread, reason, tier) ->
     assert calls == (
         [{"id": "t1", "reason": reason}] if reason in ("spam", "abuse", "other") else []
     )
+
+
+_SAID = "That lamp buyer keeps spamming me, block him"
+
+
+@settings(
+    max_examples=60,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+@given(
+    request_=st.sampled_from(["block him", "BLOCK  HIM", "spamming me", "block", "lamp"])
+    | st.text(max_size=12)
+)
+def test_property_a_chat_block_needs_a_block_the_seller_typed(relay_thread, request_) -> None:
+    """Property: on the channel pass, a block is sent exactly when the quote names a block and
+    is in what the seller typed this turn."""
+    if relay_thread.store.get_thread(relay_thread.thread_id) is None:
+        relay_thread.buyer_writes()
+    sent = len(relay_thread.fake.block_calls)
+    try:
+        _block_from_chat(relay_thread, "spam", request_, said=_SAID)
+    except ToolError:
+        pass
+
+    quoted = " ".join(request_.split()).casefold()
+    asked = "block" in quoted and quoted in _SAID.casefold()
+    assert len(relay_thread.fake.block_calls) - sent == (1 if asked else 0)
 
 
 _VERDICTS = ("clean", "suspicious", "scam")

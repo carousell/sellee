@@ -34,17 +34,25 @@ _BLOCK_NOT_CONFIRMED = (
 )
 
 
-def _words(text) -> str:
+def _normalised(text: str | None) -> str:
     return " ".join((text or "").split()).casefold()
 
 
-def _refuse_unless_the_seller_asked(ctx: ToolContext, request) -> None:
-    """On the channel pass, the quoted request must come from a message the seller typed this
-    turn: never a tapped button, an earlier turn, or anything the pass read from a buyer."""
-    quoted = _words(request)
+def _typed_this_turn(ctx: ToolContext) -> list:
+    """The seller's typed messages claimed into this pass, normalised; taps are left out."""
     rows = ctx.store.inbox_for_pass(ctx.session.pass_id) if ctx.session.pass_id else []
-    typed = [_words(r["text"]) for r in rows if not (r["payload"] or {}).get("answers_text")]
-    if not quoted or not any(quoted in text for text in typed):
+    return [
+        _normalised(row["text"])
+        for row in rows
+        if row["kind"] == "text" and not (row["payload"] or {}).get("answers_text")
+    ]
+
+
+def _refuse_unless_the_seller_asked(ctx: ToolContext, request: str | None) -> None:
+    """On the channel pass, the quote must ask for a block in a message the seller typed this
+    turn: never a tap, an earlier turn, or anything the pass read from a buyer."""
+    quoted = _normalised(request)
+    if "block" not in quoted or not any(quoted in text for text in _typed_this_turn(ctx)):
         raise ToolError(
             "seller_request must quote the seller's own message asking for this block, from "
             "the messages to handle now"
@@ -274,8 +282,8 @@ register(
                 "seller_request": {
                     "type": "string",
                     "description": "Required on Telegram or Discord: the seller's words asking "
-                    "for the block, copied from a message they typed in the messages to handle "
-                    "now.",
+                    "for the block, including the word block, copied from a message they typed "
+                    "in the messages to handle now.",
                 },
             },
             "required": ["thread_id", "reason"],
