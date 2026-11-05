@@ -3,6 +3,7 @@
     "add_qa_entry",
     "answer_scam_confirmation",
     "buyer_withdrew",
+    "carousell_ai_block_buyer",
     "carousell_ai_create_checkout_link",
     "carousell_ai_create_signin_link",
     "carousell_ai_item_policy",
