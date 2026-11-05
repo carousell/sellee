@@ -46,6 +46,46 @@ MAX_OPTIONS = 4
 # rows by, so a label that passes here is one the renderer can seat.
 MAX_OPTION_LABEL_COLS = 24
 
+# A carousell.ai scam confirmation's two answers, set in code for answer_scam_confirmation.
+CAROUSELL_AI_SCAM_OPTIONS = ("👍 Not a scam — resume", "🛑 Scam — block, report")
+
+# A block ask's ref names its buyer and reason; only code writes it (send_message refuses it).
+BLOCK_ASK_REF_PREFIX = "block:"
+# Every block ask opens with this; an escalation's notice opens "Needs your call".
+_BLOCK_QUESTION_LEAD = "Block and report "
+
+
+def block_ask_ref(thread_id: str, reason: str) -> str:
+    return f"{BLOCK_ASK_REF_PREFIX}{reason}:{thread_id}"
+
+
+def block_ask(notice) -> tuple | None:
+    """The (thread_id, reason) a block ask names, or None for any other notice."""
+    ref, text = (notice or {}).get("ref") or "", (notice or {}).get("text") or ""
+    if not ref.startswith(BLOCK_ASK_REF_PREFIX) or not text.startswith(_BLOCK_QUESTION_LEAD):
+        return None
+    reason, _, thread_id = ref[len(BLOCK_ASK_REF_PREFIX) :].partition(":")
+    return thread_id, reason
+
+
+def block_options(reason: str, handle: str) -> tuple:
+    """The Block button names the buyer and the reason, the handle cut to fit a phone button."""
+    lead, tail = "🚫 Block ", f": {reason}"
+    room = MAX_OPTION_LABEL_COLS - controls.display_width(lead + tail)
+    if controls.display_width(handle) > room:
+        while handle and controls.display_width(handle + "…") > room:
+            handle = handle[:-1]
+        handle += "…"
+    return (f"{lead}{handle}{tail}", "Don't block")
+
+
+def block_question(reason: str, handle: str, reference: str) -> str:
+    about = f" ({reference})" if reference else ""
+    return (
+        f"{_BLOCK_QUESTION_LEAD}{handle}{about} to carousell.ai for {reason}? carousell.ai will "
+        "drop their mail to you."
+    )
+
 
 def validate_options(options) -> list:
     """Check an option list from a tool call and return it as a plain list of labels.

@@ -210,6 +210,17 @@ class ChannelMixin:
                 (handled_by, _now(), *inbox_ids),
             )
 
+    def spend_claimed_inbox(self, inbox_id: int, pass_id: str, handled_by: str) -> bool:
+        """Mark one row a pass claimed as handled; False when it was not still claimed by it, so
+        of two racing callers exactly one wins."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE channel_inbox SET status = 'handled', handled_by = ?, updated_ts = ? "
+                "WHERE id = ? AND pass_id = ? AND status = 'claimed'",
+                (handled_by, _now(), inbox_id, pass_id),
+            )
+            return cur.rowcount == 1
+
     def inbox_for_pass(self, pass_id: str) -> list[InboxRecord]:
         """The inbox rows claimed into a pass — the prompt builder reads these (arrival order)."""
         rows = self._db.query(
@@ -393,6 +404,10 @@ class ChannelMixin:
             if control_token == token:
                 return {"label": label, "text": rows[0]["text"]}
         return None
+
+    def get_notice(self, notice_id: int) -> NoticeRecord | None:
+        rows = self._db.query("SELECT * FROM notices WHERE id = ?", (notice_id,))
+        return _notice_from_row(rows[0]) if rows else None
 
     def claim_queued_notices(self, limit: int, *, in_quiet: bool = False) -> list[NoticeRecord]:
         """The oldest queued notices, FIFO — the drain lane delivers them in order. During quiet

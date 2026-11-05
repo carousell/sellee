@@ -21,6 +21,11 @@ from sellee.tools.registry import (
 
 
 def _send_message(ctx: ToolContext, params: dict) -> dict:
+    if str(params.get("ref") or "").startswith(asks.BLOCK_ASK_REF_PREFIX):
+        raise ToolError(
+            f"a {asks.BLOCK_ASK_REF_PREFIX} ref is a block ask, which only "
+            "carousell_ai_block_buyer sends"
+        )
     options = params.get("options")
     if options is not None:
         try:

@@ -18,6 +18,8 @@ import urllib.request
 from sellee.rail.mail_stream import MailStreamConnection
 
 _DEFAULT_TIMEOUT_SEC = 15.0
+# The reasons bazaar's block_buyer accepts, exactly.
+REPORT_REASONS = ("scam", "spam", "abuse", "other")
 _VERIFY_TIMEOUT_SEC = 5.0
 _LISTING_PATH = "/listing/"
 # carousell.ai sits behind Cloudflare, which 403s the default urllib User-Agent. A plain browser
@@ -363,6 +365,13 @@ class RailClient:
         if not result.get("message_id"):
             raise RailToolError("reply_to_thread returned no message id")
         return {"message_id": result["message_id"]}
+
+    def block_buyer(self, thread_id: str, reason: str) -> None:
+        """Block a relay thread's buyer and report them for `reason`. bazaar keeps the first
+        report and blocks nothing more on a repeat, so a second call is safe."""
+        if reason not in REPORT_REASONS:
+            raise RailToolError(f"block_buyer reason must be one of {', '.join(REPORT_REASONS)}")
+        self.call_tool("block_buyer", {"id": str(thread_id), "reason": reason})
 
     def list_registration_mail(self, cursor: str, limit: int) -> dict:
         """Mail to the seller's registration address since `cursor`, as {mail, next_cursor}. At
