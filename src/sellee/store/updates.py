@@ -10,13 +10,21 @@ say whether an offer was under it, and no column or facts shape has a place for 
 from __future__ import annotations
 
 import json
-from typing import TypedDict
+from collections.abc import Sequence
+from typing import cast
 
 from sellee.db import Database
-from sellee.store.helpers import _now
+from sellee.store.helpers import _REPLY_THREAD_STATUSES, _now
+from sellee.updates import (
+    TELL_BUYER_ANSWERED,
+    TELL_OFFER_DECLINED,
+    BuyerAnsweredFacts,
+    OfferDeclinedFacts,
+    TellFacts,
+    TellRecord,
+    UpdateContext,
+)
 
-TELL_BUYER_ANSWERED = "buyer_answered"
-TELL_OFFER_DECLINED = "offer_declined"
 # The engine's decisions that leave nothing for a lower minimum to win back: the offer was taken or
 # leads, or it was never weighed on price (a sold item, an item another buyer holds, an auction it
 # did not lead). Any other decision under the floor turned the buyer's number down on its price and
@@ -27,41 +35,15 @@ _NOT_A_PRICE_DECLINE = frozenset({"accept_fcfs", "bid_lead", "sold", "fcfs_taken
 _QUOTE_MAX_CHARS = 500
 
 
-class OfferDeclinedFacts(TypedDict):
-    """An offer under the seller's minimum that was not taken — the buyer's number, never the
-    minimum it fell under."""
-
-    buyer_handle: str
-    amount: float
-    currency: str
-    item_title: str
-
-
-class BuyerAnsweredFacts(TypedDict):
-    """A buyer we answered: their last words, ours, and whether they are the item's first buyer —
-    no other buyer on it had been answered before them.
-
-    `buyer_said` and `we_said` are the messages as sent, cut only to a bounded length: a buyer's
-    words can carry links, emails and phone numbers. They are not fit to quote to the seller until
-    the contact details are stripped and the text is clipped to a sentence."""
-
-    buyer_handle: str
-    buyer_said: str
-    we_said: str
-    first_on_item: bool
-    item_title: str
-
-
-class TellRecord(TypedDict):
-    """One untold `tells` row. `decision` says the line asks the seller for something."""
-
-    id: int
-    item_id: str | None
-    thread_id: str | None
-    kind: str
-    decision: bool
-    facts: OfferDeclinedFacts | BuyerAnsweredFacts
-    created_ts: float
+def _facts(raw: str | bytes | None) -> TellFacts | None:
+    """A row's facts as stored, or None when they do not parse as a record — the composer retires
+    a tell it cannot read rather than fail on it, so one bad row never stops every update after it.
+    A record is all this checks; the composer checks each field before it reads one."""
+    try:
+        parsed = json.loads(raw) if raw is not None else None
+    except (TypeError, ValueError):
+        return None
+    return cast("TellFacts", parsed) if isinstance(parsed, dict) else None
 
 
 def _tell_from_row(row) -> TellRecord:
@@ -71,7 +53,7 @@ def _tell_from_row(row) -> TellRecord:
         "thread_id": row["thread_id"],
         "kind": row["kind"],
         "decision": bool(row["decision"]),
-        "facts": json.loads(row["facts"]),
+        "facts": _facts(row["facts"]),
         "created_ts": row["created_ts"],
     }
 
@@ -83,7 +65,7 @@ def _insert_tell(
     thread_id: str,
     kind: str,
     decision: bool,
-    facts: OfferDeclinedFacts | BuyerAnsweredFacts,
+    facts: TellFacts,
     now: float,
 ) -> None:
     conn.execute(
@@ -236,11 +218,82 @@ class UpdatesMixin:
         if not tell_ids:
             return 0
         stamped_ts = now if now is not None else _now()
-        placeholders = ", ".join("?" for _ in tell_ids)
         with self._db.transaction() as conn:
             cur = conn.execute(
                 f"UPDATE tells SET told_ts = ?, notice_id = ? "
-                f"WHERE told_ts IS NULL AND id IN ({placeholders})",
+                f"WHERE told_ts IS NULL AND id IN ({_placeholders(tell_ids)})",
                 (stamped_ts, notice_id, *tell_ids),
             )
             return cur.rowcount
+
+    def update_context(
+        self, *, item_ids: Sequence[str], thread_ids: Sequence[str]
+    ) -> UpdateContext:
+        """What an update's words depend on beyond its tells, as of now: which of `item_ids` are
+        still live (listed somewhere and not sold), and where each of `thread_ids` stands —
+        talking when its buyer wrote last, waiting when the conversation is still ours to carry
+        and the next word is theirs."""
+        talking, waiting = self._thread_standing(thread_ids)
+        return {
+            "live_item_ids": self._live_item_ids(item_ids),
+            "talking_thread_ids": talking,
+            "waiting_thread_ids": waiting,
+        }
+
+    def _live_item_ids(self, item_ids: Sequence[str]) -> list[str]:
+        wanted = sorted(set(item_ids))
+        if not wanted:
+            return []
+        rows = self._db.query(
+            "SELECT i.id, i.listing_urls, n.state FROM items i "
+            "LEFT JOIN negotiations n ON n.item_id = i.id "
+            f"WHERE i.id IN ({_placeholders(wanted)}) ORDER BY i.id",
+            tuple(wanted),
+        )
+        return [
+            r["id"]
+            for r in rows
+            if any(json.loads(r["listing_urls"]).values()) and r["state"] != "sold"
+        ]
+
+    def _thread_standing(self, thread_ids: Sequence[str]) -> tuple[list[str], list[str]]:
+        """(talking, waiting) among the threads in a reply status with no escalation open; a held,
+        escalated or closed thread is in neither. Talking is a thread whose buyer wrote last: a
+        message past the reply cursor, so an out-of-office the cursor was moved over is not one,
+        and no reply from the seller by hand after it. A reply of ours still being sent does not
+        count until it lands, so such a thread is talking even though the reply lane is not
+        answering it again. Waiting is the rest."""
+        wanted = sorted(set(thread_ids))
+        if not wanted:
+            return [], []
+        rows = self._db.query(
+            _THREAD_STANDING_SQL.format(
+                wanted=_placeholders(wanted), statuses=_placeholders(_REPLY_THREAD_STATUSES)
+            ),
+            (*wanted, *_REPLY_THREAD_STATUSES),
+        )
+        talking = [r["thread_id"] for r in rows if r["buyer_wrote_last"]]
+        waiting = [r["thread_id"] for r in rows if not r["buyer_wrote_last"]]
+        return talking, waiting
+
+
+# Each asked thread still ours to carry, and whether its buyer wrote last.
+_THREAD_STANDING_SQL = (
+    "SELECT t.thread_id, ("
+    "  EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
+    "    AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
+    "  AND NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
+    "    AND ms.dir = 'out' AND ms.source = 'manual' "
+    "    AND ms.ts > (SELECT MAX(mi.ts) FROM thread_messages mi "
+    "                 WHERE mi.thread_id = t.thread_id AND mi.dir = 'in'))"
+    ") AS buyer_wrote_last "
+    "FROM threads t "
+    "WHERE t.thread_id IN ({wanted}) AND t.status IN ({statuses}) "
+    "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
+    "  AND e.status = 'open') "
+    "ORDER BY t.thread_id"
+)
+
+
+def _placeholders(values: Sequence[object]) -> str:
+    return ", ".join("?" for _ in values)
