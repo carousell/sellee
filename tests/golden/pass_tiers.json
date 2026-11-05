@@ -1,6 +1,7 @@
 {
   "pass:channel": [
     "add_qa_entry",
+    "answer_block_confirmation",
     "answer_scam_confirmation",
     "buyer_withdrew",
     "carousell_ai_block_buyer",
