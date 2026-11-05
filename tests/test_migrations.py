@@ -76,6 +76,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 32),
         # 33 is the publish-key work, in flight on its own branch, and reserved the same way.
         ("data", 34),
+        # 35 is in flight on its own branch too, and reserved the same way.
+        ("data", 36),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -108,6 +110,8 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "craigslist_account")
     assert _table_exists(data_db, "buyer_withdrawals")
     assert _table_exists(data_db, "next_buyer_asks")
+    assert _table_exists(data_db, "offer_decisions")
+    assert _table_exists(data_db, "tells")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -141,6 +145,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         31,
         32,
         34,
+        36,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

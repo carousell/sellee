@@ -23,6 +23,7 @@ from sellee.store.helpers import (
     _insert_notice,
     _now,
 )
+from sellee.store.updates import record_offer_decision_in_txn
 
 
 class NegotiationMixin:
@@ -177,6 +178,16 @@ class NegotiationMixin:
             self._apply_offer_transition(led, thread_id, buyer, res)
             led["buyers"][thread_id] = buyer
             self._persist_negotiation(conn, item_id, led)
+            record_offer_decision_in_txn(
+                conn,
+                item_id=item_id,
+                thread_id=thread_id,
+                handle=handle,
+                offer=offer,
+                currency=currency,
+                result=res,
+                floor=floor,
+            )
             res["item_state"] = led["state"]
             res["currency"] = currency
             return res
