@@ -9,6 +9,7 @@ from pathlib import Path
 
 from sellee import config, daemon, heartbeat, lock, paths
 from sellee.browser import client as browser_client
+from sellee.channel import activity
 from sellee.db import connect_reader
 from sellee.events import query_events
 
@@ -76,11 +77,32 @@ def test_run_once_migrates_heartbeats_and_ledgers(xdg_tmp) -> None:
         "revise_lane",
         "inbox_fold",
         "channel_route",
+        "updates_lane",
     } <= ran
     # The release check is deliberately absent: every task's first tick is immediate, so having it
     # here would reach the release host from a smoke run — and from this test.
     assert "update_probe" not in ran
     assert "task.error" not in kinds
+
+
+def test_the_updates_lane_is_scheduled_on_the_minute_with_no_jitter(xdg_tmp, monkeypatch) -> None:
+    """Nothing outside this machine sees the lane run, so it has no reason to be spread, and the
+    hold it measures is in whole minutes."""
+    registered: list = []
+    register = daemon.Scheduler.register
+
+    def _record(self, task) -> None:
+        registered.append(task)
+        register(self, task)
+
+    monkeypatch.setattr(daemon.Scheduler, "register", _record)
+    _write_config({"http_port": 0})
+
+    assert daemon.run_daemon(once=True) == 0
+
+    (lane,) = [t for t in registered if t.name == "updates_lane"]
+    assert lane.interval_sec == activity.UPDATES_LANE_INTERVAL_SEC == 60.0
+    assert lane.jitter == 0
 
 
 def test_duplicate_instance_exits_zero_without_starting(xdg_tmp) -> None:

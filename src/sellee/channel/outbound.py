@@ -92,7 +92,7 @@ def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=
     ch = store.get_channel()
     if ch["chat_id"] is None:
         return
-    in_quiet = _in_quiet_hours(store, now)
+    in_quiet = in_quiet_hours(store, now)
     for notice in store.claim_queued_notices(limit, in_quiet=in_quiet):
         try:
             deliver(ch["chat_id"], notice["text"], notice["controls"])
@@ -103,7 +103,7 @@ def drain_notices(*, store, bus, deliver, limit: int = _NOTICE_DRAIN_BATCH, now=
         bus.publish("message.delivered", {"notice_id": notice["id"], "ref": notice["ref"]})
 
 
-def _in_quiet_hours(store, now) -> bool:
+def in_quiet_hours(store, now) -> bool:
     """Whether the quiet-hours setting's window (minutes since midnight) covers the current
     daemon-local time. Evaluated per tick against the wall clock (the one-clock rule) — a DST shift
     moves the window with it, which is exactly right for 'don't buzz me at night'."""

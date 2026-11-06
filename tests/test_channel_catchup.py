@@ -31,7 +31,7 @@ def test_catchup_lists_and_stamps_notices_but_not_escalations(make_ctx, store) -
     ctx = make_ctx(TIER_ATTENDED)
 
     res = dispatch("get_catchup", {}, ctx)
-    assert res["counts"] == {"escalations": 1, "notices": 1, "pending_settings": 0}
+    assert res["counts"] == {"escalations": 1, "notices": 1, "pending_settings": 0, "untold": 0}
     assert res["notices"][0]["text"] == "Listing went live."
     assert res["escalations"][0]["open_question"] == "Accept $70?"
 
@@ -40,7 +40,7 @@ def test_catchup_lists_and_stamps_notices_but_not_escalations(make_ctx, store) -
     assert len(store.list_open_escalations()) == 1
     # a second catchup returns no notices (already delivered) but still the open escalation
     again = dispatch("get_catchup", {}, ctx)
-    assert again["counts"] == {"escalations": 1, "notices": 0, "pending_settings": 0}
+    assert again["counts"] == {"escalations": 1, "notices": 0, "pending_settings": 0, "untold": 0}
 
 
 def test_a_question_nobody_can_answer_yet_is_shown_but_not_swallowed(make_ctx, store) -> None:
