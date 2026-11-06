@@ -93,6 +93,12 @@ PUBLISH_BROWSER_TOOLS = (
 BROWSER_SERVER_NAME = "playwright"
 
 
+# A browser form gets the description with its Q&A section; see `get_item`.
+TYPE_PUBLISHED_DESCRIPTION = (
+    "For the description, type its published_description, not its description.\n"
+)
+
+
 def publish_prompt(
     item_id: str,
     market: str = DEFAULT_PUBLISH_MARKET,
@@ -110,11 +116,7 @@ def publish_prompt(
     staged = f"Its photos are in your working directory: {', '.join(photos)}\n" if photos else ""
     composer = f"The composer is at {composer_url}\n" if composer_url else ""
     # The rail's publish tool composes the description itself; a browser form is typed into.
-    typed = (
-        ""
-        if market == DEFAULT_PUBLISH_MARKET
-        else "For the description, type its published_description, not its description.\n"
-    )
+    typed = "" if market == DEFAULT_PUBLISH_MARKET else TYPE_PUBLISHED_DESCRIPTION
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Publish item {item_id} {where}.\n"
@@ -300,6 +302,7 @@ def _edit_prompt(payload: dict, store, pass_id: str) -> str:
             if names
             else ""
         )
+    typed = TYPE_PUBLISHED_DESCRIPTION if "description" in (payload.get("changed") or ()) else ""
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Change item {item_id}'s listing on {marketplaces.display_name(market)} so it matches "
@@ -307,6 +310,7 @@ def _edit_prompt(payload: dict, store, pass_id: str) -> str:
         f"The listing is at {url}\n"
         f"Change only these fields: {changed}. Read their new values with get_item. The change was "
         f"already confirmed with the seller — do not second-guess it, and touch nothing else.\n"
+        f"{typed}"
         f"{photos}"
         f"When you are done, call record_listing_revision with revision_id "
         f"{payload['revision_id']} and how it went."

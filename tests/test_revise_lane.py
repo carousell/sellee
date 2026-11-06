@@ -4,12 +4,19 @@ seller how each one went from the row — never before it happened."""
 from __future__ import annotations
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 from tests.conftest import seed_setting
 from tests.test_browser_editor import StubEditForm
 
-from sellee import revise
+import sellee.tools  # noqa: F401  registration
+from sellee import passes, revise
 from sellee.browser.client import BrowserUnavailable
 from sellee.config import Config
+from sellee.listing_description import compose, published_description
+from sellee.tools import suggested_questions
+from sellee.tools.registry import TIER_PASS_CHANNEL, TIER_PASS_EDIT
+from sellee.tools.registry import dispatch as _dispatch
 
 FB_URL = "https://www.facebook.com/marketplace/item/123/"
 CAROUSELL_URL = "https://www.carousell.sg/p/dyson-v8-456/"
@@ -97,6 +104,69 @@ def test_a_form_missing_a_field_is_retried_rather_than_failed(store, bus) -> Non
     revise.run_next(deps)
     row = store.get_listing_revision(rev)
     assert row["status"] == "pending" and row["attempts"] == 1
+
+
+# --- the description a driven edit types --------------------------------------------------------
+
+_CATEGORY, _OFFERED = next(iter(suggested_questions.questions_by_category().items()))
+_WORDS = st.text(alphabet=st.sampled_from("abc XYZ 019.,?!'é📱\n"), max_size=30)
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    own=_WORDS,
+    answers=st.lists(st.tuples(st.sampled_from(_OFFERED), _WORDS.filter(str.strip)), max_size=4),
+    changed=st.sets(st.sampled_from(["title", "list_price", "description"]), min_size=1),
+)
+def test_a_driven_edit_types_the_composed_description_and_its_read_back_accepts_it(
+    store, bus, own, answers, changed
+) -> None:
+    item = _listed(store, description=own)
+    for question, answer in answers:
+        store.qa_add(item["id"], question, answer, "seller", on_listing=True)
+    rev = store.queue_listing_revision(item["id"], "fb", sorted(changed))
+    form = StubEditForm()  # the live listing still shows "Works.", with no section
+
+    assert revise.run_next(_deps(store, bus, form)) == rev
+
+    # Done either way: a revise that leaves the description alone never checks it.
+    assert store.get_listing_revision(rev)["status"] == "done"
+    shown = published_description(store, item) if "description" in changed else "Works."
+    assert form.saved["description"] == shown
+    assert store.get_item(item["id"])["description"] == own
+
+
+def test_a_changed_answer_reaches_facebook_through_the_lane(store, bus, make_ctx) -> None:
+    seed_setting(store, "connected_markets", ["fb", "carousell"])
+    item = _listed(store, category=_CATEGORY, description="Works.")
+    store.qa_add(item["id"], _OFFERED[0], "Yes.", "seller", on_listing=True)
+    answer = {"item_id": item["id"], "question": _OFFERED[0], "answer": "No, it needs a new one."}
+    answer.update(source="seller", on_listing=True)
+    _dispatch("add_qa_entry", answer, make_ctx(TIER_PASS_CHANNEL))
+    form = StubEditForm()
+    deps = _deps(store, bus, form)
+    composed = compose("Works.", [{"question": _OFFERED[0], "answer": "No, it needs a new one."}])
+
+    # Carousell's edit is a model pass, told to type the composed description; it records done.
+    revise.run_next(deps)
+    (carousell,) = store.list_listing_revisions("running")
+    assert "published_description" in passes.PASS_TYPES["edit"].build_prompt(carousell, store, "p")
+    _dispatch(
+        "record_listing_revision",
+        {"revision_id": carousell["revision_id"], "outcome": "done"},
+        make_ctx(TIER_PASS_EDIT, pass_id=carousell["pass_id"]),
+    )
+    store.finish_pass(carousell["pass_id"], status="done")
+    # Facebook's is driven: the editor types the composed description and reads it back.
+    revise.run_next(deps)
+
+    assert {r["market"]: r["status"] for r in store.list_listing_revisions()} == {
+        "carousell": "done",
+        "fb": "done",
+    }
+    assert form.saved["description"] == composed
 
 
 # --- the gates before a claim -------------------------------------------------------------------

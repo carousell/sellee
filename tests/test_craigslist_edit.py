@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 
@@ -16,6 +16,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser.client import COMPOSER_TEXT_JS
 from sellee.browser.markets import craigslist
 from sellee.config import Config
+from sellee.listing_description import published_description
 
 _TOKEN = "9TXkjafxYMDS5VaPLGdRyk"
 _POST = f"https://www.craigslist.org/view/d/samsung-buds3/{_TOKEN}"
@@ -403,6 +404,42 @@ def test_an_edit_to_a_live_craigslist_post_is_driven_to_done(store, bus, listed)
 
     assert store.get_listing_revision(rev)["status"] == "done"
     assert post.post["price"] == "65"
+
+
+_WORDS = st.text(alphabet=st.sampled_from("abc XYZ 019.,?!'é📱\n"), max_size=30)
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    own=_WORDS.filter(str.strip),
+    answers=st.lists(
+        st.tuples(st.sampled_from(["Any marks?", "Charger included?"]), _WORDS.filter(str.strip)),
+        max_size=4,
+    ),
+    changed=st.sets(st.sampled_from(["title", "list_price", "description"]), min_size=1),
+)
+def test_a_post_edit_types_the_composed_description_and_its_read_back_accepts_it(
+    store, bus, listed, own, answers, changed
+) -> None:
+    made = store.create_item(
+        title=listed["title"], list_price=65.0, currency="USD", description=own
+    )
+    store.record_listing_url(made["id"], "craigslist", _POST)
+    for question, answer in answers:
+        store.qa_add(made["id"], question, answer, "seller", on_listing=True)
+    rev = store.queue_listing_revision(made["id"], "craigslist", sorted(changed))
+    post = FakePost()  # the live post still reads "Barely used.", with no section
+
+    assert revise.run_next(_deps(store, bus, post)) == rev
+
+    # Done either way: a revise that leaves the description alone never checks it.
+    assert store.get_listing_revision(rev)["status"] == "done"
+    item = store.get_item(made["id"])
+    shown = published_description(store, item) if "description" in changed else "Barely used."
+    assert post.post["description"] == shown
+    assert item["description"] == own
 
 
 def test_an_item_with_no_craigslist_post_settles_failed_and_drives_nothing(
