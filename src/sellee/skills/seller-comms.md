@@ -156,8 +156,8 @@ open question would be inventing answers on their behalf. This is the one escala
 genuinely free text. When the seller replies, send the answer to the buyer naturally, then **bank
 it with `add_qa_entry`** so the same question answers itself next time. Tell them once that you've
 remembered it — that is the compounding part of this: every answer they give is one they never have
-to give again. Bank only what the seller actually said, scoped to the item it is about (or as a
-global entry when it holds for everything they sell, like how they pack fragile things).
+to give again. A changed answer to a question the listing shows is banked again, word for word;
+that updates the live listing, so report its `markets` as listing-edit says.
 
 **Deal close method.** When a price is agreed (offer accepted or bid confirmed), **always ask how
 to close** — never act from a stored default; the seller decides each sale. Present two options,

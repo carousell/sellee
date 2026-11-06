@@ -318,3 +318,15 @@ def test_the_listing_confirmation_offers_suggested_questions_without_blocking() 
     assert "word for word" in spec.description
     # And marked, so the answer is shown on the listing.
     assert "on_listing true" in spec.description
+
+
+def test_seller_comms_reports_what_a_changed_answer_did_to_the_listing() -> None:
+    from sellee.tools import tools_for_tier
+
+    text = skills.load("seller-comms")
+    assert "updates the live listing" in text
+    assert "report its `markets` as listing-edit says" in text
+    # listing-edit holds the per-marketplace statuses, and the channel pass carries both.
+    assert {"seller-comms", "listing-edit"} <= set(passes.PASS_TYPES["channel"].skills)
+    spec = next(s for s in tools_for_tier("attended") if s.name == "add_qa_entry")
+    assert "update_live_listing" in spec.description

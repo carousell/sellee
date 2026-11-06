@@ -26,6 +26,7 @@ from __future__ import annotations
 from sellee import marketplaces, settings
 from sellee.browser import editor
 from sellee.engines import negotiate as negotiate_engine
+from sellee.listing_description import published_description
 from sellee.money import to_price_cents
 from sellee.rail.client import RailError, listing_id_from_url
 from sellee.store import StoreError
@@ -77,9 +78,24 @@ def _update_live_listing(ctx: ToolContext, params: dict) -> dict:
         revised = ctx.store.revise_item(item_id, fields)
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
-    item = revised["item"]
     changed = sorted(fields)
+    return {
+        "item_id": item_id,
+        "changed": changed,
+        "floor_lowered": revised["floor_clamped"],
+        "offers_above_new_price": offers_above,
+        "markets": revise_live_listings(ctx, revised["item"], changed),
+    }
 
+
+def is_live(ctx: ToolContext, item: dict) -> bool:
+    """Whether some marketplace shows the item to buyers now."""
+    return any(item["listing_urls"].values()) and item["id"] not in ctx.store.sold_item_ids()
+
+
+def revise_live_listings(ctx: ToolContext, item: dict, changed: list) -> dict:
+    """Push `changed` (already written to the record) to every marketplace the item is listed on,
+    with one status per marketplace."""
     # The browser markets are queued before the rail is called: queueing is local bookkeeping and
     # can fail, a rail push is public and cannot be taken back. In this order a failure here
     # leaves no marketplace changed; in the other it left carousell.ai edited and the seller told
@@ -88,17 +104,10 @@ def _update_live_listing(ctx: ToolContext, params: dict) -> dict:
     for market, url in sorted(item["listing_urls"].items()):
         if market == _RAIL or not url or marketplaces.connector_type(market) != "browser":
             continue
-        markets[market] = _queue_browser(ctx, item_id, market, url, changed)
+        markets[market] = _queue_browser(ctx, item["id"], market, url, changed)
     if item["listing_urls"].get(_RAIL):
         markets = {_RAIL: _push_rail(ctx, item, changed), **markets}
-
-    return {
-        "item_id": item_id,
-        "changed": changed,
-        "floor_lowered": revised["floor_clamped"],
-        "offers_above_new_price": offers_above,
-        "markets": markets,
-    }
+    return markets
 
 
 def _offers_above(status: dict, new_price) -> int:
@@ -150,7 +159,7 @@ def _push_rail(ctx: ToolContext, item: dict, changed: list) -> dict:
     if "title" in changed:
         args["title"] = item["title"]
     if "description" in changed:
-        args["description"] = item["description"] or ""
+        args["description"] = published_description(ctx.store, item)
     if "list_price" in changed:
         args["price_cents"] = to_price_cents(item["list_price"])
     try:

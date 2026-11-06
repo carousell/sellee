@@ -4,12 +4,22 @@ verdict per marketplace, and the refusals that keep an edit from moving a deal u
 from __future__ import annotations
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
+from hypothesis.stateful import (
+    RuleBasedStateMachine,
+    invariant,
+    rule,
+    run_state_machine_as_test,
+)
 from tests.conftest import seed_setting
 
 import sellee.tools  # noqa: F401  registration
 from sellee import paths
 from sellee.config import Config
+from sellee.listing_description import compose, published_description
 from sellee.rail.client import RailToolError
+from sellee.tools import suggested_questions
 from sellee.tools.registry import TIER_ATTENDED, TIER_PASS_CHANNEL, TIER_PASS_EDIT, ToolError
 from sellee.tools.registry import dispatch as _dispatch
 
@@ -283,3 +293,171 @@ def test_a_queueing_failure_leaves_the_rail_untouched(ctx, store, rail, monkeypa
     with pytest.raises(ToolError):
         _edit(ctx, item["id"], list_price=125)
     assert rail.updates == []
+
+
+# --- the listing-time answers travel with the description ---------------------------------------
+
+_PROPERTY = settings(
+    max_examples=40,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+_CATEGORY, _OFFERED = next(iter(suggested_questions.questions_by_category().items()))
+_TEXT = st.text(alphabet=st.characters(blacklist_categories=("Cs",)), max_size=30)
+_ANSWER = _TEXT.filter(lambda s: s.strip())
+
+
+def _answer(ctx, item_id, question, answer, **kw):
+    entry = {"item_id": item_id, "question": question, "answer": answer, "source": "seller"}
+    return _dispatch("add_qa_entry", {**entry, **kw}, ctx)
+
+
+def test_a_description_edit_keeps_the_listing_time_answers(ctx, store, rail) -> None:
+    item = _listed(store, markets=("carousell-ai",), category=_CATEGORY)
+    store.qa_add(item["id"], _OFFERED[0], "Yes, all tested.", "seller", on_listing=True)
+    _edit(ctx, item["id"], description="Comes with the original box.")
+    sent = rail.updates[-1][1]["description"]
+    section = f"Common questions\nQ: {_OFFERED[0]}\nA: Yes, all tested."
+    assert sent == f"Comes with the original box.\n\n{section}"
+    assert store.get_item(item["id"])["description"] == "Comes with the original box."
+
+
+@_PROPERTY
+@given(
+    own=st.one_of(st.none(), _TEXT),
+    answers=st.lists(st.tuples(st.sampled_from(_OFFERED), _ANSWER, st.booleans()), max_size=5),
+    fields=st.fixed_dictionaries(
+        {},
+        optional={
+            "title": _ANSWER,
+            "description": _TEXT,
+            "list_price": st.integers(min_value=1, max_value=900),
+        },
+    ).filter(bool),
+)
+def test_the_live_update_sends_the_composed_description_whatever_changed(
+    ctx, store, rail, own, answers, fields
+) -> None:
+    item = _listed(store, markets=("carousell-ai",), category=_CATEGORY, description=own)
+    for question, answer, marked in answers:
+        store.qa_add(item["id"], question, answer, "seller", on_listing=marked)
+    rail.updates.clear()
+    _edit(ctx, item["id"], **fields)
+    ((_, sent),) = rail.updates
+    composed = published_description(store, store.get_item(item["id"]))
+    assert ("description" in sent) == ("description" in fields)
+    if "description" in sent:
+        assert sent["description"] == composed
+
+
+def test_a_changed_listing_answer_updates_carousell_ai_and_queues_each_browser_market(
+    ctx, store, rail
+) -> None:
+    item = _listed(store, category=_CATEGORY)
+    store.qa_add(item["id"], _OFFERED[0], "Yes.", "seller", on_listing=True)
+    result = _answer(
+        ctx, item["id"], _OFFERED[0], "Mostly; the left speaker crackles.", on_listing=True
+    )
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert result["markets"]["fb"]["status"] == "queued"
+    assert result["markets"]["carousell"]["status"] == "queued"
+    composed = compose(
+        "Works.", [{"question": _OFFERED[0], "answer": "Mostly; the left speaker crackles."}]
+    )
+    assert rail.updates == [("L1", {"description": composed})]
+    pending = store.list_listing_revisions("pending")
+    assert sorted((r["market"], r["changed"]) for r in pending) == [
+        ("carousell", ["description"]),
+        ("fb", ["description"]),
+    ]
+
+
+def test_a_new_answer_to_a_question_the_listing_shows_stays_on_it(ctx, store, rail) -> None:
+    """The listing must never keep an answer the seller has since changed, flag or no flag."""
+    item = _listed(store, markets=("carousell-ai",), category=_CATEGORY)
+    store.qa_add(item["id"], _OFFERED[0], "Yes.", "seller", on_listing=True)
+    result = _answer(ctx, item["id"], _OFFERED[0], "No, it needs a new charger.")
+    assert result["markets"] == {"carousell-ai": {"status": "updated"}}
+    assert "No, it needs a new charger." in rail.updates[-1][1]["description"]
+    assert "Yes." not in rail.updates[-1][1]["description"]
+
+
+def test_an_answer_off_the_listing_triggers_no_revise(ctx, store, rail) -> None:
+    item = _listed(store, category=_CATEGORY)
+    result = _answer(ctx, item["id"], "Can you deliver to Jurong?", "No.")
+    assert "markets" not in result
+    assert rail.updates == [] and store.list_listing_revisions() == []
+
+
+def test_a_listing_answer_on_an_unlisted_item_triggers_no_revise(ctx, store, rail) -> None:
+    item = _listed(store, markets=(), category=_CATEGORY)
+    result = _answer(ctx, item["id"], _OFFERED[0], "Yes.", on_listing=True)
+    assert "markets" not in result
+    assert rail.updates == [] and store.list_listing_revisions() == []
+    assert store.qa_listing_answers(item["id"]) == [{"question": _OFFERED[0], "answer": "Yes."}]
+
+
+def test_a_listing_answer_on_a_sold_item_is_banked_without_a_revise(
+    ctx, store, rail, monkeypatch
+) -> None:
+    item = _listed(store, category=_CATEGORY)
+    monkeypatch.setattr(store, "sold_item_ids", lambda: {item["id"]})
+    result = _answer(ctx, item["id"], _OFFERED[0], "Yes.", on_listing=True)
+    assert "markets" not in result
+    assert rail.updates == [] and store.list_listing_revisions() == []
+
+
+def test_a_listing_answer_on_a_live_item_waits_for_a_resume(ctx, store, rail, monkeypatch) -> None:
+    item = _listed(store, category=_CATEGORY)
+    monkeypatch.setattr(store, "is_paused", lambda: True)
+    with pytest.raises(ToolError, match="paused"):
+        _answer(ctx, item["id"], _OFFERED[0], "Yes.", on_listing=True)
+    assert store.qa_listing_answers(item["id"]) == []
+    assert rail.updates == [] and store.list_listing_revisions() == []
+
+
+class AnswerChanges(RuleBasedStateMachine):
+    """Answers and description edits in any order on a live item: one owed edit per marketplace,
+    and carousell.ai always holds the composed description."""
+
+    def __init__(self, ctx, store, rail):
+        super().__init__()
+        self.ctx, self.store, self.rail = ctx, store, rail
+        self.item_id = _listed(store, category=_CATEGORY)["id"]
+        self.rail.updates.clear()
+
+    @rule(question=st.sampled_from(_OFFERED), answer=_ANSWER)
+    def change_a_listing_answer(self, question, answer):
+        _answer(self.ctx, self.item_id, question, answer, on_listing=True)
+
+    @rule(answer=_ANSWER)
+    def bank_an_escalation_answer(self, answer):
+        _answer(self.ctx, self.item_id, "Can you deliver?", answer)
+
+    @rule(description=_TEXT)
+    def edit_the_description(self, description):
+        _edit(self.ctx, self.item_id, description=description)
+
+    @rule()
+    def the_lane_starts_an_edit(self):
+        self.store.claim_listing_revision()
+
+    @invariant()
+    def one_owed_edit_per_marketplace(self):
+        owed = self.store.list_listing_revisions("pending")
+        pending = [r["market"] for r in owed if r["item_id"] == self.item_id]
+        assert len(pending) == len(set(pending))
+
+    @invariant()
+    def carousell_ai_holds_the_composed_description(self):
+        if self.rail.updates:
+            sent = self.rail.updates[-1][1]["description"]
+            assert sent == published_description(self.store, self.store.get_item(self.item_id))
+
+
+def test_answer_changes_and_edits_owe_one_revise_per_marketplace(ctx, store, rail) -> None:
+    run_state_machine_as_test(
+        lambda: AnswerChanges(ctx, store, rail),
+        settings=settings(_PROPERTY, max_examples=30, stateful_step_count=12),
+    )
