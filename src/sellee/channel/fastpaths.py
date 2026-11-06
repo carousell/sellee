@@ -15,7 +15,7 @@ from sellee import channel, marketplaces, prompt_data, settings
 from sellee.browser import markets as market_adapters
 from sellee.browser import window
 from sellee.browser.markets import craigslist
-from sellee.channel import refs
+from sellee.channel import activity, refs
 from sellee.store.browser import CONNECT_MODE_OPEN, CONNECT_MODE_PROBE, HOLD_POST_PREFIX
 from sellee.tools.seller import BasicsError, validate_basics
 
@@ -701,8 +701,12 @@ def render_status(store) -> str:
 
 
 def render_catchup(store) -> str:
-    """The deep needs-me view: each open escalation's question, then queued updates. This is a
-    render only — it never stamps anything (escalations clear on resolve, notices on delivery)."""
+    """The deep needs-me view: each open escalation's question, then queued updates, then what was
+    done on the seller's listings that nothing has told them yet, whatever the activity-updates
+    setting holds back from being sent unasked. That last is the one thing this writes: it is
+    queued as an update of its own rather than stamped told here, because this reply is sent once
+    and a failed send would lose it. Nothing is stamped (escalations clear on resolve, notices on
+    delivery)."""
     lines: list = []
     escalations = store.list_open_escalations()
     if escalations:
@@ -724,6 +728,7 @@ def render_catchup(store) -> str:
         # Flattened for the same reason: this is a bulleted list, so one notice has to be one
         # bullet whatever it contains.
         lines.extend(f"• {prompt_data.one_line(n['text'])}" for n in notices)
+    lines.extend(_untold_lines(store, after=bool(lines)))
     pending = settings.pending_view(store)
     if pending:
         lines.append("Changes awaiting your OK:")
@@ -742,6 +747,23 @@ def render_catchup(store) -> str:
     if not lines:
         return "You're all caught up — nothing waiting."
     return "\n".join(lines)
+
+
+# Said when the untold update has been queued: the drain sends it right behind this reply, with
+# its buttons, and retries it if the send fails.
+UNTOLD_FOLLOWS_LINE = "What I did on your listings follows in its own message."
+
+
+def _untold_lines(store, *, after: bool) -> list:
+    """The untold update queued to follow this reply, or, while paused (when nothing would deliver
+    it), shown here in its own paragraph without being recorded, so it is still untold once the
+    seller resumes."""
+    if not store.is_paused():
+        return [UNTOLD_FOLLOWS_LINE] if activity.queue_at_catchup(store) else []
+    text = activity.untold_text(store)
+    if text is None:
+        return []
+    return ["", text] if after else [text]
 
 
 def _escalation_line(store, esc) -> str:

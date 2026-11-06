@@ -53,6 +53,18 @@ def test_claude_md_asks_for_catchup_at_session_start(configured) -> None:
         assert f"/{name}" in text
 
 
+def test_every_prompt_that_reads_the_catchup_hands_over_what_is_untold(configured) -> None:
+    """Returning `untold` is what tells the seller, so a prompt that calls get_catchup and then
+    summarizes as it likes would lose those updates for good."""
+    commands = sorted((configured / ".claude" / "commands").glob("*.md"))
+    prompts = {"CLAUDE.md": (configured / "CLAUDE.md").read_text()}
+    prompts.update({p.name: p.read_text() for p in commands})
+    reading = {name: text for name, text in prompts.items() if "get_catchup" in text}
+    assert {"CLAUDE.md", "catchup.md", "sellee.md"} <= set(reading)
+    for name, text in reading.items():
+        assert "`untold`" in text, name
+
+
 def test_claude_md_links_every_skill_by_a_resolvable_path(configured) -> None:
     from pathlib import Path
 
