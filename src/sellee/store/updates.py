@@ -72,7 +72,7 @@ def _insert_tell(
     conn,
     *,
     item_id: str,
-    thread_id: str,
+    thread_id: str | None,
     kind: str,
     decision: bool,
     facts: TellFacts,

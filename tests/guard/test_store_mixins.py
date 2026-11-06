@@ -35,6 +35,7 @@ _EXPECTED = {
     "RelayMixin",
     "WinbackMixin",
     "UpdatesMixin",
+    "SlowTellsMixin",
 }
 
 
