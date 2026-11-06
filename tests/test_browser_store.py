@@ -251,6 +251,9 @@ def test_unhandled_inbound_lists_a_waiting_sell_thread(store) -> None:
             # the message the buyer is waiting on — what a report about the wait is keyed to
             "waiting_on_msg_id": "m1",
             "waiting_since_ts": 100.0,
+            # nothing owed beyond that message
+            "owed_since_ts": None,
+            "has_unread": True,
         }
     ]
 

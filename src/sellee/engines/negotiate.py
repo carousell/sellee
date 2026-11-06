@@ -4,7 +4,8 @@ Per-item state machine spanning both platforms (one physical item, many buyers):
 
   * below list  → counter toward list (never below the floor), anti-probing (a counter cap +
     sticky ceiling), lowball deflection, and never accept below another active buyer's standing
-    offer (effective_min = max(floor, other_best + 1));
+    offer (effective_min = max(floor, other_best + 1)); a buyer reopened by a lower floor is
+    accepted at their best offer, without the ladder, when it meets effective_min;
   * at list     → FCFS: the first buyer to commit at list holds it provisionally;
   * above list  → bidding: the highest bid leads but is NEVER auto-accepted — it returns
     needs_seller_confirm so the seller approves it (the Harry-$200 guard);
@@ -83,6 +84,7 @@ def blank_buyer(handle: str) -> dict:
         "last_counter": None,
         "lowball_count": 0,
         "status": "active",
+        "reopened": False,
     }
 
 
@@ -148,9 +150,18 @@ def decide_below_list(
     min_offer_ratio,
     lowball_cap,
     floor,
+    reopened=False,
 ):
     """< list haggling: counter toward list, never below effective_min, capped + sticky. Whole
-    dollars (int) — the marketplace convention here."""
+    dollars (int) — the marketplace convention here.
+
+    `reopened` is a buyer turned down under an older, higher floor whose offer the seller has since
+    lowered the floor to reach: their best offer, if it meets effective_min, is accepted as made,
+    since the seller chose that number. Anything else goes up the ladder as usual — under
+    effective_min, or a newer offer lower than the one the lower floor reached, which would
+    otherwise turn a buyer's step down into a sale at the lower price."""
+    if reopened and offer >= max(effective_min, buyer["highest_offer"]):
+        return "accept_fcfs", int(offer), False, f"accept:{int(offer)}"
     last, rounds = buyer["last_counter"], buyer["rounds_used"]
     if last is not None and offer >= last and offer >= effective_min:
         return "accept_fcfs", int(offer), False, f"accept:{int(offer)}"
@@ -173,7 +184,7 @@ def decide_below_list(
     return "counter", int(counter), False, f"counter:{int(counter)}"
 
 
-def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
+def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs, reopened=False):
     """Top-level routing. Returns a dict — the floor value is never included."""
     if led["state"] == "sold":
         return {"decision": "sold", "needs_seller_confirm": False, "message_intent": "item_sold"}
@@ -248,6 +259,7 @@ def decide(offer, thread_id, buyer, led, floor, list_price, step, knobs):
         knobs["min_offer_ratio"],
         knobs["lowball_cap"],
         floor=floor,
+        reopened=reopened,
     )
     if counter is not None and counter < floor:
         raise BelowFloorError("price below floor — refusing to emit")

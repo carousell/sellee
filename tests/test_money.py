@@ -11,7 +11,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-from sellee.money import to_price_cents
+from sellee.money import currency_code, format_money, to_price_cents
 
 _PROPERTY = settings(max_examples=200, deadline=None)
 
@@ -125,3 +125,17 @@ def test_a_magnitude_past_the_decimal_range_is_rejected_as_value_error(
     ValueError, so either would escape every caller, as infinity and NaN once did."""
     with pytest.raises(ValueError):
         to_price_cents(Decimal(f"{digits}E+{exponent}"))
+
+
+def test_format_money_names_the_amount_as_the_negotiation_tools_do() -> None:
+    assert format_money(150.0, "SGD") == "150 SGD"
+    assert format_money(52.5, "USD") == "52.5 USD"
+    assert format_money(65, None) == "65"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [("SGD", "SGD"), ("sgd", None), ("SGD ", None), ("SGDX", None), (None, None), (840, None)],
+)
+def test_currency_code_passes_only_a_plain_three_letter_code(value, expected) -> None:
+    assert currency_code(value) == expected

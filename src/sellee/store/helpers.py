@@ -146,6 +146,37 @@ def _term_overlap(entry: dict, terms: set) -> int:
     return sum(1 for term in terms if term in haystack)
 
 
+# A thread the seller has taken over, as two clauses over a `threads t`: a reply they typed in the
+# marketplace app after the buyer's newest message, and an escalation still open on it. Shared by
+# every read that decides whether a thread is still Sellee's to answer, so they cannot drift apart.
+_NO_MANUAL_REPLY_SINCE_BUYER_SQL = (
+    "NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
+    "  AND ms.dir = 'out' AND ms.source = 'manual' "
+    "  AND ms.ts > (SELECT MAX(mi.ts) FROM thread_messages mi "
+    "               WHERE mi.thread_id = t.thread_id AND mi.dir = 'in'))"
+)
+_NO_OPEN_ESCALATION_SQL = (
+    "NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
+    "  AND e.status = 'open')"
+)
+
+# A `threads t` row's reply owing, or NULL when it has none still due: the reopening it waits on
+# can still be decided (its buyer stands as an active one on an item still taking offers), or it
+# was decided and its buyer has not since backed out or lost, on an item not sold. The ledger write
+# that makes an owing moot clears it; this keeps one that slipped past from reaching a pass.
+_LIVE_OWING_SQL = (
+    "(SELECT t.reply_owed_ts FROM negotiation_buyers owb "
+    "  JOIN negotiations own ON own.item_id = owb.item_id "
+    "  WHERE owb.item_id = t.item_id AND owb.thread_id = t.thread_id AND own.state <> 'sold' "
+    "  AND owb.status NOT IN ('withdrew', 'lost') "
+    "  AND (owb.reopened = 0 OR (owb.status = 'active' AND own.state = 'open')))"
+)
+# Whether a `threads t` row has a buyer message past the reply cursor.
+_UNREAD_INBOUND_SQL = (
+    "EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
+    "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts))"
+)
+
 # Sell threads whose buyer is still waiting on us. Shared by the read accessor and the enqueue
 # transaction, which must run it on its own connection (the read helper takes the same DB lock).
 #
@@ -167,25 +198,22 @@ def _term_overlap(entry: dict, terms: set) -> int:
 # 2026-08-29 in miniature. Bounded as the refusal is: the lane's retry settles the intent, or the
 # sweep folds it to `unconfirmed` and opens the escalation the clause below holds the thread on.
 _UNHANDLED_INBOUND_SQL = (
-    "SELECT t.thread_id, t.item_id, t.market, "
+    "SELECT * FROM (SELECT t.thread_id, t.item_id, t.market, "
     "  (SELECT mw.msg_id FROM thread_messages mw WHERE mw.thread_id = t.thread_id "
     "     AND mw.dir = 'in' ORDER BY mw.ts DESC, mw.rowid DESC LIMIT 1) AS newest_in_msg_id, "
     "  (SELECT MAX(mx.ts) FROM thread_messages mx WHERE mx.thread_id = t.thread_id "
-    "     AND mx.dir = 'in') AS newest_in_ts "
+    "     AND mx.dir = 'in') AS newest_in_ts, "
+    "  " + _LIVE_OWING_SQL + " AS reply_owed_ts, "
+    "  " + _UNREAD_INBOUND_SQL + " AS has_unread "
     "FROM threads t "
     "WHERE t.side = 'sell' AND t.status IN ({statuses}) "
-    "AND EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
-    "  AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
-    "AND NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
-    "  AND ms.dir = 'out' AND ms.source = 'manual' "
-    "  AND ms.ts > (SELECT MAX(mi.ts) FROM thread_messages mi "
-    "               WHERE mi.thread_id = t.thread_id AND mi.dir = 'in')) "
-    "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
-    "  AND e.status = 'open') "
+    "AND " + _NO_MANUAL_REPLY_SINCE_BUYER_SQL + " "
+    "AND " + _NO_OPEN_ESCALATION_SQL + " "
     "AND NOT EXISTS (SELECT 1 FROM send_intents si WHERE si.thread_id = t.thread_id "
     "  AND (si.status = 'sent_unverified' "
-    "       OR (si.status = 'pending' AND t.market IN ({retried})))) "
-    "ORDER BY t.thread_id ASC"
+    "       OR (si.status = 'pending' AND t.market IN ({retried}))))) "
+    "WHERE reply_owed_ts IS NOT NULL OR has_unread "
+    "ORDER BY thread_id ASC"
 ).format(
     statuses=",".join("?" for _ in _REPLY_THREAD_STATUSES),
     retried=",".join(f"'{market}'" for market in sorted(LANE_RETRIED_MARKETS)),
@@ -197,7 +225,10 @@ def _unhandled_inbound_rows(rows) -> list[dict]:
 
     The message identifies *what* is unanswered, which is what lets a report about it be guarded by
     content rather than by thread: a buyer answered and then ignored again is a new wait, not a
-    repeat of the old one.
+    repeat of the old one. A thread can also be owed a reply, `owed_since_ts`. With a buyer message
+    still unanswered it waits on that message, from when it came, whenever the owing began; only
+    with nothing unanswered, `has_unread` false, does it wait on the owing alone, and only since it
+    became owed.
     """
     return [
         {
@@ -205,7 +236,9 @@ def _unhandled_inbound_rows(rows) -> list[dict]:
             "item_id": r["item_id"],
             "market": r["market"],
             "waiting_on_msg_id": r["newest_in_msg_id"],
-            "waiting_since_ts": r["newest_in_ts"],
+            "waiting_since_ts": r["newest_in_ts"] if r["has_unread"] else r["reply_owed_ts"],
+            "owed_since_ts": r["reply_owed_ts"],
+            "has_unread": bool(r["has_unread"]),
         }
         for r in rows
     ]
@@ -222,6 +255,14 @@ def _claimed_through(rows) -> dict:
         row["thread_id"]: [row["newest_in_msg_id"], row["newest_in_ts"]]
         for row in rows
         if row["newest_in_msg_id"] is not None
+    }
+
+
+def _claimed_owed(rows) -> dict:
+    """The owing per thread at claim time, for the threads owed a reply — what the pass is shown,
+    and so the only owing a reply it sends can settle."""
+    return {
+        row["thread_id"]: row["reply_owed_ts"] for row in rows if row["reply_owed_ts"] is not None
     }
 
 
@@ -285,12 +326,14 @@ class RevisionRecord(TypedDict):
 
 
 class FloorAck(TypedDict):
-    """The provenance-only receipt `set_floor` returns — structurally no floor value."""
+    """The provenance-only receipt `set_floor` returns — structurally no floor value. `reopened`
+    counts the buyers a lower floor went back to; a count says nothing about any price."""
 
     status: str
     item_id: str
     source: str
     replaced: str | None
+    reopened: int
 
 
 class FloorRecord(TypedDict):

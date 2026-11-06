@@ -14,7 +14,16 @@ from collections.abc import Sequence
 from typing import cast
 
 from sellee.db import Database
-from sellee.store.helpers import _REPLY_THREAD_STATUSES, _insert_ask, _insert_notice, _now
+from sellee.store.helpers import (
+    _LIVE_OWING_SQL,
+    _NO_MANUAL_REPLY_SINCE_BUYER_SQL,
+    _NO_OPEN_ESCALATION_SQL,
+    _REPLY_THREAD_STATUSES,
+    _UNREAD_INBOUND_SQL,
+    _insert_ask,
+    _insert_notice,
+    _now,
+)
 from sellee.updates import (
     TELL_BUYER_ANSWERED,
     TELL_OFFER_DECLINED,
@@ -102,11 +111,7 @@ def record_offer_decision_in_txn(
     now = _now()
     below_floor = offer < floor
     decision = result["decision"]
-    conn.execute(
-        "UPDATE tells SET told_ts = ?, notice_id = NULL WHERE kind = ? AND item_id = ? "
-        "AND thread_id = ? AND told_ts IS NULL",
-        (now, TELL_OFFER_DECLINED, item_id, thread_id),
-    )
+    retire_offer_question_in_txn(conn, item_id=item_id, thread_id=thread_id, now=now)
     if not below_floor or decision in _NOT_A_PRICE_DECLINE:
         return
     facts: OfferDeclinedFacts = {
@@ -123,6 +128,16 @@ def record_offer_decision_in_txn(
         decision=True,
         facts=facts,
         now=now,
+    )
+
+
+def retire_offer_question_in_txn(conn, *, item_id: str, thread_id: str, now: float) -> None:
+    """Retire, untold, the question a buyer's offer under the floor left for the seller, once
+    something has answered it: a newer offer of theirs, or a lower floor that now reaches it."""
+    conn.execute(
+        "UPDATE tells SET told_ts = ?, notice_id = NULL WHERE kind = ? AND item_id = ? "
+        "AND thread_id = ? AND told_ts IS NULL",
+        (now, TELL_OFFER_DECLINED, item_id, thread_id),
     )
 
 
@@ -344,9 +359,10 @@ class UpdatesMixin:
         """(talking, waiting) among the threads in a reply status with no escalation open; a held,
         escalated or closed thread is in neither. Talking is a thread whose buyer wrote last: a
         message past the reply cursor, so an out-of-office the cursor was moved over is not one,
-        and no reply from the seller by hand after it. A reply of ours still being sent does not
-        count until it lands, so such a thread is talking even though the reply lane is not
-        answering it again. Waiting is the rest."""
+        and no reply from the seller by hand after it. A thread owed a reply with nothing new from
+        the buyer is talking too, since the next word is ours. A reply of ours still being sent
+        does not count until it lands, so such a thread is talking even though the reply lane is
+        not answering it again. Waiting is the rest."""
         wanted = sorted(set(thread_ids))
         if not wanted:
             return [], []
@@ -361,20 +377,15 @@ class UpdatesMixin:
         return talking, waiting
 
 
-# Each asked thread still ours to carry, and whether its buyer wrote last.
+# Each asked thread still ours to carry, and whether its buyer wrote last, or is owed a reply as if
+# they had.
 _THREAD_STANDING_SQL = (
     "SELECT t.thread_id, ("
-    "  EXISTS (SELECT 1 FROM thread_messages m WHERE m.thread_id = t.thread_id "
-    "    AND m.dir = 'in' AND (t.cursor_last_ts IS NULL OR m.ts > t.cursor_last_ts)) "
-    "  AND NOT EXISTS (SELECT 1 FROM thread_messages ms WHERE ms.thread_id = t.thread_id "
-    "    AND ms.dir = 'out' AND ms.source = 'manual' "
-    "    AND ms.ts > (SELECT MAX(mi.ts) FROM thread_messages mi "
-    "                 WHERE mi.thread_id = t.thread_id AND mi.dir = 'in'))"
-    ") AS buyer_wrote_last "
+    "  (" + _LIVE_OWING_SQL + " IS NOT NULL OR " + _UNREAD_INBOUND_SQL + ") "
+    "  AND " + _NO_MANUAL_REPLY_SINCE_BUYER_SQL + ") AS buyer_wrote_last "
     "FROM threads t "
     "WHERE t.thread_id IN ({wanted}) AND t.status IN ({statuses}) "
-    "AND NOT EXISTS (SELECT 1 FROM escalations e WHERE e.thread_id = t.thread_id "
-    "  AND e.status = 'open') "
+    "AND " + _NO_OPEN_ESCALATION_SQL + " "
     "ORDER BY t.thread_id"
 )
 

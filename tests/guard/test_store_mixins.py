@@ -33,6 +33,7 @@ _EXPECTED = {
     "SettingsMixin",
     "SurveyMixin",
     "RelayMixin",
+    "WinbackMixin",
     "UpdatesMixin",
 }
 
