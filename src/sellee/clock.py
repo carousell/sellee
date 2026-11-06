@@ -46,6 +46,16 @@ def zone_offset_minutes(zone: str, now: float):
     return int(moment.utcoffset().total_seconds() // 60)
 
 
+def seller_datetime(zone: str, now: float) -> datetime:
+    """`now` on the seller's own calendar, or on this process's when their zone is not one we can
+    resolve — the clock everything else timed to their day already runs on."""
+    try:
+        info = ZoneInfo(zone) if zone else None
+    except (ZoneInfoNotFoundError, ValueError):
+        info = None
+    return datetime.fromtimestamp(now, tz=info) if info is not None else datetime.fromtimestamp(now)
+
+
 def offset_delta(zone: str, now: float):
     """How far this process's clock is from the seller's, in minutes; 0 when they agree.
 

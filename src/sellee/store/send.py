@@ -9,7 +9,13 @@ from typing import TYPE_CHECKING
 from sellee import marketplaces
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
-from sellee.store.helpers import LANE_RETRIED_MARKETS, ThreadNotFound, _new_id, _now
+from sellee.store.helpers import (
+    LANE_RETRIED_MARKETS,
+    UNCONFIRMED_SEND_KIND,
+    ThreadNotFound,
+    _new_id,
+    _now,
+)
 from sellee.store.updates import record_buyer_answered_in_txn
 from sellee.store.winback import owing_seen_in_txn, settle_owed_reply_in_txn
 
@@ -481,7 +487,7 @@ class SendMixin:
             resolved = self._resolve_escalations_in_txn(
                 conn,
                 intent["thread_id"],
-                kind="unconfirmed_send",
+                kind=UNCONFIRMED_SEND_KIND,
                 resolution="Found our own message on the page — the send did land.",
             )
         return {
@@ -601,7 +607,7 @@ class SendMixin:
                     conn,
                     row["thread_id"],
                     open_question=ask,
-                    kind="unconfirmed_send",
+                    kind=UNCONFIRMED_SEND_KIND,
                     context_summary=context,
                     options=list(options),
                 )

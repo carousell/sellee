@@ -79,6 +79,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         # 35 is in flight on its own branch too, and reserved the same way.
         ("data", 36),
         ("data", 37),
+        ("data", 38),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -113,6 +114,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "next_buyer_asks")
     assert _table_exists(data_db, "offer_decisions")
     assert _table_exists(data_db, "tells")
+    assert _table_exists(data_db, "seller_handled_deals")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {
         1,
@@ -148,6 +150,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         34,
         36,
         37,
+        38,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -556,3 +559,33 @@ def test_0034_leaves_an_existing_item_without_a_category(tmp_path, monkeypatch) 
 
     item = store.Store(data_db).get_item("item_old")
     assert item is not None and item["category"] is None
+
+
+def test_0038_dates_a_live_item_from_its_creation_and_leaves_the_rest_unlisted(
+    tmp_path, monkeypatch
+) -> None:
+    """Nothing older says when an item went live, so whatever is live now counts from creation."""
+    real_data, root = _withhold(tmp_path, monkeypatch, "0038")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        for item_id, urls in (
+            ("item_live", '{"fb": "https://www.facebook.com/marketplace/item/1"}'),
+            ("item_down", '{"fb": ""}'),
+            ("item_draft", "{}"),
+        ):
+            conn.execute(
+                "INSERT INTO items (id, title, status, listing_urls, created_ts, updated_ts)"
+                " VALUES (?, 'Lamp', 'ready', ?, 5.0, 9.0)",
+                (item_id, urls),
+            )
+
+    shutil.copy(real_data / "0038_slow_tells.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    rows = data_db.query("SELECT id, live_since_ts FROM items ORDER BY id")
+    assert {r["id"]: r["live_since_ts"] for r in rows} == {
+        "item_down": None,
+        "item_draft": None,
+        "item_live": 5.0,
+    }
