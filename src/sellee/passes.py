@@ -109,11 +109,18 @@ def publish_prompt(
     # names them; the recipe never types a marketplace URL, so the composer arrives here too.
     staged = f"Its photos are in your working directory: {', '.join(photos)}\n" if photos else ""
     composer = f"The composer is at {composer_url}\n" if composer_url else ""
+    # The rail's publish tool composes the description itself; a browser form is typed into.
+    typed = (
+        ""
+        if market == DEFAULT_PUBLISH_MARKET
+        else "For the description, type its published_description, not its description.\n"
+    )
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Publish item {item_id} {where}.\n"
         f"Read the item with get_item. It has already been confirmed with the seller, so do not "
         f"re-confirm and do not change its title, price, or description — publish what is there.\n"
+        f"{typed}"
         f"{composer}"
         f"{staged}"
         f"Report the live listing URL when it is up, or say what failed."

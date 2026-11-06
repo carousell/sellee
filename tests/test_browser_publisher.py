@@ -12,11 +12,17 @@ import random
 import threading
 
 import pytest
+from hypothesis import HealthCheck, given, settings
+from hypothesis import strategies as st
 
+from sellee import crosslist
 from sellee.browser import client as client_mod
 from sellee.browser import formfill, publisher
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserClient, BrowserToolError
+from sellee.config import Config
+from sellee.listing_description import published_description
+from sellee.rail.client import RailUnprovisioned
 
 _CREATE = "https://www.facebook.com/marketplace/create/item"
 _ADAPTER = market_adapters.FACEBOOK
@@ -733,3 +739,63 @@ def test_no_suggestion_for_the_zip_stops_before_next() -> None:
         _publish(client, seller={"zip": "94103"})
 
     assert "next" not in _steps(client)
+
+
+# --- through the fan-out: the description a marketplace receives ------------------------------
+
+_LANE_PROPERTY = settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+_WORDS = st.text(alphabet=st.sampled_from("abc XYZ 019.,?!'é📱\n"), max_size=30)
+_ANSWERS = st.lists(
+    st.tuples(st.sampled_from(["Any marks?", "Charger included?"]), _WORDS.filter(str.strip)),
+    max_size=4,
+)
+
+
+def _no_rail():
+    raise RailUnprovisioned("carousell.ai is not provisioned")
+
+
+def _fan_out(store, bus, monkeypatch, description: str, answers) -> tuple[dict, StubForm]:
+    """One item with listing-time answers, published to Facebook by the fan-out's own drive."""
+    monkeypatch.setattr(formfill, "sleep", lambda _seconds: None)
+    store.set_seller_config_section("basics", {"region": "US", "zip": "94103"})
+    made = store.create_item(
+        title=_ITEM["title"], list_price=65.0, currency="USD", description=description
+    )
+    for question, answer in answers:
+        store.qa_add(made["id"], question, answer, "seller", on_listing=True)
+    client = StubForm()
+    deps = crosslist.CrosslistDeps(
+        store=store, bus=bus, config=Config(), browser_factory=lambda: client, rail_factory=_no_rail
+    )
+    crosslist._drive_publish(deps, store.get_item(made["id"]), "fb")
+    return store.get_item(made["id"]), client
+
+
+@_LANE_PROPERTY
+@given(description=_WORDS, answers=_ANSWERS)
+def test_the_fan_out_types_the_composed_description(
+    store, bus, monkeypatch, description, answers
+) -> None:
+    item, client = _fan_out(store, bus, monkeypatch, description, answers)
+
+    assert client.typed.get("description", "") == published_description(store, item)
+    assert item["description"] == description
+    assert item["listing_urls"]["fb"] == _listing_url("999")
+
+
+def test_a_listing_time_answer_is_typed_under_the_common_questions(store, bus, monkeypatch) -> None:
+    item, client = _fan_out(
+        store,
+        bus,
+        monkeypatch,
+        "Light scuffs on the desktop.",
+        [("Any marks?", "One, on\nthe left leg.")],
+    )
+
+    assert client.typed["description"] == (
+        "Light scuffs on the desktop.\n\nCommon questions\nQ: Any marks?\nA: One, on the left leg."
+    )
+    assert item["description"] == "Light scuffs on the desktop."

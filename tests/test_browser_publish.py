@@ -15,6 +15,7 @@ import pytest
 from sellee import marketplaces, passes, paths, skills
 from sellee.config import Config
 from sellee.harness import claude
+from sellee.listing_description import published_description
 from sellee.tools.registry import ToolError, dispatch
 
 _ENDPOINT = "http://127.0.0.1:7355/mcp"
@@ -308,6 +309,43 @@ def test_the_recipe_batches_the_field_read_back() -> None:
     """One read for three fields, not three reads."""
     recipe = skills.load("listing-flow-carousell")
     assert "ONE `browser_evaluate`" in recipe
+
+
+# --- the description a browser publish types ---------------------------------------------------
+
+
+def test_get_item_carries_the_published_description_beside_the_sellers_own(
+    store, make_ctx, xdg_tmp
+) -> None:
+    made = store.create_item(title="Desk", list_price=65.0, description="Light scuffs.")
+    store.qa_add(made["id"], "Any marks?", "One, on\nthe left leg.", "seller", on_listing=True)
+
+    out = dispatch("get_item", {"item_id": made["id"]}, make_ctx("pass:publish"))
+
+    assert out["description"] == "Light scuffs."
+    assert out["published_description"] == published_description(store, store.get_item(made["id"]))
+    assert out["published_description"].endswith("Q: Any marks?\nA: One, on the left leg.")
+
+
+def test_an_item_with_no_listing_answers_publishes_its_own_description(
+    store, make_ctx, xdg_tmp
+) -> None:
+    made = store.create_item(title="Desk", list_price=65.0, description="Light scuffs.")
+
+    out = dispatch("get_item", {"item_id": made["id"]}, make_ctx("pass:publish"))
+
+    assert out["published_description"] == "Light scuffs."
+
+
+def test_a_browser_publish_is_told_to_type_the_published_description() -> None:
+    prompt = passes.publish_prompt("item_1", "carousell")
+    assert "published_description" in prompt
+    assert "published_description" in skills.load("listing-flow-carousell")
+
+
+def test_the_rail_publish_is_not_told_to_type_anything() -> None:
+    """The rail's publish tool composes the description itself."""
+    assert "published_description" not in passes.publish_prompt("item_1")
 
 
 # --- recording where the listing went live -------------------------------------------------------

@@ -8,8 +8,9 @@ Publishing one already-confirmed item to Carousell by filling its real composer 
 logged-in Chrome. The numbers were agreed with the seller before this pass started: publish what the
 item record says, and change nothing.
 
-Read the item with `get_item` for its title, price, description and condition. Its photos are in
-your working directory, named in your prompt — upload those, not the paths `get_item` reports.
+Read the item with `get_item` for its title, price, `published_description` (the description to
+type) and condition. Its photos are in your working directory, named in your prompt — upload
+those, not the paths `get_item` reports.
 
 ## Before you touch the page
 
