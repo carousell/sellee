@@ -7,7 +7,7 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee import settings
+from sellee import settings, updates
 from sellee.browser import markets as market_adapters
 
 # --- quiet_hours parse / render ---------------------------------------------------------------
@@ -241,6 +241,62 @@ def test_watch_browser_description_warns_the_raise_is_a_mac_thing() -> None:
     assert "Mac" in spec.description
 
 
+# --- activity_updates -------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("raw", "value"),
+    [("all", "all"), ("decisions", "decisions"), ("off", "off"), (" Decisions ", "decisions")],
+)
+def test_activity_updates_parse_accepts_the_three_levels(raw, value) -> None:
+    assert settings.get_spec("activity_updates").parse(raw) == value
+
+
+@pytest.mark.parametrize("bad", ["some", "", "on", True, None, 0, ["all"]])
+def test_activity_updates_parse_rejects_anything_else(bad) -> None:
+    with pytest.raises(settings.SettingError) as excinfo:
+        settings.get_spec("activity_updates").parse(bad)
+    assert "all, decisions or off" in str(excinfo.value)  # the refusal names what would do
+
+
+def test_activity_updates_render_says_what_each_level_sends() -> None:
+    spec = settings.get_spec("activity_updates")
+    assert spec.render("all") == "all — what I did for you, and what needs you"
+    assert spec.render("decisions") == "decisions — only what needs you"
+    assert spec.render("off") == "off — /catchup shows the last two days"
+
+
+def test_activity_updates_promises_catchup_no_longer_than_tells_are_kept() -> None:
+    """A tell older than this is retired untold, so 'off' cannot promise /catchup keeps more."""
+    assert updates.STALE_AFTER_SECONDS == 2 * 24 * 3600
+    spec = settings.get_spec("activity_updates")
+    assert "last two days" in spec.render("off")
+    assert "last two days" in spec.description
+
+
+def test_activity_updates_defaults_to_all_and_applies_immediately() -> None:
+    spec = settings.get_spec("activity_updates")
+    assert spec.default == "all"
+    assert spec.requires_approval is False  # how chatty the seller wants me is theirs to say
+
+
+def test_activity_updates_description_says_what_still_comes_on_decisions() -> None:
+    # The description is the model's whole vocabulary for the setting, so it must say what
+    # "decisions" keeps and that "off" still leaves catchup.
+    description = settings.get_spec("activity_updates").description
+    assert "under your minimum" in description
+    assert "buyer questions" in description
+    assert "/catchup" in description
+
+
+def test_activity_updates_is_on_the_default_card(fresh_store) -> None:
+    """Nothing else would tell the seller these updates can be turned down or off."""
+    assert "activity_updates" in settings.CARD_HEADLINE
+    assert "• Activity updates: all — what I did for you, and what needs you" in (
+        settings.card_lines(fresh_store)
+    )
+
+
 # --- read helpers + the minutes boundary ------------------------------------------------------
 
 
@@ -285,6 +341,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
     assert settings.card_lines(fresh_store) == [
         "• Quiet hours: 23:00–08:00",
         "• Watch mode: off — I work in the background",
+        "• Activity updates: all — what I did for you, and what needs you",
         "3 more settings at defaults — ask me about settings.",
     ]
 

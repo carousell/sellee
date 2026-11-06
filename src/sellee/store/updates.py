@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from typing import cast
 
 from sellee.db import Database
-from sellee.store.helpers import _REPLY_THREAD_STATUSES, _now
+from sellee.store.helpers import _REPLY_THREAD_STATUSES, _insert_ask, _insert_notice, _now
 from sellee.updates import (
     TELL_BUYER_ANSWERED,
     TELL_OFFER_DECLINED,
@@ -209,6 +209,12 @@ class UpdatesMixin:
         )
         return [_tell_from_row(r) for r in rows]
 
+    def last_update_ts(self) -> float | None:
+        """When the latest update told anything, or None when none ever has: the time its tells
+        were stamped told by it, which is the clock the hold is measured on."""
+        row = self._db.query("SELECT MAX(told_ts) AS ts FROM tells WHERE notice_id IS NOT NULL")
+        return row[0]["ts"] if row else None
+
     def mark_tells_told(
         self, tell_ids: list[int], *, notice_id: int | None, now: float | None = None
     ) -> int:
@@ -219,12 +225,55 @@ class UpdatesMixin:
             return 0
         stamped_ts = now if now is not None else _now()
         with self._db.transaction() as conn:
-            cur = conn.execute(
-                f"UPDATE tells SET told_ts = ?, notice_id = ? "
-                f"WHERE told_ts IS NULL AND id IN ({_placeholders(tell_ids)})",
-                (stamped_ts, notice_id, *tell_ids),
+            return _stamp_tells_in_txn(conn, tell_ids, notice_id=notice_id, now=stamped_ts)
+
+    def queue_update_notice(
+        self,
+        text: str,
+        *,
+        ref: str,
+        tell_ids: Sequence[int],
+        options: Sequence[str] = (),
+        holdable: bool = True,
+        now: float | None = None,
+    ) -> int | None:
+        """Queue the notice carrying an update and stamp every tell it carries told by it, in one
+        transaction: a crash leaves both or neither, so a tell is never told twice or lost between
+        the two. The notice carries `options` as tappable answers when it asks the seller
+        something, and is `holdable` (it waits out quiet hours) unless the seller asked for it.
+        None, writing nothing, when the update is no longer the one to send (see
+        `_is_still_untold`)."""
+        with self._db.transaction() as conn:
+            if not _is_still_untold(conn, ref, tell_ids):
+                return None
+            if options:
+                notice_id = _insert_ask(
+                    conn, text, options=list(options), ref=ref, holdable=holdable
+                )
+            else:
+                notice_id = _insert_notice(conn, text, ref=ref, holdable=holdable)
+            _stamp_tells_in_txn(conn, tell_ids, notice_id=notice_id, now=_or_now(now))
+            return notice_id
+
+    def record_update_at_catchup(
+        self, text: str, *, ref: str, tell_ids: Sequence[int], now: float | None = None
+    ) -> int | None:
+        """Record an update handed to the seller by a catchup, as a notice already delivered that
+        way, and stamp every tell it carries told by it, in one transaction. No buttons: nothing
+        is on a chat to tap, so its question is answered in words. None, writing nothing, when the
+        update is no longer the one to send (see `_is_still_untold`)."""
+        stamped_ts = _or_now(now)
+        with self._db.transaction() as conn:
+            if not _is_still_untold(conn, ref, tell_ids):
+                return None
+            notice_id = _insert_notice(conn, text, ref=ref)
+            conn.execute(
+                "UPDATE notices SET status = 'delivered', delivered_ts = ?, via = 'catchup' "
+                "WHERE id = ?",
+                (stamped_ts, notice_id),
             )
-            return cur.rowcount
+            _stamp_tells_in_txn(conn, tell_ids, notice_id=notice_id, now=stamped_ts)
+            return notice_id
 
     def update_context(
         self, *, item_ids: Sequence[str], thread_ids: Sequence[str]
@@ -312,3 +361,38 @@ _THREAD_STANDING_SQL = (
 
 def _placeholders(values: Sequence[object]) -> str:
     return ", ".join("?" for _ in values)
+
+
+def _or_now(now: float | None) -> float:
+    return now if now is not None else _now()
+
+
+def _is_still_untold(conn, ref: str, tell_ids: Sequence[int]) -> bool:
+    """Whether an update composed from an earlier read can still go: no notice under its `ref`, and
+    every tell it carries still untold. The lane and a catchup read on different threads and can
+    pick different sets with different refs, so the ref alone does not stop the second of them
+    telling a tell the first already told; checking inside the writing transaction does, and the
+    caller's next read composes from what is left."""
+    if conn.execute("SELECT 1 FROM notices WHERE ref = ? LIMIT 1", (ref,)).fetchone() is not None:
+        return False
+    carried = tuple(sorted(set(tell_ids)))
+    if not carried:
+        return True
+    row = conn.execute(
+        f"SELECT COUNT(*) FROM tells WHERE told_ts IS NULL AND id IN ({_placeholders(carried)})",
+        carried,
+    ).fetchone()
+    return row[0] == len(carried)
+
+
+def _stamp_tells_in_txn(conn, tell_ids: Sequence[int], *, notice_id: int | None, now: float) -> int:
+    """Stamp the tells among `tell_ids` not yet stamped as told by `notice_id` (None: retired
+    untold), returning how many it stamped. One already stamped keeps its first stamp."""
+    if not tell_ids:
+        return 0
+    cur = conn.execute(
+        f"UPDATE tells SET told_ts = ?, notice_id = ? "
+        f"WHERE told_ts IS NULL AND id IN ({_placeholders(tell_ids)})",
+        (now, notice_id, *tell_ids),
+    )
+    return cur.rowcount

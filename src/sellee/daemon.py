@@ -47,7 +47,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser import sink as browser_sink
 from sellee.browser import survey as browser_survey
 from sellee.browser import window as browser_window
-from sellee.channel import outbound, presence, routing
+from sellee.channel import activity, outbound, presence, routing
 from sellee.channel.discord import provider as discord_provider
 from sellee.channel.manager import ChannelManager
 from sellee.channel.telegram import provider as telegram_provider
@@ -975,6 +975,16 @@ def run_daemon(*, once: bool) -> int:
             name="buyer_waiting_notice",
             interval_sec=outbound.BUYER_WAITING_INTERVAL_SEC,
             func=lambda: outbound.buyer_waiting_notice(store=store),
+        )
+    )
+    # Tell the seller what was done on their listings that nothing else told them: buyers answered,
+    # offers turned down under their minimum. Store-only, like the nudges above; on the minute, with
+    # no jitter, because nothing outside this machine sees it run.
+    scheduler.register(
+        Task(
+            name="updates_lane",
+            interval_sec=activity.UPDATES_LANE_INTERVAL_SEC,
+            func=lambda: activity.updates_lane(store=store, bus=bus),
         )
     )
     # And the same from the other side: when the *seller* has been waiting longer than the typing

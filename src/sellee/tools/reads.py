@@ -7,6 +7,7 @@ import os
 import time
 
 from sellee import __version__, heartbeat, paths, secrets, settings
+from sellee.channel import activity
 from sellee.rail.client import RailError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -80,9 +81,16 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     is one. It is still *shown* here — the session should say what is waiting; it just may not be
     the thing that makes it disappear. Same rule the pending settings below already follow: a read
     never decides.
+
+    `untold` is what was done on the seller's listings that no update has told them yet, as the
+    text of one: an unbound seller has no other way to hear it. Handing it over is its telling, so
+    it is recorded told, after the queued notices are read so it is not listed twice. That is the
+    trade the notices above already make: a session that ends before passing it on has lost it,
+    which a read cannot see. The chat's own /catchup queues it instead, where delivery is retried.
     """
     escalations = ctx.store.list_open_escalations()
     notices = ctx.store.list_queued_notices()
+    untold = activity.tell_at_catchup(ctx.store)
     pending_settings = settings.pending_view(ctx.store)
     channel = ctx.store.get_channel()
     bound = channel["chat_id"] is not None
@@ -94,6 +102,7 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
     return {
         "escalations": escalations,
         "notices": notices,
+        "untold": untold,
         # An unanswered proposal is needs-me work — surfaced here (with its change id) so an unbound
         # or attended-only install can still act on it. A read never decides it.
         "pending_settings": pending_settings,
@@ -101,6 +110,7 @@ def _get_catchup(ctx: ToolContext, params: dict) -> dict:
             "escalations": len(escalations),
             "notices": len(notices),
             "pending_settings": len(pending_settings),
+            "untold": 1 if untold else 0,
         },
         "channel": {"bound": bound, "bot_username": channel["bot_username"]},
         "paused": ctx.store.is_paused(),
@@ -142,7 +152,10 @@ register(
     ToolSpec(
         name="get_catchup",
         description="The needs-me queue: open escalations awaiting your call and queued updates "
-        "(returning the updates delivers them), plus channel/pause state and a connect hint.",
+        "(returning the updates delivers them), what was done on the seller's listings that they "
+        "have not been told yet (`untold`: already worded, so pass it on as it reads, never "
+        "dropped or folded into a summary, since returning it is what tells them), plus "
+        "channel/pause state and a connect hint.",
         input_schema=_NO_PARAMS,
         handler=_get_catchup,
         tiers=frozenset({TIER_ATTENDED, TIER_PASS_CHANNEL}),
