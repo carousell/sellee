@@ -38,6 +38,6 @@ CREATE INDEX tells_untold ON tells (created_ts) WHERE told_ts IS NULL;
 -- Recorded when the intent is reserved, so a commit and a later settle from the page agree.
 ALTER TABLE send_intents ADD COLUMN autonomous INTEGER NOT NULL DEFAULT 0;
 
--- "Was another buyer on this item already answered" runs inside every reply commit; without this
--- it walks every committed intent ever sent.
-CREATE INDEX send_intents_thread ON send_intents (thread_id, kind, status);
+-- "When was this buyer first answered, and was another buyer on this item answered before that"
+-- runs inside every reply commit; without this it walks every committed intent ever sent.
+CREATE INDEX send_intents_thread ON send_intents (thread_id, kind, status, committed_ts);

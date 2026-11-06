@@ -17,10 +17,11 @@ from sellee.store.helpers import _now
 
 TELL_BUYER_ANSWERED = "buyer_answered"
 TELL_OFFER_DECLINED = "offer_declined"
-# The engine's decisions that turn the buyer's number down on its price. Only these, under the
-# floor, are the seller's to decide on: a lower minimum could win that buyer back. A sold item, an
-# item another buyer holds, or an auction the offer did not lead was never weighed on price.
-_PRICE_DECLINES = frozenset({"counter", "deflect_lowball", "hold_firm"})
+# The engine's decisions that leave nothing for a lower minimum to win back: the offer was taken or
+# leads, or it was never weighed on price (a sold item, an item another buyer holds, an auction it
+# did not lead). Any other decision under the floor turned the buyer's number down on its price and
+# is the seller's to decide on, so a decision the engine adds later asks the seller by default.
+_NOT_A_PRICE_DECLINE = frozenset({"accept_fcfs", "bid_lead", "sold", "fcfs_taken", "bid_outbid"})
 # A tell quotes at most this much of either side's message, so a long message cannot bloat the row;
 # a line to the seller quotes far less.
 _QUOTE_MAX_CHARS = 500
@@ -109,7 +110,12 @@ def record_offer_decision_in_txn(
     floor: float,
 ) -> None:
     """Keep one decided offer, and owe the seller a decision when it fell under their floor and
-    was turned down on price. `floor` is read only for that comparison."""
+    was turned down on price. `floor` is read only for that comparison.
+
+    A buyer has at most one question waiting for the seller on an item: whatever their newest
+    offer came to, it retires any earlier one still waiting to be told, untold. A buyer walking up
+    under the floor is one question rather than one per round, and a buyer whose later offer met
+    the floor, or was turned away for a reason other than price, is no question at all."""
     now = _now()
     below_floor = offer < floor
     decision = result["decision"]
@@ -128,7 +134,12 @@ def record_offer_decision_in_txn(
             now,
         ),
     )
-    if not below_floor or decision not in _PRICE_DECLINES:
+    conn.execute(
+        "UPDATE tells SET told_ts = ?, notice_id = NULL WHERE kind = ? AND item_id = ? "
+        "AND thread_id = ? AND told_ts IS NULL",
+        (now, TELL_OFFER_DECLINED, item_id, thread_id),
+    )
+    if not below_floor or decision in _NOT_A_PRICE_DECLINE:
         return
     facts: OfferDeclinedFacts = {
         "buyer_handle": handle,
@@ -148,29 +159,45 @@ def record_offer_decision_in_txn(
 
 
 def _buyer_said(conn, thread_id: str, answered_msg_id: str | None) -> str:
-    if answered_msg_id is None:
-        return ""
-    row = conn.execute(
-        "SELECT text FROM thread_messages WHERE thread_id = ? AND msg_id = ? AND dir = 'in'",
-        (thread_id, answered_msg_id),
-    ).fetchone()
+    """The buyer message this reply answered, or else the buyer's newest one on the thread; empty
+    only when the buyer has said nothing there at all."""
+    row = None
+    if answered_msg_id is not None:
+        row = conn.execute(
+            "SELECT text FROM thread_messages WHERE thread_id = ? AND msg_id = ? AND dir = 'in'",
+            (thread_id, answered_msg_id),
+        ).fetchone()
+    if row is None:
+        row = conn.execute(
+            "SELECT text FROM thread_messages WHERE thread_id = ? AND dir = 'in' "
+            "ORDER BY ts DESC, rowid DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
     return row["text"] if row else ""
 
 
+# When this buyer was first really answered. The reply being committed is already stamped, so
+# this is never later than now.
+_FIRST_ANSWER_SQL = (
+    "SELECT MIN(committed_ts) AS ts FROM send_intents "
+    "WHERE thread_id = ? AND kind = 'reply' AND status = 'committed'"
+)
 # Runs inside every reply commit, so it starts from the item's few threads and reaches each one's
 # sends by index, rather than walking every committed send there has ever been.
 _RIVAL_ANSWERED_SQL = (
     "SELECT 1 FROM threads t WHERE t.item_id = ? AND t.side = 'sell' AND t.thread_id != ? "
     "AND EXISTS (SELECT 1 FROM send_intents si WHERE si.thread_id = t.thread_id "
-    "AND si.kind = 'reply' AND si.status = 'committed') LIMIT 1"
+    "AND si.kind = 'reply' AND si.status = 'committed' AND si.committed_ts < ?) LIMIT 1"
 )
 
 
-def _another_buyer_answered(conn, item_id: str, thread_id: str) -> bool:
-    """Whether a buyer on another thread of this item already had a real answer. A holding line
-    or a follow-up answered nothing, and this buyer's own earlier replies do not make them any
-    less the first."""
-    row = conn.execute(_RIVAL_ANSWERED_SQL, (item_id, thread_id)).fetchone()
+def _another_buyer_answered_first(conn, item_id: str, thread_id: str, now: float) -> bool:
+    """Whether a buyer on another thread of this item had a real answer before this buyer's first
+    one. A holding line or a follow-up answered nothing, and a rival answered after this buyer does
+    not make them any less the first, however often either is answered later."""
+    first = conn.execute(_FIRST_ANSWER_SQL, (thread_id,)).fetchone()
+    first_ts = first["ts"] if first is not None and first["ts"] is not None else now
+    row = conn.execute(_RIVAL_ANSWERED_SQL, (item_id, thread_id, first_ts)).fetchone()
     return row is not None
 
 
@@ -190,7 +217,7 @@ def record_buyer_answered_in_txn(
         "buyer_handle": thread["counterpart_handle"],
         "buyer_said": _buyer_said(conn, thread_id, answered_msg_id)[:_QUOTE_MAX_CHARS],
         "we_said": we_said[:_QUOTE_MAX_CHARS],
-        "first_on_item": not _another_buyer_answered(conn, item_id, thread_id),
+        "first_on_item": not _another_buyer_answered_first(conn, item_id, thread_id, now),
         "item_title": _item_title(conn, item_id),
     }
     _insert_tell(

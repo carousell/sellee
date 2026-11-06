@@ -140,6 +140,86 @@ def test_a_buyer_held_firm_under_the_floor_leaves_a_decision_too(store: Store) -
     assert len(held) == 1 and held[0]["decision"] is True
 
 
+def test_a_buyer_walking_up_under_the_floor_is_one_question_for_the_seller(store: Store) -> None:
+    """Each round is kept as a decision, but the seller is asked once, about the newest offer;
+    the rounds it replaced are retired untold, not carried by any notice."""
+    item = _item(store)
+    for amount in (40, 55, 60, 65, 70, 72):
+        _offer(store, item["id"], "fb:walk", amount, handle="dana")
+
+    (tell,) = store.untold_tells()
+    assert (tell["thread_id"], tell["facts"]["amount"]) == ("fb:walk", 72)
+    assert len(_decisions(store)) == 6
+    retired = [r for r in _tell_rows(store) if r["id"] != tell["id"]]
+    assert len(retired) == 5
+    assert all(r["told_ts"] is not None and r["notice_id"] is None for r in retired)
+
+
+def test_a_newer_offer_replaces_only_that_buyers_untold_question(store: Store) -> None:
+    """Another buyer's question, or one on another item, still stands; so does one the seller was
+    already told, which keeps the notice that carried it."""
+    item, other = _item(store), _item(store, title="lamp")
+    _offer(store, item["id"], "fb:1", 40, handle="dana")
+    (told,) = store.untold_tells()
+    store.mark_tells_told([told["id"]], notice_id=9)
+    _offer(store, item["id"], "fb:2", 45, handle="eli")
+    _offer(store, other["id"], "fb:1", 30, handle="dana")
+    _offer(store, item["id"], "fb:1", 50, handle="dana")
+
+    untold = [(t["item_id"], t["thread_id"], t["facts"]["amount"]) for t in store.untold_tells()]
+    assert untold == [(item["id"], "fb:2", 45), (other["id"], "fb:1", 30), (item["id"], "fb:1", 50)]
+    assert {r["id"]: r["notice_id"] for r in _tell_rows(store)}[told["id"]] == 9
+
+
+def _retired_untold(store: Store, tell_id: int) -> bool:
+    row = {r["id"]: r for r in _tell_rows(store)}[tell_id]
+    return row["told_ts"] is not None and row["notice_id"] is None
+
+
+@pytest.mark.parametrize(
+    ("first", "then", "decision"),
+    [
+        (72, 74, "counter"),
+        (72, 80, "accept_fcfs"),
+        (60, LIST_PRICE, "accept_fcfs"),
+        (60, LIST_PRICE + 20, "bid_lead"),
+    ],
+)
+def test_a_buyer_whose_next_offer_clears_the_floor_is_no_question_for_the_seller(
+    store: Store, first, then, decision
+) -> None:
+    """Their offer under the floor is no longer standing, so the seller is not asked to lower the
+    minimum for a buyer already countered at it or already agreed."""
+    item = _item(store)
+    _offer(store, item["id"], "fb:1", first, handle="dana")
+    (asked,) = store.untold_tells()
+
+    res = _offer(store, item["id"], "fb:1", then, handle="dana")
+
+    assert res["decision"] == decision
+    assert store.untold_tells() == []
+    assert _retired_untold(store, asked["id"])
+
+
+def test_a_decision_the_engine_adds_later_asks_the_seller_by_default(store: Store) -> None:
+    """Only the decisions known to leave nothing for a lower minimum to win are kept quiet."""
+    item = _item(store)
+    with store._db.transaction() as conn:
+        updates_store.record_offer_decision_in_txn(
+            conn,
+            item_id=item["id"],
+            thread_id="fb:1",
+            handle="dana",
+            offer=50,
+            currency="SGD",
+            result={"decision": "a_decision_not_yet_written"},
+            floor=FLOOR,
+        )
+
+    (tell,) = store.untold_tells()
+    assert (tell["kind"], tell["decision"], tell["facts"]["amount"]) == ("offer_declined", True, 50)
+
+
 def _sold(store: Store, item_id: str) -> None:
     store.negotiate_confirm_sold(item_id, "fb:winner")
 
@@ -169,6 +249,27 @@ def test_an_offer_under_the_floor_not_weighed_on_price_asks_the_seller_nothing(
     mine = [r for r in _decisions(store) if r["thread_id"] == "fb:1"]
     assert [(r["decision"], r["below_floor"]) for r in mine] == [(decision, 1)]
     assert [t for t in store.untold_tells() if t["kind"] == "offer_declined"] == []
+
+
+@pytest.mark.parametrize(
+    ("setup", "decision"),
+    [(_sold, "sold"), (_held_by_a_rival, "fcfs_taken"), (_in_an_auction, "bid_outbid")],
+)
+def test_a_buyer_whose_next_offer_is_turned_away_for_another_reason_is_no_question_either(
+    store: Store, setup, decision
+) -> None:
+    """Once the item is sold, held for someone else or out-bid, a lower minimum cannot win this
+    buyer back, so the question they left before it is retired with their next offer."""
+    item = _item(store)
+    _offer(store, item["id"], "fb:1", 60, handle="dana")
+    (asked,) = store.untold_tells()
+    setup(store, item["id"])
+
+    res = _offer(store, item["id"], "fb:1", 65, handle="dana")
+
+    assert res["decision"] == decision
+    assert [t for t in store.untold_tells() if t["kind"] == "offer_declined"] == []
+    assert _retired_untold(store, asked["id"])
 
 
 def _without_row_ids(rows) -> list[dict]:
@@ -213,7 +314,14 @@ def _sell_thread(store: Store, item_id: str, tid: str, handle="bob") -> None:
 
 
 def _reply(
-    store: Store, tid: str, text: str, *, kind="reply", in_msg_id=None, autonomous=True
+    store: Store,
+    tid: str,
+    text: str,
+    *,
+    kind="reply",
+    in_msg_id=None,
+    autonomous=True,
+    now: float | None = None,
 ) -> str:
     cfg = pacing.resolve(_FAST, quiet_hours=(0, 0))
     reserved = store.reserve_reply(
@@ -223,6 +331,7 @@ def _reply(
         in_msg_id=in_msg_id,
         cfg=cfg,
         autonomous=autonomous,
+        now=now,
     )
     store.commit_reply(
         intent_id=reserved["intent_id"],
@@ -230,6 +339,7 @@ def _reply(
         in_msg_id=in_msg_id,
         text=text,
         kind=kind,
+        now=now,
     )
     return reserved["intent_id"]
 
@@ -280,6 +390,24 @@ def test_only_the_first_buyer_answered_on_an_item_is_its_first(store: Store) -> 
     assert _firsts(store) == [("fb:1", True), ("fb:1", True), ("fb:2", False)]
 
 
+def test_the_first_buyer_stays_first_after_a_rival_is_answered(store: Store) -> None:
+    """Answered first, then a rival, then the first buyer again: they are still the item's first
+    buyer, and the rival still is not."""
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1", handle="bob")
+    _sell_thread(store, item["id"], "fb:2", handle="cara")
+    store.record_inbound("fb:1", msg_id="m1", text="available?", ts=10.0)
+    _reply(store, "fb:1", "Yes!", now=1000.0)
+    store.record_inbound("fb:2", msg_id="n1", text="still there?", ts=20.0)
+    _reply(store, "fb:2", "It is.", now=2000.0)
+    store.record_inbound("fb:1", msg_id="m2", text="pickup where?", ts=30.0)
+    _reply(store, "fb:1", "Tampines.", now=3000.0)
+    store.record_inbound("fb:2", msg_id="n2", text="can I come today?", ts=40.0)
+    _reply(store, "fb:2", "Sure, after 6.", now=4000.0)
+
+    assert _firsts(store) == [("fb:1", True), ("fb:2", False), ("fb:1", True), ("fb:2", False)]
+
+
 def test_a_holding_line_first_does_not_take_the_first_buyer_away(store: Store) -> None:
     item = _item(store)
     _sell_thread(store, item["id"], "fb:1", handle="bob")
@@ -322,6 +450,24 @@ def test_a_reply_with_no_buyer_message_behind_it_is_still_told(store: Store) -> 
     (tell,) = store.untold_tells()
     assert tell["facts"]["buyer_said"] == ""
     assert tell["facts"]["we_said"] == "Hi! Still keen on the bike?"
+
+
+@pytest.mark.parametrize("answered_msg_id", [None, "not-a-message-here"])
+def test_with_no_answered_message_named_the_buyer_said_their_newest_words(
+    store: Store, answered_msg_id
+) -> None:
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1", handle="bob")
+    store.record_inbound("fb:1", msg_id="m1", text="hi", ts=10.0)
+    store.record_inbound("fb:1", msg_id="m2", text="is it still available?", ts=20.0)
+
+    with store._db.transaction() as conn:
+        updates_store.record_buyer_answered_in_txn(
+            conn, thread_id="fb:1", answered_msg_id=answered_msg_id, we_said="Yes!", now=100.0
+        )
+
+    (tell,) = store.untold_tells()
+    assert tell["facts"]["buyer_said"] == "is it still available?"
 
 
 def test_a_holding_line_tells_the_seller_nothing(store: Store) -> None:
@@ -423,11 +569,17 @@ def test_both_sides_words_are_kept_to_a_bounded_length(store: Store) -> None:
     assert tell["facts"]["we_said"] == "a" * limit
 
 
-def test_finding_a_rival_answer_does_not_walk_every_send(store: Store) -> None:
-    """The lookup runs inside every reply commit, so it must reach a thread's sends by index."""
-    plan = store._db.query(
-        f"EXPLAIN QUERY PLAN {updates_store._RIVAL_ANSWERED_SQL}", ("item", "fb:1")
-    )
+@pytest.mark.parametrize(
+    ("sql", "params"),
+    [
+        (updates_store._FIRST_ANSWER_SQL, ("fb:1",)),
+        (updates_store._RIVAL_ANSWERED_SQL, ("item", "fb:1", 1000.0)),
+    ],
+    ids=["first_answer", "rival_answered"],
+)
+def test_finding_a_rival_answer_does_not_walk_every_send(store: Store, sql, params) -> None:
+    """The lookups run inside every reply commit, so they must reach a thread's sends by index."""
+    plan = store._db.query(f"EXPLAIN QUERY PLAN {sql}", params)
     details = [r["detail"] for r in plan]
     assert any("send_intents_thread" in d for d in details), details
     assert not any(d.startswith("SCAN") for d in details), details
