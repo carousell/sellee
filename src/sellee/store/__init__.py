@@ -67,6 +67,7 @@ from sellee.store.survey import SurveyMixin
 from sellee.store.threads import ThreadsMixin
 from sellee.store.updates import UpdatesMixin
 from sellee.store.wants import WantsMixin
+from sellee.store.winback import WinbackMixin
 
 # The public surface of sellee.store: the names the rest of the tree (and the tests) import
 # from the package. Some are defined here, some in helpers.py — where a name lives inside
@@ -111,6 +112,7 @@ class Store(
     SettingsMixin,
     SurveyMixin,
     RelayMixin,
+    WinbackMixin,
     UpdatesMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
@@ -196,6 +198,7 @@ _SCOPE_GUARDED = {
     # adoption that mints its own item is never refused.
     "adopt_discovered_listing": (("item_id", "item"),),
     "get_thread": (("thread_id", "thread"),),
+    "owed_offer": (("thread_id", "thread"),),
     "mark_relay_answered": (("thread_id", "thread"),),
     "close_blocked_relay_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
@@ -237,7 +240,15 @@ _SCOPE_GUARDED = {
 # row return None; the transcript read returns []; a counting delete returns 0; row-required
 # writers raise the same NotFound.
 _SCOPE_MISS_NONE = frozenset(
-    {"get_item", "get_thread", "get_want", "get_floor", "get_budget", "newest_inbound_msg_id"}
+    {
+        "get_item",
+        "get_thread",
+        "get_want",
+        "get_floor",
+        "get_budget",
+        "newest_inbound_msg_id",
+        "owed_offer",
+    }
 )
 _SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})

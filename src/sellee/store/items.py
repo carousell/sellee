@@ -31,6 +31,7 @@ from sellee.store.helpers import (
     validated_item_fields,
     validated_size_bucket,
 )
+from sellee.store.winback import reopen_for_floor_change_in_txn
 
 
 class ItemsMixin:
@@ -413,7 +414,11 @@ class ItemsMixin:
         auto_counter_rounds: int | None = None,
     ) -> FloorAck:
         """The one hardened floor writer. Returns an ack carrying provenance only — never the
-        value. Raises StoreError on invalid input or a refused overwrite."""
+        value. Raises StoreError on invalid input or a refused overwrite.
+
+        Lowering a floor reopens, in the same transaction, the buyers whose offer it now reaches
+        (see `reopen_for_floor_change_in_txn`); the ack says how many, and nothing about whom or at
+        what price."""
         if source not in _FLOOR_SOURCES:
             raise StoreError(f"source must be one of {_FLOOR_SOURCES}, got {source!r}")
         if not isinstance(floor, (int, float)) or isinstance(floor, bool) or floor <= 0:
@@ -433,9 +438,10 @@ class ItemsMixin:
                     "listing price first"
                 )
             existing = conn.execute(
-                "SELECT source FROM floors WHERE item_id = ?", (item_id,)
+                "SELECT source, floor FROM floors WHERE item_id = ?", (item_id,)
             ).fetchone()
             replaced = existing["source"] if existing else None
+            now = _now()
             if replaced == "seller" and not (source == "seller" and force):
                 raise StoreError(
                     "a seller-set floor already exists for this item — refusing to overwrite "
@@ -458,10 +464,23 @@ class ItemsMixin:
                     source,
                     auto_counter_step,
                     auto_counter_rounds,
-                    _now(),
+                    now,
                 ),
             )
-        return {"status": "written", "item_id": item_id, "source": source, "replaced": replaced}
+            reopened = reopen_for_floor_change_in_txn(
+                conn,
+                item_id,
+                old_floor=existing["floor"] if existing else None,
+                new_floor=floor,
+                now=now,
+            )
+        return {
+            "status": "written",
+            "item_id": item_id,
+            "source": source,
+            "replaced": replaced,
+            "reopened": reopened,
+        }
 
 
 def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None:

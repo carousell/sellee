@@ -1,4 +1,5 @@
-"""The one deterministic money rule — dollars to integer cents, in code, never in a prompt.
+"""The deterministic money rules — dollars to integer cents, and an amount as a buyer-facing
+string — in code, never in a prompt.
 
 The LLM never composes a price in cents; a tool converts the item's list price here so the
 conversion is auditable and consistent. Half-up rounding matches the legacy engine; a
@@ -7,7 +8,25 @@ non-positive, non-finite, or non-numeric input is rejected rather than coerced.
 
 from __future__ import annotations
 
+import re
 from decimal import ROUND_HALF_UP, Decimal, DecimalException, InvalidOperation
+
+_CURRENCY_CODE_RE = re.compile(r"[A-Z]{3}")
+
+
+def format_money(amount: object, currency: str | None) -> str:
+    """An amount as the negotiation tools and the reply prompt name it: 150.0 with SGD is
+    "150 SGD", and no currency leaves the bare number."""
+    number = f"{amount:g}" if isinstance(amount, (int, float)) else str(amount)
+    return f"{number} {currency}" if currency else number
+
+
+def currency_code(value: object) -> str | None:
+    """`value` when it is a three-letter upper-case currency code, else None. The store takes an
+    item's currency as given, so text that reaches a prompt unfenced passes through here first."""
+    if isinstance(value, str) and _CURRENCY_CODE_RE.fullmatch(value):
+        return value
+    return None
 
 
 def to_price_cents(list_price: object) -> int:

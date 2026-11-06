@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from sellee.db import Database
 from sellee.store.helpers import _REPLY_THREAD_STATUSES, ThreadNotFound, _now
+from sellee.store.winback import settle_owed_reply_in_txn
 
 
 class RelayMixin:
@@ -76,13 +77,19 @@ class RelayMixin:
             return True
 
     def mark_relay_answered(self, thread_id: str, msg_id: str, ts: float) -> None:
-        """Move the reply cursor to a buyer message bazaar shows answered, and never back."""
+        """Move the reply cursor to a buyer message bazaar shows answered, and never back.
+
+        An owed reply is settled too when that message is no older than the owing: the answer to
+        it came after the thread became owed. An answer to an older message may predate the owing,
+        so it settles nothing."""
         with self._db.transaction() as conn:
             cur = conn.execute(
                 "UPDATE threads SET cursor_last_msg_id = ?, cursor_last_ts = ?, updated_ts = ? "
                 "WHERE thread_id = ? AND (cursor_last_ts IS NULL OR cursor_last_ts < ?)",
                 (msg_id, ts, _now(), thread_id, ts),
             )
+            if cur.rowcount > 0:
+                settle_owed_reply_in_txn(conn, thread_id, through_ts=ts)
             if (
                 cur.rowcount == 0
                 and not conn.execute(
