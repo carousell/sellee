@@ -13,10 +13,17 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-COMPOSER = Path(__file__).resolve().parents[2] / "src" / "sellee" / "updates.py"
+import pytest
 
-# The one part of the tree the composer may lean on: pure decision layers, network-free by their
-# own guard.
+_SRC = Path(__file__).resolve().parents[2] / "src" / "sellee"
+# The composer and the module that makes the words in it fit to show.
+COMPOSER_MODULES = {
+    "sellee.updates": _SRC / "updates.py",
+    "sellee.update_text": _SRC / "update_text.py",
+}
+
+# The one part of the tree the composer may lean on besides itself: pure decision layers,
+# network-free by their own guard.
 _ALLOWED_SELLEE_PACKAGE = "sellee.engines"
 # The stdlib it may use, by top-level module: each only computes on the values it is given.
 _ALLOWED_STDLIB = {
@@ -45,24 +52,29 @@ def _is_engine(name: str) -> bool:
     return name == _ALLOWED_SELLEE_PACKAGE or name.startswith(_ALLOWED_SELLEE_PACKAGE + ".")
 
 
+def _is_composer(name: str) -> bool:
+    return any(name == m or name.startswith(m + ".") for m in COMPOSER_MODULES)
+
+
 def _offenders(tree: ast.AST) -> list:
     offenders = []
     for name in sorted(_imported_modules(tree)):
         top = name.split(".")[0]
         if top == "sellee":
-            if name != "sellee" and not _is_engine(name):
+            if name != "sellee" and not _is_engine(name) and not _is_composer(name):
                 offenders.append(name)
         elif top not in _ALLOWED_STDLIB:
             offenders.append(name)
     return offenders
 
 
-def test_the_composer_imports_only_engines_and_pure_stdlib() -> None:
-    tree = ast.parse(COMPOSER.read_text(), filename=str(COMPOSER))
-    offenders = _offenders(tree)
+@pytest.mark.parametrize("module", sorted(COMPOSER_MODULES))
+def test_the_composer_imports_only_engines_and_pure_stdlib(module: str) -> None:
+    path = COMPOSER_MODULES[module]
+    offenders = _offenders(ast.parse(path.read_text(), filename=str(path)))
     assert offenders == [], (
-        "sellee/updates.py must stay pure — the caller reads the store and the clock and hands "
-        "the composer what it needs:\n" + "\n".join(offenders)
+        f"{module} must stay pure — the caller reads the store and the clock and hands the "
+        "composer what it needs:\n" + "\n".join(offenders)
     )
 
 
@@ -82,6 +94,8 @@ def test_the_scan_catches_what_it_is_meant_to() -> None:
         "from sellee.engines_helpers import peek\n"
         "from sellee.engines import hosts\n"
         "from sellee.engines.hosts import extract_links\n"
+        "from sellee.update_text import quote\n"
+        "from sellee.updates_extra import peek\n"
         "import re\n"
         "from collections.abc import Sequence\n"
     )
@@ -99,6 +113,8 @@ def test_the_scan_catches_what_it_is_meant_to() -> None:
         "sellee.store.Store",
         "sellee.tools.registry",
         "sellee.tools.registry.dispatch",
+        "sellee.updates_extra",
+        "sellee.updates_extra.peek",
         "sqlite3",
         "subprocess",
         "time",

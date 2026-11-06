@@ -12,21 +12,25 @@ Two steps, so the caller can retire what will never be told even when nothing is
 it cannot read, and `compose_update` renders what that selection kept, or returns None when there
 is nothing to say. The composer takes only a selection, so nothing reaches the words without
 passing those rules.
+
+`compose_weekly` is the line for a seller nothing else reached all week: what is live, and whether
+any buyer wrote.
 """
 
 from __future__ import annotations
 
 import math
-import re
-import unicodedata
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, replace
 from typing import TypedDict, TypeGuard, Union
 
-from sellee.engines import hosts
+from sellee.update_text import ELLIPSIS, clip_title, clip_words, money, quote
 
 TELL_BUYER_ANSWERED = "buyer_answered"
 TELL_OFFER_DECLINED = "offer_declined"
+TELL_ASK_WAITING = "ask_waiting"
+TELL_LISTING_QUIET = "listing_quiet"
+TELL_DEAL_CHECKIN = "deal_checkin"
 
 
 class OfferDeclinedFacts(TypedDict):
@@ -54,8 +58,35 @@ class BuyerAnsweredFacts(TypedDict):
     item_title: str
 
 
-# What a tell's facts may be. Neither shape has anywhere to put the floor.
-TellFacts = Union[OfferDeclinedFacts, BuyerAnsweredFacts]
+class AskWaitingFacts(TypedDict):
+    """A buyer left waiting on the seller's answer to an escalation: when it was asked and the
+    buyer's newest words, as sent. The escalation's own question is not here: it is Sellee's to
+    the seller, and could name the minimum."""
+
+    buyer_handle: str
+    buyer_said: str
+    asked_ts: float
+    item_title: str
+
+
+class ListingQuietFacts(TypedDict):
+    """A live listing no buyer has written about, and since when it has been live."""
+
+    live_since_ts: float
+    item_title: str
+
+
+class DealCheckinFacts(TypedDict):
+    """A sale the seller said they would close themselves, still neither sold nor released."""
+
+    buyer_handle: str
+    item_title: str
+
+
+# What a tell's facts may be. No shape has anywhere to put the floor.
+TellFacts = Union[
+    OfferDeclinedFacts, BuyerAnsweredFacts, AskWaitingFacts, ListingQuietFacts, DealCheckinFacts
+]
 
 
 class TellRecord(TypedDict):
@@ -123,12 +154,6 @@ HELD_AFTER_SECONDS = 6 * 3600
 HELD_MIN_LISTINGS = 3
 # A section shows this many listing lines, then counts the rest.
 MAX_LINES_PER_SECTION = 3
-# Quotes and titles are clipped so a line stays a line on a phone.
-QUOTE_MAX_CHARS = 80
-TITLE_MAX_CHARS = 48
-# A first sentence shorter than this is an opener ("Hi!", "Hello there.") rather than what the
-# buyer asked, so the quote runs on into the next sentence.
-QUOTE_MIN_CHARS = 12
 # Past this many offers on one listing, their amounts are given as a range.
 MAX_AMOUNTS_LISTED = 3
 # The smallest single message among the channels a seller can bind (Discord's; Telegram allows
@@ -138,17 +163,46 @@ UPDATE_MAX_CHARS = 2000
 # The buttons on an update that asks for a decision: lower the minimum the offers fell under, or
 # leave it where it is.
 DECISION_OPTIONS = ("Lower my minimum", "Hold")
+# The buttons on a check-in about a sale the seller is closing themselves.
+CHECKIN_OPTIONS = ("✅ Sold", "💔 Fell through", "⏳ Still on it")
+# A buyer's handle is a name on a line, not a quote.
+HANDLE_MAX_CHARS = 32
+# Past this long a wait reads in days rather than hours.
+WAIT_IN_DAYS_AFTER_SECONDS = 48 * 3600
+# How many live listings the weekly line names before it counts the rest.
+WEEKLY_MAX_TITLES = 3
 
-_EMOJI = {TELL_OFFER_DECLINED: "💰", TELL_BUYER_ANSWERED: "🗣"}
-# The kinds whose line asks the seller for a decision.
-_DECISION_KINDS = frozenset({TELL_OFFER_DECLINED})
+_EMOJI = {
+    TELL_OFFER_DECLINED: "💰",
+    TELL_BUYER_ANSWERED: "🗣",
+    TELL_ASK_WAITING: "⏳",
+    TELL_LISTING_QUIET: "💤",
+    TELL_DEAL_CHECKIN: "🤝",
+}
+# The kinds whose line needs the seller: told first, and never told only by a count.
+_NEEDS_YOU_KINDS = frozenset({TELL_OFFER_DECLINED, TELL_ASK_WAITING, TELL_DEAL_CHECKIN})
+# The kinds told one line per tell rather than gathered into their listing's activity line.
+_OWN_LINE_KINDS = frozenset({TELL_ASK_WAITING, TELL_LISTING_QUIET, TELL_DEAL_CHECKIN})
+# The buttons each asking kind puts on an update. A tap sends back only its label, so one update
+# carries one kind's buttons, and for a check-in one sale's (see `_one_question`).
+_KIND_OPTIONS = {TELL_OFFER_DECLINED: DECISION_OPTIONS, TELL_DEAL_CHECKIN: CHECKIN_OPTIONS}
 # The text facts each kind's line reads. Each must be text or absent, or the tell cannot be read.
 _TEXT_FACTS = {
     TELL_OFFER_DECLINED: ("currency", "item_title"),
     TELL_BUYER_ANSWERED: ("buyer_said", "we_said", "item_title"),
+    TELL_ASK_WAITING: ("buyer_handle", "buyer_said", "item_title"),
+    TELL_LISTING_QUIET: ("item_title",),
+    TELL_DEAL_CHECKIN: ("buyer_handle", "item_title"),
+}
+# The numbers each kind's line reads. Each must be a finite number.
+_NUMBER_FACTS = {
+    TELL_OFFER_DECLINED: ("amount",),
+    TELL_ASK_WAITING: ("asked_ts",),
+    TELL_LISTING_QUIET: ("live_since_ts",),
 }
 _CONTINUATION = "\n   "
-_ELLIPSIS = "…"
+_SECONDS_PER_HOUR = 3600
+_SECONDS_PER_DAY = 24 * _SECONDS_PER_HOUR
 
 
 def select_tellable(
@@ -184,23 +238,27 @@ def _tellable(tell: TellRecord, live: frozenset[str], now: float) -> TellableRec
 
 def _is_readable(facts: object, kind: str) -> TypeGuard[TellFacts]:
     """Whether `facts` is a record of `kind` in every field its line reads: text where it reads
-    text, a yes-or-no for the first buyer, a finite number for an offer."""
+    text, a yes-or-no for the first buyer, a finite number for an amount or a time."""
     text_facts = _TEXT_FACTS.get(kind)
     if text_facts is None or not isinstance(facts, dict):
         return False
     if not all(isinstance(facts.get(name), (str, type(None))) for name in text_facts):
         return False
-    if kind == TELL_BUYER_ANSWERED:
-        return isinstance(facts.get("first_on_item"), (bool, type(None)))
-    amount = facts.get("amount")
-    if not isinstance(amount, (int, float)) or isinstance(amount, bool):
+    if not all(_is_number(facts.get(name)) for name in _NUMBER_FACTS.get(kind, ())):
         return False
-    return math.isfinite(amount)
+    return kind != TELL_BUYER_ANSWERED or isinstance(facts.get("first_on_item"), (bool, type(None)))
+
+
+def _is_number(value: object) -> bool:
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    return math.isfinite(value)
 
 
 @dataclass(frozen=True)
 class _Group:
-    """The tells on one listing, which become one line."""
+    """The tells that become one line: what was done on one listing, or one tell of a kind told
+    on a line of its own."""
 
     item_id: str
     tells: tuple[TellableRecord, ...]
@@ -217,18 +275,29 @@ class _Group:
         return max(t["created_ts"] for t in self.tells)
 
     @property
-    def is_decision(self) -> bool:
-        return any(t["kind"] in _DECISION_KINDS for t in self.tells)
+    def needs_you(self) -> bool:
+        return any(t["kind"] in _NEEDS_YOU_KINDS for t in self.tells)
+
+    @property
+    def is_quiet(self) -> bool:
+        return any(t["kind"] == TELL_LISTING_QUIET for t in self.tells)
+
+    @property
+    def options(self) -> tuple[str, ...]:
+        return next(
+            (_KIND_OPTIONS[t["kind"]] for t in self.tells if t["kind"] in _KIND_OPTIONS), ()
+        )
 
 
 @dataclass(frozen=True)
 class _Piece:
     """One line of an update (a listing's line may wrap onto a continuation), the tells it tells
-    and whether it asks the seller for a decision. Headings and blank lines tell nothing."""
+    and the buttons it needs, if it asks the seller something they can tap an answer to. Headings
+    and blank lines tell nothing."""
 
     text: str
     ids: tuple[int, ...] = ()
-    asks: bool = False
+    options: tuple[str, ...] = ()
 
 
 def compose_update(
@@ -238,15 +307,16 @@ def compose_update(
 
     A few fresh tells read as one line per listing, naming everything told about it, the listings
     that need the seller first. Tells on many listings, or any held past `HELD_AFTER_SECONDS`,
-    read as "While you were away:" with a section for what needs the seller and one for what was
-    done for them."""
-    tells = tuple(sorted(selection.tellable, key=lambda t: t["id"]))
+    read as "While you were away:" with a section for what needs the seller, one for what was
+    done for them and one for listings nobody has written about."""
+    tells = _one_question(tuple(sorted(selection.tellable, key=lambda t: t["id"])))
     if not tells:
         return None
     groups = _groups(tells)
     status = _Status(
         talking=frozenset(context["talking_thread_ids"]),
         waiting=frozenset(context["waiting_thread_ids"]),
+        now=now,
     )
     is_held = len(groups) >= HELD_MIN_LISTINGS or any(
         now - t["created_ts"] > HELD_AFTER_SECONDS for t in tells
@@ -255,40 +325,60 @@ def compose_update(
     kept = _within_one_message(pieces)
     return Update(
         text=_joined(kept),
-        options=DECISION_OPTIONS if any(p.asks for p in kept) else (),
+        options=next((p.options for p in kept if p.options), ()),
         carried_ids=tuple(sorted(i for p in kept for i in p.ids)),
     )
 
 
+def _one_question(tells: tuple[TellableRecord, ...]) -> tuple[TellableRecord, ...]:
+    """`tells` less the check-ins this update cannot ask about. A tap sends back only its label, so
+    an update's buttons answer one question: offers under the minimum take them when there are
+    any, and otherwise the oldest check-in does, so "Sold" names one sale. A check-in left out
+    stays untold and is asked in the next update."""
+    checkins = [t for t in tells if t["kind"] == TELL_DEAL_CHECKIN]
+    if not checkins:
+        return tells
+    has_offers = any(t["kind"] == TELL_OFFER_DECLINED for t in tells)
+    asked = None if has_offers else min(checkins, key=lambda t: (t["created_ts"], t["id"]))["id"]
+    return tuple(t for t in tells if t["kind"] != TELL_DEAL_CHECKIN or t["id"] == asked)
+
+
 @dataclass(frozen=True)
 class _Status:
-    """Where each answered thread's conversation stands, as `UpdateContext` reads it."""
+    """Where each answered thread's conversation stands, as `UpdateContext` reads it, and the
+    moment the update is composed at, which a wait or a listing's age is counted to."""
 
     talking: frozenset[str]
     waiting: frozenset[str]
+    now: float
 
 
 def _groups(tells: Iterable[TellableRecord]) -> tuple[_Group, ...]:
-    by_item: dict[str, list[TellableRecord]] = {}
+    by_line: dict[tuple[str, int], list[TellableRecord]] = {}
     for tell in tells:
-        by_item.setdefault(tell["item_id"], []).append(tell)
-    return tuple(_Group(item_id=item_id, tells=tuple(group)) for item_id, group in by_item.items())
+        own_line = tell["id"] if tell["kind"] in _OWN_LINE_KINDS else 0
+        by_line.setdefault((tell["item_id"], own_line), []).append(tell)
+    return tuple(
+        _Group(item_id=item_id, tells=tuple(group)) for (item_id, _), group in by_line.items()
+    )
 
 
 def _listing_piece(group: _Group, status: _Status) -> _Piece:
-    return _Piece(_line(group, status), ids=group.ids, asks=group.is_decision)
+    return _Piece(_line(group, status), ids=group.ids, options=group.options)
 
 
 def _short_pieces(groups: Sequence[_Group], status: _Status) -> tuple[_Piece, ...]:
-    """Listings that need the seller first, then the most recently active."""
-    ordered = sorted(groups, key=lambda g: (not g.is_decision, -g.newest_ts))
+    """Lines that need the seller first and quiet listings last, each the most recent first."""
+    ordered = sorted(groups, key=lambda g: (not g.needs_you, g.is_quiet, -g.newest_ts))
     return tuple(_listing_piece(g, status) for g in ordered)
 
 
 def _held_pieces(groups: Sequence[_Group], status: _Status) -> tuple[_Piece, ...]:
+    done = [g for g in groups if not g.needs_you and not g.is_quiet]
     sections = (
-        _section("Needs you:", [g for g in groups if g.is_decision], status),
-        _section("Done for you:", [g for g in groups if not g.is_decision], status),
+        _section("Needs you:", [g for g in groups if g.needs_you], status),
+        _section("Done for you:", done, status),
+        _section("Quiet listings:", [g for g in groups if g.is_quiet], status),
     )
     body = tuple(piece for s in sections if s for piece in (_Piece(""), *s))
     return (_Piece("While you were away:"), *body)
@@ -300,10 +390,10 @@ def _section(heading: str, groups: Sequence[_Group], status: _Status) -> tuple[_
     ordered = sorted(groups, key=lambda g: -g.newest_ts)
     shown = ordered[:MAX_LINES_PER_SECTION]
     hidden = ordered[MAX_LINES_PER_SECTION:]
-    # What was done for the seller is told by the count; a decision is not, since the seller can
-    # only make it knowing which listing and which offers, so a hidden one stays untold and comes
+    # What was done for the seller is told by the count; what needs them is not, since they can
+    # only answer it knowing which listing and which buyer, so a hidden one stays untold and comes
     # back named in the next update.
-    counted = tuple(i for g in hidden if not g.is_decision for i in g.ids)
+    counted = tuple(i for g in hidden if not g.needs_you for i in g.ids)
     more = _Piece(f"+{len(hidden)} more", ids=counted)
     return (
         _Piece(heading),
@@ -313,9 +403,13 @@ def _section(heading: str, groups: Sequence[_Group], status: _Status) -> tuple[_
 
 
 def _line(group: _Group, status: _Status) -> str:
-    """One listing's line: its offers, then its answered buyers as "Also answered…"."""
+    """One listing's line: its offers, then its answered buyers as "Also answered…"; or the line
+    of a tell told on its own."""
     latest = max(group.tells, key=lambda t: (t["created_ts"], t["id"]))
-    title = _clip_title(latest["facts"].get("item_title") or "") or "a listing"
+    title = clip_title(latest["facts"].get("item_title") or "") or "a listing"
+    own_line = _OWN_LINES.get(latest["kind"])
+    if own_line is not None:
+        return f"{_EMOJI[latest['kind']]} {title} — {own_line(latest['facts'], status.now)}"
     offers = group.of_kind(TELL_OFFER_DECLINED)
     answered = group.of_kind(TELL_BUYER_ANSWERED)
     if not offers:
@@ -337,8 +431,8 @@ def _within_one_message(pieces: Sequence[_Piece]) -> tuple[_Piece, ...]:
     something."""
     if len(_joined(pieces)) <= UPDATE_MAX_CHARS:
         return tuple(pieces)
-    marker = _Piece(_ELLIPSIS)
-    room = UPDATE_MAX_CHARS - len("\n" + _ELLIPSIS)
+    marker = _Piece(ELLIPSIS)
+    room = UPDATE_MAX_CHARS - len("\n" + ELLIPSIS)
     fits = 0
     while fits < len(pieces) and len(_joined(pieces[: fits + 1])) <= room:
         fits += 1
@@ -348,7 +442,7 @@ def _within_one_message(pieces: Sequence[_Piece]) -> tuple[_Piece, ...]:
     first = next(i for i, p in enumerate(pieces) if p.ids)
     lead = tuple(pieces[:first])
     line_room = room - len(_joined(lead)) - (1 if lead else 0)
-    clipped = replace(pieces[first], text=_clip_words(pieces[first].text, line_room))
+    clipped = replace(pieces[first], text=clip_words(pieces[first].text, line_room))
     is_more_untold = any(p.ids for p in pieces[first + 1 :])
     return (*lead, clipped, *((marker,) if is_more_untold else ()))
 
@@ -374,7 +468,7 @@ def _answered_body(tells: Sequence[TellableRecord], status: _Status) -> str:
     latest = max(tells, key=lambda t: (t["created_ts"], t["id"]))
     facts = latest["facts"]
     who = "its first buyer" if facts.get("first_on_item") else "a buyer"
-    exchange = _exchange(_quote(facts.get("buyer_said") or ""), _quote(facts.get("we_said") or ""))
+    exchange = _exchange(quote(facts.get("buyer_said") or ""), quote(facts.get("we_said") or ""))
     if not exchange:
         return " ".join(filter(None, [f"answered {who}.", said]))
     head = f"answered {who} ({exchange})."
@@ -402,203 +496,109 @@ def _exchange(theirs: str, ours: str) -> str:
     return ""
 
 
-# --- money ---------------------------------------------------------------------------------------
-
-# Currencies shown with a sign; any other reads as "60 SGD", the way every other seller-facing
-# price does.
-_CURRENCY_SIGNS = {"USD": "$"}
-
-
-# A currency is shown only as the three-letter code the store keeps; anything else is left off
-# rather than let a stray string run the line long.
-_CURRENCY_CODE_RE = re.compile(r"[A-Z]{3}")
-
-
-def _amount(facts: TellFacts) -> float:
-    value = facts.get("amount")
-    if not isinstance(value, (int, float)) or not math.isfinite(value):
-        return 0.0
-    return float(value)
-
-
-def _money(facts: TellFacts) -> str:
-    value = _amount(facts)
-    number = f"{value:.0f}" if value == int(value) else f"{value:.2f}"
-    currency = str(facts.get("currency") or "").strip().upper()
-    if not _CURRENCY_CODE_RE.fullmatch(currency):
-        currency = ""
-    sign = _CURRENCY_SIGNS.get(currency)
-    if sign:
-        return f"{sign}{number}"
-    return f"{number} {currency}" if currency else number
-
-
-# --- quoting -------------------------------------------------------------------------------------
-
-_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
-# An email spaced out around its "@" or dots ("bob @ gmail . com"). A dot with a space after it
-# but not before ends a sentence, so it does not count; and the last part must be a real-looking
-# domain ending, so "meet @ 5 . see you" stays as written.
-# A bracketed dot or "at", as written to slip past a filter: "[.]", "(dot)", "[@]", "(at)".
-_BRACKETED_DOT = r"\s*[\[(]\s*(?:\.|dot)\s*[\])]\s*"
-_BRACKETED_AT = r"\s*[\[(]\s*(?:@|at)\s*[\])]\s*"
-_SPACED_DOT = rf"(?:\.|\s+\.\s+|{_BRACKETED_DOT})"
-_SPACED_EMAIL_RE = re.compile(
-    rf"[\w.+-]+\s*@\s*[\w-]+(?:{_SPACED_DOT}[\w-]+)*{_SPACED_DOT}(?P<tld>[a-z]{{2,}})\b",
-    re.IGNORECASE,
-)
-# An email spelled out to slip past a filter: "bob at gmail dot com", "bob [at] gmail [.] com".
-# The last part must be a real-looking domain ending, so "I'm at work dot…" stays as written.
-_SPELLED_DOT = rf"(?:\s+dot\s+|{_BRACKETED_DOT})"
-_SPELLED_EMAIL_RE = re.compile(
-    rf"[\w.+-]+(?:\s+at\s+|{_BRACKETED_AT})[\w-]+"
-    rf"(?:{_SPELLED_DOT}[\w-]+)*{_SPELLED_DOT}(?P<tld>[a-z]{{2,}})\b",
-    re.IGNORECASE,
-)
-# A social or payment handle: "@bob_k", "venmo me @bobby".
-_HANDLE_RE = re.compile(r"(?<![\w@])@\w{2,}")
-# A payment or social app's name, as a buyer writes it before their id there.
-_APP = (
-    r"(?P<app>venmo|paypal|cash\s?app|zelle|paylah|paynow|instagram|insta|ig|telegram|"
-    r"snapchat|snap|wechat|kik|discord|signal|line\s?id)"
-)
-# A plain id written after an app's name and a colon: "venmo: bobk", "line id: bobby99".
-_APP_ID_RE = re.compile(rf"\b{_APP}\s*[:=]\s*[\w.\-]{{2,}}", re.IGNORECASE)
-# An id written after an app's name and "is": "insta is bob_k99". Plain words follow "is" too
-# ("venmo is fine"), so only a token that reads as an id, with a digit or an underscore in it, is
-# taken for one.
-_APP_ID_IS_RE = re.compile(
-    rf"(?P<lead>\b{_APP}(?:\s+(?:id|handle|username))?\s+is\s+)(?=[\w.\-]*[\d_])[\w.\-]{{2,}}",
-    re.IGNORECASE,
-)
-# A link with any scheme, not just the web's: "tg://resolve?domain=bobk", "weixin://dl/chat?bobk".
-# A chat app opens these from a tap, so they are a contact as much as a web link is. Trailing
-# punctuation is left out, so the sentence the link ended keeps its full stop.
-_SCHEME_LINK_RE = re.compile(r"\b[a-z][a-z0-9+.\-]*://\S*[^\s.,;:!?)\]}>\"']", re.IGNORECASE)
-# A run of digits and digit words ("six five zero 2 4 8 …"): a phone number spelled out so a
-# filter on digits misses it. Masked only when it has a spelled digit and is long enough to dial.
-_DIGIT_TOKEN = r"\b(?:\d+|zero|oh|one|two|three|four|five|six|seven|eight|nine)\b"
-_DIGIT_TOKEN_RE = re.compile(_DIGIT_TOKEN, re.IGNORECASE)
-_SPELLED_PHONE_RE = re.compile(rf"\+?{_DIGIT_TOKEN}(?:[\s,.\-–]+{_DIGIT_TOKEN})+", re.IGNORECASE)
-_PHONE_MIN_DIGITS = 7
-# Seven or more digits, optionally led by "+" or an opening bracket, with up to three separators
-# between digits — "(650) 248-0749", "+65 9123 - 4567" — so a phone number however it is spaced.
-# A run led by a currency sign is a price, and an ISO date is a date; neither is masked.
-_PHONE_RE = re.compile(
-    r"(?<![\w.$€£¥])(?!\d{4}-\d\d-\d\d(?!\d))\+?\(?\d(?:[\s().\-–]{0,3}\d){6,}(?![\w])"
-)
-_SENTENCE_END_RE = re.compile(r"[.!?](?=\s|$)")
-_CUT_PUNCTUATION = " .,;:!?-"
-# A sentence cut short keeps its question mark: what was asked is the point of the quote.
-_SENTENCE_CUT_PUNCTUATION = " .,;:!-"
-# A straight double quote that opens a phrase: at the start, or after a space or bracket.
-_OPENING_QUOTE_RE = re.compile(r'(?:^|(?<=[\s(\[]))"')
-# The arrow the update writes between the buyer's words and ours. Inside a quote it becomes a
-# hyphen, so a buyer cannot write a line that reads as an exchange that never happened.
-_ARROWS = str.maketrans({"→": "-", "⟶": "-"})
-# The ideographic full stop NFKC leaves alone, which reads as the dot in "bob@gmail。com". Only one
-# between two Latin letters or digits is read so; one ending a Chinese sentence stays as written.
-_LATIN_FULL_STOP_RE = re.compile(r"(?<=[A-Za-z0-9])。(?=[A-Za-z0-9])")
-_ZERO_WIDTH_JOINER = "\u200d"
-# What may stand before a joiner inside an emoji: a symbol, a skin tone, or the variation
-# selector that asks for the emoji form of the symbol before it.
-_EMOJI_PARTS = frozenset({"So", "Sk", "Mn"})
-
-
-def _plausible_email(match: re.Match[str]) -> str:
-    return "[email]" if match.group("tld").lower() in hosts.PLAUSIBLE_TLDS else match.group(0)
-
-
-def _spelled_phone(match: re.Match[str]) -> str:
-    tokens = _DIGIT_TOKEN_RE.findall(match.group(0))
-    digits = sum(len(t) if t.isdigit() else 1 for t in tokens)
-    is_spelled = any(not t.isdigit() for t in tokens)
-    return "[phone]" if is_spelled and digits >= _PHONE_MIN_DIGITS else match.group(0)
-
-
-def _without_contacts(text: str) -> str:
-    """The buyer's words with emails (written out, spaced or spelled), handles, links and phone
-    numbers (in digits or words) replaced by a plain marker: the seller is told something was there
-    without the update becoming a way to pass it on. Links go before phone numbers, so a link with
-    a number in it ("wa.me/…") is one link rather than a link around a phone, and a link with a
-    scheme goes first of all, so whatever is inside it is one link too."""
-    text = _SCHEME_LINK_RE.sub("[link]", text)
-    text = _EMAIL_RE.sub("[email]", text)
-    text = _SPACED_EMAIL_RE.sub(_plausible_email, text)
-    text = _SPELLED_EMAIL_RE.sub(_plausible_email, text)
-    text = _HANDLE_RE.sub("[handle]", text)
-    text = _APP_ID_RE.sub(lambda m: f"{m.group('app')}: [handle]", text)
-    text = _APP_ID_IS_RE.sub(r"\g<lead>[handle]", text)
-    for link in sorted(hosts.extract_links(text), key=len, reverse=True):
-        text = text.replace(link, "[link]")
-    text = _SPELLED_PHONE_RE.sub(_spelled_phone, text)
-    return _PHONE_RE.sub("[phone]", text)
-
-
-def _neutral(text: str) -> str:
-    """`text` with its straight double quotes made typographic and the exchange arrow a hyphen, so
-    a quote cannot close early and write the rest of the line itself."""
-    return _OPENING_QUOTE_RE.sub("“", text).replace('"', "”").translate(_ARROWS)
-
-
-def _opening(text: str) -> str:
-    """The first sentence, run on through the next while what is kept is shorter than
-    `QUOTE_MIN_CHARS`."""
-    for end in _SENTENCE_END_RE.finditer(text):
-        if end.end() >= QUOTE_MIN_CHARS:
-            return text[: end.end()]
-    return text
-
-
-def _is_emoji_joiner(text: str, at: int) -> bool:
-    """Whether the zero-width joiner at `at` joins two symbols, the way an emoji like 👨‍👩‍👧 is
-    built. No contact pattern reads a symbol, so a joiner there hides nothing."""
-    if not 0 < at < len(text) - 1:
-        return False
-    before, after = text[at - 1], text[at + 1]
-    return unicodedata.category(before) in _EMOJI_PARTS and unicodedata.category(after) == "So"
-
-
-def _visible(text: str) -> str:
-    """`text` without the characters that render as nothing, whitespace aside: zero-width spaces
-    and joiners, the word joiner, the byte-order mark, soft hyphens, direction marks and the rest
-    of Unicode's control and format characters. One inside an email or a number would split it
-    out of every contact pattern while the seller still read it whole."""
-    return "".join(
-        ch
-        for at, ch in enumerate(text)
-        if ch.isspace()
-        or unicodedata.category(ch)[0] != "C"
-        or (ch == _ZERO_WIDTH_JOINER and _is_emoji_joiner(text, at))
+def _waiting_body(facts: TellFacts, now: float) -> str:
+    said = quote(str(facts.get("buyer_said") or ""))
+    heard = f' ("{said}")' if said else ""
+    waited = _how_long(now - _number(facts.get("asked_ts")))
+    return (
+        f"a buyer has waited {waited} for your answer{heard}."
+        f"{_CONTINUATION}Reply here and I'll take it from there."
     )
 
 
-def _quote(text: str) -> str:
-    """The opening sentence, contact details removed, within `QUOTE_MAX_CHARS`. Invisible
-    characters are dropped and lookalikes folded first ("＠" reads as "@", "。" as "."), so a
-    contact cannot hide behind them. Anything left out is marked with an ellipsis; a cut inside a
-    sentence falls between words."""
-    shown = _LATIN_FULL_STOP_RE.sub(".", unicodedata.normalize("NFKC", _visible(text)))
-    folded = " ".join(shown.split())
-    clean = _neutral(_without_contacts(folded))
-    if not clean:
-        return ""
-    first = _opening(clean)
-    if len(first) > QUOTE_MAX_CHARS:
-        return _clip_words(first, QUOTE_MAX_CHARS)
-    if len(first) < len(clean):
-        return first.rstrip(_SENTENCE_CUT_PUNCTUATION) + _ELLIPSIS
-    return first
+def _quiet_body(facts: TellFacts, now: float) -> str:
+    days = int((now - _number(facts.get("live_since_ts"))) // _SECONDS_PER_DAY)
+    return (
+        f"live {_count(days, 'day')} and no buyer has written yet."
+        f"{_CONTINUATION}Want me to lower the price? Reply with the new one."
+    )
 
 
-def _clip_title(title: str) -> str:
-    clean = " ".join(title.split())
-    return clean if len(clean) <= TITLE_MAX_CHARS else _clip_words(clean, TITLE_MAX_CHARS)
+def _checkin_body(facts: TellFacts, _now: float) -> str:
+    who = _handle(facts.get("buyer_handle")) or "the buyer"
+    return f"still on it with {who}? You said you'd close this sale yourself."
 
 
-def _clip_words(text: str, limit: int) -> str:
-    """`text` cut to at most `limit` characters including the ellipsis, between words when there
-    is a space to cut at."""
-    room = text[: limit - len(_ELLIPSIS) + 1]
-    head = room.rsplit(" ", 1)[0] if " " in room else room[:-1]
-    return head.rstrip(_CUT_PUNCTUATION) + _ELLIPSIS
+# The line of each kind told on its own, after its listing's title.
+_OWN_LINES = {
+    TELL_ASK_WAITING: _waiting_body,
+    TELL_LISTING_QUIET: _quiet_body,
+    TELL_DEAL_CHECKIN: _checkin_body,
+}
+
+
+def _how_long(seconds: float) -> str:
+    if seconds >= WAIT_IN_DAYS_AFTER_SECONDS:
+        return _count(int(seconds // _SECONDS_PER_DAY), "day")
+    return _count(int(seconds // _SECONDS_PER_HOUR), "hour")
+
+
+def _count(number: int, noun: str) -> str:
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
+
+
+def _handle(raw: object) -> str:
+    """A buyer's handle fit to name on a line: marketplace text, so contact details come out and
+    it is clipped like any quote."""
+    shown = quote(str(raw or ""))
+    return shown if len(shown) <= HANDLE_MAX_CHARS else clip_words(shown, HANDLE_MAX_CHARS)
+
+
+def compose_weekly(
+    titles: Sequence[str], *, buyers: int, aged: Sequence[str], quiet: Sequence[str] = ()
+) -> str | None:
+    """The weekly line for a seller who has heard nothing else all week: which listings are live,
+    and whether any buyer wrote. `titles` are the live listings, `buyers` how many buyers wrote
+    about them in the week, `aged` the titles among them live a full week: the only ones it offers
+    to lower when nobody wrote, since a listing up a few days has not had a quiet week. `quiet` are
+    the listings no buyer has ever written about that the line also tells, named when other buyers
+    did write so the count does not read as interest in them. None with nothing live."""
+    if not titles:
+        return None
+    head = f"👋 Still on it: {_count(len(titles), 'listing')} live ({_named(titles)})."
+    if buyers:
+        wrote = f"{head} {_count(buyers, 'buyer')} wrote this week"
+        if not quiet:
+            return f"{wrote}."
+        return f"{wrote}, none yet about {_named(quiet)}. {_offer_to_lower(quiet, quiet)}"
+    quiet_week = f"{head} No buyers wrote this week."
+    if not aged:
+        return quiet_week
+    return f"{quiet_week} {_offer_to_lower(aged, titles)}"
+
+
+def _offer_to_lower(offered: Sequence[str], named: Sequence[str]) -> str:
+    """The offer to lower one of `offered`, which are among the `named` listings the line has just
+    listed: by pronoun when they are all of them, otherwise by name."""
+    if len(offered) == len(named):
+        if len(offered) == 1:
+            return "Want me to lower it? Tell me the new price."
+        return "Want me to lower one? Tell me which and the new price."
+    if len(offered) == 1:
+        return f"Want me to lower {_named(offered)}? Tell me the new price."
+    return f"Want me to lower one of {_named(offered)}? Tell me which and the new price."
+
+
+def _named(titles: Sequence[str]) -> str:
+    """Up to `WEEKLY_MAX_TITLES` titles, each one clipped line in quotes so a comma in a title
+    does not read as two listings, then a count of the rest."""
+    shown = [_quoted_title(t) for t in titles[:WEEKLY_MAX_TITLES]]
+    hidden = len(titles) - len(shown)
+    return ", ".join(shown) + (f" and {hidden} more" if hidden else "")
+
+
+def _quoted_title(title: str) -> str:
+    clipped = clip_title(title)
+    return f"“{clipped}”" if clipped else "a listing"
+
+
+def _number(value: object) -> float:
+    return float(value) if isinstance(value, (int, float)) and _is_number(value) else 0.0
+
+
+def _amount(facts: TellFacts) -> float:
+    return _number(facts.get("amount"))
+
+
+def _money(facts: TellFacts) -> str:
+    return money(_amount(facts), facts.get("currency"))

@@ -35,6 +35,7 @@ from sellee.store.helpers import (
     _insert_notice,
     _item_from_row,
     _now,
+    sync_live_since_in_txn,
     validate_photos,
 )
 
@@ -492,6 +493,7 @@ class SurveyMixin:
                         "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
                         (json.dumps(urls, sort_keys=True), now, item_id),
                     )
+                    sync_live_since_in_txn(conn, item_id, now=now)
             moved = conn.execute(
                 "UPDATE discovered_listings SET status = 'adopted', item_id = ?, adopted_ts = ?, "
                 "rail_state = ?, last_error = NULL "
