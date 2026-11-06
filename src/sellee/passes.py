@@ -339,6 +339,12 @@ def _reply_prompt(payload: dict, store, pass_id: str) -> str:
     # Read through the store the pass itself will use, so the prompt can only carry what the pass is
     # scoped to see; a thread that has been closed since the lane claimed it simply drops out.
     threads = [t for t in (store.get_thread(tid) for tid in thread_ids) if t is not None]
+    # Only an owing the claim recorded is shown: it is the one a reply from this pass settles.
+    owed = payload.get("claimed_owed") or {}
+    threads = [
+        {**t, "owed_offer": store.owed_offer(t["thread_id"])} if t["thread_id"] in owed else t
+        for t in threads
+    ]
     items = {}
     for thread in threads:
         item_id = thread.get("item_id")

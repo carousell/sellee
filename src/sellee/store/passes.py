@@ -12,6 +12,7 @@ from sellee.store.helpers import (
     ClaimedPass,
     PassRecord,
     StoreError,
+    _claimed_owed,
     _claimed_through,
     _insert_notice,
     _new_id,
@@ -382,6 +383,9 @@ class PassesMixin:
                 "item_ids": item_ids,
                 "claimed_through": _claimed_through(claimable),
             }
+            owed = _claimed_owed(claimable)
+            if owed:
+                payload["claimed_owed"] = owed
             conn.execute(
                 "INSERT INTO passes (pass_id, type, payload, status, requested_ts) "
                 "VALUES (?, 'reply', ?, 'queued', ?)",

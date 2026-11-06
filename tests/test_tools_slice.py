@@ -72,7 +72,13 @@ def test_set_floor_ack_has_no_value(make_ctx) -> None:
     ctx = make_ctx(TIER_ATTENDED)
     item = _mk_item(ctx)
     ack = dispatch("set_floor", {"item_id": item["id"], "floor": 60.0, "source": "seller"}, ctx)
-    assert ack == {"status": "written", "item_id": item["id"], "source": "seller", "replaced": None}
+    assert ack == {
+        "status": "written",
+        "item_id": item["id"],
+        "source": "seller",
+        "replaced": None,
+        "reopened": 0,
+    }
     with pytest.raises(ToolError, match="list price"):
         dispatch("set_floor", {"item_id": item["id"], "floor": 999.0, "source": "seller"}, ctx)
 

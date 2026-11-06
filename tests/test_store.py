@@ -99,7 +99,13 @@ def test_floor_ack_carries_no_value(store: Store) -> None:
     item = _item(store, list_price=80.0)
     ack = store.set_floor(item["id"], 63.0, "seller")
     # the exact dict is the guarantee: provenance and outcome only, no floor key or value
-    assert ack == {"status": "written", "item_id": item["id"], "source": "seller", "replaced": None}
+    assert ack == {
+        "status": "written",
+        "item_id": item["id"],
+        "source": "seller",
+        "replaced": None,
+        "reopened": 0,
+    }
     assert "floor" not in ack
     stored = store.get_floor(item["id"])
     assert stored["floor"] == 63.0 and stored["source"] == "seller"

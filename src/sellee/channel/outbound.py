@@ -73,6 +73,12 @@ BUYER_WAITING_TEXT = (
     "Heads up{about}: they've been waiting {minutes} minutes for a reply and I haven't been able "
     "to send one. You may want to answer them in the app."
 )
+# A buyer owed a reply with nothing new from them: their last message was answered, so "they've
+# been waiting" would send the seller looking for a message that is not there.
+BUYER_OWED_TEXT = (
+    "Heads up{about}: I owe them an answer on their offer and haven't been able to send it for "
+    "{minutes} minutes. You may want to answer them in the app."
+)
 BUYER_WAITING_REF = "buyer-waiting"
 # Long enough that an ordinary reply in flight is never reported — a pass takes seconds and the
 # lane's own retries have room — short enough that the seller can still save the sale.
@@ -260,7 +266,9 @@ def buyer_waiting_notice(*, store, now=None) -> None:
     and needs no second telling.
 
     Guarded by the *message* rather than the thread, so a buyer who is answered and then ignored
-    again is reported afresh instead of being written off by the first notice's ref. Not holdable:
+    again is reported afresh instead of being written off by the first notice's ref. A thread owed
+    a reply with nothing new from the buyer is guarded by the owing instead, and told as an answer
+    Sellee owes rather than a message the buyer is waiting on. Not holdable:
     a notice about an overnight wait that arrives at 08:00 arrives exactly when it stopped
     mattering.
     """
@@ -277,18 +285,34 @@ def buyer_waiting_notice(*, store, now=None) -> None:
         waiting_sec = now - since
         if waiting_sec < BUYER_WAITING_AGE_SEC:
             continue
-        ref = f"{BUYER_WAITING_REF}:{row['thread_id']}:{row['waiting_on_msg_id']}"
+        owed_only = _owed_only(row)
+        ref = _buyer_waiting_ref(row, owed_only=owed_only)
         if store.has_notice_with_ref(ref):
             continue
-        store.queue_notice(_buyer_waiting_text(store, row, waiting_sec), ref=ref)
+        text = BUYER_OWED_TEXT if owed_only else BUYER_WAITING_TEXT
+        store.queue_notice(_buyer_waiting_text(store, row, waiting_sec, text), ref=ref)
 
 
-def _buyer_waiting_text(store, row: dict, waiting_sec: float) -> str:
+def _owed_only(row: dict) -> bool:
+    """Whether the thread waits only on an owing: every message the buyer wrote is answered."""
+    return row.get("owed_since_ts") is not None and not row.get("has_unread")
+
+
+def _buyer_waiting_ref(row: dict, *, owed_only: bool) -> str:
+    """Keyed by what is unanswered: the buyer's message, or for an owed-only wait the owing itself,
+    so a notice already sent about that message, long answered, cannot swallow the new wait."""
+    base = f"{BUYER_WAITING_REF}:{row['thread_id']}"
+    if owed_only:
+        return f"{base}:owed:{row['owed_since_ts']!r}"
+    return f"{base}:{row['waiting_on_msg_id']}"
+
+
+def _buyer_waiting_text(store, row: dict, waiting_sec: float, text: str) -> str:
     """The seller-facing line. Which marketplace, which buyer and which listing come from the
     thread, flattened there — the handle and title are marketplace-sourced, and a newline in
     either would stage a second message the agent never wrote."""
     reference = refs.thread_reference(store, row["thread_id"])
-    return BUYER_WAITING_TEXT.format(
+    return text.format(
         about=f" — {reference}" if reference else "",
         minutes=int(waiting_sec // 60),
     )

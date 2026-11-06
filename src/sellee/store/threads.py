@@ -16,6 +16,7 @@ from sellee.store.helpers import (
     _now,
     _thread_from_row,
 )
+from sellee.store.winback import settle_owed_reply_in_txn
 
 
 class ThreadsMixin:
@@ -144,20 +145,16 @@ class ThreadsMixin:
                 "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
             ).fetchone():
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            at = ts if ts is not None else _now()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO thread_messages "
                 "(thread_id, msg_id, dir, text, ts, source, scam_verdict) "
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (
-                    thread_id,
-                    msg_id,
-                    direction,
-                    text,
-                    ts if ts is not None else _now(),
-                    source,
-                    scam_verdict,
-                ),
+                (thread_id, msg_id, direction, text, at, source, scam_verdict),
             )
+            if cur.rowcount > 0 and direction == "out" and source == "manual":
+                # The seller answered the buyer themselves after the thread became owed a reply.
+                settle_owed_reply_in_txn(conn, thread_id, through_ts=at)
             return cur.rowcount > 0
 
     def record_inbound(
@@ -304,12 +301,14 @@ class ThreadsMixin:
             else:
                 held_from = row["status"] or "active"
             if mark_handled_msg:
+                now = _now()
                 conn.execute(
                     "UPDATE threads SET status = 'held', held_reason = ?, held_from_status = ?, "
                     "cursor_last_msg_id = ?, cursor_last_ts = ?, updated_ts = ? "
                     "WHERE thread_id = ?",
-                    (reason, held_from, mark_handled_msg, _now(), _now(), thread_id),
+                    (reason, held_from, mark_handled_msg, now, now, thread_id),
                 )
+                settle_owed_reply_in_txn(conn, thread_id, through_ts=now)
             else:
                 conn.execute(
                     "UPDATE threads SET status = 'held', held_reason = ?, held_from_status = ?, "
