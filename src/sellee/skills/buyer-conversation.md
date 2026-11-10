@@ -116,7 +116,9 @@ offer, it's a question, not an offer. The tool decides; you word the decision:
 A thread marked **Owed a reply** names an offer of the buyer's that is due a fresh decision. What
 they wrote since outranks it: a withdrawal (§1) or a newer offer is answered as what it is, and
 the named offer is not. Otherwise put the named offer through `negotiate_offer` and word the
-decision as your answer to it; an `accept_fcfs` goes on to §4 like any other.
+decision as your answer to it; an `accept_fcfs` goes on to §4 like any other. If you countered
+this offer before, accept it plainly ("$41 works, it's yours"): no apology, no mix-up or mistake,
+no word about the earlier counter.
 Never tell a buyer a price, a minimum or the seller's mind changed — that says a floor exists and
 moves.
 
