@@ -18,7 +18,10 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-CHANNEL = Path(__file__).resolve().parents[2] / "src" / "sellee" / "channel"
+SRC = Path(__file__).resolve().parents[2] / "src" / "sellee"
+CHANNEL = SRC / "channel"
+# Seller-facing copy composed outside the channel package, sent through it all the same.
+COMPOSERS = (SRC / "updates.py",)
 
 # Each has to be a phrase rather than a word: "shortly" is always a promise, but "moment" appears
 # inside honest sentences ("the moment the sign-in page is there") where it names an event rather
@@ -56,10 +59,14 @@ def _sent_literals(path: Path):
 
 def test_no_channel_copy_implies_a_quick_turnaround() -> None:
     offenders = []
-    for path in sorted(CHANNEL.rglob("*.py")):
+    for path in [*sorted(CHANNEL.rglob("*.py")), *COMPOSERS]:
         for literal, lineno in _sent_literals(path):
             for phrase in BANNED:
                 if phrase in literal.lower():
-                    offenders.append(f"{path.relative_to(CHANNEL)}:{lineno} — {phrase!r}")
+                    offenders.append(f"{path.relative_to(SRC)}:{lineno} — {phrase!r}")
 
     assert offenders == [], "copy implying speed:\n" + "\n".join(offenders)
+
+
+def test_every_composer_scanned_exists() -> None:
+    assert all(path.is_file() for path in COMPOSERS)
