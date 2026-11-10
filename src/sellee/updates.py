@@ -89,11 +89,13 @@ class UpdateContext(TypedDict):
     moment it composes: the listings still live; the threads where the buyer has written since our
     last answer and is owed the next one ("still talking"); and the threads still ours to carry
     where the next word is the buyer's ("waiting on them"). A thread in neither is held, escalated
-    or over, and its line says neither."""
+    or over, and its line says neither. `replied_ts` is when our latest reply on each thread was
+    sent, so an offer is said to be turned down only once a reply after it went out."""
 
     live_item_ids: list[str]
     talking_thread_ids: list[str]
     waiting_thread_ids: list[str]
+    replied_ts: dict[str, float]
 
 
 @dataclass(frozen=True)
@@ -247,6 +249,7 @@ def compose_update(
     status = _Status(
         talking=frozenset(context["talking_thread_ids"]),
         waiting=frozenset(context["waiting_thread_ids"]),
+        replied_ts=dict(context["replied_ts"]),
     )
     is_held = len(groups) >= HELD_MIN_LISTINGS or any(
         now - t["created_ts"] > HELD_AFTER_SECONDS for t in tells
@@ -266,6 +269,12 @@ class _Status:
 
     talking: frozenset[str]
     waiting: frozenset[str]
+    replied_ts: dict[str, float]
+
+    def has_answered(self, tell: TellableRecord) -> bool:
+        """Whether a reply of ours went out on the tell's thread after the tell was written."""
+        sent = self.replied_ts.get(tell["thread_id"] or "")
+        return sent is not None and sent >= tell["created_ts"]
 
 
 def _groups(tells: Iterable[TellableRecord]) -> tuple[_Group, ...]:
@@ -320,7 +329,7 @@ def _line(group: _Group, status: _Status) -> str:
     answered = group.of_kind(TELL_BUYER_ANSWERED)
     if not offers:
         return f"{_EMOJI[TELL_BUYER_ANSWERED]} {title} — {_answered_body(answered, status)}"
-    body = _offers_body(offers)
+    body = _offers_body(offers, status)
     if answered:
         body = f"{body} Also {_answered_body(answered, status)}"
     return f"{_EMOJI[TELL_OFFER_DECLINED]} {title} — {body}"
@@ -353,17 +362,20 @@ def _within_one_message(pieces: Sequence[_Piece]) -> tuple[_Piece, ...]:
     return (*lead, clipped, *((marker,) if is_more_untold else ()))
 
 
-def _offers_body(tells: Sequence[TellableRecord]) -> str:
+def _offers_body(tells: Sequence[TellableRecord], status: _Status) -> str:
+    """The offers under the minimum. "I said no." only once every one of them has had a reply,
+    since until then the buyer has heard nothing."""
+    said_no = " I said no." if all(status.has_answered(t) for t in tells) else ""
     amounts = [_money(t["facts"]) for t in tells]
     if len(amounts) == 1:
-        return f"an offer of {amounts[0]}, under your minimum. I said no."
+        return f"an offer of {amounts[0]}, under your minimum.{said_no}"
     if len(amounts) > MAX_AMOUNTS_LISTED:
         ranked = sorted(tells, key=lambda t: _amount(t["facts"]))
         listed = f"{_money(ranked[0]['facts'])} to {_money(ranked[-1]['facts'])}"
     else:
         listed = ", ".join(amounts)
     which = "both" if len(amounts) == 2 else "all"
-    return f"{len(amounts)} offers ({listed}), {which} under your minimum. I said no."
+    return f"{len(amounts)} offers ({listed}), {which} under your minimum.{said_no}"
 
 
 def _answered_body(tells: Sequence[TellableRecord], status: _Status) -> str:

@@ -99,11 +99,12 @@ def _answered(
     }
 
 
-def _ctx(*, live=tuple(TITLES), talking=(), waiting=()) -> UpdateContext:
+def _ctx(*, live=tuple(TITLES), talking=(), waiting=(), replied=None) -> UpdateContext:
     return {
         "live_item_ids": list(live),
         "talking_thread_ids": list(talking),
         "waiting_thread_ids": list(waiting),
+        "replied_ts": dict(replied or {}),
     }
 
 
@@ -111,16 +112,18 @@ def _compose_selected(tells, ctx: UpdateContext, *, now=NOW):
     return compose_update(select_tellable(tells, ctx, now=now), ctx, now=now)
 
 
-def _compose(tells, *, talking=(), waiting=None):
+def _compose(tells, *, talking=(), waiting=None, replied=None):
     """Compose what is tellable, with every thread not talking taken as waiting on its buyer,
-    unless `waiting` names them."""
+    unless `waiting` names them, and every thread replied to just now, unless `replied` says."""
     if waiting is None:
         waiting = [t["thread_id"] for t in tells if t["thread_id"] not in talking]
-    return _compose_selected(tells, _ctx(talking=talking, waiting=waiting))
+    if replied is None:
+        replied = {t["thread_id"]: NOW for t in tells if t["thread_id"]}
+    return _compose_selected(tells, _ctx(talking=talking, waiting=waiting, replied=replied))
 
 
-def _text(tells, *, talking=(), waiting=None) -> str:
-    update = _compose(tells, talking=talking, waiting=waiting)
+def _text(tells, *, talking=(), waiting=None, replied=None) -> str:
+    update = _compose(tells, talking=talking, waiting=waiting, replied=replied)
     assert update is not None
     return update.text
 
@@ -264,6 +267,28 @@ def test_many_offers_on_one_listing_are_given_as_a_range() -> None:
     assert update is not None
     assert update.text == (
         "💰 KitchenAid mixer — 5 offers ($30 to $45), all under your minimum. I said no."
+    )
+
+
+# --- "I said no." only once the buyer has heard it ---------------------------------------------
+
+
+def test_an_offer_no_reply_has_gone_out_on_yet_is_not_said_to_be_turned_down() -> None:
+    tell = _offer(1, DESK, 40)
+    assert _text([tell], replied={}) == "💰 IKEA desk — an offer of $40, under your minimum."
+
+
+def test_a_reply_sent_before_the_offer_does_not_answer_it() -> None:
+    tell = _offer(1, DESK, 40, age=10 * MINUTE)
+    replied = {tell["thread_id"]: NOW - HOUR}
+    assert _text([tell], replied=replied) == "💰 IKEA desk — an offer of $40, under your minimum."
+
+
+def test_offers_are_said_to_be_turned_down_only_once_every_one_has_had_a_reply() -> None:
+    tells = [_offer(1, MIXER, 40), _offer(2, MIXER, 45)]
+    replied = {tells[0]["thread_id"]: NOW}
+    assert _text(tells, replied=replied) == (
+        "💰 KitchenAid mixer — 2 offers ($40, $45), both under your minimum."
     )
 
 
@@ -876,6 +901,35 @@ def test_a_thread_with_our_reply_still_being_sent_is_talking(store: Store) -> No
 
     assert ctx["talking_thread_ids"] == ["fb:sending"]
     assert ctx["waiting_thread_ids"] == []
+
+
+def test_the_context_says_when_our_latest_reply_went_out(store: Store) -> None:
+    item = _live_item(store, "desk")
+    _answered_thread(store, item["id"], "fb:answered")
+    _sell_thread(store, item["id"], "fb:unanswered")
+
+    ctx = store.update_context(item_ids=[], thread_ids=["fb:answered", "fb:unanswered"])
+
+    assert list(ctx["replied_ts"]) == ["fb:answered"]
+    assert ctx["replied_ts"]["fb:answered"] > 0
+
+
+def test_a_real_offer_is_said_to_be_turned_down_once_the_reply_lands(store: Store) -> None:
+    desk = _live_item(store, "IKEA desk")
+    _sell_thread(store, desk["id"], "fb:d1")
+    store.negotiate_offer(desk["id"], "fb:d1", "dana", 40, config=Config())
+
+    def text() -> str:
+        tells = store.untold_tells()
+        ctx = store.update_context(item_ids=[desk["id"]], thread_ids=["fb:d1"])
+        now = time_now()
+        update = compose_update(select_tellable(tells, ctx, now=now), ctx, now=now)
+        assert update is not None
+        return update.text
+
+    assert text() == "💰 IKEA desk — an offer of $40, under your minimum."
+    _reply(store, "fb:d1", "Thanks! I could do $50.")
+    assert text().startswith("💰 IKEA desk — an offer of $40, under your minimum. I said no. ")
 
 
 def test_a_tell_row_whose_facts_do_not_parse_is_retired(store: Store) -> None:

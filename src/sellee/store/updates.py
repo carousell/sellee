@@ -232,13 +232,28 @@ class UpdatesMixin:
         """What an update's words depend on beyond its tells, as of now: which of `item_ids` are
         still live (listed somewhere and not sold), and where each of `thread_ids` stands —
         talking when its buyer wrote last, waiting when the conversation is still ours to carry
-        and the next word is theirs."""
+        and the next word is theirs — and when our latest reply on each was sent."""
         talking, waiting = self._thread_standing(thread_ids)
         return {
             "live_item_ids": self._live_item_ids(item_ids),
             "talking_thread_ids": talking,
             "waiting_thread_ids": waiting,
+            "replied_ts": self._replied_ts(thread_ids),
         }
+
+    def _replied_ts(self, thread_ids: Sequence[str]) -> dict[str, float]:
+        """When our latest reply landed on each of `thread_ids` that has one. A holding line or a
+        follow-up answers nothing, and a reply still being sent has not reached the buyer."""
+        wanted = sorted(set(thread_ids))
+        if not wanted:
+            return {}
+        rows = self._db.query(
+            "SELECT thread_id, MAX(committed_ts) AS ts FROM send_intents "
+            f"WHERE thread_id IN ({_placeholders(wanted)}) AND kind = 'reply' "
+            "AND status = 'committed' GROUP BY thread_id",
+            tuple(wanted),
+        )
+        return {r["thread_id"]: r["ts"] for r in rows if r["ts"] is not None}
 
     def _live_item_ids(self, item_ids: Sequence[str]) -> list[str]:
         wanted = sorted(set(item_ids))
