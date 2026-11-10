@@ -1,10 +1,10 @@
-"""The ledgers activity updates are composed from: every offer the engine decided, and every thing
-done on a seller's listing that they have not been told about yet (a "tell").
+"""The ledger activity updates are composed from: every thing done on a seller's listing that they
+have not been told about yet (a "tell").
 
-Both are written by the transaction that produced the fact, through the in-transaction writers
+Each tell is written by the transaction that produced the fact, through the in-transaction writers
 here, so a tell can never describe something that was rolled back and never goes missing for
 something that committed. The floor stays out by construction: the writers are handed it only to
-say whether an offer was under it, and no row, column or facts shape has a place for the value.
+say whether an offer was under it, and no column or facts shape has a place for the value.
 """
 
 from __future__ import annotations
@@ -109,8 +109,8 @@ def record_offer_decision_in_txn(
     result: dict,
     floor: float,
 ) -> None:
-    """Keep one decided offer, and owe the seller a decision when it fell under their floor and
-    was turned down on price. `floor` is read only for that comparison.
+    """Owe the seller a decision when a decided offer fell under their floor and was turned down on
+    price. `floor` is read only for that comparison.
 
     A buyer has at most one question waiting for the seller on an item: whatever their newest
     offer came to, it retires any earlier one still waiting to be told, untold. A buyer walking up
@@ -119,21 +119,6 @@ def record_offer_decision_in_txn(
     now = _now()
     below_floor = offer < floor
     decision = result["decision"]
-    conn.execute(
-        "INSERT INTO offer_decisions "
-        "(item_id, thread_id, amount, currency, decision, counter_price, below_floor, ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-        (
-            item_id,
-            thread_id,
-            offer,
-            currency or "",
-            decision,
-            result.get("counter_price"),
-            1 if below_floor else 0,
-            now,
-        ),
-    )
     conn.execute(
         "UPDATE tells SET told_ts = ?, notice_id = NULL WHERE kind = ? AND item_id = ? "
         "AND thread_id = ? AND told_ts IS NULL",

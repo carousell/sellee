@@ -110,7 +110,6 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
     assert _table_exists(data_db, "craigslist_account")
     assert _table_exists(data_db, "buyer_withdrawals")
     assert _table_exists(data_db, "next_buyer_asks")
-    assert _table_exists(data_db, "offer_decisions")
     assert _table_exists(data_db, "tells")
     assert _table_exists(events_db, "events")
     assert {r["version"] for r in data_db.query("SELECT version FROM schema_migrations")} == {

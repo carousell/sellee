@@ -33,51 +33,20 @@ def _offer(store: Store, item_id: str, thread_id: str, amount: float, handle="da
     return store.negotiate_offer(item_id, thread_id, handle, amount, config=CFG)
 
 
-def _decisions(store: Store) -> list[dict]:
-    return [dict(r) for r in store._db.query("SELECT * FROM offer_decisions ORDER BY id")]
-
-
 def _tell_rows(store: Store) -> list[dict]:
     return [dict(r) for r in store._db.query("SELECT * FROM tells ORDER BY id")]
 
 
-# --- offer_decisions ---------------------------------------------------------------------------
+# --- offer_declined tells ----------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(
-    ("amount", "decision", "below_floor"),
-    [
-        (120, "bid_lead", 0),
-        (100, "accept_fcfs", 0),
-        (85, "counter", 0),
-        (65, "counter", 1),
-        (30, "deflect_lowball", 1),
-    ],
-)
-def test_every_decided_offer_is_kept_with_what_was_decided(
-    store: Store, amount, decision, below_floor
-) -> None:
-    item = _item(store)
-    res = _offer(store, item["id"], "fb:1", amount)
-
-    rows = _decisions(store)
-    assert len(rows) == 1
-    row = rows[0]
-    assert res["decision"] == decision
-    assert (row["item_id"], row["thread_id"]) == (item["id"], "fb:1")
-    assert (row["amount"], row["currency"], row["decision"]) == (amount, "SGD", decision)
-    assert row["counter_price"] == res.get("counter_price")
-    assert row["below_floor"] == below_floor
-    assert row["ts"] > 0
-
-
-@pytest.mark.parametrize(("amount", "below_floor"), [(FLOOR - 1, 1), (FLOOR, 0), (FLOOR + 1, 0)])
+@pytest.mark.parametrize(("amount", "asks"), [(FLOOR - 1, 1), (FLOOR, 0), (FLOOR + 1, 0)])
 def test_below_floor_is_judged_against_the_floor_the_engine_was_handed(
-    store: Store, amount, below_floor
+    store: Store, amount, asks
 ) -> None:
     item = _item(store)
     _offer(store, item["id"], "fb:1", amount)
-    assert [r["below_floor"] for r in _decisions(store)] == [below_floor]
+    assert len(store.untold_tells()) == asks
 
 
 def test_the_same_offer_handed_over_again_writes_nothing(store: Store) -> None:
@@ -86,7 +55,6 @@ def test_the_same_offer_handed_over_again_writes_nothing(store: Store) -> None:
     again = _offer(store, item["id"], "fb:1", 65)
 
     assert again["decision"] == "repeat_offer"
-    assert len(_decisions(store)) == 1
     assert len(_tell_rows(store)) == 1
 
 
@@ -94,10 +62,7 @@ def test_an_offer_held_for_a_floor_not_yet_set_writes_nothing(store: Store) -> N
     item = _item(store, floor=None)
     res = _offer(store, item["id"], "fb:1", 65)
     assert res["decision"] == "needs_floor"
-    assert _decisions(store) == [] and _tell_rows(store) == []
-
-
-# --- offer_declined tells ----------------------------------------------------------------------
+    assert _tell_rows(store) == []
 
 
 @pytest.mark.parametrize("amount", [65, 30])
@@ -141,15 +106,14 @@ def test_a_buyer_held_firm_under_the_floor_leaves_a_decision_too(store: Store) -
 
 
 def test_a_buyer_walking_up_under_the_floor_is_one_question_for_the_seller(store: Store) -> None:
-    """Each round is kept as a decision, but the seller is asked once, about the newest offer;
-    the rounds it replaced are retired untold, not carried by any notice."""
+    """The seller is asked once, about the newest offer; the rounds it replaced are retired untold,
+    not carried by any notice."""
     item = _item(store)
     for amount in (40, 55, 60, 65, 70, 72):
         _offer(store, item["id"], "fb:walk", amount, handle="dana")
 
     (tell,) = store.untold_tells()
     assert (tell["thread_id"], tell["facts"]["amount"]) == ("fb:walk", 72)
-    assert len(_decisions(store)) == 6
     retired = [r for r in _tell_rows(store) if r["id"] != tell["id"]]
     assert len(retired) == 5
     assert all(r["told_ts"] is not None and r["notice_id"] is None for r in retired)
@@ -240,14 +204,12 @@ def test_an_offer_under_the_floor_not_weighed_on_price_asks_the_seller_nothing(
     store: Store, setup, decision
 ) -> None:
     """A lower minimum cannot win back a buyer told the item is sold, held for someone else, or
-    out-bid, so their offer is kept but the seller is not asked about it."""
+    out-bid, so the seller is not asked about their offer."""
     item = _item(store)
     setup(store, item["id"])
     res = _offer(store, item["id"], "fb:1", 50, handle="dana")
 
     assert res["decision"] == decision
-    mine = [r for r in _decisions(store) if r["thread_id"] == "fb:1"]
-    assert [(r["decision"], r["below_floor"]) for r in mine] == [(decision, 1)]
     assert [t for t in store.untold_tells() if t["kind"] == "offer_declined"] == []
 
 
@@ -290,16 +252,14 @@ def test_neither_ledger_ever_carries_the_floor(store: Store) -> None:
     for amount in (40, 55, 60, 65, 70, 72):
         _offer(store, walker["id"], "fb:walk", amount)
 
-    assert _decisions(store) and store.untold_tells()
-    assert leak_paths(_without_row_ids(_decisions(store)), FLOOR) == []
+    assert store.untold_tells()
     assert leak_paths(_without_row_ids(_tell_rows(store)), FLOOR) == []
     assert leak_paths(_without_row_ids(store.untold_tells()), FLOOR) == []
 
 
 def test_no_ledger_shape_has_anywhere_to_put_a_floor(store: Store) -> None:
-    for table in ("offer_decisions", "tells"):
-        columns = {r["name"] for r in store._db.query(f"PRAGMA table_info({table})")}
-        assert not any("floor" in c and c != "below_floor" for c in columns), table
+    columns = {r["name"] for r in store._db.query("PRAGMA table_info(tells)")}
+    assert not any("floor" in c for c in columns)
     for shape in (TellRecord, OfferDeclinedFacts, BuyerAnsweredFacts):
         assert not any("floor" in key for key in shape.__annotations__), shape.__name__
 
@@ -666,7 +626,7 @@ def test_an_offer_whose_tell_fails_decides_nothing(store: Store, monkeypatch) ->
     with pytest.raises(RuntimeError):
         _offer(store, item["id"], "fb:1", 30)
 
-    assert _decisions(store) == [] and _tell_rows(store) == []
+    assert _tell_rows(store) == []
     assert store._db.query("SELECT 1 FROM negotiations") == []
 
 
