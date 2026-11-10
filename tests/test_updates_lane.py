@@ -20,6 +20,7 @@ from sellee import skills
 from sellee.channel import activity, fastpaths, outbound
 from sellee.db import Database
 from sellee.store import Store
+from sellee.store import updates as updates_store
 from sellee.tools import TIER_ATTENDED
 from sellee.tools.registry import all_specs, dispatch
 from sellee.updates import DECISION_OPTIONS, MAX_LINES_PER_SECTION
@@ -174,6 +175,45 @@ def test_a_stream_of_tells_holds_until_the_oldest_reaches_the_cap(seller: Store)
     assert _update_notices(seller) == []
 
 
+@pytest.mark.parametrize("mode", ["all", "decisions"])
+def test_a_buyer_countering_inside_every_hold_still_reaches_the_seller_at_the_cap(
+    seller: Store, monkeypatch, mode: str
+) -> None:
+    """Each counter under the minimum replaces the buyer's untold offer with a fresh one, so their
+    own tell is never older than the gap between counters. The cap runs from their first, or a
+    buyer countering every 14 minutes would keep the seller from hearing for as long as they kept
+    at it."""
+    seed_setting(seller, "activity_updates", mode)
+    mixer = _live_item(seller, "KitchenAid mixer")
+    start = NOW - 2 * HOUR
+    clock = {"now": start}
+    monkeypatch.setattr(updates_store, "_now", lambda: clock["now"])
+
+    queued_at = None
+    for minute in range(int(2 * HOUR / MINUTE)):
+        clock["now"] = start + minute * MINUTE
+        if minute % 14 == 0:
+            with seller._db.transaction() as conn:  # noqa: SLF001
+                updates_store.record_offer_decision_in_txn(
+                    conn,
+                    item_id=mixer,
+                    thread_id="fb:o1",
+                    handle="dana",
+                    offer=40.0 + minute / 14,
+                    currency="USD",
+                    result={"decision": "decline"},
+                    floor=FLOOR,
+                )
+        activity.updates_lane(store=seller, now=clock["now"])
+        if _update_notices(seller):
+            queued_at = clock["now"]
+            break
+
+    assert queued_at == start + activity.MAX_HOLD_SEC
+    (latest,) = (t for t in _tell_rows(seller).items() if t[1][1] is not None)
+    assert latest[0] == max(_tell_rows(seller))  # only the offer still standing is told
+
+
 def test_what_an_update_had_no_room_for_waits_a_hold_for_the_next(seller: Store) -> None:
     """The composer names a few listings that need the seller and counts the rest; the rest are
     still untold and long past their own hold, so only the hold from the last update keeps them
@@ -280,27 +320,30 @@ def test_a_night_of_tells_waits_out_quiet_hours_and_goes_as_one(seller: Store) -
     assert all(told == morning for told, _ in _tell_rows(seller).values())
 
 
-@pytest.mark.parametrize(
-    ("hour", "minute", "goes"),
-    [(22, 50, False), (22, 44, True)],  # the window is 10 minutes off, then 16
-)
-def test_an_update_that_would_wait_out_quiet_hours_is_composed_after_them(
-    seller: Store, hour: int, minute: int, goes: bool
-) -> None:
-    """Queued just before the window, it would sit all night with words and buttons from the
-    evening before; held back, it is composed from what is true in the morning."""
+@pytest.mark.parametrize("minute", [44, 50, 59])  # the window 16, 10 and 1 minute off
+def test_an_update_due_just_before_quiet_hours_goes_before_them(seller: Store, minute: int) -> None:
+    """The drain delivers a queued update within seconds, so one due before the window opens
+    reaches the seller that evening rather than waiting for the morning."""
     seed_setting(seller, "quiet_hours", [2300, 800])
-    tick = datetime(2026, 11, 4, hour, minute).timestamp()
-    morning = datetime(2026, 11, 5, 8, 0).timestamp()
+    tick = datetime(2026, 11, 4, 22, minute).timestamp()
     mixer = _live_item(seller, "KitchenAid mixer")
     offer = _tell(seller, mixer, "offer_declined", age=20 * MINUTE, thread="fb:o1", now=tick)
 
     activity.updates_lane(store=seller, now=tick)
-    assert len(_update_notices(seller)) == (1 if goes else 0)
 
-    activity.updates_lane(store=seller, now=morning)
     (notice,) = _update_notices(seller)
-    assert _tell_rows(seller) == {offer: (tick if goes else morning, notice["id"])}
+    assert _tell_rows(seller) == {offer: (tick, notice["id"])}
+
+
+def test_the_last_minutes_of_quiet_hours_still_hold(seller: Store) -> None:
+    seed_setting(seller, "quiet_hours", [2300, 800])
+    mixer = _live_item(seller, "KitchenAid mixer")
+    tick = datetime(2026, 11, 5, 7, 59).timestamp()
+    _tell(seller, mixer, "offer_declined", age=20 * MINUTE, thread="fb:o1", now=tick)
+
+    activity.updates_lane(store=seller, now=tick)
+
+    assert _update_notices(seller) == []
 
 
 def test_quiet_hours_are_the_window_the_drain_already_holds_for(seller: Store) -> None:

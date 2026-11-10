@@ -20,6 +20,7 @@ from sellee.updates import (
     TELL_OFFER_DECLINED,
     BuyerAnsweredFacts,
     OfferDeclinedFacts,
+    TellableRecord,
     TellFacts,
     TellRecord,
     UpdateContext,
@@ -214,6 +215,25 @@ class UpdatesMixin:
         were stamped told by it, which is the clock the hold is measured on."""
         row = self._db.query("SELECT MAX(told_ts) AS ts FROM tells WHERE notice_id IS NOT NULL")
         return row[0]["ts"] if row else None
+
+    def first_owed_ts(self, tells: Sequence[TellableRecord], *, since: float) -> float | None:
+        """When the seller was first owed what `tells` say, counting from `since`: the earliest of
+        them, or of the tells each one replaced untold (same kind, listing and thread, retired with
+        no notice). A buyer countering under the minimum replaces their untold offer every time, so
+        their own tell is never older than the gap between counters; this is when they began.
+        None when `tells` is empty."""
+        if not tells:
+            return None
+        earliest = min(t["created_ts"] for t in tells)
+        for kind, item_id, thread_id in {(t["kind"], t["item_id"], t["thread_id"]) for t in tells}:
+            row = self._db.query(
+                "SELECT MIN(created_ts) AS ts FROM tells WHERE kind = ? AND item_id IS ? "
+                "AND thread_id IS ? AND notice_id IS NULL AND created_ts >= ?",
+                (kind, item_id, thread_id, since),
+            )
+            if row and row[0]["ts"] is not None:
+                earliest = min(earliest, row[0]["ts"])
+        return earliest
 
     def mark_tells_told(
         self, tell_ids: list[int], *, notice_id: int | None, now: float | None = None

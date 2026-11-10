@@ -7,8 +7,8 @@ when tells keep arriving. Nothing is composed while paused, unbound or inside qu
 night's tells become one update when the window ends rather than one queued per tell.
 
 The hold also runs from the last update, so tells an update had no room for wait for the next one
-rather than following it a minute later; and an update the hold would carry into quiet hours waits
-for the window to end, so the morning's words are composed in the morning.
+rather than following it a minute later. An update due just before quiet hours goes then: the drain
+delivers it within seconds, so it never waits out the night with the evening's words.
 
 The notice and the stamp that marks its tells told are one transaction, and the notice's ref names
 the oldest tell it carries, so a restart can neither lose an update nor send it twice.
@@ -48,11 +48,14 @@ def updates_lane(*, store, bus=None, now: float | None = None) -> None:
     if store.is_paused() or store.get_channel()["chat_id"] is None:
         return
     now = time.time() if now is None else now
-    if outbound.in_quiet_hours(store, now) or outbound.in_quiet_hours(store, now + HOLD_SEC):
+    if outbound.in_quiet_hours(store, now):
         return
     tells, context, selection = _select(store, now)
     wanted = _wanted(selection.tellable, tells, settings.get(store, "activity_updates"))
-    if not _is_due(wanted, now, last_update=store.last_update_ts()):
+    last_update = store.last_update_ts()
+    since = max(last_update or 0.0, now - updates.STALE_AFTER_SECONDS)
+    first_owed = store.first_owed_ts(wanted, since=since)
+    if not _is_due(wanted, now, last_update=last_update, first_owed=first_owed):
         return
     only_wanted = updates.TellSelection(tellable=wanted, retired_ids=())
     update = updates.compose_update(only_wanted, context, now=now)
@@ -159,14 +162,22 @@ def _wanted(
 
 
 def _is_due(
-    tells: Sequence[updates.TellableRecord], now: float, *, last_update: float | None
+    tells: Sequence[updates.TellableRecord],
+    now: float,
+    *,
+    last_update: float | None,
+    first_owed: float | None,
 ) -> bool:
+    """Whether the hold is up. The cap runs from `first_owed` rather than the oldest tell, since a
+    buyer's counter replaces their untold offer and would otherwise restart it every time."""
     if not tells:
         return False
     if last_update is not None and now - last_update < HOLD_SEC:
         return False
     newest = max(t["created_ts"] for t in tells)
     oldest = min(t["created_ts"] for t in tells)
+    if first_owed is not None:
+        oldest = min(oldest, first_owed)
     return now - newest >= HOLD_SEC or now - oldest >= MAX_HOLD_SEC
 
 
