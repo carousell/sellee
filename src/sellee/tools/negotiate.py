@@ -78,7 +78,7 @@ def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
 
 
 def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
-    thread_id = _answered_thread(ctx, params, outcome="it sold to")
+    thread_id = _answered_thread(ctx, params, outcome="it sold to", sole_in_words=True)
     if thread_id is None:
         raise ToolError(
             f"no sale on item {params['item_id']!r} is being closed by the seller — name the "
@@ -99,19 +99,21 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     return result
 
 
-def _answered_thread(ctx: ToolContext, params: dict, *, outcome: str) -> str | None:
-    """The buyer whose sale the seller is answering about: the thread named, else the one the
-    check-in the seller tapped asked about (`notice_id`), else the one sale on the item they took
-    over; None when they took none over. A check-in's tap names the sale only in words, and a
-    guessed thread would sell to the wrong buyer and close the thread of the one paying.
+def _answered_thread(
+    ctx: ToolContext, params: dict, *, outcome: str, sole_in_words: bool
+) -> str | None:
+    """The buyer whose sale the seller is answering about: the one the check-in the seller tapped
+    asked about (`notice_id`), else the thread named, else, with `sole_in_words`, the one sale on
+    the item they took over; None when none of those names a buyer. A check-in's tap names the
+    sale only in words, and a guessed thread would sell to the wrong buyer and close the thread of
+    the one paying.
 
     A tap from an old check-in answers for the buyer that check-in named, not whoever was taken
-    over since, and is refused once that buyer's sale is settled: the seller is asked again rather
-    than having the tap applied to a sale it never named."""
-    if params.get("thread_id"):
-        return params["thread_id"]
+    over since or whoever the call names, and is refused once that buyer's sale is settled or when
+    the call names another: the seller is asked again rather than having the tap applied to a sale
+    it never named."""
     item_id = params["item_id"]
-    handed = ctx.store.seller_handled_threads(item_id)
+    named = params.get("thread_id")
     notice_id = params.get("notice_id")
     if notice_id is not None:
         thread_id = ctx.store.checkin_thread(item_id, notice_id)
@@ -120,12 +122,22 @@ def _answered_thread(ctx: ToolContext, params: dict, *, outcome: str) -> str | N
                 f"notice {notice_id} asked about no sale on item {item_id!r} — name the "
                 f"thread_id of the buyer {outcome}"
             )
-        if thread_id not in handed:
+        if named and named != thread_id:
+            raise ToolError(
+                f"notice {notice_id} asked about the sale on {thread_id!r}, not {named!r} — ask "
+                f"the seller which buyer {outcome}"
+            )
+        if thread_id not in ctx.store.seller_handled_threads(item_id):
             raise ToolError(
                 f"the sale notice {notice_id} asked about ({thread_id!r}) is no longer one the "
                 f"seller is closing — ask the seller which buyer {outcome} and name that thread_id"
             )
         return thread_id
+    if named:
+        return named
+    if not sole_in_words:
+        return None
+    handed = ctx.store.seller_handled_threads(item_id)
     if len(handed) > 1:
         raise ToolError(
             f"the seller is closing {len(handed)} sales on item {item_id!r} — name the "
@@ -281,7 +293,12 @@ def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:
-    thread_id = _answered_thread(ctx, params, outcome="whose sale fell through")
+    """A release names no buyer for many reasons (a lapsed checkout, a reservation Sellee was
+    closing), so one that names none settles no sale the seller took over: guessing their one
+    would end the check-ins on a sale they are still closing."""
+    thread_id = _answered_thread(
+        ctx, params, outcome="whose sale fell through", sole_in_words=False
+    )
     if thread_id is not None:
         _require_pair(ctx, {**params, "thread_id": thread_id})
     try:
@@ -325,8 +342,9 @@ _RELEASE_SCHEMA = {
         "thread_id": {
             "type": "string",
             "description": "The thread of the buyer whose sale fell through, when the seller was "
-            "closing it themselves. Leave it out on a tapped check-in (`notice_id`) or when they "
-            "took over only one; with several and neither, the release is refused.",
+            "closing it themselves and said so in words. Leave it out on a tapped check-in "
+            "(`notice_id`). With neither, the item is released but no sale the seller took "
+            "over is settled, and their check-ins go on.",
         },
         "notice_id": _CHECKIN_NOTICE_ID,
     },

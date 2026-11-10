@@ -346,6 +346,20 @@ def test_the_weekly_line_names_a_quiet_listing_when_other_buyers_wrote() -> None
     )
 
 
+def test_the_weekly_line_names_a_quiet_listing_beyond_the_titles_it_shows() -> None:
+    """The quiet listings are the oldest, so the newest-first names leave them in "and N more";
+    the line stamps their tells told, so it names them itself."""
+    titles = ["Lamp", "Desk", "Chair", "Sofa", "Old bike"]
+
+    text = compose_weekly(titles, buyers=0, aged=titles, quiet=["Sofa", "Old bike"])
+
+    assert text == (
+        "👋 Still on it: 5 listings live (“Lamp”, “Desk”, “Chair” and 2 more). No buyers wrote "
+        "this week, and none ever about “Sofa”, “Old bike”. Want me to lower one? Tell me which "
+        "and the new price."
+    )
+
+
 def test_no_live_listing_is_no_weekly_line() -> None:
     assert compose_weekly([], buyers=0, aged=[]) is None
 

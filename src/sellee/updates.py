@@ -563,8 +563,10 @@ def compose_weekly(
     and whether any buyer wrote. `titles` are the live listings, `buyers` how many buyers wrote
     about them in the week, `aged` the titles among them live a full week: the only ones it offers
     to lower when nobody wrote, since a listing up a few days has not had a quiet week. `quiet` are
-    the listings no buyer has ever written about that the line also tells, named when other buyers
-    did write so the count does not read as interest in them. None with nothing live."""
+    the listings no buyer has ever written about that the line also tells. The line stamps their
+    tells told, so each is named: by the count of buyers when others wrote, and when nobody did and
+    one falls in the "and N more" (they are the oldest, so the newest-first names leave them
+    there), by a phrase of their own and the offer to lower them. None with nothing live."""
     if not titles:
         return None
     head = f"👋 Still on it: {_count(len(titles), 'listing')} live ({_named(titles)})."
@@ -573,7 +575,11 @@ def compose_weekly(
         if not quiet:
             return f"{wrote}."
         return f"{wrote}, none yet about {_named(quiet)}. {_offer_to_lower(quiet, quiet)}"
-    quiet_week = f"{head} No buyers wrote this week."
+    quiet_week = f"{head} No buyers wrote this week"
+    shown = set(titles[:WEEKLY_MAX_TITLES])
+    if any(title not in shown for title in quiet):
+        return f"{quiet_week}, and none ever about {_named(quiet)}. {_offer_to_lower(quiet, quiet)}"
+    quiet_week = f"{quiet_week}."
     if not aged:
         return quiet_week
     return f"{quiet_week} {_offer_to_lower(aged, titles)}"

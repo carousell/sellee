@@ -29,8 +29,6 @@ ASK_WAITING_AFTER_SEC = 12 * 3600
 LISTING_QUIET_AFTER_SEC = 7 * 24 * 3600
 # A sale the seller is closing is asked about this long after they took it, and as often after.
 DEAL_CHECKIN_EVERY_SEC = 24 * 3600
-# The weekly line counts the buyers who wrote in this long.
-WEEK_SEC = 7 * 24 * 3600
 
 
 class LiveListing(TypedDict):

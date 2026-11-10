@@ -411,9 +411,9 @@ class NegotiationMixin:
             return {"item_state": "sold", "take_down": take_down, "close_threads": close}
 
     def negotiate_release(self, item_id: str, thread_id: str | None = None) -> dict:
-        """Put the item back on the market after a sale fell through. A sale the seller was closing
-        themselves is settled with it: only `thread_id`'s when named, every one on the item when
-        not."""
+        """Put the item back on the market after a sale fell through. The sale on `thread_id`, when
+        named and the seller was closing it themselves, is settled with it; a release that names no
+        buyer settles none, since it may be about a sale Sellee was closing."""
         with self._db.transaction() as conn:
             list_price, _currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
@@ -422,7 +422,8 @@ class NegotiationMixin:
                     b["status"] = "active"
             _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
-            settle_seller_handled_in_txn(conn, item_id, thread_id=thread_id, now=_now())
+            if thread_id is not None:
+                settle_seller_handled_in_txn(conn, item_id, thread_id=thread_id, now=_now())
             return {"item_state": led["state"]}
 
     def negotiate_withdraw(

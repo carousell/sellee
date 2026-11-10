@@ -380,7 +380,7 @@ def test_a_deal_that_sold_or_fell_through_is_not_checked_on_again(
     if settle == "sold":
         store.negotiate_confirm_sold(item, tid)
     elif settle == "released":
-        store.negotiate_release(item)
+        store.negotiate_release(item, tid)
     else:
         store.negotiate_withdraw(item, tid, msg_id="m1", notice=lambda _r: ("gone", None))
 
@@ -419,8 +419,6 @@ def test_fell_through_on_one_of_two_sales_settles_only_that_one(make_ctx, store:
     _hand_over(make_ctx, store, first, at=handed)
     _hand_over(make_ctx, store, second, at=handed)
 
-    with pytest.raises(ToolError, match="closing 2 sales"):
-        dispatch("negotiate_release", {"item_id": item}, make_ctx(TIER_ATTENDED))
     dispatch("negotiate_release", {"item_id": item, "thread_id": first}, make_ctx(TIER_ATTENDED))
 
     assert store.seller_handled_threads(item) == [second]
@@ -428,11 +426,26 @@ def test_fell_through_on_one_of_two_sales_settles_only_that_one(make_ctx, store:
     assert [t["thread_id"] for t in _tells(store, "deal_checkin")] == [second]
 
 
-def test_fell_through_on_the_one_sale_taken_over_settles_it(make_ctx, store: Store) -> None:
+def test_a_release_naming_no_buyer_leaves_the_sale_taken_over(make_ctx, store: Store) -> None:
+    """A Sellee checkout for another buyer lapsed: releasing the item for that must not end the
+    check-ins on the sale the seller is still closing."""
     item = _live_item(store)
-    _hand_over(make_ctx, store, _sell_thread(store, item), at=1_000_000.0)
+    tid = _sell_thread(store, item)
+    handed = 1_000_000.0
+    _hand_over(make_ctx, store, tid, at=handed)
 
     dispatch("negotiate_release", {"item_id": item}, make_ctx(TIER_ATTENDED))
+
+    assert store.seller_handled_threads(item) == [tid]
+    assert store.write_slow_tells(now=handed + DAY) == 1
+
+
+def test_fell_through_named_in_words_settles_that_sale(make_ctx, store: Store) -> None:
+    item = _live_item(store)
+    tid = _sell_thread(store, item)
+    _hand_over(make_ctx, store, tid, at=1_000_000.0)
+
+    dispatch("negotiate_release", {"item_id": item, "thread_id": tid}, make_ctx(TIER_ATTENDED))
 
     assert store.seller_handled_threads(item) == []
 
@@ -482,7 +495,7 @@ def test_a_tap_from_an_old_check_in_never_sells_to_a_buyer_it_did_not_name(
     later = _sell_thread(seller, item, "fb:2", handle="sam")
     handed = 1_000_000.0
     notice_id = _checkin_notice(make_ctx, seller, item, handed=handed)
-    dispatch("negotiate_release", {"item_id": item}, make_ctx(TIER_ATTENDED))
+    dispatch("negotiate_release", {"item_id": item, "thread_id": "fb:1"}, make_ctx(TIER_ATTENDED))
     _hand_over(make_ctx, seller, later, at=handed + 2 * DAY)
 
     for tool in ("negotiate_confirm_sold", "negotiate_release"):
@@ -490,6 +503,27 @@ def test_a_tap_from_an_old_check_in_never_sells_to_a_buyer_it_did_not_name(
             dispatch(tool, {"item_id": item, "notice_id": notice_id}, make_ctx(TIER_ATTENDED))
     assert seller.negotiate_status(item)["item_state"] != "sold"
     assert seller.seller_handled_threads(item) == [later]
+
+
+def test_a_tapped_check_in_refuses_a_buyer_it_did_not_name(make_ctx, seller: Store) -> None:
+    """The model names a thread beside the tap: the tap's buyer decides, and a different one is
+    refused rather than sold to."""
+    item = _live_item(seller)
+    _sell_thread(seller, item, "fb:1", handle="bob_k")
+    other = _sell_thread(seller, item, "fb:2", handle="sam")
+    handed = 1_000_000.0
+    notice_id = _checkin_notice(make_ctx, seller, item, handed=handed)
+    _hand_over(make_ctx, seller, other, at=handed + DAY + activity.HOLD_SEC + MINUTE)
+
+    for tool in ("negotiate_confirm_sold", "negotiate_release"):
+        with pytest.raises(ToolError, match="not 'fb:2'"):
+            dispatch(
+                tool,
+                {"item_id": item, "notice_id": notice_id, "thread_id": other},
+                make_ctx(TIER_ATTENDED),
+            )
+    assert seller.negotiate_status(item)["item_state"] != "sold"
+    assert seller.seller_handled_threads(item) == ["fb:1", other]
 
 
 def test_a_notice_that_asked_about_no_sale_is_refused(make_ctx, store: Store) -> None:
