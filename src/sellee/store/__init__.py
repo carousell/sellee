@@ -63,6 +63,7 @@ from sellee.store.revisions import RevisionsMixin
 from sellee.store.scam import ScamMixin
 from sellee.store.send import SendMixin
 from sellee.store.settings import SettingsMixin
+from sellee.store.slow_tells import SlowTellsMixin
 from sellee.store.survey import SurveyMixin
 from sellee.store.threads import ThreadsMixin
 from sellee.store.updates import UpdatesMixin
@@ -114,6 +115,7 @@ class Store(
     RelayMixin,
     WinbackMixin,
     UpdatesMixin,
+    SlowTellsMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
 
@@ -222,7 +224,9 @@ _SCOPE_GUARDED = {
     "negotiate_status": (("item_id", "item"),),
     "negotiate_confirm_bid": (("item_id", "item"), ("thread_id", "thread")),
     "negotiate_confirm_sold": (("item_id", "item"), ("thread_id", "thread")),
-    "negotiate_release": (("item_id", "item"),),
+    "negotiate_release": (("item_id", "item"), ("thread_id", "thread")),
+    "seller_handled_threads": (("item_id", "item"),),
+    "checkin_thread": (("item_id", "item"),),
     "negotiate_withdraw": (("item_id", "item"), ("thread_id", "thread")),
     "has_withdrawn": (("item_id", "item"), ("thread_id", "thread")),
     "answers_since_withdrawal": (("item_id", "item"), ("thread_id", "thread")),
@@ -248,9 +252,10 @@ _SCOPE_MISS_NONE = frozenset(
         "get_budget",
         "newest_inbound_msg_id",
         "owed_offer",
+        "checkin_thread",
     }
 )
-_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search"})
+_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search", "seller_handled_threads"})
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),

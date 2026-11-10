@@ -72,6 +72,8 @@ _REPLY_THREAD_STATUSES = ("active", "liaising", "agreed")
 # Markets whose read lane retries an unsettled send itself, under its own id, until bazaar
 # answers; the sweep never asks the seller about one.
 LANE_RETRIED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
+# The escalation the stale-intent sweep opens to ask whether our own message landed.
+UNCONFIRMED_SEND_KIND = "unconfirmed_send"
 
 UI_CACHE_STALE_FAILS = 3
 UI_CACHE_STALE_DAYS = 30
@@ -1098,7 +1100,45 @@ def _insert_item_in_txn(
             now,
         ),
     )
+    sync_live_since_in_txn(conn, item_id, now=now)
     return item_id
+
+
+def sync_live_since_in_txn(conn, item_id: str, *, now: float) -> None:
+    """Keep `items.live_since_ts` in step with the item's listing URLs, after any write to them:
+    stamped `now` when the first goes up, kept while any stays, cleared when the last comes down.
+
+    Taking the last one down also settles any sale on it the seller was closing themselves: a
+    check-in on a listing nobody can see could never be told, and a relist later is a new sale,
+    not that buyer's."""
+    conn.execute(
+        "UPDATE items SET live_since_ts = CASE "
+        "WHEN EXISTS (SELECT 1 FROM json_each(items.listing_urls) WHERE json_each.value != '') "
+        "THEN COALESCE(live_since_ts, ?) END WHERE id = ?",
+        (now, item_id),
+    )
+    row = conn.execute("SELECT live_since_ts FROM items WHERE id = ?", (item_id,)).fetchone()
+    if row is not None and row["live_since_ts"] is None:
+        settle_seller_handled_in_txn(conn, item_id, now=now)
+
+
+def settle_seller_handled_in_txn(
+    conn, item_id: str, *, thread_id: str | None = None, now: float
+) -> None:
+    """Stop checking in on the sales handed to the seller on `item_id` (only `thread_id`'s, when
+    named): it sold, it was released, that buyer backed out, or the listing came down."""
+    if thread_id is None:
+        conn.execute(
+            "UPDATE seller_handled_deals SET settled_ts = ? "
+            "WHERE item_id = ? AND settled_ts IS NULL",
+            (now, item_id),
+        )
+        return
+    conn.execute(
+        "UPDATE seller_handled_deals SET settled_ts = ? "
+        "WHERE item_id = ? AND thread_id = ? AND settled_ts IS NULL",
+        (now, item_id, thread_id),
+    )
 
 
 def _stamp_welcomed_in_txn(conn) -> None:

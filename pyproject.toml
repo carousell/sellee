@@ -108,10 +108,10 @@ ban-relative-imports = "all"
 
 [tool.pyright]
 # Basic mode checks only what is annotated, so its blast radius is the annotated
-# store surface and the activity-update composer that reads its records — the
-# JSON-boundary tool handlers (params: dict), the engines, and everything else
-# stay unchecked and green. Scoped tight so the first run is not
+# store surface and the activity-update composer (with its text helpers) that reads
+# its records — the JSON-boundary tool handlers (params: dict), the engines, and
+# everything else stay unchecked and green. Scoped tight so the first run is not
 # drowned by the rest of the still-untyped tree; widening is a separate decision.
-include = ["src/sellee/store", "src/sellee/updates.py"]
+include = ["src/sellee/store", "src/sellee/updates.py", "src/sellee/update_text.py"]
 typeCheckingMode = "basic"
 pythonVersion = "3.14"

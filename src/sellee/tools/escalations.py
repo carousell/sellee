@@ -50,7 +50,11 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
 
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:
     try:
-        result = ctx.store.resolve_escalation(params["escalation_id"], params["resolution"])
+        result = ctx.store.resolve_escalation(
+            params["escalation_id"],
+            params["resolution"],
+            seller_handles_it=bool(params.get("seller_handles_it")),
+        )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     ctx.bus.publish(
@@ -104,6 +108,15 @@ register(
             "properties": {
                 "escalation_id": {"type": "string"},
                 "resolution": {"type": "string"},
+                "seller_handles_it": {
+                    "type": "boolean",
+                    "description": "true when the seller chose to close this sale themselves "
+                    "(the I'll-handle-it answer to the close ask), and only then. It is what "
+                    "keeps that promise: the seller is then asked once a day, in an activity "
+                    "update and whatever their activity_updates setting, whether it sold or fell "
+                    "through, until negotiate_confirm_sold or negotiate_release settles it or the "
+                    "listing comes down. Without it nobody checks in.",
+                },
             },
             "required": ["escalation_id", "resolution"],
             "additionalProperties": False,

@@ -13,6 +13,7 @@ from sellee.store.helpers import (
     _new_id,
     _now,
 )
+from sellee.store.slow_tells import hand_deal_to_seller_in_txn
 
 
 class EscalationsMixin:
@@ -151,20 +152,29 @@ class EscalationsMixin:
                 )
         return [row["id"] for row in rows]
 
-    def resolve_escalation(self, escalation_id: str, resolution: str) -> dict:
+    def resolve_escalation(
+        self, escalation_id: str, resolution: str, *, seller_handles_it: bool = False
+    ) -> dict:
         """Stamp an escalation resolved. Thread reactivation stays the caller's update_thread —
-        this only closes the escalation record (the substrate any alarm path checks first)."""
+        this only closes the escalation record (the substrate any alarm path checks first).
+
+        `seller_handles_it` records, in the same transaction, that the seller is closing the sale
+        this escalation asked about themselves, which is what they are checked in with about once
+        a day until it is sold or released."""
         with self._db.transaction() as conn:
             row = conn.execute(
                 "SELECT status FROM escalations WHERE id = ?", (escalation_id,)
             ).fetchone()
             if not row:
                 raise StoreError(f"no escalation with id {escalation_id!r}")
+            now = _now()
             conn.execute(
                 "UPDATE escalations SET status = 'resolved', resolution = ?, resolved_ts = ? "
                 "WHERE id = ?",
-                (resolution, _now(), escalation_id),
+                (resolution, now, escalation_id),
             )
+            if seller_handles_it:
+                hand_deal_to_seller_in_txn(conn, escalation_id, now=now)
         return {"id": escalation_id, "status": "resolved"}
 
     def count_open_escalations(self) -> int:

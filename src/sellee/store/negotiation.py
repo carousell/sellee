@@ -23,6 +23,7 @@ from sellee.store.helpers import (
     _insert_ask,
     _insert_notice,
     _now,
+    settle_seller_handled_in_txn,
 )
 from sellee.store.updates import record_offer_decision_in_txn
 
@@ -406,9 +407,13 @@ class NegotiationMixin:
             for t in close:
                 led["buyers"][t]["status"] = "lost"
             self._persist_negotiation(conn, item_id, led)
+            settle_seller_handled_in_txn(conn, item_id, now=_now())
             return {"item_state": "sold", "take_down": take_down, "close_threads": close}
 
-    def negotiate_release(self, item_id: str) -> dict:
+    def negotiate_release(self, item_id: str, thread_id: str | None = None) -> dict:
+        """Put the item back on the market after a sale fell through. The sale on `thread_id`, when
+        named and the seller was closing it themselves, is settled with it; a release that names no
+        buyer settles none, since it may be about a sale Sellee was closing."""
         with self._db.transaction() as conn:
             list_price, _currency = self._item_for_negotiation(conn, item_id)
             led = self._load_negotiation(conn, item_id)
@@ -417,6 +422,8 @@ class NegotiationMixin:
                     b["status"] = "active"
             _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
+            if thread_id is not None:
+                settle_seller_handled_in_txn(conn, item_id, thread_id=thread_id, now=_now())
             return {"item_state": led["state"]}
 
     def negotiate_withdraw(
@@ -463,6 +470,7 @@ class NegotiationMixin:
             if was_holder:
                 _reopen(led, list_price)
             self._persist_negotiation(conn, item_id, led)
+            settle_seller_handled_in_txn(conn, item_id, thread_id=thread_id, now=_now())
             conn.execute(
                 "INSERT INTO buyer_withdrawals (item_id, thread_id, msg_id, ts) "
                 "VALUES (?, ?, ?, ?) ON CONFLICT (item_id, thread_id) DO UPDATE SET "
@@ -880,7 +888,12 @@ class NegotiationMixin:
         self, *, sale_id: str, item_id: str, thread_id: str, checkout_url: str, price, currency
     ) -> CheckoutRecord:
         """Persist the checkout record idempotently — the deterministic sale_id maps to one record;
-        a re-record returns the existing one, never a second link."""
+        a re-record returns the existing one, never a second link.
+
+        A link minted for a buyer whose sale the seller had taken over means Sellee is closing it
+        again, so that hand-over is settled in the same transaction: a check-in asking whether the
+        seller closed it would be false, and its "fell through" would reopen an item a buyer can
+        still pay for."""
         with self._db.transaction() as conn:
             conn.execute(
                 "INSERT OR IGNORE INTO checkouts "
@@ -888,6 +901,7 @@ class NegotiationMixin:
                 "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 (sale_id, item_id, thread_id, checkout_url, price, currency, _now()),
             )
+            settle_seller_handled_in_txn(conn, item_id, thread_id=thread_id, now=_now())
         return self.get_checkout(sale_id)  # type: ignore[return-value]
 
 

@@ -78,6 +78,13 @@ def _confirm_bid(ctx: ToolContext, params: dict) -> dict:
 
 
 def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
+    thread_id = _answered_thread(ctx, params, outcome="it sold to", sole_in_words=True)
+    if thread_id is None:
+        raise ToolError(
+            f"no sale on item {params['item_id']!r} is being closed by the seller — name the "
+            "thread_id of the buyer it sold to"
+        )
+    params = {**params, "thread_id": thread_id}
     _require_pair(ctx, params)
     try:
         result = ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
@@ -90,6 +97,53 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
     # Browser listings only the seller can close are named now, not after the rail archive.
     result["manual_take_downs"] = listing.manual_take_downs(ctx.store, params["item_id"])
     return result
+
+
+def _answered_thread(
+    ctx: ToolContext, params: dict, *, outcome: str, sole_in_words: bool
+) -> str | None:
+    """The buyer whose sale the seller is answering about: the one the check-in the seller tapped
+    asked about (`notice_id`), else the thread named, else, with `sole_in_words`, the one sale on
+    the item they took over; None when none of those names a buyer. A check-in's tap names the
+    sale only in words, and a guessed thread would sell to the wrong buyer and close the thread of
+    the one paying.
+
+    A tap from an old check-in answers for the buyer that check-in named, not whoever was taken
+    over since or whoever the call names, and is refused once that buyer's sale is settled or when
+    the call names another: the seller is asked again rather than having the tap applied to a sale
+    it never named."""
+    item_id = params["item_id"]
+    named = params.get("thread_id")
+    notice_id = params.get("notice_id")
+    if notice_id is not None:
+        thread_id = ctx.store.checkin_thread(item_id, notice_id)
+        if thread_id is None:
+            raise ToolError(
+                f"notice {notice_id} asked about no sale on item {item_id!r} — name the "
+                f"thread_id of the buyer {outcome}"
+            )
+        if named and named != thread_id:
+            raise ToolError(
+                f"notice {notice_id} asked about the sale on {thread_id!r}, not {named!r} — ask "
+                f"the seller which buyer {outcome}"
+            )
+        if thread_id not in ctx.store.seller_handled_threads(item_id):
+            raise ToolError(
+                f"the sale notice {notice_id} asked about ({thread_id!r}) is no longer one the "
+                f"seller is closing — ask the seller which buyer {outcome} and name that thread_id"
+            )
+        return thread_id
+    if named:
+        return named
+    if not sole_in_words:
+        return None
+    handed = ctx.store.seller_handled_threads(item_id)
+    if len(handed) > 1:
+        raise ToolError(
+            f"the seller is closing {len(handed)} sales on item {item_id!r} — name the "
+            f"thread_id of the buyer {outcome}"
+        )
+    return handed[0] if handed else None
 
 
 WITHDREW_TEXT = "A buyer backed out{about}: {reason}."
@@ -239,8 +293,16 @@ def _mint_or_let_go(ctx: ToolContext, held: dict) -> str:
 
 
 def _release(ctx: ToolContext, params: dict) -> dict:
+    """A release names no buyer for many reasons (a lapsed checkout, a reservation Sellee was
+    closing), so one that names none settles no sale the seller took over: guessing their one
+    would end the check-ins on a sale they are still closing."""
+    thread_id = _answered_thread(
+        ctx, params, outcome="whose sale fell through", sole_in_words=False
+    )
+    if thread_id is not None:
+        _require_pair(ctx, {**params, "thread_id": thread_id})
     try:
-        return ctx.store.negotiate_release(params["item_id"])
+        return ctx.store.negotiate_release(params["item_id"], thread_id)
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
 
@@ -249,6 +311,44 @@ _ITEM_THREAD_SCHEMA = {
     "type": "object",
     "properties": {"item_id": {"type": "string"}, "thread_id": {"type": "string"}},
     "required": ["item_id", "thread_id"],
+    "additionalProperties": False,
+}
+# A tapped check-in names its sale only through the notice it rides on; see `_answered_thread`.
+_CHECKIN_NOTICE_ID = {
+    "type": "integer",
+    "description": "On a tapped answer to a check-in about a sale the seller is closing "
+    "themselves, the notice the tap answers: the buyer that check-in asked about is used, never "
+    "one taken over since.",
+}
+_CONFIRM_SOLD_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "item_id": {"type": "string"},
+        "thread_id": {
+            "type": "string",
+            "description": "The thread of the buyer it sold to. Leave it out when answering a "
+            "check-in on a sale the seller is closing themselves: the buyer of the check-in "
+            "tapped (`notice_id`) is used, or, answered in words, the one buyer they took over.",
+        },
+        "notice_id": _CHECKIN_NOTICE_ID,
+    },
+    "required": ["item_id"],
+    "additionalProperties": False,
+}
+_RELEASE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "item_id": {"type": "string"},
+        "thread_id": {
+            "type": "string",
+            "description": "The thread of the buyer whose sale fell through, when the seller was "
+            "closing it themselves and said so in words. Leave it out on a tapped check-in "
+            "(`notice_id`). With neither, the item is released but no sale the seller took "
+            "over is settled, and their check-ins go on.",
+        },
+        "notice_id": _CHECKIN_NOTICE_ID,
+    },
+    "required": ["item_id"],
     "additionalProperties": False,
 }
 _ITEM_ONLY_SCHEMA = {
@@ -302,7 +402,7 @@ register(
         description="Mark an item sold to a thread. Archives its carousell.ai listing itself "
         "(carousell_ai_take_down says how that went); returns the other-market take-down list "
         "and the threads to close.",
-        input_schema=_ITEM_THREAD_SCHEMA,
+        input_schema=_CONFIRM_SOLD_SCHEMA,
         handler=_confirm_sold,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
@@ -311,7 +411,7 @@ register(
     ToolSpec(
         name="negotiate_release",
         description="Return an item to available after a sale fell through.",
-        input_schema=_ITEM_ONLY_SCHEMA,
+        input_schema=_RELEASE_SCHEMA,
         handler=_release,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )

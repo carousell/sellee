@@ -27,6 +27,7 @@ from sellee.store.helpers import (
     _now,
     _term_overlap,
     _ui_cache_from_row,
+    sync_live_since_in_txn,
     validate_photos,
     validated_item_fields,
     validated_size_bucket,
@@ -362,10 +363,12 @@ class ItemsMixin:
                 raise ItemNotFound(f"no item with id {item_id!r}")
             urls = json.loads(row["listing_urls"])
             urls.pop(market, None)
+            now = _now()
             conn.execute(
                 "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
-                (json.dumps(urls, sort_keys=True), _now(), item_id),
+                (json.dumps(urls, sort_keys=True), now, item_id),
             )
+            sync_live_since_in_txn(conn, item_id, now=now)
         return self.get_item(item_id)  # type: ignore[return-value]
 
     def record_post_read(self, url: str, state: str, *, live: bool) -> dict:
@@ -490,8 +493,10 @@ def record_listing_url_in_txn(conn, item_id: str, market: str, url: str) -> None
         raise ItemNotFound(f"no item with id {item_id!r}")
     urls = json.loads(row["listing_urls"])
     urls[market] = url
+    now = _now()
     conn.execute(
         "UPDATE items SET listing_urls = ?, updated_ts = ? WHERE id = ?",
-        (json.dumps(urls, sort_keys=True), _now(), item_id),
+        (json.dumps(urls, sort_keys=True), now, item_id),
     )
+    sync_live_since_in_txn(conn, item_id, now=now)
     _forget_thread_listings_in_txn(conn, market)
