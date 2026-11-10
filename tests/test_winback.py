@@ -347,6 +347,21 @@ def test_a_reopened_decision_is_spent_once(store: Store) -> None:
     assert again["decision"] == "repeat_offer"
 
 
+def test_a_retried_accept_is_answered_with_the_accept_not_the_old_counter(store: Store) -> None:
+    """Ann was countered above 65 under the old floor. The accept a pass took did not go out, so the
+    next pass decides her 65 again: she must hear the deal she holds, not the counter she had."""
+    item = _item(store)
+    _answered_buyer(store, item["id"], "fb:ann", 65)
+    _lower(store, item["id"])
+    store.negotiate_offer(item["id"], "fb:ann", "ann", 65, config=CFG)
+
+    again = store.negotiate_offer(item["id"], "fb:ann", "ann", 65, config=CFG)
+
+    assert (again["decision"], again["accept_price"]) == ("accept_fcfs", 65)
+    assert again["item_state"] == "reserved_provisional"
+    assert _buyer_rows(store, item["id"])["fb:ann"] == ("front_runner", 0)
+
+
 def test_the_repeat_offer_guard_still_holds_for_buyers_not_reopened(store: Store) -> None:
     item = _crowd(store)
     _lower(store, item["id"])
@@ -715,6 +730,39 @@ def test_a_journalled_manual_reply_settles_the_owing(store: Store) -> None:
     store.record_manual_reply("fb:ann", "Sure, 65 works")
 
     assert _owed(store) == set()
+
+
+def _answer_by_hand(store: Store, tid: str) -> None:
+    store.record_manual_reply(tid, "Let me check")
+
+
+def _answer_by_hold(store: Store, tid: str) -> None:
+    store.hold_thread(tid, "seller is handling it", mark_handled_msg=f"{tid}-m2")
+    store.release_thread(tid)
+
+
+def _answer_by_pass(store: Store, tid: str) -> None:
+    claimed = store.enqueue_reply_pass()
+    assert claimed is not None
+    _reply(store, tid, "Yes, it's still available.", pass_id=claimed["pass_id"])
+
+
+@pytest.mark.parametrize("answer", [_answer_by_hand, _answer_by_hold, _answer_by_pass])
+def test_an_owing_settled_before_its_decision_sits_the_buyer_back_down(
+    store: Store, answer
+) -> None:
+    """Cal was walked away from and stood up again by the lower floor. Once his owing is settled
+    without his offer being decided, he goes back to where he stood, so he is not left counting as
+    a rival every other buyer has to beat."""
+    item = _item(store)
+    _answered_buyer(store, item["id"], "fb:cal", 53, 54, 55)
+    _lower(store, item["id"])
+    assert _buyer_rows(store, item["id"])["fb:cal"] == ("active", 1)
+
+    answer(store, "fb:cal")
+
+    assert _owed(store) == set()
+    assert _buyer_rows(store, item["id"])["fb:cal"] == ("passed", 0)
 
 
 def test_a_relay_answer_settles_only_an_owing_it_came_after(store: Store) -> None:

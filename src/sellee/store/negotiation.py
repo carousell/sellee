@@ -186,7 +186,7 @@ class NegotiationMixin:
                 # from what we already told them and change nothing: re-deciding would walk the
                 # counter down a step per call (the engine targets list - step * rounds), which is
                 # how no.202 was countered at $101 instead of $105 on 2026-08-27.
-                return self._repeat_offer(buyer, led, currency)
+                return self._repeat_offer(thread_id, buyer, led, currency)
 
             res = negotiate_engine.decide(
                 offer,
@@ -217,11 +217,29 @@ class NegotiationMixin:
             return res
 
     @staticmethod
-    def _repeat_offer(buyer: dict, led: dict, currency: str) -> dict:
+    def _repeat_offer(thread_id: str, buyer: dict, led: dict, currency: str) -> dict:
         """The answer to an offer we have already decided. Persists nothing — no round, no offer
         row, no state change — and carries the price we last named so the buyer hears one number,
-        not a
-        new concession every time a lane retries."""
+        not a new concession every time a lane retries. A buyer the item is held for at that
+        offer hears the accept again: an accept leaves their last counter as it was, and a lower
+        floor can accept under it."""
+        front = led["front_runner"] or {}
+        if (
+            led["state"] == "reserved_provisional"
+            and front.get("thread_id") == thread_id
+            and front.get("kind") == "fcfs"
+        ):
+            price = int(front["amount"])
+            return {
+                "decision": "accept_fcfs",
+                "accept_price": price,
+                "counter_price": price,
+                "hold_firm": False,
+                "needs_seller_confirm": False,
+                "message_intent": f"accept:{price}",
+                "item_state": led["state"],
+                "currency": currency,
+            }
         last = buyer["last_counter"]
         return {
             "decision": "repeat_offer",

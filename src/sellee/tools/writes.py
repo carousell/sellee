@@ -154,7 +154,9 @@ register(
         "reports only provenance, whether an existing floor was replaced, and `reopened`: how "
         "many buyers turned down under the old floor a lower one now closes a deal with (a "
         "buyer a rival still outranks, or one the seller is answering by hand, is not counted). "
-        "Sellee writes back to each of them on its own. Changing a floor the seller already set, "
+        "Sellee writes back to each of them on its own. Raising the floor again only undoes a "
+        "reopening Sellee has not yet decided; an acceptance already decided stands, even when it "
+        "is under the new floor. Changing a floor the seller already set, "
         'as "Lower my minimum" does, needs `force: true`.',
         input_schema={
             "type": "object",

@@ -148,14 +148,26 @@ def owing_seen_in_txn(conn, thread_id: str, pass_id: str | None) -> float | None
 
 def settle_owed_reply_in_txn(conn, thread_id: str, *, through_ts: float | None) -> None:
     """The thread was answered by something that came at or after `through_ts`: an owing that
-    began no later than that is settled. A None `through_ts` settles nothing."""
+    began no later than that is settled. A None `through_ts` settles nothing. An owing settled
+    before its offer was decided takes the reopening back, so the buyer does not stay standing as
+    a rival."""
     if through_ts is None:
         return
-    conn.execute(
+    cur = conn.execute(
         "UPDATE threads SET reply_owed_ts = NULL WHERE thread_id = ? "
         "AND reply_owed_ts IS NOT NULL AND reply_owed_ts <= ?",
         (thread_id, through_ts),
     )
+    if cur.rowcount == 0:
+        return
+    row = conn.execute(
+        "SELECT nb.item_id FROM negotiation_buyers nb "
+        "JOIN threads t ON t.thread_id = nb.thread_id AND t.item_id = nb.item_id "
+        "WHERE nb.thread_id = ? AND nb.reopened = 1",
+        (thread_id,),
+    ).fetchone()
+    if row is not None:
+        take_back_reopening_in_txn(conn, row["item_id"], thread_id)
 
 
 def _owing_already_decided(conn, thread_id: str) -> float | None:
