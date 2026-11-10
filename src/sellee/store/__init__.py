@@ -65,6 +65,7 @@ from sellee.store.send import SendMixin
 from sellee.store.settings import SettingsMixin
 from sellee.store.survey import SurveyMixin
 from sellee.store.threads import ThreadsMixin
+from sellee.store.updates import UpdatesMixin
 from sellee.store.wants import WantsMixin
 
 # The public surface of sellee.store: the names the rest of the tree (and the tests) import
@@ -110,6 +111,7 @@ class Store(
     SettingsMixin,
     SurveyMixin,
     RelayMixin,
+    UpdatesMixin,
 ):
     """Typed access to sellee.db, serialized behind the single write connection.
 

@@ -10,6 +10,7 @@ from sellee import marketplaces
 from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
 from sellee.store.helpers import LANE_RETRIED_MARKETS, ThreadNotFound, _new_id, _now
+from sellee.store.updates import record_buyer_answered_in_txn
 
 # How hard the machine tries before the seller is asked anything. An unsettled send is re-read by
 # the inbox lane on its own cadence; two misses at that cadence is roughly the grace window the
@@ -115,12 +116,16 @@ class SendMixin:
         now: float | None = None,
         interactive: bool = False,
         pass_id: str | None = None,
+        autonomous: bool = False,
     ) -> dict:
         """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
         one transaction; an unpaced market skips the reserve. A wait/quiet/unverified_open verdict
         records no pacing action and no intent — a blocked reply leaves nothing behind for a sweep
         to re-drive. Returns the verdict
-        and, on go, the intent id; the caller performs the sink send outside this transaction."""
+        and, on go, the intent id; the caller performs the sink send outside this transaction.
+
+        `autonomous` marks a reply the reply lane wrote on its own, rather than words the seller
+        dictated or sent themselves; only that kind of answer is later news to the seller."""
         now = now if now is not None else _now()
         with self._db.transaction() as conn:
             thread = conn.execute(
@@ -148,7 +153,7 @@ class SendMixin:
                     "verdict": "go",
                     "delay_sec": 0.0,
                     "intent_id": self._new_intent_in_txn(
-                        conn, thread_id, in_msg_id, text, kind, now, pass_id
+                        conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
                     ),
                 }
             cutoff = now - pacing_engine.WINDOW_SECONDS
@@ -173,11 +178,13 @@ class SendMixin:
                 "verdict": "go",
                 "delay_sec": verdict["delay_sec"],
                 "intent_id": self._new_intent_in_txn(
-                    conn, thread_id, in_msg_id, text, kind, now, pass_id
+                    conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
                 ),
             }
 
-    def _new_intent_in_txn(self, conn, thread_id, in_msg_id, text, kind, now, pass_id) -> str:
+    def _new_intent_in_txn(
+        self, conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
+    ) -> str:
         if in_msg_id is None:
             # Fix what this reply answers now, so a commit long after it never claims a message
             # the buyer sent while it was being delivered.
@@ -186,9 +193,9 @@ class SendMixin:
         intent_id = _new_id("intent")
         conn.execute(
             "INSERT INTO send_intents "
-            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?)",
-            (intent_id, thread_id, in_msg_id, text, kind, now),
+            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts, autonomous) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
+            (intent_id, thread_id, in_msg_id, text, kind, now, 1 if autonomous else 0),
         )
         return intent_id
 
@@ -235,6 +242,18 @@ class SendMixin:
         # A market that names its own messages is recorded under that name, so the read lane
         # finding the same message later adds nothing.
         out_msg_id = msg_id or f"out|{intent_id}"
+        intent = conn.execute(
+            "SELECT status, autonomous FROM send_intents WHERE intent_id = ?", (intent_id,)
+        ).fetchone()
+        # Only an answer the reply lane wrote on its own is news to the seller, and only the first
+        # time it commits: one they dictated they already know about, a holding line answered
+        # nothing, and a retried commit is the same reply.
+        is_news = (
+            kind == "reply"
+            and intent is not None
+            and intent["status"] != "committed"
+            and bool(intent["autonomous"])
+        )
         conn.execute(
             "INSERT OR IGNORE INTO thread_messages "
             "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'agent')",
@@ -257,6 +276,14 @@ class SendMixin:
                 "UPDATE threads SET last_followup_ts = ?, followup_disposition = 'sent', "
                 "updated_ts = ? WHERE thread_id = ?",
                 (now, now, thread_id),
+            )
+        if is_news:
+            record_buyer_answered_in_txn(
+                conn,
+                thread_id=thread_id,
+                answered_msg_id=handled[0] if handled is not None else None,
+                we_said=text,
+                now=now,
             )
         return {"msg_id": out_msg_id}
 
