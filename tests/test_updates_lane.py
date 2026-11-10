@@ -134,7 +134,9 @@ def test_the_lane_records_what_it_queued(seller: Store, bus) -> None:
     activity.updates_lane(store=seller, bus=bus, now=NOW)
 
     (event,) = bus.store.read(kinds=[activity.UPDATE_QUEUED_EVENT])
+    (notice,) = _update_notices(seller)
     assert event.kind == "activity_update.queued"  # apart from the installer's update.* events
+    assert event.payload["notice_id"] == notice["id"]
     assert event.payload["ref"] == f"update:{offer}"
     assert event.payload["tells"] == 1
     assert event.payload["asks"] is True
@@ -500,13 +502,13 @@ def test_a_catchup_landing_mid_tick_is_not_told_again_by_the_lane(seller: Store)
     mixer, desk = _live_item(seller, "KitchenAid mixer"), _live_item(seller, "IKEA desk")
     answered = _tell(seller, desk, "buyer_answered", age=HOUR, thread="fb:a1")
     offer = _tell(seller, mixer, "offer_declined", age=20 * MINUTE, thread="fb:o1")
-    checked = seller.has_notice_with_ref
+    queue = seller.queue_update_notice
 
-    def _catchup_first(ref: str) -> bool:
+    def _catchup_first(*args, **kwargs):
         activity.tell_at_catchup(seller, now=NOW)  # lands between the lane's read and its write
-        return checked(ref)
+        return queue(*args, **kwargs)
 
-    seller.has_notice_with_ref = _catchup_first  # type: ignore[method-assign]
+    seller.queue_update_notice = _catchup_first  # type: ignore[method-assign]
     activity.updates_lane(store=seller, now=NOW)
 
     (notice,) = _update_notices(seller)
@@ -694,6 +696,23 @@ def test_phone_catchup_while_paused_shows_it_and_records_nothing(seller: Store, 
     assert _update_notices(seller) == []
     assert _tell_rows(seller) == {offer: (None, None)}
     assert leak_paths(text, FLOOR) == []
+
+
+def test_phone_catchup_while_paused_sets_the_update_apart_from_the_list_above(
+    seller: Store, bus
+) -> None:
+    """Shown inline under what is queued, the update gets its own paragraph so it does not read
+    as the last bullet."""
+    mixer = _live_item(seller, "KitchenAid mixer")
+    _tell(seller, mixer, "offer_declined", age=MINUTE, thread="fb:o1", now=time())
+    seller.queue_notice("Listing went live.")
+    seller.set_paused(True, source="test")
+
+    text = _phone_catchup(seller, bus)
+
+    bullet = "• Listing went live."
+    assert text.index(bullet) < text.index("under your minimum")
+    assert f"{bullet}\n\n" in text
 
 
 # --- what the channel pass is told about an update's answers ---------------------------------

@@ -62,8 +62,6 @@ def updates_lane(*, store, bus=None, now: float | None = None) -> None:
     if update is None or not update.carried_ids:
         return
     ref = _ref(update)
-    if store.has_notice_with_ref(ref):
-        return
     notice_id = store.queue_update_notice(
         update.text, ref=ref, tell_ids=update.carried_ids, options=update.options, now=now
     )
@@ -112,8 +110,9 @@ def queue_at_catchup(store, *, now: float | None = None) -> bool:
 
 
 def untold_text(store, *, now: float | None = None) -> str | None:
-    """Everything untold as the text of one update, recording nothing: a preview for when nothing
-    could deliver it (paused), so it is still untold once the seller resumes."""
+    """Everything untold as the text of one update, recording no notice and stamping nothing told:
+    a preview for when nothing could deliver it (paused), so it is still untold once the seller
+    resumes. Tells no longer worth telling are retired, as on any read of the ledger."""
     now = time.time() if now is None else now
     _tells, context, selection = _select(store, now)
     update = updates.compose_update(selection, context, now=now)
