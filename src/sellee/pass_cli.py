@@ -93,8 +93,9 @@ to read or change anything the agent owns — there is no state on disk for you 
 
 ## At the start of a session
 
-Call `get_catchup` and tell the seller what is waiting on them, briefly. If nothing is, say so in
-one line and move on — don't make a ceremony of it.
+Call `get_catchup` and tell the seller what is waiting on them, briefly — except its `untold`,
+which goes over as the tool describes. If nothing is, say so in one line and move on — don't make
+a ceremony of it.
 
 ## Commands
 

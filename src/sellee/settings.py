@@ -43,7 +43,10 @@ PROPOSAL_TTL_SEC = 24 * 3600
 # watch_browser earns its place for the same reason and one more: where the work happens is not
 # something any wording the agent produces could hint at, and the card carries the button that
 # flips it — a toggle whose current state is not legible right above it is a coin toss.
-CARD_HEADLINE = ("quiet_hours", "watch_browser")
+#
+# activity_updates earns it because the updates arrive unasked: a seller who finds them too many
+# should see, on the card they open to check on things, that they can be turned down.
+CARD_HEADLINE = ("quiet_hours", "watch_browser", "activity_updates")
 
 # Settings the card renders in a section of their own, and which `card_lines` therefore leaves out.
 # connected_markets is the only one: the Connections block lists every marketplace with its state
@@ -850,5 +853,51 @@ register(
         "inboxes never takes your focus either way, and bringing the window forward only works on "
         "a Mac. true or false.",
         take_effect="applies to the next page I open.",
+    )
+)
+
+
+# --- activity updates ------------------------------------------------------------------------
+#
+# How much of what I did on the seller's listings I tell them unasked: everything (offers I turned
+# down under their minimum, buyers I answered), only the offers under their minimum, or nothing.
+# It narrows what is pushed, never what is asked: an escalation, a buyer question only they can
+# answer, a deal to close, all come whatever this says, and /catchup still shows what I did in the
+# last two days (an older tell is retired untold).
+
+ACTIVITY_UPDATES_ALL = "all"
+ACTIVITY_UPDATES_DECISIONS = "decisions"
+ACTIVITY_UPDATES_OFF = "off"
+_ACTIVITY_UPDATES_RENDERED = {
+    ACTIVITY_UPDATES_ALL: "all — what I did for you, and what needs you",
+    ACTIVITY_UPDATES_DECISIONS: "decisions — only what needs you",
+    ACTIVITY_UPDATES_OFF: "off — /catchup shows the last two days",
+}
+_ACTIVITY_UPDATES_HELP = "activity updates must be one of: all, decisions or off"
+
+
+def _parse_activity_updates(raw: object) -> str:
+    if isinstance(raw, str) and raw.strip().lower() in _ACTIVITY_UPDATES_RENDERED:
+        return raw.strip().lower()
+    raise SettingError(_ACTIVITY_UPDATES_HELP)
+
+
+def _render_activity_updates(value: object) -> str:
+    return _ACTIVITY_UPDATES_RENDERED.get(str(value), str(value))
+
+
+register(
+    SettingSpec(
+        key="activity_updates",
+        label="Activity updates",
+        parse=_parse_activity_updates,
+        render=_render_activity_updates,
+        default=ACTIVITY_UPDATES_ALL,
+        description="What I tell you unasked about what I did on your listings: all (offers I "
+        "turned down under your minimum, and buyers I answered), decisions (only offers under "
+        "your minimum, which need your call), or off. Escalations, buyer questions only you can "
+        "answer and deals to close still come whatever this says, and /catchup shows what I did "
+        "in the last two days. all | decisions | off.",
+        take_effect="applies to the next update; nothing already sent is taken back.",
     )
 )

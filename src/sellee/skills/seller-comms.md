@@ -71,8 +71,7 @@ The code puts `Marketplace · Buyer · Listing` in front of every escalation bef
 it, read from the thread rather than from your words, and it drops any of the three your question
 already names. So write the ask the way the templates below do and let the prefix do the rest:
 naming the buyer and the item is not wasted (it is what the transcript keeps), and it is never
-doubled. The marketplace is the one to leave out entirely: the prefix always carries it, and no
-template below has ever needed it.
+doubled. The marketplace is the one to leave out entirely: the prefix always carries it.
 
 ## Framing per decision type
 
@@ -90,8 +89,8 @@ When it does apply, the offer has already asked it: the reply pass escalates wit
 tool's own question, which names the offer and the list price. Never ask it again in your own
 words, and never earlier, as setup homework; the seller's answer arrives on that escalation.
 `options: ["✅ Accept", "↔️ Counter", "❌ Decline"]` — the floor itself is a number, so it stays a
-typed answer; the buttons are the escape hatch for settling just this offer. A seller who taps
-rather than answering the floor question has decided this one offer, and the floor is still open.
+typed answer; the buttons settle just this offer. A seller who taps rather than answering the
+floor question has decided this one offer, and the floor is still open.
 Record the answer with `set_floor`. A below-list decision implies the floor:
 "counter 80" or accepting a below-list offer means that amount *is* the floor — set it, don't ask
 twice. If `set_floor` rejects a floor above list, re-ask: give a lower floor, or say "raise the
@@ -117,6 +116,10 @@ buyer in line when there is one. Its taps:
   it did ("✅ Checkout link sent to <buyer> for <price>"), with the **Checkout links** rule when it
   reports `another_link_out`; if it refuses, tell the seller what changed.
 - **📌 Leave it listed** — nothing more to do; the listing stays up as it is.
+
+**Activity updates** — **Lower my minimum**: `set_floor` needs the price and the item; a bare
+number names the item only if the update listed one, else ask which. Never offer to reach buyers
+already turned down. **Hold**: change nothing, message no buyer, and say so briefly.
 
 **Scam confirmation.** The chat is already held and nothing was sent or clicked — say so, so the
 seller knows there's no fire. The one decision left is theirs: is this a scam? Describe the move in
@@ -220,7 +223,7 @@ deal in progress).
 deal still in progress.
 Sold → `negotiate_confirm_sold` (take-downs and closing the losing threads
 follow); fell through → `negotiate_release` and tell the seller "released, back on the market."
-For seller-handled deals, check in daily until it resolves — brief, one nudge a day, never nagging.
+For seller-handled deals, check in daily until it resolves — one brief nudge a day.
 Not available yet: a way to schedule that daily check-in, so it only happens if the seller is
 already in conversation with you. Don't promise a daily nudge you cannot set a timer for.
 

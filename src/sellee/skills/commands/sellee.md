@@ -6,7 +6,9 @@ Show the seller where things stand, then offer to act. In one pass:
 
 1. `get_status` — daemon health, paused or not, whether a chat channel is bound.
 2. `list_items` — what's live and what's still a draft.
-3. `get_catchup` — anything waiting on them. Render it the same way as `/catchup`.
+3. `get_catchup` — anything waiting on them. Render it the same way as `/catchup`: its `untold`
+   goes over as the tool describes, not into the summary, and an answer to its `asks` is taken as
+   seller-comms' **Activity updates** says.
 4. `get_settings` — their settings, current values first; mention the ones still at defaults only
    if they ask.
 
