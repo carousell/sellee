@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Callable
 from sellee.db import Database
 from sellee.engines import buyer_negotiate as buyer_engine
 from sellee.engines import negotiate as negotiate_engine
+from sellee.money import format_money
 from sellee.store.helpers import (
     IMPORTED_THREAD_SOURCES,
     BudgetRecord,
@@ -26,6 +27,37 @@ from sellee.store.helpers import (
 from sellee.store.updates import record_offer_decision_in_txn
 
 
+def load_ledger_in_txn(conn, item_id: str) -> dict:
+    """An item's sell-side ledger as the engine reads it: its state and every buyer on it."""
+    row = conn.execute("SELECT * FROM negotiations WHERE item_id = ?", (item_id,)).fetchone()
+    if row:
+        front_runner = json.loads(row["front_runner"]) if row["front_runner"] else None
+        state, sold_to, is_bidding = row["state"], row["sold_to"], bool(row["is_bidding"])
+    else:
+        front_runner, state, sold_to, is_bidding = None, "open", None, False
+    buyers = {}
+    for b in conn.execute(
+        "SELECT * FROM negotiation_buyers WHERE item_id = ?", (item_id,)
+    ).fetchall():
+        buyers[b["thread_id"]] = {
+            "buyer_handle": b["buyer_handle"],
+            "offers": json.loads(b["offers"]),
+            "highest_offer": b["highest_offer"],
+            "rounds_used": b["rounds_used"],
+            "last_counter": b["last_counter"],
+            "lowball_count": b["lowball_count"],
+            "status": b["status"],
+            "reopened": bool(b["reopened"]),
+        }
+    return {
+        "state": state,
+        "is_bidding": is_bidding,
+        "front_runner": front_runner,
+        "sold_to": sold_to,
+        "buyers": buyers,
+    }
+
+
 class NegotiationMixin:
     # Bound by Store.__init__; declared so a checker resolves it inside each mixin.
     _db: Database
@@ -39,32 +71,7 @@ class NegotiationMixin:
     # --- sell-side negotiation --------------------------------------------------------------
 
     def _load_negotiation(self, conn, item_id: str) -> dict:
-        row = conn.execute("SELECT * FROM negotiations WHERE item_id = ?", (item_id,)).fetchone()
-        if row:
-            front_runner = json.loads(row["front_runner"]) if row["front_runner"] else None
-            state, sold_to, is_bidding = row["state"], row["sold_to"], bool(row["is_bidding"])
-        else:
-            front_runner, state, sold_to, is_bidding = None, "open", None, False
-        buyers = {}
-        for b in conn.execute(
-            "SELECT * FROM negotiation_buyers WHERE item_id = ?", (item_id,)
-        ).fetchall():
-            buyers[b["thread_id"]] = {
-                "buyer_handle": b["buyer_handle"],
-                "offers": json.loads(b["offers"]),
-                "highest_offer": b["highest_offer"],
-                "rounds_used": b["rounds_used"],
-                "last_counter": b["last_counter"],
-                "lowball_count": b["lowball_count"],
-                "status": b["status"],
-            }
-        return {
-            "state": state,
-            "is_bidding": is_bidding,
-            "front_runner": front_runner,
-            "sold_to": sold_to,
-            "buyers": buyers,
-        }
+        return load_ledger_in_txn(conn, item_id)
 
     def _persist_negotiation(self, conn, item_id: str, led: dict) -> None:
         conn.execute(
@@ -87,12 +94,16 @@ class NegotiationMixin:
             conn.execute(
                 "INSERT INTO negotiation_buyers "
                 "(item_id, thread_id, buyer_handle, offers, highest_offer, rounds_used, "
-                " last_counter, lowball_count, status) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                " last_counter, lowball_count, status, reopened) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
                 "ON CONFLICT (item_id, thread_id) DO UPDATE SET "
                 "buyer_handle = excluded.buyer_handle, offers = excluded.offers, "
                 "highest_offer = excluded.highest_offer, rounds_used = excluded.rounds_used, "
                 "last_counter = excluded.last_counter, lowball_count = excluded.lowball_count, "
-                "status = excluded.status",
+                "status = excluded.status, reopened = excluded.reopened, "
+                # The status a reopening is taken back to; gone once the reopening is spent.
+                "reopened_from = CASE WHEN excluded.reopened = 1 "
+                "  THEN negotiation_buyers.reopened_from END",
                 (
                     item_id,
                     thread_id,
@@ -103,8 +114,10 @@ class NegotiationMixin:
                     b["last_counter"],
                     b["lowball_count"],
                     b["status"],
+                    1 if b.get("reopened") else 0,
                 ),
             )
+        _lapse_owings_in_txn(conn, item_id, led)
 
     def _item_for_negotiation(self, conn, item_id: str) -> tuple:
         item = conn.execute(
@@ -163,17 +176,28 @@ class NegotiationMixin:
             led = self._load_negotiation(conn, item_id)
             buyer = led["buyers"].get(thread_id) or negotiate_engine.blank_buyer(handle)
             buyer["buyer_handle"] = handle
-            # Decided again even at their old price: that offer was withdrawn.
+            # Decided again even at their old price: that offer was withdrawn, or a lower floor
+            # now reaches it. Reopening is spent by this one decision, whatever its amount.
             returning = _readmit(buyer, offer)
-            if not negotiate_engine.record_offer(buyer, offer) and not returning:
+            reopened = bool(buyer.get("reopened"))
+            buyer["reopened"] = False
+            if not negotiate_engine.record_offer(buyer, offer) and not (returning or reopened):
                 # The same offer, handed to us again — a retrying lane, not a moving buyer. Answer
                 # from what we already told them and change nothing: re-deciding would walk the
                 # counter down a step per call (the engine targets list - step * rounds), which is
                 # how no.202 was countered at $101 instead of $105 on 2026-08-27.
-                return self._repeat_offer(buyer, led, currency)
+                return self._repeat_offer(thread_id, buyer, led, currency)
 
             res = negotiate_engine.decide(
-                offer, thread_id, buyer, led, floor, list_price, knobs["step"], knobs
+                offer,
+                thread_id,
+                buyer,
+                led,
+                floor,
+                list_price,
+                knobs["step"],
+                knobs,
+                reopened=reopened,
             )
             self._apply_offer_transition(led, thread_id, buyer, res)
             led["buyers"][thread_id] = buyer
@@ -193,11 +217,29 @@ class NegotiationMixin:
             return res
 
     @staticmethod
-    def _repeat_offer(buyer: dict, led: dict, currency: str) -> dict:
+    def _repeat_offer(thread_id: str, buyer: dict, led: dict, currency: str) -> dict:
         """The answer to an offer we have already decided. Persists nothing — no round, no offer
         row, no state change — and carries the price we last named so the buyer hears one number,
-        not a
-        new concession every time a lane retries."""
+        not a new concession every time a lane retries. A buyer the item is held for at that
+        offer hears the accept again: an accept leaves their last counter as it was, and a lower
+        floor can accept under it."""
+        front = led["front_runner"] or {}
+        if (
+            led["state"] == "reserved_provisional"
+            and front.get("thread_id") == thread_id
+            and front.get("kind") == "fcfs"
+        ):
+            price = int(front["amount"])
+            return {
+                "decision": "accept_fcfs",
+                "accept_price": price,
+                "counter_price": price,
+                "hold_firm": False,
+                "needs_seller_confirm": False,
+                "message_intent": f"accept:{price}",
+                "item_state": led["state"],
+                "currency": currency,
+            }
         last = buyer["last_counter"]
         return {
             "decision": "repeat_offer",
@@ -239,8 +281,9 @@ class NegotiationMixin:
             "item_state": led["state"],
             "currency": currency,
             # Used as the escalation question, so the seller sees the offer they are deciding on.
-            "floor_ask": f"A buyer offered {_money(offer, currency)}; your list price is "
-            f"{_money(list_price, currency)}. What's the lowest you'd take? It stays private.",
+            "floor_ask": f"A buyer offered {format_money(offer, currency)}; your list price "
+            f"is {format_money(list_price, currency)}. What's the lowest you'd take? "
+            "It stays private.",
         }
 
     @staticmethod
@@ -511,7 +554,7 @@ class NegotiationMixin:
                 "handle": handle,
                 "amount": amount,
                 "currency": currency,
-                "price": _money(amount, currency),
+                "price": format_money(amount, currency),
                 "reserved_now": ask["sent_ts"] is None and not held,
                 "already_sent": ask["sent_ts"] is not None,
                 "another_link_out": another is not None,
@@ -848,6 +891,46 @@ class NegotiationMixin:
         return self.get_checkout(sale_id)  # type: ignore[return-value]
 
 
+def take_back_reopening_in_txn(conn, item_id: str, thread_id: str) -> None:
+    """Undo a buyer's reopening: no longer owed a reply, and standing where they stood before it,
+    so a buyer walked away from is not left counting as a rival."""
+    conn.execute(
+        "UPDATE negotiation_buyers SET reopened = 0, reopened_from = NULL, "
+        "status = CASE WHEN status = 'active' AND reopened_from IS NOT NULL "
+        "  THEN reopened_from ELSE status END "
+        "WHERE item_id = ? AND thread_id = ?",
+        (item_id, thread_id),
+    )
+    conn.execute("UPDATE threads SET reply_owed_ts = NULL WHERE thread_id = ?", (thread_id,))
+
+
+def _lapse_owings_in_txn(conn, item_id: str, led: dict) -> None:
+    """Drop the owings the ledger as just written has made moot. A reopening not yet decided lapses
+    once its buyer stops standing as an active one or the item stops taking offers, since the offer
+    it waits on can no longer be accepted; a decided one stays owed until its reply goes out,
+    unless the buyer backed out or lost the item, or the item sold."""
+    state = led["state"]
+    lapsed = [
+        tid
+        for tid, b in led["buyers"].items()
+        if b.get("reopened") and (b["status"] != "active" or state != "open")
+    ]
+    for tid in lapsed:
+        take_back_reopening_in_txn(conn, item_id, tid)
+        row = conn.execute(
+            "SELECT status FROM negotiation_buyers WHERE item_id = ? AND thread_id = ?",
+            (item_id, tid),
+        ).fetchone()
+        led["buyers"][tid] = {**led["buyers"][tid], "status": row["status"], "reopened": False}
+    conn.execute(
+        "UPDATE threads SET reply_owed_ts = NULL "
+        "WHERE item_id = ? AND reply_owed_ts IS NOT NULL AND (? = 'sold' OR thread_id IN "
+        "  (SELECT thread_id FROM negotiation_buyers WHERE item_id = ? "
+        "   AND status IN ('withdrew', 'lost')))",
+        (item_id, state, item_id),
+    )
+
+
 def _stale_tap(led: dict, thread_id: str, handle: str, offer) -> str | None:
     """Why the buyer a withdrawal notice named can no longer have the item at the offer it named,
     or None when they still can."""
@@ -901,7 +984,7 @@ def _next_buyer(led: dict, currency) -> NextBuyer | None:
         "thread_id": thread_id,
         "handle": led["buyers"][thread_id]["buyer_handle"],
         "offer": offer,
-        "price": _money(offer, currency),
+        "price": format_money(offer, currency),
     }
 
 
@@ -920,9 +1003,3 @@ def _thread_handle(conn, thread_id: str) -> str:
         "SELECT counterpart_handle FROM threads WHERE thread_id = ?", (thread_id,)
     ).fetchone()
     return row["counterpart_handle"] if row else thread_id
-
-
-def _money(amount, currency) -> str:
-    """Format 150.0 with SGD as "150 SGD"."""
-    number = f"{amount:g}" if isinstance(amount, (int, float)) else str(amount)
-    return f"{number} {currency}" if currency else number

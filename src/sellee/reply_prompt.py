@@ -10,11 +10,16 @@ could have authored — the message text, the buyer's handle, the item title, an
 fields a channel pass can write — goes through `prompt_data.as_data`, so it arrives fenced,
 attributed, and on one line; any scam verdict the daemon's pre-scan already stamped travels with
 the message that earned it.
+
+A thread can also be owed a reply, whether or not the buyer has written since, when their earlier
+offer is due a fresh decision. That line is the daemon's own, built from the negotiation ledger,
+so it is rendered unfenced: fenced, it would read as data the model is told never to act on.
 """
 
 from __future__ import annotations
 
 from sellee import prompt_data
+from sellee.money import currency_code, format_money
 from sellee.proc_tree import PASS_PROMPT_MARKER
 
 # How much of each conversation to show. A buyer thread is short by nature; the cap is here so one
@@ -78,6 +83,9 @@ def _thread_block(thread: dict, item: dict | None) -> str:
         lines.append(f"Buyer's area: {prompt_data.as_data(thread['buyer_location'])}")
     if thread.get("agent_note"):
         lines.append(f"Your note: {prompt_data.as_data(thread['agent_note'])}")
+    owed = thread.get("owed_offer")
+    if owed:
+        lines.append(_owed_line(owed))
     messages = thread.get("messages") or []
     if messages:
         lines.append("Conversation so far (oldest first):")
@@ -85,6 +93,12 @@ def _thread_block(thread: dict, item: dict | None) -> str:
     else:
         lines.append("Conversation so far: (nothing recorded)")
     return "\n".join(lines)
+
+
+def _owed_line(owed: dict) -> str:
+    # Rendered unfenced, so the item's currency is named only when it is a plain currency code.
+    money = format_money(owed["offer"], currency_code(owed.get("currency")))
+    return f"Owed a reply: their offer of {money} is due a fresh decision."
 
 
 def build_reply_prompt(threads: list, items: dict) -> str:

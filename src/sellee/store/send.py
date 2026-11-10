@@ -11,6 +11,7 @@ from sellee.db import Database
 from sellee.engines import pacing as pacing_engine
 from sellee.store.helpers import LANE_RETRIED_MARKETS, ThreadNotFound, _new_id, _now
 from sellee.store.updates import record_buyer_answered_in_txn
+from sellee.store.winback import owing_seen_in_txn, settle_owed_reply_in_txn
 
 # How hard the machine tries before the seller is asked anything. An unsettled send is re-read by
 # the inbox lane on its own cadence; two misses at that cadence is roughly the grace window the
@@ -193,9 +194,19 @@ class SendMixin:
         intent_id = _new_id("intent")
         conn.execute(
             "INSERT INTO send_intents "
-            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts, autonomous) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?)",
-            (intent_id, thread_id, in_msg_id, text, kind, now, 1 if autonomous else 0),
+            "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts, autonomous, "
+            " owed_seen_ts) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+            (
+                intent_id,
+                thread_id,
+                in_msg_id,
+                text,
+                kind,
+                now,
+                1 if autonomous else 0,
+                owing_seen_in_txn(conn, thread_id, pass_id),
+            ),
         )
         return intent_id
 
@@ -243,7 +254,8 @@ class SendMixin:
         # finding the same message later adds nothing.
         out_msg_id = msg_id or f"out|{intent_id}"
         intent = conn.execute(
-            "SELECT status, autonomous FROM send_intents WHERE intent_id = ?", (intent_id,)
+            "SELECT status, autonomous, owed_seen_ts FROM send_intents WHERE intent_id = ?",
+            (intent_id,),
         ).fetchone()
         # Only an answer the reply lane wrote on its own is news to the seller, and only the first
         # time it commits: one they dictated they already know about, a holding line answered
@@ -271,6 +283,10 @@ class SendMixin:
                 "updated_ts = ? WHERE thread_id = ?",
                 (handled[0], handled[1], now, thread_id),
             )
+        # Only a reply answers an owing, and only one composed with sight of it: a reply decided
+        # before the owing began, or a nudge that says nothing about price, leaves it standing.
+        if kind == "reply" and intent is not None:
+            settle_owed_reply_in_txn(conn, thread_id, through_ts=intent["owed_seen_ts"])
         if kind == "followup":
             conn.execute(
                 "UPDATE threads SET last_followup_ts = ?, followup_disposition = 'sent', "
@@ -512,11 +528,15 @@ class SendMixin:
                 "SELECT 1 FROM threads WHERE thread_id = ?", (thread_id,)
             ).fetchone():
                 raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            now = _now()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO thread_messages "
                 "(thread_id, msg_id, dir, text, ts, source) VALUES (?, ?, 'out', ?, ?, 'manual')",
-                (thread_id, msg_id, text, _now()),
+                (thread_id, msg_id, text, now),
             )
+            if cur.rowcount > 0:
+                # The seller has dealt with the buyer themselves; nothing is owed on their behalf.
+                settle_owed_reply_in_txn(conn, thread_id, through_ts=now)
             return {"recorded": cur.rowcount > 0, "deduped": cur.rowcount == 0}
 
     def stale_intent_sweep(

@@ -1103,15 +1103,18 @@ def paced_out_markets(store, config, now=None) -> tuple:
 
 def in_no_send_cooldown(store, now, skip_markets=()) -> bool:
     """Whether a recent no_send pass holds this tick: only while every claimable waiting thread is
-    still waiting on the message that pass claimed. Read from pass rows, so a restart keeps it."""
+    still waiting on the message, and the owed reply, that pass claimed. Read from pass rows, so a
+    restart keeps it."""
     last = store.last_finished_pass("reply")
     if last is None or last["class"] != "no_send":
         return False
     if (now - last["finished_ts"]) >= NO_SEND_COOLDOWN_SEC:
         return False
     seen = last["payload"].get("claimed_through") or {}
+    owed = last["payload"].get("claimed_owed") or {}
     return all(
         (seen.get(row["thread_id"]) or [None])[0] == row["waiting_on_msg_id"]
+        and owed.get(row["thread_id"]) == row["owed_since_ts"]
         for row in store.threads_with_unhandled_inbound()
         if row["market"] not in skip_markets
     )
