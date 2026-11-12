@@ -397,6 +397,17 @@ class ThreadSummary(TypedDict):
     updated_ts: float
 
 
+class ItemThread(ThreadSummary):
+    """A thread from `item_threads`, with its newest buyer message (None when the buyer wrote
+    nothing), when it became owed a reply (None when it is not), and when it was last sent a
+    past-enquirer update (None when it never was)."""
+
+    last_inbound_msg_id: str | None
+    last_inbound_ts: float | None
+    reply_owed_ts: float | None
+    last_update_ts: float | None
+
+
 class ThreadRecord(ThreadSummary):
     """A single thread with its (capped) transcript folded in — what get_thread returns."""
 

@@ -183,13 +183,10 @@ def test_the_planner_picks_exactly_the_buyers_the_rules_allow(
         return
     assert chosen == {t for t, spec in by_thread.items() if _may_hear(spec, new)}
     assert len(planned) == len(chosen)  # one message per thread
+    drop = f"is now {format_price(new, currency)} (was {format_price(old, currency)})"
     for update in planned:
         assert update.in_msg_id == "m2"
-        # Matched with "the " before it, so a title like "o" is not found inside "of".
-        rest = update.text.replace(f"the {title}", "the ", 1)
-        rest = rest.replace(format_price(new, currency), "", 1)
-        rest = rest.replace(format_price(old, currency), "", 1)
-        assert rest == "The price of the  is now  (was )."
+        assert update.text == f"The price of the {title} {drop}."
 
     # Sent and recorded through the store's own send bracket, the same change selects nobody.
     for update in planned:

@@ -47,6 +47,7 @@ from sellee.store.helpers import (
     ClaimedPass,
     ItemNotFound,
     ItemRecord,
+    ItemThread,
     StoreError,
     ThreadNotFound,
     ThreadSummary,
@@ -206,6 +207,7 @@ _SCOPE_GUARDED = {
     "mark_relay_answered": (("thread_id", "thread"),),
     "close_blocked_relay_thread": (("thread_id", "thread"),),
     "get_thread_messages": (("thread_id", "thread"),),
+    "item_threads": (("item_id", "item"),),
     "newest_inbound_msg_id": (("thread_id", "thread"),),
     "append_thread_message": (("thread_id", "thread"),),
     "record_inbound": (("thread_id", "thread"),),
@@ -260,7 +262,9 @@ _SCOPE_MISS_NONE = frozenset(
         "open_scam_confirmation",
     }
 )
-_SCOPE_MISS_EMPTY = frozenset({"get_thread_messages", "qa_search", "seller_handled_threads"})
+_SCOPE_MISS_EMPTY = frozenset(
+    {"get_thread_messages", "qa_search", "seller_handled_threads", "item_threads"}
+)
 _SCOPE_MISS_ZERO = frozenset({"retract_detect_scam"})
 _SCOPE_MISS_NOTFOUND = {
     "set_photo_uploads": ("item", ItemNotFound),
@@ -336,6 +340,14 @@ class ScopedStore:
         rows = self._store.list_threads(side=side, status=status)
         if self._scope is None:
             return rows
+        return [r for r in rows if r["thread_id"] in self._scope.thread_ids]
+
+    def item_threads(self, item_id: str, market: str) -> list[ItemThread]:
+        if self._scope is None:
+            return self._store.item_threads(item_id, market)
+        if not self._scope.allows("item", item_id):
+            return []
+        rows = self._store.item_threads(item_id, market)
         return [r for r in rows if r["thread_id"] in self._scope.thread_ids]
 
     def list_items(self, status: str | None = None) -> list[ItemRecord]:
