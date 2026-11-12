@@ -184,7 +184,7 @@ def test_channel_pass_prompt_and_tier(store, bus, xdg_tmp) -> None:
 def test_the_craigslist_rules_ride_the_prompt_only_for_a_seller_who_works_craigslist(
     store, bus, xdg_tmp
 ) -> None:
-    """They are paid per pass, so a seller who never connected Craigslist never gets them."""
+    """They are sent on every pass, so a seller who never connected Craigslist never gets them."""
     _bound(store)
     rules = "# Seller comms on Craigslist"
     pass_id = store.enqueue_channel_pass()

@@ -149,8 +149,8 @@ def build_channel_prompt(
     provider, and a Discord seller told they are on Telegram gets told it back — the agent writes
     "I'll message you on Telegram" to someone who has never used it.
 
-    `market_guidance` is the rulebook for each connected marketplace that has one. It rides here
-    rather than in the system prompt so a seller who never connected that market never pays for it.
+    `market_guidance` holds the rules for each connected marketplace that has them. They go here,
+    not in the system prompt, so a seller who never connected that market is never sent them.
     """
     parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS.format(channel_name=channel_name)]
     if settings_block:

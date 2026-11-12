@@ -311,7 +311,7 @@ def test_the_listing_confirmation_offers_suggested_questions_without_blocking() 
     assert {"suggested_questions", "add_qa_entry"} <= channel
     assert "as optional" in text
     assert "never re-ask a skipped one" in text
-    # The questions ride the confirmation; its one-tap publish still needs nothing else.
+    # The questions go in the confirmation; its one-tap publish still needs nothing else.
     assert "A tapped **✅ List it** is a complete answer: publish" in text
     # Banked exactly as offered, so the tool leaves an answered question out next time.
     spec = next(s for s in tools_for_tier("attended") if s.name == "suggested_questions")
