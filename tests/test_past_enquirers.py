@@ -9,8 +9,10 @@ import json
 import pytest
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
+from tests.conftest import seed_setting
 
 from sellee import marketplaces
+from sellee.config import Config
 from sellee.engines.negotiate import NOT_STANDING
 from sellee.past_enquirers import (
     ListingChange,
@@ -19,6 +21,8 @@ from sellee.past_enquirers import (
     told_about,
 )
 from sellee.store.updates import announcement
+from sellee.tools import revise
+from sellee.tools.registry import TIER_PASS_CHANNEL
 from sellee.tools.reply import _refused
 
 RAIL = marketplaces.RAIL
@@ -35,6 +39,7 @@ _SELL_STATUSES = (
 )
 _LEDGER_STATUSES = ("active", "front_runner", "leading_bid", "outbid", *NOT_STANDING)
 _T0 = 1_700_000_000.0
+_FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
 _ids = itertools.count()
 
 
@@ -509,3 +514,48 @@ def test_a_standing_offer_below_the_new_price_still_hears(offer, old, new, hears
     ledger = {f"{RAIL}:t1": {"status": "active", "highest_offer": offer}}
     change = _change(old_price=old, new_price=new)
     assert bool(plan_updates(change, [_row()], ledger)) is hears
+
+
+# --- the seller's off switch ---------------------------------------------------------------------
+
+_MARKETS = tuple(m["id"] for m in marketplaces.all_marketplaces())
+# (old price, new price, photo added): drops, rises, unchanged, each with and without a new photo.
+_CHANGES = tuple(
+    (old, new, photo)
+    for old, new in ((95.0, 80.0), (95.0, 120.0), (95.0, 95.0))
+    for photo in (0, 1)
+)
+
+
+class _RecordingSink:
+    def __init__(self):
+        self.sent = []
+
+    def send(self, thread, text, kind, intent_id):
+        self.sent.append((thread["thread_id"], kind))
+        return {}
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+@pytest.mark.parametrize(("old", "new", "photo"), _CHANGES)
+@pytest.mark.parametrize("market", _MARKETS)
+def test_with_updates_off_no_live_change_tells_anyone(
+    make_ctx, store, market, old, new, photo, enabled
+) -> None:
+    seed_setting(store, "connected_markets", [m for m in _MARKETS if m != RAIL])
+    seed_setting(store, "past_enquirer_updates", enabled)
+    item = store.create_item(title="Lamp", list_price=new, currency="SGD")
+    spec = {"status": "active", "buyer_wrote": True, "cursor": "newest", "followup": "none"}
+    thread_id = _seed(store, item["id"], market, {**spec, "owed": False, "ledger": None})
+    sink = _RecordingSink()
+    ctx = make_ctx(TIER_PASS_CHANNEL, pass_id="p1", reply_sink=sink, config=_FAST)
+    change = ListingChange(item["id"], market, "Lamp", "SGD", old, new, photo_added=bool(photo))
+
+    told = revise._tell_past_enquirers(ctx, change)
+
+    # With the setting on, the same thread gets a drop, so only the setting stops it.
+    expected = [(thread_id, "followup")] if enabled and new < old else []
+    assert sink.sent == expected
+    assert told == len(expected)
+    assert bool(store.untold_tells()) == bool(expected)
+    assert (store.get_thread(thread_id)["last_followup_ts"] is None) == (not expected)

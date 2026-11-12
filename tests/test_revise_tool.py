@@ -770,6 +770,29 @@ def test_the_result_counts_the_buyers_told_so_nothing_is_reported_as_pending(
     assert "buyers_told" in description and "never describe an update" in description
 
 
+def test_a_seller_who_turned_updates_off_tells_nobody_of_a_rail_price_drop(
+    make_ctx, store, bus, relay_fake
+):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    ctx = _relay_ctx(make_ctx, store, bus, relay_fake)
+    turned = _dispatch(
+        "propose_setting_change", {"key": "past_enquirer_updates", "raw_value": "off"}, ctx
+    )
+    assert turned["status"] == "applied"
+    before = _seller_hears(store)  # the change's own Undo notice
+
+    result = _edit(ctx, item["id"], list_price=80)
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert result["buyers_told"] == 0
+    assert relay_fake.reply_calls == []
+    assert _seller_hears(store) == before
+    assert store.untold_tells() == []
+    assert store.get_thread("carousell-ai:t1")["last_followup_ts"] is None
+
+
 # --- past enquirers hear about new photos on carousell.ai ----------------------------------------
 
 _PHOTOS = f"I've added new photos of the Teak lamp: {_WEB}/listing/L1."

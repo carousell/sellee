@@ -907,3 +907,36 @@ register(
         take_effect="applies to the next update; nothing already sent is taken back.",
     )
 )
+
+
+# --- telling past enquirers ---------------------------------------------------------------------
+# Off is always safe and on is the default, so a change applies immediately with an Undo.
+
+_PAST_ENQUIRER_UPDATES_HELP = "this must be true or false (tell buyers who asked, or not)"
+
+
+def _parse_past_enquirer_updates(raw: object) -> bool:
+    return _parse_bool(raw, _PAST_ENQUIRER_UPDATES_HELP)
+
+
+def _render_past_enquirer_updates(value: object) -> str:
+    if value:
+        return (
+            "on — carousell.ai buyers who asked hear when the price drops or new photos are added"
+        )
+    return "off — carousell.ai buyers who asked aren't told of price drops or new photos"
+
+
+register(
+    SettingSpec(
+        key="past_enquirer_updates",
+        label="Updates to buyers who asked",
+        parse=_parse_past_enquirer_updates,
+        render=_render_past_enquirer_updates,
+        default=True,
+        description="Whether I tell buyers who already asked about an item on carousell.ai when "
+        "you lower its price or add photos there, with one short message each, and count them "
+        "in your activity updates. Off, I send them no such message. true or false.",
+        take_effect="applies to the next listing change.",
+    )
+)

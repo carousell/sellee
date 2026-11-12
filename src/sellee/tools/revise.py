@@ -149,6 +149,8 @@ def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange)
     seller its tell as it commits. Never raises: the listing has already changed."""
     told = 0
     try:
+        if not settings.get(ctx.store, "past_enquirer_updates"):
+            return 0
         price_drop, new_photos = past_enquirers.told_about(change)
         announces = announcement(price_drop=price_drop, new_photos=new_photos)
         with _EDITING:
