@@ -91,8 +91,7 @@ class RevisionsMixin:
 
         The buyers' change carries too: the oldest owed row's `old_price` is still what that
         marketplace shows, and a photo any of them added is still new there. A row with no
-        `old_price` owes its buyers nothing (an edit made while past-enquirer updates were off),
-        so it carries nothing and nothing before it carries past it.
+        `old_price` (made while updates were off) owes nothing, and no earlier row carries past it.
         """
         changed = sorted({str(name) for name in changed})
         if not changed:

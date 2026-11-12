@@ -41,8 +41,8 @@ class RegistrationDeps:
     rail_factory: Callable
     service_hooks: dict = field(default_factory=lambda: SERVICE_HOOKS)
     now: Callable[[], float] = time.time
-    # Resends a past-enquirer update through the given send only while it is still current, and
-    # answers whether it did. None resends none: each is dropped.
+    # Resends a lost past-enquirer update only while it is still current, and answers whether it
+    # did. With None, every lost update is dropped.
     retry_update: Callable[[object, dict, Callable[[], object]], bool] | None = None
 
 

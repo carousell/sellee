@@ -255,9 +255,8 @@ def _superseded(ctx: ToolContext, change: past_enquirers.ListingChange) -> bool:
 
 
 def retry_update(store, intent: dict, send: Callable[[], object]) -> bool:
-    """Resend an unsettled past-enquirer update through `send`, only while it is still current: the
-    item unchanged since the update was reserved, and its buyer still one the planner would pick.
-    False means it was not sent, and the caller drops it rather than quote a moved price."""
+    """Resend a lost past-enquirer update through `send` only while it is still current; False
+    means it was not sent, and the caller drops it rather than quote a moved price."""
     with _EDITING:
         if not _still_current(store, intent):
             return False
@@ -268,7 +267,7 @@ def retry_update(store, intent: dict, send: Callable[[], object]) -> bool:
 def _still_current(store, intent: dict) -> bool:
     thread = store.get_thread(intent["thread_id"], message_cap=0)
     if thread is None or thread["market"] not in settings.connected_markets(store):
-        return False  # the seller disconnected it: nothing more goes out there
+        return False  # the seller disconnected this marketplace
     item = store.get_item(thread["item_id"]) if thread.get("item_id") else None
     if item is None or item["id"] in store.sold_item_ids():
         return False
