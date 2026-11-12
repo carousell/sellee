@@ -32,7 +32,7 @@ from sellee import (
     setup_cli,
 )
 from sellee.browser import markets as market_adapters
-from sellee.installer import checks, materialize, preflight
+from sellee.installer import checks, materialize, preflight, runtime
 from sellee.installer import region as region_guess
 from sellee.rail.client import (
     RailAuthError,
@@ -254,6 +254,22 @@ def test_a_re_run_is_idempotent(world) -> None:
     assert setup_main("--yes", "--manual") == 0
     assert materialize.current_version() is not None
     assert paths.shim_path().is_symlink()
+
+
+def test_a_runtime_that_cannot_be_built_is_a_message_not_a_traceback(
+    world, monkeypatch, capsys
+) -> None:
+    """Provisioning runs several frames down inside the install, and a first-time installer whose
+    network drops gets the one line about it rather than a stack."""
+
+    def fail(*_args, **_kwargs):
+        raise runtime.RuntimeSetupError("could not download uv 0.12.1: connection refused")
+
+    monkeypatch.setattr(runtime, "provision", fail)
+
+    assert setup_main("--yes", "--manual") == 1
+    assert "could not download uv 0.12.1" in capsys.readouterr().err
+    assert materialize.current_version() is None
 
 
 # --- the consent gate ---------------------------------------------------------------------------

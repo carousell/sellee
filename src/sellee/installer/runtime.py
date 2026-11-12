@@ -337,7 +337,8 @@ def describe(tree: Path) -> dict:
     if present:
         code, out, err = _run([interpreter, "-c", "import psutil; print(psutil.__version__)"])
         dependency_ok = code == 0
-        detail = out.strip() if dependency_ok else err.strip().splitlines()[-1:][0] if err else ""
+        lines = (out if dependency_ok else err).strip().splitlines()
+        detail = lines[-1] if lines else ""
     return {
         "interpreter": str(interpreter),
         "present": present,

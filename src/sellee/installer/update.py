@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from sellee import __version__, config, deployment, heartbeat, paths, supervisor
-from sellee.installer import materialize
+from sellee.installer import materialize, runtime
 
 log = logging.getLogger(__name__)
 
@@ -505,7 +505,7 @@ def run(args) -> int:
         if getattr(args, "rollback", False):
             return rollback(args, cfg, out)
         return perform(args, cfg, out)
-    except UpdateError as exc:
+    except (UpdateError, runtime.RuntimeSetupError) as exc:
         print(f"sellee: {exc}", file=sys.stderr)
         return 1
     except materialize.LayoutError as exc:

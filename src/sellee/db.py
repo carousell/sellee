@@ -39,10 +39,19 @@ def connect_writer(path: Path) -> sqlite3.Connection:
     return conn
 
 
+def read_only_uri(path: Path) -> str:
+    """The `file:` URI that opens `path` read-only.
+
+    Built, not interpolated: pasted in as-is, a `?` or `#` in the path ends it early and a `%`
+    starts an escape, so SQLite opens some other file or none. as_uri() escapes all of them.
+    """
+    return f"{Path(path).absolute().as_uri()}?mode=ro"
+
+
 def connect_reader(path: Path) -> sqlite3.Connection:
     """A read-only connection. Works whether or not a writer is live — even against a stopped
     daemon's file (the `logs` tail of history)."""
-    uri = f"file:{path}?mode=ro"
+    uri = read_only_uri(path)
     conn = sqlite3.connect(uri, uri=True, isolation_level=None, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     _apply_pragmas(conn, writable=False)

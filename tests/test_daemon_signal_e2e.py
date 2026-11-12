@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from sellee import db
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = REPO_ROOT / "bin" / "sellee"
 
@@ -52,7 +54,7 @@ def _events_db(tmp_path) -> Path:
 
 
 def _kinds(db_path: Path) -> list[str]:
-    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn = sqlite3.connect(db.read_only_uri(db_path), uri=True)
     try:
         return [r[0] for r in conn.execute("SELECT kind FROM events ORDER BY seq")]
     except sqlite3.OperationalError:
