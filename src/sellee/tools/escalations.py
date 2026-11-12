@@ -12,6 +12,7 @@ from __future__ import annotations
 from sellee import marketplaces, reply_prompt
 from sellee.channel import asks
 from sellee.engines import scam as scam_engine
+from sellee.rail.client import RailError, RailUnprovisioned
 from sellee.store import SCAM_CONFIRMATION, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -21,6 +22,12 @@ from sellee.tools.registry import (
     ToolError,
     ToolSpec,
     register,
+)
+
+# A failed call can still have landed (a timeout after bazaar committed), so claim no outcome.
+_NOT_CONFIRMED = (
+    "carousell.ai did not confirm the block and report; the ask stays open, and tapping Scam "
+    "again sends it again, which is safe even if the first one landed"
 )
 
 
@@ -38,7 +45,7 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
     kind = params.get("kind")
     if _holds_a_scam(ctx.store, params["thread_id"]):
         # Replies stay refused until the seller answers, so the ask is the scam confirmation.
-        kind = SCAM_CONFIRMATION
+        kind, options = SCAM_CONFIRMATION, list(asks.CAROUSELL_AI_SCAM_OPTIONS)
     try:
         result = ctx.store.escalate(
             params["thread_id"],
@@ -100,8 +107,31 @@ def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
             "only a carousell.ai scam confirmation is answered here; on other markets release "
             "the thread with release_thread"
         )
+    if params["answer"] == "scam":
+        return _block_and_report(ctx, thread_id)
+    return _settle(ctx, thread_id, params["answer"])
+
+
+def _block_and_report(ctx: ToolContext, thread_id: str) -> dict:
+    """One block_buyer with `scam` for the thread's buyer, then the ask closes with the thread."""
+    if ctx.store.open_scam_confirmation(thread_id) is None:
+        raise ToolError(f"thread {thread_id!r} has no scam confirmation open")
     try:
-        result = ctx.store.settle_scam_confirmation(thread_id, params["answer"])
+        if ctx.rail_factory is None:
+            raise RailUnprovisioned("no carousell.ai connection")
+        ctx.rail_factory().block_buyer(thread_id.split(":", 1)[1], "scam")
+    except RailError:
+        # No retry queue: the ask stays open, so the seller's next tap sends it again.
+        return {"thread_id": thread_id, "status": "report_failed", "detail": _NOT_CONFIRMED}
+    try:
+        return {**_settle(ctx, thread_id, "scam"), "status": "reported"}
+    except ToolError as exc:
+        raise ToolError(f"the buyer was blocked and reported, but {exc}") from exc
+
+
+def _settle(ctx: ToolContext, thread_id: str, answer: str) -> dict:
+    try:
+        result = ctx.store.settle_scam_confirmation(thread_id, answer)
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     ctx.bus.publish(
@@ -196,13 +226,15 @@ register(
         description="The seller's answer to a carousell.ai scam confirmation (an escalation of "
         "kind scam_confirmation). not_scam resolves it, lowers the thread's scam verdicts to "
         "suspicious so replies are no longer refused, and restores the thread's status; "
-        "keep_held resolves it and keeps the thread held. Nothing is sent to carousell.ai. "
-        "Refuses, changing nothing, when no confirmation is open.",
+        "scam blocks and reports the buyer to carousell.ai once, then resolves it and closes "
+        "the thread; if carousell.ai cannot be reached it returns report_failed and changes "
+        "nothing, and a later scam answer sends it again. keep_held resolves it and keeps the "
+        "thread held. Refuses, changing nothing, when no confirmation is open.",
         input_schema={
             "type": "object",
             "properties": {
                 "thread_id": {"type": "string"},
-                "answer": {"type": "string", "enum": ["not_scam", "keep_held"]},
+                "answer": {"type": "string", "enum": ["not_scam", "scam", "keep_held"]},
             },
             "required": ["thread_id", "answer"],
             "additionalProperties": False,

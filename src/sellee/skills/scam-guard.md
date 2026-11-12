@@ -52,8 +52,9 @@ Nothing is sent to the counterpart at any step.
 - Never record a scam signature on your own judgement; only the seller's explicit confirmation does
   that, and it happens on their channel.
 
-Reporting the account to the marketplace is the seller's to do in its own app. If they ask about it,
-say so plainly — no tool here files a report.
+On carousell.ai, the seller's *Scam* answer to the confirmation blocks and reports the buyer to
+carousell.ai, and carousell.ai may warn other sellers about them. Code does it when the seller
+answers; you never report on your own. On other markets, reporting the account is the seller's to do
+in the marketplace's own app; if they ask, say so plainly.
 
-Signatures recorded on this install stay on it. There is no sharing of them anywhere, so nothing you
-record travels beyond this seller's own agent.
+Scam signatures you record stay on this install.

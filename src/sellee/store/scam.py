@@ -16,7 +16,6 @@ class ScamMixin:
     _SCAM_LEGAL_FROM = {
         "confirmed": {"observed", "confirmed"},
         "dismissed": {"observed", "confirmed"},
-        "shared": {"confirmed", "shared"},
     }
 
     def add_scam_signature(
@@ -106,14 +105,9 @@ class ScamMixin:
                 return {"id": sig_id, "status": to_status, "noop": True}
             if current not in legal_from:
                 raise StoreError(f"cannot {to_status} a {current!r} signature")
-            stamp = (
-                "confirmed_ts"
-                if to_status == "confirmed"
-                else ("shared_ts" if to_status == "shared" else None)
-            )
-            if stamp:
+            if to_status == "confirmed":
                 conn.execute(
-                    f"UPDATE scam_signatures SET status = ?, {stamp} = ? WHERE id = ?",
+                    "UPDATE scam_signatures SET status = ?, confirmed_ts = ? WHERE id = ?",
                     (to_status, _now(), sig_id),
                 )
             else:
