@@ -138,6 +138,7 @@ def build_channel_prompt(
     transcript: list,
     settings_block: str | None = None,
     channel_name: str = DEFAULT_CHANNEL_NAME,
+    market_guidance: tuple = (),
 ) -> str:
     """Assemble the pass prompt from the claimed pending rows and the recent-transcript window, plus
     a compact settings block (the LLM's near-context vocabulary for what it can propose). History
@@ -147,10 +148,14 @@ def build_channel_prompt(
     `channel_name` is read off the bound row rather than written in: this prompt runs on every
     provider, and a Discord seller told they are on Telegram gets told it back — the agent writes
     "I'll message you on Telegram" to someone who has never used it.
+
+    `market_guidance` is the rulebook for each connected marketplace that has one. It rides here
+    rather than in the system prompt so a seller who never connected that market never pays for it.
     """
     parts = [PASS_PROMPT_MARKER, _INSTRUCTIONS.format(channel_name=channel_name)]
     if settings_block:
         parts.append(settings_block)
+    parts.extend(market_guidance)
     claimed_media = {path for row in claimed_rows for path in (row.get("media_paths") or [])}
     window = _format_transcript(transcript, TRANSCRIPT_CHAR_CAP, skip_paths=claimed_media)
     if window:

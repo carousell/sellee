@@ -355,6 +355,18 @@ def _reply_prompt(payload: dict, store, pass_id: str) -> str:
     return reply_prompt_mod.build_reply_prompt(threads, items)
 
 
+# A connected marketplace's own seller-comms rules, sent in the channel prompt only when the seller
+# works that market; the system prompt carries what every seller needs.
+CHANNEL_MARKET_SKILLS = {marketplaces.CRAIGSLIST: "seller-comms-craigslist"}
+
+
+def _channel_market_guidance(store) -> tuple:
+    connected = settings.connected_markets(store)
+    return tuple(
+        skills.load(skill) for market, skill in CHANNEL_MARKET_SKILLS.items() if market in connected
+    )
+
+
 def _channel_prompt(payload: dict, store, pass_id: str) -> str:
     # The rows claimed into this pass at enqueue, plus the conversational window — both read fresh
     # from durable sellee.db rows, so a restart rebuilds the same prompt.
@@ -365,6 +377,7 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
         transcript,
         settings_block=settings.prompt_block(store),
         channel_name=channel.display_name(store.get_channel()["adapter"]),
+        market_guidance=_channel_market_guidance(store),
     )
 
 

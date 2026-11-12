@@ -114,6 +114,7 @@ _SKILL_BLURBS = (
     ("sellee-conventions", "the house rules — tools only, secrets stay dark, escalate when unsure"),
     ("voice-and-style", "how outbound messages read, and the trust boundary around them"),
     ("seller-comms", "how to frame a decision the seller has to make"),
+    ("seller-comms-craigslist", "the same, for a seller who works Craigslist"),
     ("listing-flow", "photos in, live listing out"),
     ("listing-flow-carousell", "the same, filled into Carousell's own composer in the browser"),
     ("listing-edit", "changing a listing that is already live, everywhere it is listed"),
