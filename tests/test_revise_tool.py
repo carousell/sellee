@@ -3,14 +3,27 @@ verdict per marketplace, and the refusals that keep an edit from moving a deal u
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 from tests.conftest import seed_setting
+from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
 import sellee.tools  # noqa: F401  registration
 from sellee import paths
+from sellee.channel import activity
 from sellee.config import Config
-from sellee.rail.client import RailToolError
-from sellee.tools.registry import TIER_ATTENDED, TIER_PASS_CHANNEL, TIER_PASS_EDIT, ToolError
+from sellee.rail import inbox as relay
+from sellee.rail.client import RailClient, RailToolError
+from sellee.rail.sink import RelayReplySink
+from sellee.tools.registry import (
+    TIER_ATTENDED,
+    TIER_PASS_CHANNEL,
+    TIER_PASS_EDIT,
+    ToolError,
+    all_specs,
+)
 from sellee.tools.registry import dispatch as _dispatch
 
 RAIL_URL = "https://www.carousell.ai/listing/L1"
@@ -283,3 +296,475 @@ def test_a_queueing_failure_leaves_the_rail_untouched(ctx, store, rail, monkeypa
     with pytest.raises(ToolError):
         _edit(ctx, item["id"], list_price=125)
     assert rail.updates == []
+
+
+# --- past enquirers hear about a carousell.ai price drop -----------------------------------------
+
+_WEB = "https://www.carousell.ai"
+_FAST = Config(reply_delay_sec=(0, 0), interactive_reply_delay_sec=(0, 0))
+_DROP = "The price of the Teak lamp is now $80 (was $95)."
+
+
+@pytest.fixture
+def relay_fake():
+    state = FakeRelay()
+    state._clock = time.time() - 1000  # bazaar's clock: these threads are older than any edit
+    state.listings.append({"title": "Teak lamp"})  # bazaar's listing L1
+    base, shutdown = serve(state)
+    state.base = base
+    yield state
+    shutdown()
+
+
+def _relay_client(fake):
+    return RailClient(api_base=fake.base, api_key="k", web_base_url=_WEB, timeout_sec=5.0)
+
+
+def _read_relay(store, bus, fake, *, later_sec: float = 0.0) -> None:
+    deps = relay.RelayDeps(
+        store=store,
+        bus=bus,
+        config=Config(),
+        rail_factory=lambda: _relay_client(fake),
+        now=lambda: time.time() + later_sec,
+    )
+    relay.relay_lane(deps)
+
+
+def _relay_ctx(make_ctx, store, bus, fake):
+    sink = RelayReplySink(
+        client=_relay_client(fake), store=store, bus=bus, retry_delays_sec=(0, 0, 0)
+    )
+    return make_ctx(
+        TIER_PASS_CHANNEL,
+        pass_id="p1",
+        rail_factory=lambda: _relay_client(fake),
+        reply_sink=sink,
+        config=_FAST,
+    )
+
+
+def _asked(fake, thread_id: str, *, answered: bool = True) -> None:
+    fake.add_thread(thread_id, listing_id="L1")
+    fake.add_message(thread_id, f"{thread_id}-q", "buyer", "Is the lamp still available?")
+    if answered:
+        fake.add_message(thread_id, f"{thread_id}-a", "agent", "Yes, it is.")
+
+
+def _lamp(store) -> dict:
+    item = store.create_item(title="Teak lamp", list_price=95.0, currency="SGD")
+    store.record_listing_url(item["id"], "carousell-ai", f"{_WEB}/listing/L1")
+    return item
+
+
+def _updates_sent(fake) -> list:
+    return sorted((call["id"], call["text"]) for call in fake.reply_calls)
+
+
+def _seller_hears(store) -> list:
+    """Every notice queued for the seller, then the activity update their untold tells make."""
+    update = activity.untold_text(store)
+    return [n["text"] for n in store.list_queued_notices()] + ([update] if update else [])
+
+
+def test_a_rail_price_drop_tells_each_buyer_who_asked_once(make_ctx, store, bus, relay_fake):
+    item = _lamp(store)
+    for thread_id in ("t1", "t2", "passed", "blocked"):
+        _asked(relay_fake, thread_id)
+    _asked(relay_fake, "waiting", answered=False)  # owed an answer, which will carry the price
+    relay_fake.block("blocked")
+    _read_relay(store, bus, relay_fake)
+    with store._db.transaction() as conn:  # noqa: SLF001 — a buyer who already passed
+        conn.execute(
+            "INSERT INTO negotiations (item_id, state, updated_ts) VALUES (?, 'open', 0)",
+            (item["id"],),
+        )
+        conn.execute(
+            "INSERT INTO negotiation_buyers (item_id, thread_id, status) VALUES (?, ?, 'passed')",
+            (item["id"], "carousell-ai:passed"),
+        )
+
+    result = _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert result["buyers_told"] == 2
+    assert _updates_sent(relay_fake) == [("t1", _DROP), ("t2", _DROP)]
+    one = {"buyers": 1, "price_drop": True, "new_photos": False, "item_title": "Teak lamp"}
+    assert [t["facts"] for t in store.untold_tells()] == [one, one]
+    assert _seller_hears(store) == [
+        "📣 Teak lamp — let 2 buyers who asked know about the price drop."
+    ]
+    for thread_id in ("carousell-ai:t1", "carousell-ai:t2"):
+        thread = store.get_thread(thread_id)
+        assert thread["last_followup_ts"] is not None
+        assert [m["text"] for m in thread["messages"] if m["dir"] == "out"][-1] == _DROP
+    # The waiting buyer is still owed their answer.
+    assert "carousell-ai:waiting" in {
+        row["thread_id"] for row in store.threads_with_unhandled_inbound()
+    }
+
+
+def test_a_thread_that_was_told_hears_nothing_more_until_the_buyer_writes(
+    make_ctx, store, bus, relay_fake
+):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    ctx = _relay_ctx(make_ctx, store, bus, relay_fake)
+    _edit(ctx, item["id"], list_price=80)
+    _read_relay(store, bus, relay_fake)  # bazaar shows our update stored
+
+    _edit(ctx, item["id"], list_price=70)
+    assert len(relay_fake.reply_calls) == 1
+
+    relay_fake._clock = time.time() + 5  # the buyer writes after the update
+    relay_fake.add_message("t1", "t1-q2", "buyer", "Would you take 60?")
+    relay_fake.add_message("t1", "t1-a2", "agent", "Sorry, no.")
+    _read_relay(store, bus, relay_fake)
+    _edit(ctx, item["id"], list_price=65)
+    assert [c["text"] for c in relay_fake.reply_calls][-1] == (
+        "The price of the Teak lamp is now $65 (was $70)."
+    )
+    assert len(relay_fake.reply_calls) == 2
+
+
+def test_a_nudge_since_the_buyer_wrote_does_not_hold_back_a_price_drop(
+    make_ctx, store, bus, relay_fake
+):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    ctx = _relay_ctx(make_ctx, store, bus, relay_fake)
+    nudge = {"thread_id": "carousell-ai:t1", "text": "Still keen?", "kind": "followup"}
+    assert _dispatch("send_reply", nudge, ctx)["status"] == "sent"
+
+    result = _edit(ctx, item["id"], list_price=80)
+
+    assert result["buyers_told"] == 1
+    assert [c["text"] for c in relay_fake.reply_calls] == ["Still keen?", _DROP]
+
+
+def test_a_rail_price_rise_tells_nobody(make_ctx, store, bus, relay_fake):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=120)
+    assert relay_fake.reply_calls == []
+    assert _seller_hears(store) == []
+
+
+def test_a_failed_rail_push_tells_nobody(make_ctx, store, bus, relay_fake):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    relay_fake.listings.clear()  # bazaar no longer has the listing, so the update fails
+    result = _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+    assert result["markets"]["carousell-ai"]["status"] == "failed"
+    assert relay_fake.reply_calls == []
+    assert _seller_hears(store) == []
+
+
+class _BuyerWritesMidSend:
+    """A sink during whose send the relay lane imports a new buyer message."""
+
+    def __init__(self, store):
+        self.store = store
+
+    def send(self, thread, text, kind, intent_id):
+        self.store.append_thread_message(
+            thread["thread_id"], msg_id="late", direction="in", text="Still there?"
+        )
+        return {}
+
+
+def test_a_buyer_message_that_lands_during_the_update_is_still_owed_an_answer(
+    make_ctx, store, rail
+):
+    item = _listed(store, markets=("carousell-ai",))
+    store.create_thread(
+        thread_id="carousell-ai:t1",
+        side="sell",
+        market="carousell-ai",
+        counterpart_handle="b",
+        item_id=item["id"],
+    )
+    store.append_thread_message("carousell-ai:t1", msg_id="q", direction="in", text="hi", ts=1.0)
+    store.mark_relay_answered("carousell-ai:t1", "q", 1.0)
+    ctx = make_ctx(
+        TIER_PASS_CHANNEL,
+        rail_factory=lambda: rail,
+        reply_sink=_BuyerWritesMidSend(store),
+        config=_FAST,
+    )
+
+    _edit(ctx, item["id"], list_price=120)
+
+    assert store.get_thread("carousell-ai:t1")["cursor_last_msg_id"] == "q"
+    assert "carousell-ai:t1" in {r["thread_id"] for r in store.threads_with_unhandled_inbound()}
+
+
+def test_a_buyer_who_wrote_before_the_update_was_stored_is_still_owed_an_answer(
+    make_ctx, store, bus, relay_fake
+):
+    # bazaar holds the buyer's new message before our update, but sellee has not read it yet.
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    relay_fake._clock = time.time() + 5
+    relay_fake.add_message("t1", "t1-q2", "buyer", "Can you hold it till Friday?")
+
+    _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+    _read_relay(store, bus, relay_fake)
+
+    assert "carousell-ai:t1" in {r["thread_id"] for r in store.threads_with_unhandled_inbound()}
+
+
+class _LedgerMovesMidRun:
+    """A sink during whose first send another buyer passes on the item."""
+
+    def __init__(self, store, item_id, passing_thread):
+        self.store, self.item_id, self.passing = store, item_id, passing_thread
+        self.sent: list = []
+
+    def send(self, thread, text, kind, intent_id):
+        if not self.sent:
+            with self.store._db.transaction() as conn:  # noqa: SLF001 — the negotiation lands
+                conn.execute(
+                    "INSERT OR IGNORE INTO negotiations (item_id, state, updated_ts) "
+                    "VALUES (?, 'open', 0)",
+                    (self.item_id,),
+                )
+                conn.execute(
+                    "INSERT INTO negotiation_buyers (item_id, thread_id, status) "
+                    "VALUES (?, ?, 'passed')",
+                    (self.item_id, self.passing),
+                )
+        self.sent.append(thread["thread_id"])
+        return {}
+
+
+def _answered_rail_thread(store, item_id, thread_id):
+    store.create_thread(
+        thread_id=thread_id,
+        side="sell",
+        market="carousell-ai",
+        counterpart_handle="b",
+        item_id=item_id,
+    )
+    store.append_thread_message(thread_id, msg_id="q", direction="in", text="hi", ts=1.0)
+    store.mark_relay_answered(thread_id, "q", 1.0)
+
+
+def test_a_buyer_who_passes_while_updates_go_out_is_not_sent_one(make_ctx, store, rail):
+    item = _listed(store, markets=("carousell-ai",))
+    _answered_rail_thread(store, item["id"], "carousell-ai:a")
+    _answered_rail_thread(store, item["id"], "carousell-ai:b")
+    sink = _LedgerMovesMidRun(store, item["id"], "carousell-ai:b")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, reply_sink=sink, config=_FAST)
+
+    _edit(ctx, item["id"], list_price=120)
+
+    assert sink.sent == ["carousell-ai:a"]
+    assert _seller_hears(store) == [
+        "📣 Dyson V8 — let 1 buyer who asked know about the price drop."
+    ]
+
+
+def test_a_failing_event_write_does_not_turn_a_landed_edit_into_an_error(
+    make_ctx, store, bus, rail, monkeypatch
+):
+    item = _listed(store, markets=("carousell-ai",))
+    _answered_rail_thread(store, item["id"], "carousell-ai:a")
+    sink = _LedgerMovesMidRun(store, item["id"], "carousell-ai:none")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, reply_sink=sink, config=_FAST)
+    publish = bus.publish
+
+    def broken(kind, payload, **kw):
+        if kind.startswith("past_enquirers."):
+            raise RuntimeError("database is locked")
+        return publish(kind, payload, **kw)
+
+    monkeypatch.setattr(bus, "publish", broken)
+    result = _edit(ctx, item["id"], list_price=120)
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert _seller_hears(store) == [
+        "📣 Dyson V8 — let 1 buyer who asked know about the price drop."
+    ]
+
+
+def test_the_seller_hears_about_the_buyers_told_before_a_send_blew_up(
+    make_ctx, store, rail, monkeypatch
+):
+    item = _listed(store, markets=("carousell-ai",))
+    _answered_rail_thread(store, item["id"], "carousell-ai:a")
+    _answered_rail_thread(store, item["id"], "carousell-ai:b")
+    sink = _LedgerMovesMidRun(store, item["id"], "carousell-ai:none")
+    monkeypatch.setattr(
+        "sellee.tools.reply._reserve_and_send",
+        _raising_on("carousell-ai:b"),
+    )
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, reply_sink=sink, config=_FAST)
+
+    result = _edit(ctx, item["id"], list_price=120)
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert _seller_hears(store) == [
+        "📣 Dyson V8 — let 1 buyer who asked know about the price drop."
+    ]
+
+
+def _raising_on(thread_id):
+    from sellee.tools import reply
+
+    real = reply._reserve_and_send
+
+    def reserve_and_send(ctx, params, thread, kind, sink, announces=None):
+        if params["thread_id"] == thread_id:
+            raise RuntimeError("no such table: send_intents")
+        return real(ctx, params, thread, kind, sink, announces)
+
+    return reserve_and_send
+
+
+class _PriceMovesMidRun:
+    """A sink during whose first send another edit raises the price from a second thread."""
+
+    def __init__(self, store, item_id, edit_again):
+        self.store, self.item_id, self.edit_again = store, item_id, edit_again
+        self.seen: list = []  # (message, the live price as it went)
+        self.other = None
+
+    def send(self, thread, text, kind, intent_id):
+        if self.other is None:
+            self.other = threading.Thread(target=self.edit_again)
+            self.other.start()
+            self.other.join(timeout=0.5)  # long enough for an unserialised edit to land
+        self.seen.append((text, self.store.get_item(self.item_id)["list_price"]))
+        return {}
+
+
+def test_an_edit_that_lands_while_updates_go_out_never_leaves_a_stale_price(make_ctx, store, rail):
+    item = _listed(store, markets=("carousell-ai",))
+    _answered_rail_thread(store, item["id"], "carousell-ai:a")
+    _answered_rail_thread(store, item["id"], "carousell-ai:b")
+    ctx = None
+    sink = _PriceMovesMidRun(store, item["id"], lambda: _edit(ctx, item["id"], list_price=200))
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, reply_sink=sink, config=_FAST)
+
+    _edit(ctx, item["id"], list_price=120)
+    sink.other.join(timeout=5)
+
+    assert [price for _text, price in sink.seen] == [120, 120]
+    assert store.get_item(item["id"])["list_price"] == 200
+
+
+def _update_intents(store) -> list:
+    return [
+        row["status"]
+        for row in store._db.query(  # noqa: SLF001 — the send bracket's durable record
+            "SELECT status FROM send_intents WHERE kind = 'followup'"
+        )
+    ]
+
+
+def test_an_update_lost_in_an_outage_is_dropped_not_sent_late(make_ctx, store, bus, relay_fake):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    relay_fake.reply_script = ["internal"] * 4  # every attempt fails before bazaar stores it
+
+    _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+    assert _update_intents(store) == ["sent_unverified"]
+    attempts = len(relay_fake.reply_calls)
+
+    # Long after, the price could have moved or the buyer passed: the lane must not send it now.
+    _read_relay(store, bus, relay_fake, later_sec=relay.RETRY_SEND_AFTER_SEC + 60)
+
+    assert len(relay_fake.reply_calls) == attempts
+    assert not any(m["text"] == _DROP for m in relay_fake.messages["t1"])
+    assert _update_intents(store) == []
+
+
+def test_an_update_bazaar_stored_during_an_outage_is_settled_not_dropped(
+    make_ctx, store, bus, relay_fake
+):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    relay_fake.reply_script = ["lost"] * 4  # stored on the first attempt, every answer lost
+
+    result = _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+    assert result["buyers_told"] == 0 and _seller_hears(store) == []
+    _read_relay(store, bus, relay_fake, later_sec=relay.RETRY_SEND_AFTER_SEC + 60)
+    _read_relay(store, bus, relay_fake, later_sec=relay.RETRY_SEND_AFTER_SEC + 120)
+
+    assert [m["text"] for m in relay_fake.messages["t1"]].count(_DROP) == 1
+    assert _update_intents(store) == ["committed"]
+    # Told when the lane settles it, and only once however often it reads the thread again.
+    assert _seller_hears(store) == [
+        "📣 Teak lamp — let 1 buyer who asked know about the price drop."
+    ]
+
+
+def test_a_stored_update_the_thread_read_missed_is_settled_under_bazaars_id(
+    make_ctx, store, bus, relay_fake
+):
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    stamp = relay_fake.threads["t1"]["updated"]
+    relay_fake.reply_script = ["lost"] * 4
+
+    _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=80)
+    relay_fake.threads["t1"]["updated"] = stamp - 0.5  # behind the cursor: the read skips it
+    _read_relay(store, bus, relay_fake, later_sec=relay.RETRY_SEND_AFTER_SEC + 60)
+
+    stored = next(m for m in relay_fake.messages["t1"] if m["text"] == _DROP)
+    outbound = [m for m in store.get_thread("carousell-ai:t1")["messages"] if m["dir"] == "out"]
+    assert _update_intents(store) == ["committed"]
+    assert (outbound[-1]["msg_id"], outbound[-1]["text"]) == (stored["id"], _DROP)
+    assert [m["text"] for m in relay_fake.messages["t1"]].count(_DROP) == 1
+
+
+def test_a_refused_send_is_not_counted_as_a_buyer_told(make_ctx, store, rail, monkeypatch):
+    from sellee.tools import reply
+
+    item = _listed(store, markets=("carousell-ai",))
+    _answered_rail_thread(store, item["id"], "carousell-ai:a")
+    _answered_rail_thread(store, item["id"], "carousell-ai:b")
+    real = reply._send_reply
+
+    def send_reply(ctx, params, **kw):
+        if params["thread_id"] == "carousell-ai:b":
+            raise ToolError("thread is 'held' — not eligible for a followup")
+        return real(ctx, params, **kw)
+
+    monkeypatch.setattr(reply, "_send_reply", send_reply)
+    sink = _LedgerMovesMidRun(store, item["id"], "carousell-ai:none")
+    ctx = make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, reply_sink=sink, config=_FAST)
+
+    result = _edit(ctx, item["id"], list_price=120)
+
+    assert result["buyers_told"] == 1
+    assert _seller_hears(store) == [
+        "📣 Dyson V8 — let 1 buyer who asked know about the price drop."
+    ]
+
+
+def test_the_result_counts_the_buyers_told_so_nothing_is_reported_as_pending(
+    make_ctx, store, bus, relay_fake
+):
+    """A seller was once told an update "already pending for one buyer may still go out", because
+    the result carried no count. It carries the count, and the description says to report it."""
+    item = _lamp(store)
+    _asked(relay_fake, "t1")
+    _read_relay(store, bus, relay_fake)
+    ctx = _relay_ctx(make_ctx, store, bus, relay_fake)
+
+    assert _edit(ctx, item["id"], list_price=80)["buyers_told"] == 1
+    assert _edit(ctx, item["id"], list_price=70)["buyers_told"] == 0  # already told once
+    assert _edit(ctx, item["id"], description="Solid teak.")["buyers_told"] == 0
+    (spec,) = [s for s in all_specs() if s.name == "update_live_listing"]
+    description = spec.description
+    assert "buyers_told" in description and "never describe an update" in description

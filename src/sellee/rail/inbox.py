@@ -159,7 +159,8 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
         if author == "agent":
             # Stored is enough: bazaar sends it, so waiting would invite a second reply.
             _settle_our_send(deps, message)
-            if last_buyer:
+            # A follow-up answers nothing; its own commit already moved the cursor as far as it may.
+            if last_buyer and not _our_followup(deps, message):
                 answered_id, answered_ts = last_buyer
                 deps.store.mark_relay_answered(thread_id, answered_id, answered_ts)
 
@@ -193,6 +194,10 @@ def _nudge_escalated_buyers(deps: RelayDeps) -> None:
         )
 
 
+def _our_followup(deps: RelayDeps, message: dict) -> bool:
+    return deps.store.intent_kind(message.get("client_message_id") or "") == "followup"
+
+
 def _settle_our_send(deps: RelayDeps, message: dict) -> None:
     """Commit our own send whose outcome was unknown, now that bazaar shows it stored. Its
     client_message_id is the intent id the sink sent it under."""
@@ -209,6 +214,9 @@ def _finish_our_sends(deps: RelayDeps, rail) -> None:
     cutoff = deps.now() - RETRY_SEND_AFTER_SEC
     for intent in deps.store.unsettled_intents_on(MARKET, created_before=cutoff):
         native = intent["thread_id"].split(":", 1)[1]
+        if intent["kind"] == "followup":
+            _settle_or_drop_followup(deps, rail, intent, native)
+            continue
         try:
             result = rail.reply_to_thread(native, intent["text"], intent["intent_id"])
         except (RailNetworkError, RailAuthError):
@@ -219,6 +227,23 @@ def _finish_our_sends(deps: RelayDeps, rail) -> None:
                 deps.store.drop_refused_intent(intent["intent_id"])
             continue
         deps.store.settle_intent_from_read(intent["intent_id"], msg_id=result["message_id"])
+
+
+def _settle_or_drop_followup(deps: RelayDeps, rail, intent: dict, native: str) -> None:
+    """Settle a follow-up bazaar stored; drop one it did not. Sent late, it could quote a price
+    or reach a buyer that has since changed."""
+    try:
+        messages = rail.get_thread(native)["messages"]
+    except (RailNetworkError, RailAuthError):
+        raise
+    except RailError:
+        return  # this thread could not be read; look again next tick
+    stored = next((m for m in messages if m.get("client_message_id") == intent["intent_id"]), None)
+    if stored is not None:
+        deps.store.settle_intent_from_read(intent["intent_id"], msg_id=stored["id"])
+    else:
+        log.info("relay follow-up %s never reached bazaar; dropped", intent["intent_id"])
+        deps.store.drop_refused_intent(intent["intent_id"])
 
 
 def _item_for(items, listing_id: str) -> str | None:

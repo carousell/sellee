@@ -44,14 +44,15 @@ The result has one status per marketplace. Report each one as it is, never one "
 are asking can't be what they meant. Tell them it moved, never either number (the floor's rules
 live in seller-comms, under "No floor yet").
 
-A checkout link already sent stays good at the price it was sent at. Nothing takes a link back, so
-don't imply the edit did.
+**`buyers_told`**: carousell.ai buyers who asked and were just told. Say that number; never call an
+update pending.
+
+A checkout link already sent stays good at its price; don't imply the edit took it back.
 
 ## This is not a relist
 
-There is no taking a listing down and posting it again. The live listing is what every buyer
-conversation about it is attached to; replacing it would cut those buyers off and leave a second
-copy besides. If the seller wants a fresh start, the edit *is* the fresh start: new price, new
+There is no taking a listing down and posting it again. Every buyer conversation is attached to the
+live listing; replacing it would cut those buyers off and leave a second copy. If the seller wants a fresh start, the edit *is* the fresh start: new price, new
 words, new photos, same listing. A genuinely different thing is a new item.
 
 Currency and condition can't be changed on a live listing. If they need to be, that is a new item.
