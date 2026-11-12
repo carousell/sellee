@@ -783,3 +783,15 @@ def test_an_update_is_not_retried_once_craigslist_is_disconnected(
     _retried(store, bus, waiting)
 
     assert _updates_sent(waiting) == []
+
+
+def test_an_update_to_a_buyer_whose_offer_now_meets_the_price_is_dropped(
+    make_ctx, store, bus, waiting, item
+):
+    """Their offer is the negotiation's to answer now, not the update's."""
+    _stuck_update(make_ctx, store, bus, waiting, item)
+    store.negotiate_offer(item["id"], _THREAD, "buyer", 60, config=Config())
+
+    _retried(store, bus, waiting)
+
+    assert _updates_sent(waiting) == []
