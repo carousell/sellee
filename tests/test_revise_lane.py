@@ -856,6 +856,43 @@ def test_a_nudge_sent_after_the_edit_landed_does_not_hold_back_its_update(
     assert _told(sent) == [("registration", thread_id)]
 
 
+@pytest.mark.parametrize("market", ["fb", "carousell", "craigslist"])
+def test_an_edit_made_while_updates_were_off_tells_nobody_once_they_are_back_on(
+    store, bus, make_ctx, sent, market
+) -> None:
+    item = _item_on(store, market)
+    _asked(store, item["id"], market, 0)
+    seed_setting(store, "past_enquirer_updates", False)
+    _drop_to_80(make_ctx, item["id"])
+    seed_setting(store, "past_enquirer_updates", True)  # back on before the edit lands
+    (row,) = store.list_listing_revisions("pending")
+    _settle(store, row["revision_id"], "done", {"price": "80"})
+
+    revise.tell_settled(_lane(store, bus, make_ctx))
+    assert sent == []
+    assert store.listing_revisions_owing_buyers() == []
+
+
+def test_a_price_edited_again_before_the_lane_sends_is_not_announced(
+    store, bus, make_ctx, sent, monkeypatch
+) -> None:
+    item = _item_on(store, "craigslist")
+    _asked(store, item["id"], "craigslist", 0)
+    _drop_to_80(make_ctx, item["id"])
+    (row,) = store.list_listing_revisions("pending")
+    _settle(store, row["revision_id"], "done", {"price": "80"})
+    read = revise.settled_change
+
+    def then_edited_again(store_, revision):
+        change = read(store_, revision)
+        store.revise_item(item["id"], {"list_price": 70.0})  # lands before the sender's lock
+        return change
+
+    monkeypatch.setattr(revise, "settled_change", then_edited_again)
+    revise.tell_settled(_lane(store, bus, make_ctx))
+    assert sent == []
+
+
 @pytest.mark.parametrize("enabled", [False, True])
 @pytest.mark.parametrize("market", ["fb", "carousell", "craigslist"])
 def test_with_updates_off_a_settled_browser_edit_tells_nobody_even_later(

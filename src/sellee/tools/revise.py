@@ -212,6 +212,8 @@ def _send_updates(
         price_drop, new_photos = past_enquirers.told_about(change)
         announces = announcement(price_drop=price_drop, new_photos=new_photos)
         with _EDITING:
+            if _superseded(ctx, change):
+                return Sends(0, 0)  # an edit since this change was read: its price is out of date
             first = _plan(ctx, change, told_since)
             not_told += first.skipped
             for update in first.planned:
@@ -233,6 +235,15 @@ def _send_updates(
         log.exception("past-enquirer updates for %s on %s failed", change.item_id, change.market)
         held += 1  # the rest of the round is owed another try
     return Sends(sent, held, tuple(told), tuple(not_told))
+
+
+def _superseded(ctx: ToolContext, change: past_enquirers.ListingChange) -> bool:
+    """Whether the item no longer has the price `change` would announce. Read under `_EDITING`, so
+    no edit can move it again before the sends go out."""
+    if change.new_price is None:
+        return False
+    item = ctx.store.get_item(change.item_id)
+    return item is None or item.get("list_price") != change.new_price
 
 
 def _plan(
@@ -379,14 +390,16 @@ def _queue_browser(
         return {"status": "not_connected", "url": url}
     if not (editor.can_edit_fields(market, changed) or marketplaces.edit_flow(market)):
         return {"status": "manual", "url": url}
+    # A change made while updates are off tells nobody, even if they are back on when it lands.
+    told = settings.past_enquirer_updates_on(ctx.store)
     try:
         revision_id = ctx.store.queue_listing_revision(
             item_id,
             market,
             changed,
-            old_price=change.old_price,
-            new_price=change.new_price,
-            photo_added=change.photo_added,
+            old_price=change.old_price if told else None,
+            new_price=change.new_price if told else None,
+            photo_added=change.photo_added and told,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
