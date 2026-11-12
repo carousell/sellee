@@ -267,7 +267,9 @@ def retry_update(store, intent: dict, send: Callable[[], object]) -> bool:
 
 def _still_current(store, intent: dict) -> bool:
     thread = store.get_thread(intent["thread_id"], message_cap=0)
-    item = store.get_item(thread["item_id"]) if thread and thread.get("item_id") else None
+    if thread is None or thread["market"] not in settings.connected_markets(store):
+        return False  # the seller disconnected it: nothing more goes out there
+    item = store.get_item(thread["item_id"]) if thread.get("item_id") else None
     if item is None or item["id"] in store.sold_item_ids():
         return False
     if (item.get("updated_ts") or 0) > intent["created_ts"]:

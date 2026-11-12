@@ -771,3 +771,15 @@ def test_an_update_to_a_buyer_who_wrote_again_is_dropped_not_resent(
     _retried(store, bus, waiting)
 
     assert _updates_sent(waiting) == []
+
+
+def test_an_update_is_not_retried_once_craigslist_is_disconnected(
+    make_ctx, store, bus, waiting, item
+):
+    _stuck_update(make_ctx, store, bus, waiting, item)
+    store.begin_craigslist_sign_in(time.time())  # its account stays, so the lane still runs
+    seed_setting(store, "connected_markets", ["carousell", "fb"])
+
+    _retried(store, bus, waiting)
+
+    assert _updates_sent(waiting) == []
