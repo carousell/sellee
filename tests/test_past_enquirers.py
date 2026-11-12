@@ -16,6 +16,7 @@ from sellee.past_enquirers import (
     ListingChange,
     format_price,
     plan_updates,
+    told_about,
 )
 from sellee.store.updates import announcement
 from sellee.tools.reply import _refused
@@ -208,6 +209,69 @@ def test_the_planner_picks_exactly_the_buyers_the_rules_allow(
     assert _plan(store, change) == []
 
 
+@settings(
+    max_examples=150,
+    deadline=None,
+    suppress_health_check=[HealthCheck.function_scoped_fixture, HealthCheck.too_slow],
+)
+@given(
+    specs=st.lists(_thread, min_size=0, max_size=6),
+    old=_price,
+    new=_price,
+    photo_added=st.booleans(),
+    listing=st.none() | st.integers(min_value=1, max_value=999),
+    title=_title,
+    currency=st.sampled_from(("SGD", "USD", "MYR", None)),
+)
+def test_a_photo_change_reaches_the_same_buyers_with_one_message_each(
+    store, specs, old, new, photo_added, listing, title, currency
+) -> None:
+    link = None if listing is None else f"https://www.carousell.ai/listing/L{listing}"
+    item = store.create_item(title=title, list_price=new, currency=currency or "SGD")
+    by_thread = {_seed(store, item["id"], RAIL, spec): spec for spec in specs}
+    decoys = {_seed(store, item["id"], "fb", spec) for spec in specs}
+    change = ListingChange(item["id"], RAIL, title, currency, old, new, photo_added, link)
+
+    planned = _plan(store, change)
+    chosen = {u.thread_id for u in planned}
+
+    assert not chosen & decoys
+    photos = photo_added and link is not None
+    drop = new < old and currency is not None  # a price with no currency to name is left out
+    # A rise plans nothing, and so does an edit that changes neither the price nor the photos.
+    if new > old or not (drop or photos):
+        assert planned == []
+        return
+    assert chosen == {t for t, spec in by_thread.items() if _may_hear(spec, new)}
+    assert len(planned) == len(chosen)  # at most one message per thread
+    now = f"is now {format_price(new, currency or '')} (was {format_price(old, currency or '')})"
+    expected = {
+        (True, False): f"The price of the {title} {now}.",
+        (False, True): f"I've added new photos of the {title}: {link}.",
+        (True, True): f"The price of the {title} {now}, and I've added new photos: {link}.",
+    }[(drop, photos)]
+    for update in planned:
+        assert update.text == expected  # the title, the prices and the link, and nothing else
+
+    for update in planned:
+        reserved = store.reserve_reply(
+            thread_id=update.thread_id,
+            kind="followup",
+            text=update.text,
+            in_msg_id=update.in_msg_id,
+            cfg=None,
+            announces=announcement(price_drop=drop, new_photos=photos),
+        )
+        store.commit_reply(
+            intent_id=reserved["intent_id"],
+            thread_id=update.thread_id,
+            in_msg_id=update.in_msg_id,
+            text=update.text,
+            kind="followup",
+        )
+    assert _plan(store, change) == []
+
+
 # --- worked examples -----------------------------------------------------------------------------
 
 
@@ -274,6 +338,68 @@ def test_a_nudge_sent_since_the_buyer_wrote_does_not_hold_back_a_price_drop() ->
 def test_a_buyer_whose_offer_meets_the_new_price_is_left_to_the_negotiation() -> None:
     ledger = {f"{RAIL}:t1": {"status": "active", "highest_offer": 80.0}}
     assert plan_updates(_change(), [_row()], ledger) == []
+
+
+_LINK = "https://www.carousell.ai/listing/L1"
+
+
+def test_the_new_photos_message_reads_as_agreed() -> None:
+    change = _change(new_price=95.0, photo_added=True, listing_url=_LINK)
+    [update] = plan_updates(change, [_row()], {})
+    assert update.text == f"I've added new photos of the Sony headphones: {_LINK}."
+
+
+def test_a_price_drop_with_new_photos_is_one_message() -> None:
+    change = _change(photo_added=True, listing_url=_LINK)
+    [update] = plan_updates(change, [_row()], {})
+    assert update.text == (
+        "The price of the Sony headphones is now $80 (was $95), and I've added new photos: "
+        f"{_LINK}."
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        _change(old_price=80.0, new_price=95.0, photo_added=True, listing_url=_LINK),  # a rise
+        _change(new_price=95.0, photo_added=True, listing_url=None),  # no link to show them
+        _change(new_price=95.0, photo_added=False, listing_url=_LINK),  # reordered or removed
+    ],
+    ids=["price-rise", "no-link", "no-new-photo"],
+)
+def test_new_photos_plan_nothing_without_a_link_or_alongside_a_rise(change) -> None:
+    assert plan_updates(change, [_row()], {}) == []
+    assert told_about(change) == (False, False)
+
+
+def test_new_photos_with_no_currency_to_name_leave_the_price_out() -> None:
+    [update] = plan_updates(
+        _change(currency=None, photo_added=True, listing_url=_LINK), [_row()], {}
+    )
+    assert update.text == f"I've added new photos of the Sony headphones: {_LINK}."
+
+
+def test_a_price_drop_without_a_link_still_names_the_price() -> None:
+    [update] = plan_updates(_change(photo_added=True), [_row()], {})
+    assert update.text == "The price of the Sony headphones is now $80 (was $95)."
+
+
+def test_the_seller_is_told_a_price_drop_only_when_its_buyers_are() -> None:
+    assert told_about(_change()) == (True, False)
+    assert told_about(_change(new_price=120.0)) == (False, False)
+    assert told_about(_change(currency=None)) == (False, False)
+
+
+def test_the_seller_is_told_of_new_photos_only_when_its_buyers_are() -> None:
+    assert told_about(_change(new_price=95.0, photo_added=True, listing_url=_LINK)) == (
+        False,
+        True,
+    )
+    assert told_about(_change(photo_added=True, listing_url=_LINK)) == (True, True)
+    assert told_about(_change(currency=None, photo_added=True, listing_url=_LINK)) == (
+        False,
+        True,
+    )
 
 
 def test_item_threads_reads_one_items_threads_on_one_market_with_the_newest_buyer_message(

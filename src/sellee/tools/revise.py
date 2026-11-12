@@ -110,7 +110,7 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
         markets = {_RAIL: _push_rail(ctx, item, changed), **markets}
         if markets[_RAIL]["status"] == "updated":
             after = ctx.store.get_item(item_id) or item
-            change = _live_change(before, after, _RAIL)
+            change = _live_change(_rail_shows(before), _rail_shows(after), _RAIL)
             buyers_told = _tell_past_enquirers(ctx, change)
 
     return {
@@ -125,6 +125,7 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
 
 def _live_change(before: dict, after: dict, market: str) -> past_enquirers.ListingChange:
     """What a buyer on `market` can now see changed, from the item before and after the edit."""
+    old_photos = {p.get("path") for p in before.get("photos") or []}
     return past_enquirers.ListingChange(
         item_id=after["id"],
         market=market,
@@ -132,7 +133,15 @@ def _live_change(before: dict, after: dict, market: str) -> past_enquirers.Listi
         currency=after.get("currency"),
         old_price=before.get("list_price"),
         new_price=after.get("list_price"),
+        photo_added=any(p.get("path") not in old_photos for p in after.get("photos") or []),
+        listing_url=after["listing_urls"].get(market),
     )
+
+
+def _rail_shows(item: dict) -> dict:
+    """The item as carousell.ai shows it: only uploaded photos reach the listing, so a photo whose
+    upload failed or was skipped counts as new once a retry lands it."""
+    return dict(item, photos=[p for p in item.get("photos") or [] if p.get("uploaded_url")])
 
 
 def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange) -> int:
@@ -140,8 +149,8 @@ def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange)
     seller its tell as it commits. Never raises: the listing has already changed."""
     told = 0
     try:
-        # The planner sends only a price drop, so that is what every update announces.
-        announces = announcement(price_drop=True, new_photos=False)
+        price_drop, new_photos = past_enquirers.told_about(change)
+        announces = announcement(price_drop=price_drop, new_photos=new_photos)
         with _EDITING:
             for update in _plan(ctx, change):
                 # The ledger, or another edit's update, can move while earlier sends go out.
@@ -355,7 +364,7 @@ register(
         "in the reason's words. floor_lowered = the seller's private floor moved down to the new "
         "price (say so without naming either number). offers_above_new_price counts standing "
         "offers higher than the new price. buyers_told = how many buyers who asked about it on "
-        "carousell.ai were just sent the price drop; report that number as it is, "
+        "carousell.ai were just sent the price drop or new photos; report that number as it is, "
         "and never describe an update to a buyer as pending or still going out.",
         input_schema={
             "type": "object",

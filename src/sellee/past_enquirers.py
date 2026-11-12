@@ -12,6 +12,10 @@ from sellee.engines.negotiate import NOT_STANDING
 from sellee.tools.reply import _refused
 
 PRICE_DROP_TEXT = "The price of the {title} is now {new} (was {old})."
+PHOTOS_TEXT = "I've added new photos of the {title}: {link}."
+PRICE_DROP_AND_PHOTOS_TEXT = (
+    "The price of the {title} is now {new} (was {old}), and I've added new photos: {link}."
+)
 
 # Currencies written with a bare "$"; any other code is written after the number.
 _DOLLAR_CURRENCIES = frozenset({"USD", "SGD"})
@@ -28,6 +32,8 @@ class ListingChange:
     currency: str | None
     old_price: float | None
     new_price: float | None
+    photo_added: bool = False
+    listing_url: str | None = None
 
     @property
     def price_dropped(self) -> bool:
@@ -35,6 +41,19 @@ class ListingChange:
             self.old_price is not None
             and self.new_price is not None
             and self.new_price < self.old_price
+        )
+
+    @property
+    def photos_shown(self) -> bool:
+        """A photo was added and there is a listing link to send with it."""
+        return self.photo_added and bool(self.listing_url)
+
+    @property
+    def price_rose(self) -> bool:
+        return (
+            self.old_price is not None
+            and self.new_price is not None
+            and self.new_price > self.old_price
         )
 
 
@@ -63,14 +82,33 @@ def plan_updates(
     ]
 
 
+def told_about(change: ListingChange) -> tuple[bool, bool]:
+    """What each planned message for `change` tells its buyer: (a price drop, new photos)."""
+    if change.price_rose:
+        return False, False
+    return _price_shown(change), change.photos_shown
+
+
 def _message(change: ListingChange) -> str | None:
-    if not _price_shown(change):
+    template = _template(change, PRICE_DROP_TEXT, PHOTOS_TEXT, PRICE_DROP_AND_PHOTOS_TEXT)
+    if template is None:
         return None
-    return PRICE_DROP_TEXT.format(
+    price = _price_shown(change)
+    return template.format(
         title=change.title,
-        new=format_price(change.new_price, change.currency or ""),
-        old=format_price(change.old_price, change.currency or ""),
+        new=format_price(change.new_price, change.currency or "") if price else "",
+        old=format_price(change.old_price, change.currency or "") if price else "",
+        link=change.listing_url,
     )
+
+
+def _template(change: ListingChange, drop: str, photos: str, both: str) -> str | None:
+    """The wording for `change`, or None. A price rise sends nothing, even with new photos."""
+    if change.price_rose:
+        return None
+    if _price_shown(change):
+        return both if change.photos_shown else drop
+    return photos if change.photos_shown else None
 
 
 def _price_shown(change: ListingChange) -> bool:

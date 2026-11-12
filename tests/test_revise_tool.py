@@ -768,3 +768,152 @@ def test_the_result_counts_the_buyers_told_so_nothing_is_reported_as_pending(
     (spec,) = [s for s in all_specs() if s.name == "update_live_listing"]
     description = spec.description
     assert "buyers_told" in description and "never describe an update" in description
+
+
+# --- past enquirers hear about new photos on carousell.ai ----------------------------------------
+
+_PHOTOS = f"I've added new photos of the Teak lamp: {_WEB}/listing/L1."
+
+
+class _MediaOnClient(RailClient):
+    """The relay fake, with bazaar's media upload switched on; the upload itself is stubbed."""
+
+    def offers_tool(self, name: str) -> bool:
+        return True
+
+    def upload_photo(self, data: bytes, content_type: str) -> str:
+        return f"enc-{data[3:].decode()}"  # the photo's name, after the JPEG header
+
+
+def _photo(name: str) -> str:
+    media = paths.media_dir()
+    media.mkdir(parents=True, exist_ok=True)
+    path = media / f"{name}.jpg"
+    path.write_bytes(b"\xff\xd8\xff" + name.encode())
+    return str(path.resolve())
+
+
+def _photo_lamp(store) -> dict:
+    """The lamp, live on carousell.ai with photos a and b already uploaded."""
+    item = store.create_item(
+        title="Teak lamp",
+        list_price=95.0,
+        currency="SGD",
+        photos=[{"path": _photo(n), "uploaded_url": f"enc-{n}"} for n in ("a", "b")],
+    )
+    store.record_listing_url(item["id"], "carousell-ai", f"{_WEB}/listing/L1")
+    return item
+
+
+def _media_ctx(make_ctx, store, bus, fake, client: type[RailClient] = _MediaOnClient):
+    def rail():
+        return client(api_base=fake.base, api_key="k", web_base_url=_WEB, timeout_sec=5.0)
+
+    sink = RelayReplySink(client=_relay_client(fake), store=store, bus=bus, retry_delays_sec=(0,))
+    return make_ctx(
+        TIER_PASS_CHANNEL, pass_id="p1", rail_factory=rail, reply_sink=sink, config=_FAST
+    )
+
+
+def _asked_about_photo_lamp(make_ctx, store, bus, fake, client: type[RailClient] = _MediaOnClient):
+    item = _photo_lamp(store)
+    for thread_id in ("t1", "t2", "passed"):
+        _asked(fake, thread_id)
+    _read_relay(store, bus, fake)
+    with store._db.transaction() as conn:  # noqa: SLF001 — a buyer who already passed
+        conn.execute(
+            "INSERT INTO negotiations (item_id, state, updated_ts) VALUES (?, 'open', 0)",
+            (item["id"],),
+        )
+        conn.execute(
+            "INSERT INTO negotiation_buyers (item_id, thread_id, status) VALUES (?, ?, 'passed')",
+            (item["id"], "carousell-ai:passed"),
+        )
+    return item, _media_ctx(make_ctx, store, bus, fake, client)
+
+
+def test_a_new_photo_on_the_rail_tells_each_buyer_who_asked_once(make_ctx, store, bus, relay_fake):
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake)
+
+    result = _edit(ctx, item["id"], photos=[_photo("a"), _photo("b"), _photo("c")])
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    pushed = [m["url"] for m in relay_fake.listings[0]["media"]["urls"]]
+    assert pushed == ["enc-a", "enc-b", "enc-c"]
+    assert _updates_sent(relay_fake) == [("t1", _PHOTOS), ("t2", _PHOTOS)]
+    assert _seller_hears(store) == [
+        "📣 Teak lamp — let 2 buyers who asked know about the new photos."
+    ]
+    for thread_id in ("carousell-ai:t1", "carousell-ai:t2"):
+        assert store.get_thread(thread_id)["last_followup_ts"] is not None
+
+
+@pytest.mark.parametrize(
+    "new_set",
+    [("b", "a"), ("a",), ("b",), ("a", "b")],
+    ids=["reordered", "first-removed", "second-removed", "unchanged"],
+)
+def test_photos_removed_or_reordered_tell_nobody(make_ctx, store, bus, relay_fake, new_set):
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake)
+
+    result = _edit(ctx, item["id"], photos=[_photo(n) for n in new_set])
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert relay_fake.reply_calls == []
+    assert _seller_hears(store) == []
+
+
+def test_a_replaced_photo_counts_as_new(make_ctx, store, bus, relay_fake):
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake)
+    _edit(ctx, item["id"], photos=[_photo("a"), _photo("c")])
+    assert _updates_sent(relay_fake) == [("t1", _PHOTOS), ("t2", _PHOTOS)]
+
+
+def test_a_price_drop_with_a_new_photo_is_one_message_per_buyer(make_ctx, store, bus, relay_fake):
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake)
+
+    _edit(ctx, item["id"], list_price=80, photos=[_photo("a"), _photo("b"), _photo("c")])
+
+    both = (
+        f"The price of the Teak lamp is now $80 (was $95), and I've added new photos: "
+        f"{_WEB}/listing/L1."
+    )
+    assert _updates_sent(relay_fake) == [("t1", both), ("t2", both)]
+    assert _seller_hears(store) == [
+        "📣 Teak lamp — let 2 buyers who asked know about the price drop and the new photos."
+    ]
+
+
+def test_a_photo_carousell_ai_could_not_take_tells_nobody(make_ctx, store, bus, relay_fake):
+    # bazaar lists no upload tool while its media is off, so the listing keeps its old photos.
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake, client=RailClient)
+
+    result = _edit(ctx, item["id"], photos=[_photo("a"), _photo("b"), _photo("c")])
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert relay_fake.reply_calls == []
+    assert _seller_hears(store) == []
+
+
+class _UploadFails(RailClient):
+    """bazaar's media is on, but the photo upload itself fails."""
+
+    def offers_tool(self, name: str) -> bool:
+        return True
+
+    def upload_photo(self, data: bytes, content_type: str) -> str:
+        raise RailToolError("photo upload returned HTTP 503")
+
+
+@pytest.mark.parametrize("first", [_UploadFails, RailClient], ids=["upload-failed", "media-off"])
+def test_a_retry_that_lands_a_photo_tells_the_buyers(make_ctx, store, bus, relay_fake, first):
+    item, ctx = _asked_about_photo_lamp(make_ctx, store, bus, relay_fake, client=first)
+    new_set = [_photo("a"), _photo("b"), _photo("c")]
+    _edit(ctx, item["id"], photos=new_set)
+    assert relay_fake.reply_calls == []
+
+    retry = _media_ctx(make_ctx, store, bus, relay_fake)
+    result = _edit(retry, item["id"], photos=new_set)
+
+    assert result["markets"]["carousell-ai"] == {"status": "updated"}
+    assert _updates_sent(relay_fake) == [("t1", _PHOTOS), ("t2", _PHOTOS)]
