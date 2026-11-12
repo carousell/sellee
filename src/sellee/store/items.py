@@ -116,7 +116,8 @@ class ItemsMixin:
         return {"item": self.get_item(item_id), "floor_clamped": clamped}  # type: ignore[typeddict-item]
 
     def _write_item_fields(self, item_id: str, fields: dict, *, refuse_if_listed=False) -> bool:
-        """One UPDATE plus the floor clamp, in one transaction. Returns whether the floor moved.
+        """One UPDATE plus the floor clamp and the buyers it reopens, in one transaction. Returns
+        whether the floor moved.
 
         `refuse_if_listed` is checked inside the transaction, so a publish recording its URL a
         moment earlier cannot slip a buyer-visible change past it.
@@ -125,7 +126,9 @@ class ItemsMixin:
         values = [fields[name] for name in fields]
         now = _now()
         with self._db.transaction() as conn:
-            row = conn.execute("SELECT listing_urls FROM items WHERE id = ?", (item_id,)).fetchone()
+            row = conn.execute(
+                "SELECT listing_urls, list_price FROM items WHERE id = ?", (item_id,)
+            ).fetchone()
             if not row:
                 raise ItemNotFound(f"no item with id {item_id!r}")
             visible = sorted(name for name in fields if name in _BUYER_VISIBLE)
@@ -139,9 +142,27 @@ class ItemsMixin:
                 f"UPDATE items SET {assignments}, updated_ts = ? WHERE id = ?",
                 (*values, now, item_id),
             )
+            before = conn.execute(
+                "SELECT floor FROM floors WHERE item_id = ?", (item_id,)
+            ).fetchone()
             # In the same transaction as the price write, so `floor <= list_price` is never
             # observable as broken — not even by a reader between two statements.
-            return _clamp_floor_in_txn(conn, item_id, now)
+            if not _clamp_floor_in_txn(conn, item_id, now):
+                return False
+            # The pulled-down minimum reopens buyers as `set_floor` would, each offer weighed
+            # against the price it was made under.
+            after = conn.execute(
+                "SELECT floor FROM floors WHERE item_id = ?", (item_id,)
+            ).fetchone()
+            reopen_for_floor_change_in_txn(
+                conn,
+                item_id,
+                old_floor=before["floor"],
+                new_floor=after["floor"],
+                now=now,
+                offered_against=row["list_price"],
+            )
+            return True
 
     def set_photo_uploads(self, item_id: str, uploaded_urls: list) -> ItemRecord:
         """Stamp the uploaded media reference onto every photo of an item, in display order.

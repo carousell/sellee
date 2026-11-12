@@ -770,6 +770,35 @@ def test_the_result_counts_the_buyers_told_so_nothing_is_reported_as_pending(
     assert "buyers_told" in description and "never describe an update" in description
 
 
+def test_a_buyer_a_price_drop_reopens_gets_one_message_and_it_is_not_the_update(
+    make_ctx, store, bus, relay_fake
+):
+    """Bob offered $45 on a $50 lamp with a $48 minimum. The price drops to $40, pulling the
+    minimum down with it: Bob is the negotiation's now (owed a reply), not the update's."""
+    item = store.create_item(title="Teak lamp", list_price=50.0, currency="SGD")
+    store.record_listing_url(item["id"], "carousell-ai", f"{_WEB}/listing/L1")
+    store.set_floor(item["id"], 48.0, "seller")
+    _asked(relay_fake, "bob")
+    _asked(relay_fake, "cara")
+    _read_relay(store, bus, relay_fake)
+    store.negotiate_offer(item["id"], "carousell-ai:bob", "bob", 45, config=Config())
+
+    result = _edit(_relay_ctx(make_ctx, store, bus, relay_fake), item["id"], list_price=40)
+
+    assert result["floor_lowered"] is True
+    assert result["buyers_told"] == 1
+    assert [call["id"] for call in relay_fake.reply_calls] == ["cara"]
+    owed = {
+        t["thread_id"]: t["reply_owed_ts"] for t in store.item_threads(item["id"], "carousell-ai")
+    }
+    assert owed["carousell-ai:bob"] is not None and owed["carousell-ai:cara"] is None
+    assert store.owed_offer("carousell-ai:bob") == {"offer": 45.0, "currency": "SGD"}
+    # His one message is the reply he is owed, decided on his $45: now above the price, so the
+    # engine takes it as a lead for the seller to confirm.
+    decided = store.negotiate_offer(item["id"], "carousell-ai:bob", "bob", 45, config=Config())
+    assert (decided["decision"], decided["needs_seller_confirm"]) == ("bid_lead", True)
+
+
 def test_a_seller_who_turned_updates_off_tells_nobody_of_a_rail_price_drop(
     make_ctx, store, bus, relay_fake
 ):

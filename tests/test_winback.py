@@ -310,6 +310,59 @@ def test_a_thread_no_longer_talking_is_not_reopened(store: Store) -> None:
     assert _lower(store, item["id"])["reopened"] == 0
 
 
+# --- a price drop that pulls the minimum down -----------------------------------------------------
+
+
+def _bobs_item(store: Store) -> dict:
+    """$50 with a $48 minimum, and Bob's $45 under it, countered and answered."""
+    item = store.create_item(title="Teak lamp", list_price=50.0, currency="SGD")
+    store.set_floor(item["id"], 48.0, "seller")
+    _answered_buyer(store, item["id"], "fb:bob", 45)
+    return item
+
+
+def test_a_price_drop_under_the_minimum_reopens_the_buyer_it_now_reaches(store: Store) -> None:
+    item = _bobs_item(store)
+    assert _buyer_rows(store, item["id"])["fb:bob"] == ("active", 0)
+
+    ack = store.revise_item(item["id"], {"list_price": 40.0})
+
+    assert ack["floor_clamped"] is True
+    assert _buyer_rows(store, item["id"])["fb:bob"] == ("active", 1)
+    assert _owed(store) == {"fb:bob"}
+
+
+def test_a_rival_above_him_still_outranks_him_after_a_price_drop(store: Store) -> None:
+    item = _bobs_item(store)
+    _answered_buyer(store, item["id"], "fb:ann", 46)
+
+    store.revise_item(item["id"], {"list_price": 40.0})
+
+    rows = _buyer_rows(store, item["id"])
+    assert (rows["fb:ann"], rows["fb:bob"]) == (("active", 1), ("active", 0))
+    assert _owed(store) == {"fb:ann"}
+
+
+def test_a_rival_at_his_offer_leaves_both_standing_after_a_price_drop(store: Store) -> None:
+    item = _bobs_item(store)
+    _answered_buyer(store, item["id"], "fb:abe", 45)
+
+    store.revise_item(item["id"], {"list_price": 40.0})
+
+    assert _owed(store) == set()
+
+
+@pytest.mark.parametrize("price", [48.0, 49.0, 55.0])
+def test_a_price_change_that_leaves_the_minimum_reopens_nobody(store: Store, price) -> None:
+    item = _bobs_item(store)
+
+    ack = store.revise_item(item["id"], {"list_price": price})
+
+    assert ack["floor_clamped"] is False
+    assert _buyer_rows(store, item["id"])["fb:bob"] == ("active", 0)
+    assert _owed(store) == set()
+
+
 # --- the re-decision -----------------------------------------------------------------------------
 
 
