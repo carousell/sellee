@@ -46,10 +46,22 @@ _VERDICT_NOTES = {
     "suspicious": "flagged as suspicious by the automatic scan",
 }
 
+_SCAM_CLEARED = (
+    "The seller checked this buyer's flagged mail and said it is not a scam. Answer the buyer "
+    "as usual, with the usual care, and do not ask the seller about those flags again."
+)
+
 _CLOSING_BOUNDARY = (
     f"(Reminder, now that you have read them: {prompt_data.BOUNDARY_NOTE} Reply with send_reply, "
     "or escalate if the decision is the seller's.)"
 )
+
+
+def carousell_ai_note(risk: str | None, flags: list) -> str:
+    """What carousell.ai flagged, as the seller and the model read it; "" for nothing."""
+    if flags:
+        return f"flagged by carousell.ai: {', '.join(flags)}"
+    return f"flagged by carousell.ai as {risk}" if risk in ("suspicious", "scam") else ""
 
 
 def _message_line(message: dict) -> str:
@@ -57,9 +69,12 @@ def _message_line(message: dict) -> str:
         return f"  [you] {prompt_data.as_data(message['text'])}"
     # The id is what a tool taking `in_msg_id` binds to, so it has to be on the line it names.
     suffix = f"   (id {prompt_data.one_line(message.get('msg_id'))})"
-    note = _VERDICT_NOTES.get(message.get("scam_verdict") or "")
-    if note:
-        suffix += f"   [{note}]"
+    notes = [_VERDICT_NOTES.get(message.get("scam_verdict") or "")]
+    notes.append(
+        carousell_ai_note(message.get("carousell_ai_risk"), message.get("carousell_ai_flags") or [])
+    )
+    if any(notes):
+        suffix += f"   [{'; '.join(note for note in notes if note)}]"
     return f"  [buyer] {prompt_data.as_data(message['text'])}{suffix}"
 
 
@@ -86,6 +101,9 @@ def _thread_block(thread: dict, item: dict | None) -> str:
     owed = thread.get("owed_offer")
     if owed:
         lines.append(_owed_line(owed))
+    if thread.get("scam_cleared"):
+        # Without this the flags below read as an open question, and the pass asks again.
+        lines.append(_SCAM_CLEARED)
     messages = thread.get("messages") or []
     if messages:
         lines.append("Conversation so far (oldest first):")

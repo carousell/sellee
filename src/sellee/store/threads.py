@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import json
+
 from sellee.db import Database
 from sellee.store.helpers import (
     _THREAD_SIDES,
     _TRANSCRIPT_DEFAULT_CAP,
+    SCAM_CONFIRMATION,
     ItemNotFound,
     MessageRecord,
     StoreError,
@@ -104,6 +107,13 @@ class ThreadsMixin:
             **_thread_from_row(rows[0]),
             "messages": self.get_thread_messages(thread_id, limit=message_cap),
             "message_count": message_count,
+            "scam_cleared": bool(
+                self._db.query(
+                    "SELECT 1 FROM escalations WHERE thread_id = ? AND status = 'resolved' "
+                    "AND resolution = 'not scam' LIMIT 1",
+                    (thread_id,),
+                )
+            ),
         }
         return record
 
@@ -134,6 +144,8 @@ class ThreadsMixin:
         ts: float | None = None,
         source: str | None = None,
         scam_verdict: str | None = None,
+        carousell_ai_risk: str | None = None,
+        carousell_ai_flags: list | None = None,
     ) -> bool:
         """Fold one transcript row into a thread, deduped by (thread_id, msg_id). Returns True if
         it was newly inserted, False if the constraint dropped a duplicate — dedup by the schema,
@@ -148,9 +160,19 @@ class ThreadsMixin:
             at = ts if ts is not None else _now()
             cur = conn.execute(
                 "INSERT OR IGNORE INTO thread_messages "
-                "(thread_id, msg_id, dir, text, ts, source, scam_verdict) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?)",
-                (thread_id, msg_id, direction, text, at, source, scam_verdict),
+                "(thread_id, msg_id, dir, text, ts, source, scam_verdict, carousell_ai_risk, "
+                " carousell_ai_flags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    thread_id,
+                    msg_id,
+                    direction,
+                    text,
+                    at,
+                    source,
+                    scam_verdict,
+                    carousell_ai_risk,
+                    json.dumps(carousell_ai_flags) if carousell_ai_flags else None,
+                ),
             )
             if cur.rowcount > 0 and direction == "out" and source == "manual":
                 # The seller answered the buyer themselves after the thread became owed a reply.
@@ -187,15 +209,18 @@ class ThreadsMixin:
         self, thread_id: str, *, limit: int | None = None
     ) -> list[MessageRecord]:
         """The transcript in chronological order, capped to the most recent `limit` rows."""
+        columns = (
+            "msg_id, dir, text, ts, source, scam_verdict, carousell_ai_risk, carousell_ai_flags"
+        )
         if limit is None:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
+                f"SELECT {columns} FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts ASC, rowid ASC",
                 (thread_id,),
             )
         else:
             rows = self._db.query(
-                "SELECT msg_id, dir, text, ts, source, scam_verdict FROM thread_messages "
+                f"SELECT {columns} FROM thread_messages "
                 "WHERE thread_id = ? ORDER BY ts DESC, rowid DESC LIMIT ?",
                 (thread_id, limit),
             )
@@ -208,6 +233,8 @@ class ThreadsMixin:
                 "ts": r["ts"],
                 "source": r["source"],
                 "scam_verdict": r["scam_verdict"],
+                "carousell_ai_risk": r["carousell_ai_risk"],
+                "carousell_ai_flags": json.loads(r["carousell_ai_flags"] or "[]"),
             }
             for r in rows
         ]
@@ -331,3 +358,74 @@ class ThreadsMixin:
                 (restored, _now(), thread_id),
             )
         return self.get_thread(thread_id)  # type: ignore[return-value]
+
+    # The open ask a seller's scam answer settles: one opened as the scam confirmation, or one
+    # opened before that kind existed on a thread that still holds a scam.
+    _OPEN_SCAM_CONFIRMATION_SQL = (
+        "SELECT id FROM escalations WHERE thread_id = ? AND status = 'open' AND (kind = ? OR "
+        "EXISTS (SELECT 1 FROM thread_messages WHERE thread_id = escalations.thread_id "
+        "AND scam_verdict = 'scam'))"
+    )
+
+    def open_scam_confirmation(self, thread_id: str) -> str | None:
+        """The id of the thread's open scam confirmation, or None."""
+        rows = self._db.query(self._OPEN_SCAM_CONFIRMATION_SQL, (thread_id, SCAM_CONFIRMATION))
+        return rows[0]["id"] if rows else None
+
+    def settle_scam_confirmation(self, thread_id: str, answer: str) -> dict:
+        """`not_scam` lowers each `scam` verdict to `suspicious` and restores the status from
+        before hold and ask; `keep_held` leaves the verdicts and holds the thread."""
+        if answer not in ("not_scam", "keep_held"):
+            raise StoreError(f"unknown scam confirmation answer {answer!r}")
+        ts = _now()
+        with self._db.transaction() as conn:
+            row = conn.execute(
+                "SELECT status, held_from_status, escalated_from_status FROM threads "
+                "WHERE thread_id = ?",
+                (thread_id,),
+            ).fetchone()
+            if not row:
+                raise ThreadNotFound(f"no thread with id {thread_id!r}")
+            asked = conn.execute(
+                self._OPEN_SCAM_CONFIRMATION_SQL, (thread_id, SCAM_CONFIRMATION)
+            ).fetchone()
+            if asked is None:
+                raise StoreError(f"thread {thread_id!r} has no scam confirmation open")
+            conn.execute(
+                "UPDATE escalations SET status = 'resolved', resolution = ?, resolved_ts = ? "
+                "WHERE id = ?",
+                (answer.replace("_", " "), ts, asked["id"]),
+            )
+            status, seen = row["status"], set()
+            # A repeated hold over an ask can point the two back at each other, so stop on a loop.
+            while status in ("held", "escalated") and status not in seen:
+                seen.add(status)
+                status = row[f"{status}_from_status"] or "active"
+            if status in ("held", "escalated"):
+                status = "active"
+            lowered = 0
+            if answer == "keep_held":
+                conn.execute(
+                    "UPDATE threads SET status = 'held', held_from_status = ?, "
+                    "held_reason = COALESCE(held_reason, 'scam'), escalated_from_status = NULL, "
+                    "updated_ts = ? WHERE thread_id = ?",
+                    (status, ts, thread_id),
+                )
+                status = "held"
+            else:
+                lowered = conn.execute(
+                    "UPDATE thread_messages SET scam_verdict = 'suspicious' "
+                    "WHERE thread_id = ? AND scam_verdict = 'scam'",
+                    (thread_id,),
+                ).rowcount
+                conn.execute(
+                    "UPDATE threads SET status = ?, held_reason = NULL, held_from_status = NULL, "
+                    "escalated_from_status = NULL, updated_ts = ? WHERE thread_id = ?",
+                    (status, ts, thread_id),
+                )
+        return {
+            "thread_id": thread_id,
+            "status": status,
+            "escalation_id": asked["id"],
+            "lowered": lowered,
+        }

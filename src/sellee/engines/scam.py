@@ -213,6 +213,17 @@ def scan(
     }
 
 
+_VERDICT_RANK = {"clean": 0, "suspicious": 1, "scam": 2}
+
+
+def higher_verdict(local: str, other) -> str:
+    """The higher of our verdict and another detector's. A value outside the three counts as no
+    risk, so the other side can only ever raise ours."""
+    if not isinstance(other, str) or other not in _VERDICT_RANK:
+        return local
+    return max(local, other, key=lambda verdict: _VERDICT_RANK.get(verdict, -1))
+
+
 def merge_signatures(registry: list, bank: list) -> list:
     """The deterministic match set the scan consumes: registry ∪ active local bank, registry wins
     on a (kind, value) tie, minus anything the seller dismissed on this install."""

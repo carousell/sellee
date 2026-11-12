@@ -127,8 +127,8 @@ plain terms ("offered to 'arrange delivery', then sent a link to 'receive the mo
 link **defanged only** (`hxxps://payout[.]site` — never retype or open it), and offer: not a scam —
 resume / keep held.
 `options: ["👍 Not a scam — resume", "🛑 Keep it held"]`
-On "not a scam", release via `release_thread` (the prior status is restored
-automatically). Reporting the account on the marketplace is the seller's to do in the app — if they
+On carousell.ai, answer with `answer_scam_confirmation` (`not_scam` or `keep_held`). Elsewhere,
+"not a scam" is `release_thread`, which restores the prior status. Reporting the account on the marketplace is the seller's to do in the app — if they
 want the counterpart reported, say so plainly rather than promising to file it for them.
 
 **Unconfirmed send — say nothing.** When `send_reply` returns `send_unverified` (`delivered:

@@ -85,6 +85,8 @@ _THREAD_SIDES = ("sell", "buy")
 # The sources the inboxes file a thread they read off a marketplace under. Only such a thread shows
 # a buyer came through that marketplace, so nothing else may file one.
 IMPORTED_THREAD_SOURCES = frozenset({"browser_read", "registration_read", "relay_read"})
+# The ask that settles a held scam; only answer_scam_confirmation closes it.
+SCAM_CONFIRMATION = "scam_confirmation"
 # Thread transcript reads are capped so a huge thread can't blow a pass's context.
 _TRANSCRIPT_DEFAULT_CAP = 100
 
@@ -352,8 +354,8 @@ class FloorRecord(TypedDict):
 
 
 class MessageRecord(TypedDict):
-    """One transcript row (see `get_thread_messages`). scam_verdict is stamped by the daemon's
-    pre-scan on marketplace inbound; None on rows that arrived by another path."""
+    """One transcript row. scam_verdict is the daemon's pre-scan of marketplace inbound, None
+    otherwise; the carousell_ai_* fields hold carousell.ai's own label on its buyer messages."""
 
     msg_id: str
     dir: str
@@ -361,6 +363,8 @@ class MessageRecord(TypedDict):
     ts: float
     source: str | None
     scam_verdict: str | None
+    carousell_ai_risk: str | None
+    carousell_ai_flags: list[str]
 
 
 class ThreadSummary(TypedDict):
@@ -398,6 +402,8 @@ class ThreadRecord(ThreadSummary):
 
     messages: list[MessageRecord]
     message_count: int
+    # The seller answered a scam confirmation on it with Not a scam.
+    scam_cleared: bool
 
 
 class WantRecord(TypedDict):

@@ -72,7 +72,18 @@ class FakeRelay:
         }
         self.messages[thread_id] = []
 
-    def add_message(self, thread_id, msg_id, author, text, *, pending_send=False, client_id=""):
+    def add_message(
+        self,
+        thread_id,
+        msg_id,
+        author,
+        text,
+        *,
+        pending_send=False,
+        client_id="",
+        risk="",
+        flags=(),
+    ):
         ts = self.tick()
         self.messages[thread_id].append(
             {
@@ -82,6 +93,8 @@ class FakeRelay:
                 "sent_at": rfc3339(ts),
                 "client_message_id": client_id if author == "agent" else "",
                 "pending_send": pending_send,
+                "risk": risk,
+                "flags": list(flags) if isinstance(flags, tuple) else flags,
             }
         )
         self.threads[thread_id]["updated"] = ts

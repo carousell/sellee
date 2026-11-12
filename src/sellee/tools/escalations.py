@@ -9,8 +9,10 @@ update_thread (escalated->active).
 
 from __future__ import annotations
 
+from sellee import marketplaces, reply_prompt
 from sellee.channel import asks
-from sellee.store import StoreError
+from sellee.engines import scam as scam_engine
+from sellee.store import SCAM_CONFIRMATION, StoreError
 from sellee.tools.registry import (
     TIER_ATTENDED,
     TIER_PASS_CHANNEL,
@@ -29,11 +31,19 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
             options = asks.validate_options(options)
         except ValueError as exc:
             raise ToolError(str(exc)) from exc
+    question = params["open_question"]
+    note = reply_prompt.carousell_ai_note(*_carousell_ai_label(ctx.store, params["thread_id"]))
+    if note:
+        question = f"{question} ({note})"
+    kind = params.get("kind")
+    if _holds_a_scam(ctx.store, params["thread_id"]):
+        # Replies stay refused until the seller answers, so the ask is the scam confirmation.
+        kind = SCAM_CONFIRMATION
     try:
         result = ctx.store.escalate(
             params["thread_id"],
-            open_question=params["open_question"],
-            kind=params.get("kind"),
+            open_question=question,
+            kind=kind,
             context_summary=params.get("context_summary"),
             options=options,
         )
@@ -42,13 +52,68 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
     if not result["idempotent"]:
         ctx.bus.publish(
             "escalation.open",
-            {"id": result["id"], "thread_id": params["thread_id"], "kind": params.get("kind")},
+            {"id": result["id"], "thread_id": params["thread_id"], "kind": kind},
             pass_id=ctx.session.pass_id,
         )
     return result
 
 
+def _holds_a_scam(store, thread_id: str) -> bool:
+    """Whether a carousell.ai thread has a buyer message whose merged verdict is `scam`."""
+    thread = store.get_thread(thread_id, message_cap=0)
+    if thread is None or thread["market"] != marketplaces.RAIL:
+        return False
+    return any(row["scam_verdict"] == "scam" for row in store.get_thread_messages(thread_id))
+
+
+def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
+    """Raise when a carousell.ai thread's open ask is a scam confirmation, which only
+    answer_scam_confirmation settles, so the reply gate is cleared with it."""
+    thread = store.get_thread(thread_id, message_cap=0)
+    if thread is None or thread["market"] != marketplaces.RAIL:
+        return
+    if store.open_scam_confirmation(thread_id) is not None:
+        raise ToolError(
+            "this thread waits on the seller's answer to a scam confirmation; settle it with "
+            "answer_scam_confirmation"
+        )
+
+
+def _carousell_ai_label(store, thread_id: str) -> tuple:
+    """carousell.ai's highest risk on the buyer's messages in this thread, and every relay flag
+    it put on them, in order."""
+    inbound = [row for row in store.get_thread_messages(thread_id) if row["dir"] == "in"]
+    risk = "clean"
+    for row in inbound:
+        risk = scam_engine.higher_verdict(risk, row["carousell_ai_risk"])
+    flags = [flag for row in inbound for flag in row["carousell_ai_flags"]]
+    return risk, list(dict.fromkeys(flags))
+
+
+def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
+    thread_id = params["thread_id"]
+    thread = ctx.store.get_thread(thread_id, message_cap=0)
+    if thread is None:
+        raise ToolError(f"no thread with id {thread_id!r}")
+    if thread["market"] != marketplaces.RAIL:
+        raise ToolError(
+            "only a carousell.ai scam confirmation is answered here; on other markets release "
+            "the thread with release_thread"
+        )
+    try:
+        result = ctx.store.settle_scam_confirmation(thread_id, params["answer"])
+    except StoreError as exc:
+        raise ToolError(str(exc)) from exc
+    ctx.bus.publish(
+        "escalation.resolved", {"id": result["escalation_id"]}, pass_id=ctx.session.pass_id
+    )
+    return result
+
+
 def _resolve_escalation(ctx: ToolContext, params: dict) -> dict:
+    esc = ctx.store.get_escalation(params["escalation_id"])
+    if esc is not None and esc["status"] == "open":
+        refuse_answering_a_scam_confirmation(ctx.store, esc["thread_id"])
     try:
         result = ctx.store.resolve_escalation(
             params["escalation_id"],
@@ -122,6 +187,28 @@ register(
             "additionalProperties": False,
         },
         handler=_resolve_escalation,
+        tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
+    )
+)
+register(
+    ToolSpec(
+        name="answer_scam_confirmation",
+        description="The seller's answer to a carousell.ai scam confirmation (an escalation of "
+        "kind scam_confirmation). not_scam resolves it, lowers the thread's scam verdicts to "
+        "suspicious so replies are no longer refused, and restores the thread's status; "
+        "keep_held resolves it and keeps the thread held. Nothing is sent to carousell.ai. "
+        "Refuses, changing nothing, when no confirmation is open.",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "thread_id": {"type": "string"},
+                "answer": {"type": "string", "enum": ["not_scam", "keep_held"]},
+            },
+            "required": ["thread_id", "answer"],
+            "additionalProperties": False,
+        },
+        handler=_answer_scam_confirmation,
+        # The seller's own decision, so only where their answer arrives.
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
     )
 )
