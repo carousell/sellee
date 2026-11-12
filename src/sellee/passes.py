@@ -93,6 +93,12 @@ PUBLISH_BROWSER_TOOLS = (
 BROWSER_SERVER_NAME = "playwright"
 
 
+# A browser form gets the description with its Q&A section; see `get_item`.
+TYPE_PUBLISHED_DESCRIPTION = (
+    "For the description, type its published_description, not its description.\n"
+)
+
+
 def publish_prompt(
     item_id: str,
     market: str = DEFAULT_PUBLISH_MARKET,
@@ -109,11 +115,14 @@ def publish_prompt(
     # names them; the recipe never types a marketplace URL, so the composer arrives here too.
     staged = f"Its photos are in your working directory: {', '.join(photos)}\n" if photos else ""
     composer = f"The composer is at {composer_url}\n" if composer_url else ""
+    # The rail's publish tool composes the description itself; a browser form is typed into.
+    typed = "" if market == DEFAULT_PUBLISH_MARKET else TYPE_PUBLISHED_DESCRIPTION
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Publish item {item_id} {where}.\n"
         f"Read the item with get_item. It has already been confirmed with the seller, so do not "
         f"re-confirm and do not change its title, price, or description — publish what is there.\n"
+        f"{typed}"
         f"{composer}"
         f"{staged}"
         f"Report the live listing URL when it is up, or say what failed."
@@ -293,6 +302,7 @@ def _edit_prompt(payload: dict, store, pass_id: str) -> str:
             if names
             else ""
         )
+    typed = TYPE_PUBLISHED_DESCRIPTION if "description" in (payload.get("changed") or ()) else ""
     return (
         f"{PASS_PROMPT_MARKER}\n"
         f"Change item {item_id}'s listing on {marketplaces.display_name(market)} so it matches "
@@ -300,6 +310,7 @@ def _edit_prompt(payload: dict, store, pass_id: str) -> str:
         f"The listing is at {url}\n"
         f"Change only these fields: {changed}. Read their new values with get_item. The change was "
         f"already confirmed with the seller — do not second-guess it, and touch nothing else.\n"
+        f"{typed}"
         f"{photos}"
         f"When you are done, call record_listing_revision with revision_id "
         f"{payload['revision_id']} and how it went."
@@ -355,6 +366,18 @@ def _reply_prompt(payload: dict, store, pass_id: str) -> str:
     return reply_prompt_mod.build_reply_prompt(threads, items)
 
 
+# A connected marketplace's own seller-comms rules, sent in the channel prompt only when the seller
+# works that market; the system prompt carries what every seller needs.
+CHANNEL_MARKET_SKILLS = {marketplaces.CRAIGSLIST: "seller-comms-craigslist"}
+
+
+def _channel_market_guidance(store) -> tuple:
+    connected = settings.connected_markets(store)
+    return tuple(
+        skills.load(skill) for market, skill in CHANNEL_MARKET_SKILLS.items() if market in connected
+    )
+
+
 def _channel_prompt(payload: dict, store, pass_id: str) -> str:
     # The rows claimed into this pass at enqueue, plus the conversational window — both read fresh
     # from durable sellee.db rows, so a restart rebuilds the same prompt.
@@ -365,6 +388,7 @@ def _channel_prompt(payload: dict, store, pass_id: str) -> str:
         transcript,
         settings_block=settings.prompt_block(store),
         channel_name=channel.display_name(store.get_channel()["adapter"]),
+        market_guidance=_channel_market_guidance(store),
     )
 
 

@@ -43,6 +43,7 @@
     "send_message",
     "send_reply",
     "set_floor",
+    "suggested_questions",
     "update_item",
     "update_live_listing",
     "update_seller_config",

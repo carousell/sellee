@@ -8,6 +8,7 @@ import time
 
 from sellee import __version__, heartbeat, paths, secrets, settings
 from sellee.channel import activity
+from sellee.listing_description import published_description
 from sellee.rail.client import RailError
 from sellee.tools.registry import (
     TIER_ATTENDED,
@@ -122,7 +123,7 @@ def _get_item(ctx: ToolContext, params: dict) -> dict:
     item = ctx.store.get_item(params["item_id"])
     if item is None:
         raise ToolError(f"no item with id {params['item_id']!r}")
-    return item
+    return {**item, "published_description": published_description(ctx.store, item)}
 
 
 def _list_items(ctx: ToolContext, params: dict) -> dict:
@@ -164,7 +165,9 @@ register(
 register(
     ToolSpec(
         name="get_item",
-        description="Fetch one item's buyer-safe record (never its floor).",
+        description="Fetch one item's buyer-safe record (never its floor). published_description "
+        "is the description a marketplace gets: its own plus the seller's answers to common "
+        "questions.",
         input_schema={
             "type": "object",
             "properties": {"item_id": {"type": "string"}},

@@ -47,6 +47,7 @@ from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.markets import craigslist
 from sellee.channel import fastpaths
+from sellee.listing_description import published_description
 from sellee.passes import DEFAULT_PUBLISH_MARKET
 from sellee.rail.client import RailError, RailToolRefused, RailUnprovisioned, listing_id_from_url
 
@@ -424,6 +425,8 @@ def _drive_publish(deps: CrosslistDeps, item: dict, market: str) -> None:
                 in_review=in_review,
             )
 
+    # The marketplace gets the description with its Q&A section; the stored one stays the seller's.
+    item = {**item, "description": published_description(deps.store, item)}
     # Staged where the browser server may read from: the media store is outside its roots.
     photos = publisher.stage_photos(item["id"], item.get("photos") or [])
     try:

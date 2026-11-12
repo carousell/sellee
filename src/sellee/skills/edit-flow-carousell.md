@@ -8,9 +8,9 @@ Changing one live Carousell listing so it matches the item record, in the seller
 Chrome. The change was confirmed with the seller before this pass started: make the listing say
 what the item says, for the fields your prompt names, and touch nothing else.
 
-Read the item with `get_item` for the new values. If photos are among the fields, the new set is in
-your working directory, named in your prompt, in order — upload those, not the paths `get_item`
-reports.
+Read the item with `get_item` for the new values; the description to type is its
+`published_description`. If photos are among the fields, the new set is in your working directory,
+named in your prompt, in order — upload those, not the paths `get_item` reports.
 
 ## Before you touch the page
 
@@ -53,8 +53,8 @@ field, and none where the remembered selectors resolve. To check a single fact, 
    `description` are the page's own record of what it shows. `offers.price` reads like `"115.00"`:
    compare it as a number.
 9. **Record it.** `record_listing_revision` with `done` only if every changed field reads back as
-   the item says, putting what the page shows in `shown`. Anything else is `failed`, with the
-   reason — the seller is told either way.
+   the item says (the description as its `published_description`), putting what the page shows in
+   `shown`. Anything else is `failed`, with the reason — the seller is told either way.
 10. **Close your tab**, including when it failed.
 
 ## Never spend money

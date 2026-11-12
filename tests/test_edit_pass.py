@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 from tests.conftest import seed_setting
 
-from sellee import passes
+from sellee import passes, skills
 
 CAROUSELL_URL = "https://www.carousell.sg/p/dyson-v8-456/"
 
@@ -58,6 +58,19 @@ def test_the_prompt_names_the_listing_the_fields_and_the_id_to_report(store) -> 
     assert "description" in prompt
     assert payload["revision_id"] in prompt
     assert "record_listing_revision" in prompt
+
+
+def test_a_description_edit_is_told_to_type_the_published_description(store) -> None:
+    prompt = passes.PASS_TYPES["edit"].build_prompt(_running(store), store, "pass_1")
+    assert "type its published_description, not its description" in prompt
+    assert "`published_description`" in skills.load("edit-flow-carousell")
+
+
+def test_an_edit_that_leaves_the_description_alone_is_not_told_about_it(store) -> None:
+    prompt = passes.PASS_TYPES["edit"].build_prompt(
+        _running(store, changed=("list_price",)), store, "p"
+    )
+    assert "published_description" not in prompt
 
 
 def test_the_pass_gets_the_recipe_and_the_browser(store) -> None:

@@ -37,6 +37,7 @@ from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.inbox import browser_busy
+from sellee.listing_description import published_description
 
 log = logging.getLogger(__name__)
 
@@ -185,6 +186,8 @@ def _drive(deps: ReviseDeps, revision: dict, item: dict) -> None:
     market = revision["market"]
     adapter = market_adapters.get_adapter(market)
     url = item["listing_urls"][market]
+    # Typed and read back with its Q&A section; the stored description stays the seller's.
+    item = {**item, "description": published_description(deps.store, item)}
     try:
         client = deps.browser_factory()
         with client.exclusive(), doorbell.visiting(client, adapter):

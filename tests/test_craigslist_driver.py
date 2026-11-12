@@ -7,7 +7,7 @@ import contextlib
 import re
 
 import pytest
-from hypothesis import given, settings
+from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import connect_craigslist, seed_setting
 
@@ -17,6 +17,7 @@ from sellee.browser import publisher
 from sellee.browser.client import BrowserError
 from sellee.browser.markets import craigslist
 from sellee.config import Config
+from sellee.listing_description import published_description
 from sellee.rail import registration
 from sellee.rail.client import RailUnprovisioned
 
@@ -130,6 +131,7 @@ class FakeForm:
                 "title": self.fields.get(craigslist.TITLE),
                 "price": self.fields.get(craigslist.PRICE),
                 "zip": self.fields.get(craigslist.ZIP),
+                "description": self.fields.get(craigslist.BODY),
                 "chat_on": self.chat_on,
             }
             seen.update(self.mangle)
@@ -453,6 +455,48 @@ def test_a_ready_post_is_driven_and_its_url_recorded(store, bus, crosslisting) -
     assert store.publish_pass_index() == [] or all(
         row["status"] != "queued" for row in store.publish_pass_index()
     )
+
+
+_WORDS = st.text(alphabet=st.sampled_from("abc XYZ 019.,?!'é📱\n"), max_size=30)
+
+
+@settings(
+    max_examples=40, deadline=None, suppress_health_check=[HealthCheck.function_scoped_fixture]
+)
+@given(
+    description=_WORDS.filter(str.strip),
+    answers=st.lists(
+        st.tuples(st.sampled_from(["Any marks?", "Charger included?"]), _WORDS.filter(str.strip)),
+        max_size=4,
+    ),
+)
+def test_the_post_carries_the_composed_description(
+    store, bus, crosslisting, description, answers
+) -> None:
+    made = store.create_item(
+        title="Samsung Buds3", list_price=80.0, currency="USD", description=description
+    )
+    for question, answer in answers:
+        store.qa_add(made["id"], question, answer, "seller", on_listing=True)
+    item, form = store.get_item(made["id"]), FakeForm()
+
+    crosslist._drive_publish(_deps(store, bus, form), item, "craigslist")
+
+    assert form.fields[craigslist.BODY] == published_description(store, item)
+    assert form.published
+    assert store.get_item(made["id"])["description"] == description
+
+
+def test_a_listing_time_answer_goes_into_the_posting_body(store, bus, crosslisting) -> None:
+    store.qa_add(crosslisting["id"], "Any marks?", "None at\nall.", "seller", on_listing=True)
+    form = FakeForm()
+
+    crosslist.enqueue_next(_deps(store, bus, form))
+
+    assert form.fields[craigslist.BODY] == (
+        "Barely used.\n\nCommon questions\nQ: Any marks?\nA: None at all."
+    )
+    assert store.get_item(crosslisting["id"])["listing_urls"]["craigslist"] == _POST
 
 
 def test_the_condition_is_picked_through_its_menu_widget() -> None:

@@ -188,23 +188,44 @@ class ItemsMixin:
 
     # --- Q&A bank ---------------------------------------------------------------------------
 
-    def qa_add(self, item_id: str, question: str, answer: str, source: str) -> dict:
-        """Bank one taught answer. item_id '*' is a global entry."""
+    def qa_add(
+        self, item_id: str, question: str, answer: str, source: str, *, on_listing: bool = False
+    ) -> dict:
+        """Bank one taught answer. item_id '*' is a global entry. on_listing shows it on the item's
+        published description, so it needs one item."""
         if source not in _QA_SOURCES:
             raise StoreError(f"qa source must be one of {_QA_SOURCES}")
         if not (question or "").strip() or not (answer or "").strip():
             raise StoreError("question and answer must both be non-empty")
+        if on_listing and item_id == QA_GLOBAL_ITEM:
+            raise StoreError("an answer shown on a listing belongs to one item, not to every item")
         if item_id != QA_GLOBAL_ITEM and self.get_item(item_id) is None:
             raise ItemNotFound(f"no item with id {item_id!r}")
         ts = _now()
         with self._db.transaction() as conn:
             cur = conn.execute(
-                "INSERT INTO qa_bank (item_id, question, answer, source, created_ts) "
-                "VALUES (?, ?, ?, ?, ?)",
-                (item_id, question.strip(), answer.strip(), source, ts),
+                "INSERT INTO qa_bank (item_id, question, answer, source, on_listing, created_ts) "
+                "VALUES (?, ?, ?, ?, ?, ?)",
+                (item_id, question.strip(), answer.strip(), source, int(on_listing), ts),
             )
             entry_id = cur.lastrowid
         return {"id": entry_id, "item_id": item_id, "source": source, "created_ts": ts}
+
+    def qa_questions(self, item_id: str) -> set:
+        """Every question banked for the item or globally, uncapped, as qa_add stored it."""
+        rows = self._db.query(
+            "SELECT question FROM qa_bank WHERE item_id IN (?, ?)", (item_id, QA_GLOBAL_ITEM)
+        )
+        return {r["question"] for r in rows}
+
+    def qa_listing_answers(self, item_id: str) -> list[dict]:
+        """The item's on_listing rows, oldest first, so a later answer to a question follows it."""
+        rows = self._db.query(
+            "SELECT question, answer FROM qa_bank WHERE item_id = ? AND on_listing = 1 "
+            "ORDER BY created_ts, id",
+            (item_id,),
+        )
+        return [{"question": r["question"], "answer": r["answer"]} for r in rows]
 
     def qa_search(self, item_id: str, query: str | None = None, limit: int = _QA_SEARCH_CAP):
         """The item's entries plus the global ones, capped — the whole bank, for the model to match.

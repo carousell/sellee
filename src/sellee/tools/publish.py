@@ -17,6 +17,7 @@ from sellee import settings
 from sellee.browser import publisher
 from sellee.browser.client import BrowserUnavailable
 from sellee.engines import pacing as pacing_engine
+from sellee.listing_description import published_description
 from sellee.money import to_price_cents
 from sellee.rail import signin
 from sellee.rail.client import RailError, RailPolicyRefused, RailUnprovisioned, category_refusal
@@ -167,7 +168,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     # a refusal before any listing exists.
     args = {
         "title": item["title"],
-        "description": item["description"] or "",
+        "description": published_description(ctx.store, item),
         "price_cents": price_cents,
         "parcel_bucket": f"PARCEL_BUCKET_{item['size_bucket'].upper()}",
         "category": item["category"],

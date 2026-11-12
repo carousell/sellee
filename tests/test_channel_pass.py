@@ -8,8 +8,10 @@ from __future__ import annotations
 import threading
 import time
 
+from tests.conftest import seed_setting
+
 from fake_telegram_api import CHAT_ID, FAKE_TOKEN, FakeTelegramAPI
-from sellee import passes, secrets
+from sellee import passes, secrets, skills
 from sellee.channel import outbound, routing
 from sellee.channel.prompt import (
     TRANSCRIPT_CHAR_CAP,
@@ -177,6 +179,20 @@ def test_channel_pass_prompt_and_tier(store, bus, xdg_tmp) -> None:
     # the tier's tool set is the pass:channel surface (full-scope sell conversation)
     names = {s.name for s in tools_for_tier(TIER_PASS_CHANNEL)}
     assert {"create_item", "set_floor", "send_message", "escalate"} <= names
+
+
+def test_the_craigslist_rules_ride_the_prompt_only_for_a_seller_who_works_craigslist(
+    store, bus, xdg_tmp
+) -> None:
+    """They are sent on every pass, so a seller who never connected Craigslist never gets them."""
+    _bound(store)
+    rules = "# Seller comms on Craigslist"
+    pass_id = store.enqueue_channel_pass()
+    assert rules not in passes._channel_prompt({"inbox_ids": []}, store, pass_id)
+    seed_setting(store, "connected_markets", ["craigslist"])
+    assert rules in passes._channel_prompt({"inbox_ids": []}, store, pass_id)
+    system = skills.compose_system_prompt(passes.PASS_TYPES["channel"].skills_for({}))
+    assert "Craigslist's ZIP" not in system and rules not in system
 
 
 # --- fold on settle ---------------------------------------------------------------------------
