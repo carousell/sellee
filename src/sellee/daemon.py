@@ -61,7 +61,8 @@ from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
-from sellee.tools.registry import ToolContext
+from sellee.tools import revise as revise_tool
+from sellee.tools.registry import TIER_PASS_EDIT, Session, ToolContext
 
 log = logging.getLogger(__name__)
 
@@ -475,6 +476,13 @@ def reply_sink_for(market: str, *, store, bus, cfg, rail_factory, browser_factor
         region=inbox.seller_region(store),
         on_drive=lambda: browser_window.raise_if_watching(cfg, store),
         verify_window_sec=cfg.send_verify_window_sec,
+    )
+
+
+def past_enquirer_sender(context_factory):
+    """The revise lane's send for a settled change: as an edit, through each market's sink."""
+    return lambda change, since: revise_tool._send_updates(
+        context_factory(Session(tier=TIER_PASS_EDIT)), change, told_since=since
     )
 
 
@@ -906,7 +914,12 @@ def run_daemon(*, once: bool) -> int:
     # Carry a seller's listing edit out to each browser marketplace, and report each outcome. The
     # rail half already happened inline, in the conversation that asked for it.
     revise_deps = revise.ReviseDeps(
-        store=store, bus=bus, config=cfg, browser_factory=browser_factory, governor=governor
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+        send_updates=past_enquirer_sender(context_factory),
     )
     scheduler.register(
         Task(

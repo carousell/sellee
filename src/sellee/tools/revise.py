@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from typing import NamedTuple
 
 from sellee import marketplaces, past_enquirers, settings
 from sellee.browser import editor
@@ -105,7 +106,8 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
     for market, url in sorted(item["listing_urls"].items()):
         if market == _RAIL or not url or marketplaces.connector_type(market) != "browser":
             continue
-        markets[market] = _queue_browser(ctx, item_id, market, url, changed)
+        change = _live_change(before, item, market)
+        markets[market] = _queue_browser(ctx, item_id, market, url, changed, change)
     if item["listing_urls"].get(_RAIL):
         markets = {_RAIL: _push_rail(ctx, item, changed), **markets}
         if markets[_RAIL]["status"] == "updated":
@@ -147,19 +149,7 @@ def _rail_shows(item: dict) -> dict:
 def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange) -> int:
     """Send each planned update as a `followup`, returning how many were sent. Each one owes the
     seller its tell as it commits. Never raises: the listing has already changed."""
-    told = 0
-    try:
-        if not settings.get(ctx.store, "past_enquirer_updates"):
-            return 0
-        price_drop, new_photos = past_enquirers.told_about(change)
-        announces = announcement(price_drop=price_drop, new_photos=new_photos)
-        with _EDITING:
-            for update in _plan(ctx, change):
-                # The ledger, or another edit's update, can move while earlier sends go out.
-                if update in _plan(ctx, change):
-                    told += _send_update(ctx, update, announces)
-    except Exception:
-        log.exception("past-enquirer updates for %s on %s failed", change.item_id, change.market)
+    told = _send_updates(ctx, change).sent
     try:
         ctx.bus.publish(
             "past_enquirers.told",
@@ -170,15 +160,65 @@ def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange)
     return told
 
 
-def _plan(ctx: ToolContext, change: past_enquirers.ListingChange) -> list:
-    threads = ctx.store.item_threads(change.item_id, change.market)
+class Sends(NamedTuple):
+    """How one round of updates went: sent, and held for a later round."""
+
+    sent: int
+    held: int
+
+
+# Send results that leave a thread's update for a later round: nothing reached the buyer yet.
+# `send_unverified` is not here: the buyer may have it, so it is never sent again.
+_HELD = frozenset(
+    {"quiet", "wait", "no_send_path", "in_flight", "paused", "send_failed", "unverified_open"}
+)
+
+
+def _send_updates(
+    ctx: ToolContext,
+    change: past_enquirers.ListingChange,
+    *,
+    told_since: float | None = None,
+) -> Sends:
+    """Send each update `change` earns as a `followup`, never raising. A thread sent an update
+    since `told_since` already heard this change, even if its buyer wrote again; a nudge since
+    does not count."""
+    sent = held = 0
+    try:
+        if not settings.past_enquirer_updates_on(ctx.store):
+            return Sends(0, 0)
+        price_drop, new_photos = past_enquirers.told_about(change)
+        announces = announcement(price_drop=price_drop, new_photos=new_photos)
+        with _EDITING:
+            for update in _plan(ctx, change, told_since):
+                # The ledger, or another edit's update, can move while earlier sends go out.
+                if update in _plan(ctx, change, told_since):
+                    status = _send_update(ctx, update, announces)
+                    sent += status == "sent"
+                    held += status in _HELD
+    except Exception:
+        log.exception("past-enquirer updates for %s on %s failed", change.item_id, change.market)
+        held += 1  # the rest of the round is owed another try
+    return Sends(sent, held)
+
+
+def _plan(
+    ctx: ToolContext, change: past_enquirers.ListingChange, told_since: float | None = None
+) -> list:
+    threads = [
+        thread
+        for thread in ctx.store.item_threads(change.item_id, change.market)
+        if told_since is None
+        or thread["last_update_ts"] is None
+        or thread["last_update_ts"] < told_since
+    ]
     ledger = ctx.store.negotiate_status(change.item_id)["buyers"]
     return past_enquirers.plan_updates(change, threads, ledger)
 
 
 def _send_update(
     ctx: ToolContext, update: past_enquirers.PlannedUpdate, announces: str | None
-) -> bool:
+) -> str:
     params = {
         "thread_id": update.thread_id,
         "text": update.text,
@@ -186,9 +226,9 @@ def _send_update(
         "in_msg_id": update.in_msg_id,
     }
     try:
-        return reply._send_reply(ctx, params, announces=announces)["status"] == "sent"
+        return reply._send_reply(ctx, params, announces=announces)["status"]
     except ToolError:
-        return False  # refused for this thread alone; the others still go
+        return "refused"  # for this thread alone; the others still go
 
 
 def _offers_above(status: dict, new_price) -> int:
@@ -272,7 +312,14 @@ def _uploaded_media(ctx: ToolContext, item_id: str) -> dict:
     }
 
 
-def _queue_browser(ctx: ToolContext, item_id: str, market: str, url: str, changed: list) -> dict:
+def _queue_browser(
+    ctx: ToolContext,
+    item_id: str,
+    market: str,
+    url: str,
+    changed: list,
+    change: past_enquirers.ListingChange,
+) -> dict:
     """Owe a browser marketplace this edit, or say plainly why it will not happen by itself.
 
     Two answers are not "queued", and both carry the listing URL so the seller can change it by
@@ -284,7 +331,14 @@ def _queue_browser(ctx: ToolContext, item_id: str, market: str, url: str, change
     if not (editor.can_edit_fields(market, changed) or marketplaces.edit_flow(market)):
         return {"status": "manual", "url": url}
     try:
-        revision_id = ctx.store.queue_listing_revision(item_id, market, changed)
+        revision_id = ctx.store.queue_listing_revision(
+            item_id,
+            market,
+            changed,
+            old_price=change.old_price,
+            new_price=change.new_price,
+            photo_added=change.photo_added,
+        )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
     ctx.bus.publish("revise.queued", {"item_id": item_id, "market": market, "changed": changed})
@@ -367,7 +421,8 @@ register(
         "price (say so without naming either number). offers_above_new_price counts standing "
         "offers higher than the new price. buyers_told = how many buyers who asked about it on "
         "carousell.ai were just sent the price drop or new photos; report that number as it is, "
-        "and never describe an update to a buyer as pending or still going out.",
+        "and never describe an update to a buyer as pending or still going out. Buyers on a "
+        "queued marketplace are told once it shows the change, not by this call.",
         input_schema={
             "type": "object",
             "properties": {

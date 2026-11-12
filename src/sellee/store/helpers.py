@@ -327,6 +327,11 @@ class RevisionRecord(TypedDict):
     pass_id: str | None
     created_ts: float
     finished_ts: float | None
+    # The change a buyer can see, captured at edit time; None where none was recorded.
+    old_price: float | None
+    new_price: float | None
+    photo_added: bool
+    buyers_closed_ts: float | None
 
 
 class FloorAck(TypedDict):

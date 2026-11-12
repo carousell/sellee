@@ -47,6 +47,10 @@ def _revision_from_row(row) -> RevisionRecord:
         "pass_id": row["pass_id"],
         "created_ts": row["created_ts"],
         "finished_ts": row["finished_ts"],
+        "old_price": row["old_price"],
+        "new_price": row["new_price"],
+        "photo_added": bool(row["photo_added"]),
+        "buyers_closed_ts": row["buyers_closed_ts"],
     }
 
 
@@ -63,7 +67,16 @@ class RevisionsMixin:
     # Bound by Store.__init__; declared so a checker resolves it inside each mixin.
     _db: Database
 
-    def queue_listing_revision(self, item_id: str, market: str, changed) -> str:
+    def queue_listing_revision(
+        self,
+        item_id: str,
+        market: str,
+        changed,
+        *,
+        old_price: float | None = None,
+        new_price: float | None = None,
+        photo_added: bool = False,
+    ) -> str:
         """Owe this marketplace an edit, replacing any edit it was already owed.
 
         Superseding rather than queueing a second row is the whole point: a seller who drops a
@@ -75,6 +88,9 @@ class RevisionsMixin:
         A row already running is not superseded — it is mid-drive — but its fields are carried
         too. It may yet fail, and the new row is then the one that must still push them; pushing
         a field the running edit did land is harmless, because an edit is idempotent.
+
+        The buyers' change carries too: the oldest owed row's `old_price` is still what that
+        marketplace shows, and a photo any of them added is still new there.
         """
         changed = sorted({str(name) for name in changed})
         if not changed:
@@ -84,19 +100,20 @@ class RevisionsMixin:
         with self._db.transaction() as conn:
             if not conn.execute("SELECT 1 FROM items WHERE id = ?", (item_id,)).fetchone():
                 raise ItemNotFound(f"no item with id {item_id!r}")
-            pending = conn.execute(
-                "SELECT revision_id, changed FROM listing_revisions "
-                "WHERE item_id = ? AND market = ? AND status = 'pending'",
+            owed = conn.execute(
+                "SELECT status, changed, old_price, photo_added FROM listing_revisions "
+                "WHERE item_id = ? AND market = ? AND status IN ('pending', 'running') "
+                "ORDER BY created_ts ASC, revision_id ASC",
                 (item_id, market),
             ).fetchall()
-            running = conn.execute(
-                "SELECT changed FROM listing_revisions "
-                "WHERE item_id = ? AND market = ? AND status = 'running'",
-                (item_id, market),
-            ).fetchall()
+            pending = [row for row in owed if row["status"] == "pending"]
             carried = set(changed)
-            for row in list(pending) + list(running):
+            for row in owed:
                 carried.update(json.loads(row["changed"]))
+                photo_added = photo_added or bool(row["photo_added"])
+            shown = next((row["old_price"] for row in owed if row["old_price"] is not None), None)
+            if shown is not None:
+                old_price = shown
             if pending:
                 conn.execute(
                     "UPDATE listing_revisions SET status = 'superseded', finished_ts = ? "
@@ -104,10 +121,19 @@ class RevisionsMixin:
                     (now, item_id, market),
                 )
             conn.execute(
-                "INSERT INTO listing_revisions "
-                "(revision_id, item_id, market, changed, status, created_ts) "
-                "VALUES (?, ?, ?, ?, 'pending', ?)",
-                (revision_id, item_id, market, json.dumps(sorted(carried)), now),
+                "INSERT INTO listing_revisions (revision_id, item_id, market, changed, status, "
+                "created_ts, old_price, new_price, photo_added) "
+                "VALUES (?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
+                (
+                    revision_id,
+                    item_id,
+                    market,
+                    json.dumps(sorted(carried)),
+                    now,
+                    old_price,
+                    new_price,
+                    int(photo_added),
+                ),
             )
         return revision_id
 
@@ -264,3 +290,22 @@ class RevisionsMixin:
             if text is not None:
                 _insert_notice(conn, text, ref=ref)
         return True
+
+    def listing_revisions_owing_buyers(self) -> list[RevisionRecord]:
+        """`done` edits whose buyers are still owed the news, oldest first."""
+        rows = self._db.query(
+            "SELECT * FROM listing_revisions WHERE status = 'done' AND buyers_closed_ts IS NULL "
+            "ORDER BY finished_ts ASC, revision_id ASC"
+        )
+        return [_revision_from_row(row) for row in rows]
+
+    def close_buyers(self, revision_id: str) -> bool:
+        """Owe this edit's buyers nothing more. False when it was already closed. Each buyer told
+        was already counted to the seller as their update committed."""
+        with self._db.transaction() as conn:
+            cur = conn.execute(
+                "UPDATE listing_revisions SET buyers_closed_ts = ? "
+                "WHERE revision_id = ? AND buyers_closed_ts IS NULL",
+                (_now(), revision_id),
+            )
+        return cur.rowcount == 1

@@ -253,3 +253,82 @@ def test_a_new_edit_carries_the_fields_of_one_still_running(store: Store) -> Non
     rows = {r["revision_id"]: r for r in store.list_listing_revisions()}
     assert rows[first]["status"] == "running"  # mid-drive, so not superseded
     assert rows[second]["changed"] == ["description", "list_price"]
+
+
+# --- the change a revision carries to the buyers who asked ----------------------------------------
+
+
+def test_a_revision_keeps_the_change_it_was_queued_with(store: Store) -> None:
+    item = _item(store)
+    rev = store.queue_listing_revision(
+        item["id"], "fb", ["list_price"], old_price=150.0, new_price=120.0, photo_added=True
+    )
+    row = store.get_listing_revision(rev)
+    assert (row["old_price"], row["new_price"], row["photo_added"]) == (150.0, 120.0, True)
+
+
+def test_an_edit_queued_without_a_change_records_none(store: Store) -> None:
+    item = _item(store)
+    row = store.get_listing_revision(store.queue_listing_revision(item["id"], "fb", ["title"]))
+    assert (row["old_price"], row["new_price"], row["photo_added"]) == (None, None, False)
+
+
+@pytest.mark.parametrize("claim_first", [False, True])
+def test_a_newer_edit_keeps_the_price_the_marketplace_still_shows(
+    store: Store, claim_first: bool
+) -> None:
+    # Superseded or still running, the earlier row has not landed: buyers there still see 150.
+    item = _item(store)
+    store.queue_listing_revision(
+        item["id"], "fb", ["photos"], old_price=150.0, new_price=150.0, photo_added=True
+    )
+    if claim_first:
+        store.claim_listing_revision()
+    rev = store.queue_listing_revision(
+        item["id"], "fb", ["list_price"], old_price=150.0, new_price=120.0
+    )
+    rev = store.queue_listing_revision(
+        item["id"], "fb", ["list_price"], old_price=120.0, new_price=100.0
+    )
+    row = store.get_listing_revision(rev)
+    assert (row["old_price"], row["new_price"], row["photo_added"]) == (150.0, 100.0, True)
+
+
+def test_a_newer_edit_on_another_market_carries_nothing_across(store: Store) -> None:
+    item = _item(store)
+    store.queue_listing_revision(item["id"], "fb", ["list_price"], old_price=150.0, new_price=120.0)
+    rev = store.queue_listing_revision(
+        item["id"], "carousell", ["list_price"], old_price=120.0, new_price=100.0
+    )
+    assert store.get_listing_revision(rev)["old_price"] == 120.0
+
+
+def test_a_done_revision_owes_its_buyers_until_closed_once(store: Store) -> None:
+    item = _item(store)
+    rev = store.queue_listing_revision(
+        item["id"], "fb", ["list_price"], old_price=150.0, new_price=120.0
+    )
+    failed = store.queue_listing_revision(item["id"], "carousell", ["list_price"])
+    assert store.listing_revisions_owing_buyers() == []  # nothing has settled yet
+
+    store.claim_listing_revision()
+    store.finish_listing_revision(rev, status="done", accepted={"price": "120"})
+    store.claim_listing_revision()
+    store.finish_listing_revision(failed, status="failed", error="nope")
+    assert [r["revision_id"] for r in store.listing_revisions_owing_buyers()] == [rev]
+
+    assert store.close_buyers(rev) is True
+    assert store.close_buyers(rev) is False
+    assert store.listing_revisions_owing_buyers() == []
+    # Buyers told were counted to the seller as each update committed, never at close.
+    assert store.untold_tells() == []
+
+
+def test_a_close_writes_no_tell(store: Store) -> None:
+    item = _item(store)
+    rev = store.queue_listing_revision(item["id"], "fb", ["title"])
+    store.claim_listing_revision()
+    store.finish_listing_revision(rev, status="done")
+    assert store.close_buyers(rev) is True
+    assert store.untold_tells() == []
+    assert store.listing_revisions_owing_buyers() == []

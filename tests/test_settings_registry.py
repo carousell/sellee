@@ -317,11 +317,9 @@ def test_past_enquirer_updates_parse_rejects_non_booleans(bad) -> None:
 def test_past_enquirer_updates_render_says_which_way_round() -> None:
     spec = settings.get_spec("past_enquirer_updates")
     assert spec.render(True) == (
-        "on — carousell.ai buyers who asked hear when the price drops or new photos are added"
+        "on — buyers who asked hear when the price drops or new photos are added"
     )
-    assert spec.render(False) == (
-        "off — carousell.ai buyers who asked aren't told of price drops or new photos"
-    )
+    assert spec.render(False) == "off — buyers who asked aren't told of price drops or new photos"
 
 
 def test_past_enquirer_updates_defaults_on_and_applies_immediately() -> None:
@@ -331,16 +329,18 @@ def test_past_enquirer_updates_defaults_on_and_applies_immediately() -> None:
     assert "past_enquirer_updates" not in settings.CARD_HEADLINE
 
 
-def test_past_enquirer_updates_promises_only_the_marketplace_that_sends_them() -> None:
-    # Only a carousell.ai push calls the planner today; browser markets do not.
+def test_past_enquirer_updates_names_every_marketplace_that_sends_them() -> None:
+    # carousell.ai on its push; the browser markets once their edit settles and shows the change.
     description = settings.get_spec("past_enquirer_updates").description
-    assert "carousell.ai" in description
-    assert "lower its price or add photos" in description
+    for market in ("carousell.ai", "Facebook Marketplace", "Carousell", "Craigslist"):
+        assert market in description
+    assert "once that marketplace shows the change" in description
+    assert "lower its" in description and "add photos" in description
 
 
 def test_the_card_shows_past_enquirer_updates_once_turned_off(fresh_store) -> None:
     seed_setting(fresh_store, "past_enquirer_updates", False)
-    off = "off — carousell.ai buyers who asked aren't told of price drops or new photos"
+    off = "off — buyers who asked aren't told of price drops or new photos"
     assert f"• Updates to buyers who asked: {off}" in settings.card_lines(fresh_store)
 
 

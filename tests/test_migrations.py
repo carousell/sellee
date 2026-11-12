@@ -81,6 +81,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 37),
         ("data", 38),
         ("data", 39),
+        ("data", 40),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -153,6 +154,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         37,
         38,
         39,
+        40,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 
@@ -623,3 +625,33 @@ def test_0038_dates_a_live_item_from_its_creation_and_leaves_the_rest_unlisted(
         "item_draft": None,
         "item_live": 5.0,
     }
+
+
+def test_0040_leaves_an_edit_that_already_landed_owing_its_buyers_nothing(
+    tmp_path, monkeypatch
+) -> None:
+    real_data, root = _withhold(tmp_path, monkeypatch, "0040")
+    data_db, events_db = _make_dbs(tmp_path)
+    _run(tmp_path, data_db, events_db)
+    with data_db.transaction() as conn:
+        for rev, status in (("rev_done", "done"), ("rev_pending", "pending")):
+            conn.execute(
+                "INSERT INTO listing_revisions (revision_id, item_id, market, changed, status,"
+                " created_ts, finished_ts) VALUES (?, 'item_x', 'fb', '[\"list_price\"]', ?, 1, 2)",
+                (rev, status),
+            )
+
+    shutil.copy(real_data / "0040_listing_revision_change.sql", root / "data")
+    _run(tmp_path, data_db, events_db)
+
+    st = store.Store(data_db)
+    columns = {r["name"] for r in data_db.query("PRAGMA table_info(listing_revisions)")}
+    assert "buyers_told" not in columns  # each send counts itself to the seller as it commits
+    assert st.listing_revisions_owing_buyers() == []
+    pending = st.get_listing_revision("rev_pending")
+    assert pending is not None
+    assert (pending["old_price"], pending["new_price"], pending["photo_added"]) == (
+        None,
+        None,
+        False,
+    )

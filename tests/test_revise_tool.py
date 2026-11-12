@@ -768,6 +768,7 @@ def test_the_result_counts_the_buyers_told_so_nothing_is_reported_as_pending(
     (spec,) = [s for s in all_specs() if s.name == "update_live_listing"]
     description = spec.description
     assert "buyers_told" in description and "never describe an update" in description
+    assert "told once it shows the change, not by this call" in description
 
 
 def test_a_buyer_a_price_drop_reopens_gets_one_message_and_it_is_not_the_update(

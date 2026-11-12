@@ -31,12 +31,13 @@ import time
 from dataclasses import dataclass, field
 from typing import Callable
 
-from sellee import craigslist_posts, marketplaces, settings
-from sellee.browser import craigslist_account, doorbell, editor
+from sellee import craigslist_posts, marketplaces, past_enquirers, settings
+from sellee.browser import craigslist_account, doorbell, editor, formfill
 from sellee.browser import governor as page_governor
 from sellee.browser import markets as market_adapters
 from sellee.browser.client import BrowserError, BrowserUnavailable
 from sellee.browser.inbox import browser_busy
+from sellee.store.send import UNPACED_MARKETS
 
 log = logging.getLogger(__name__)
 
@@ -45,6 +46,8 @@ REVISE_RETRY_AFTER_SEC = 15 * 60.0
 # A driven edit runs inside one lane tick; a row still `running` with no pass this long after its
 # claim was left behind by a crash, and would otherwise hold the lane shut forever.
 STALE_RUNNING_SEC = 30 * 60.0
+# How long after an edit lands a held update may still be sent; after that it is dropped.
+BUYER_UPDATE_WINDOW_SEC = 24 * 3600.0
 
 _FIELD_WORDS = {
     "title": "title",
@@ -75,6 +78,9 @@ class ReviseDeps:
     held: set = field(default_factory=set)
     # Reads a Craigslist post's public page; None reads it over the network.
     fetch_post: Callable[[str], str] | None = None
+    # Sends a change's updates through each market's reply sink, skipping threads followed up
+    # since the given time; answers (sent, held) and never raises. None tells nobody.
+    send_updates: Callable[[past_enquirers.ListingChange, float], tuple[int, int]] | None = None
 
 
 # The pages one driven edit costs: the listing to edit, and the listing again to confirm it.
@@ -95,6 +101,7 @@ def revise_lane(deps: ReviseDeps) -> None:
     report_settled(deps)
     if deps.store.is_paused():
         return
+    tell_settled(deps)
     settle_orphans(deps)
     run_next(deps)
 
@@ -350,3 +357,77 @@ def report_settled(deps: ReviseDeps) -> int:
                 },
             )
     return reported
+
+
+# --- telling the buyers who asked ----------------------------------------------------------------
+
+
+def tell_settled(deps: ReviseDeps) -> int:
+    """Tell the buyers on each `done` edit's marketplace what it now shows, once per edit; a held
+    send keeps the edit owed for a later tick. Each send owes the seller its tell as it commits.
+    Returns how many buyers were told this tick."""
+    if deps.send_updates is None:
+        return 0
+    told = 0
+    on = settings.past_enquirer_updates_on(deps.store)
+    for revision in deps.store.listing_revisions_owing_buyers():
+        if not on:
+            # Closed untold, so turning updates back on never sends a stale change.
+            deps.store.close_buyers(revision["revision_id"])
+            continue
+        change = settled_change(deps.store, revision)
+        expired = deps.now() - (revision["finished_ts"] or 0) > BUYER_UPDATE_WINDOW_SEC
+        if change is None or expired:
+            deps.store.close_buyers(revision["revision_id"])
+            continue
+        if _held_for_buyers(deps, revision["market"]):
+            continue
+        sent, held = deps.send_updates(change, revision["finished_ts"] or 0.0)
+        told += sent
+        deps.bus.publish(
+            "past_enquirers.told",
+            {"item_id": revision["item_id"], "market": revision["market"], "told": sent},
+        )
+        if not held:
+            deps.store.close_buyers(revision["revision_id"])
+    return told
+
+
+def settled_change(store, revision: dict) -> past_enquirers.ListingChange | None:
+    """What a `done` revision shows that marketplace's buyers: a price drop only if the read-back
+    showed the item's current price, a photo only if the driver checked it. None: tell nobody, as
+    for an item sold or no longer listed there."""
+    item = store.get_item(revision["item_id"])
+    if item is None or item["id"] in store.sold_item_ids():
+        return None
+    listing_url = (item.get("listing_urls") or {}).get(revision["market"])
+    if not listing_url:
+        return None  # taken down there since: its buyers have nothing to look at
+    new_price = revision["new_price"]
+    shown = (revision["accepted"] or {}).get("price")
+    price_shown = (
+        new_price is not None
+        and item.get("list_price") == new_price
+        and formfill.read_price(shown) is not None
+        and formfill.price_matches(shown, new_price)
+    )
+    return past_enquirers.ListingChange(
+        item_id=item["id"],
+        market=revision["market"],
+        title=item["title"],
+        currency=item.get("currency"),
+        old_price=revision["old_price"],
+        new_price=new_price if price_shown else None,
+        photo_added=revision["photo_added"] and not revision["pass_id"],
+        listing_url=listing_url,
+    )
+
+
+def _held_for_buyers(deps: ReviseDeps, market: str) -> bool:
+    """Whether a `followup` here must wait. Quiet hours and the shared tab apply only to the
+    browser markets, which are the paced ones."""
+    if market in UNPACED_MARKETS:
+        return False
+    return bool(browser_busy(deps.store)) or page_governor.in_quiet_hours(
+        deps.store, deps.config, deps.now()
+    )

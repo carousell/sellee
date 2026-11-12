@@ -919,12 +919,15 @@ def _parse_past_enquirer_updates(raw: object) -> bool:
     return _parse_bool(raw, _PAST_ENQUIRER_UPDATES_HELP)
 
 
+def past_enquirer_updates_on(store) -> bool:
+    """Whether buyers who asked about an item may be told when it changes, on any marketplace."""
+    return bool(get(store, "past_enquirer_updates"))
+
+
 def _render_past_enquirer_updates(value: object) -> str:
     if value:
-        return (
-            "on — carousell.ai buyers who asked hear when the price drops or new photos are added"
-        )
-    return "off — carousell.ai buyers who asked aren't told of price drops or new photos"
+        return "on — buyers who asked hear when the price drops or new photos are added"
+    return "off — buyers who asked aren't told of price drops or new photos"
 
 
 register(
@@ -934,9 +937,10 @@ register(
         parse=_parse_past_enquirer_updates,
         render=_render_past_enquirer_updates,
         default=True,
-        description="Whether I tell buyers who already asked about an item on carousell.ai when "
-        "you lower its price or add photos there, with one short message each, and count them "
-        "in your activity updates. Off, I send them no such message. true or false.",
+        description="Whether I tell buyers who already asked about an item when you lower its "
+        "price or add photos, with one short message each, once that marketplace shows the change "
+        "(carousell.ai, Facebook Marketplace, Carousell or Craigslist), and count them in your "
+        "activity updates. Off, I send them no such message. true or false.",
         take_effect="applies to the next listing change.",
     )
 )
