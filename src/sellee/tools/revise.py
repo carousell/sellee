@@ -102,7 +102,7 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
     # leaves no marketplace changed; in the other it left carousell.ai edited and the seller told
     # "internal error".
     markets: dict = {}
-    buyers_told = 0
+    sends = Sends(0, 0)
     for market, url in sorted(item["listing_urls"].items()):
         if market == _RAIL or not url or marketplaces.connector_type(market) != "browser":
             continue
@@ -113,7 +113,7 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
         if markets[_RAIL]["status"] == "updated":
             after = ctx.store.get_item(item_id) or item
             change = _live_change(_rail_shows(before), _rail_shows(after), _RAIL)
-            buyers_told = _tell_past_enquirers(ctx, change)
+            sends = _tell_past_enquirers(ctx, change)
 
     return {
         "item_id": item_id,
@@ -121,7 +121,9 @@ def _edit_live_listing(ctx: ToolContext, params: dict) -> dict:
         "floor_lowered": revised["floor_clamped"],
         "offers_above_new_price": offers_above,
         "markets": markets,
-        "buyers_told": buyers_told,
+        "buyers_told": sends.sent,
+        "told": list(sends.told),
+        "not_told": [{"buyer": s.buyer, "why": s.reason} for s in sends.not_told],
     }
 
 
@@ -146,25 +148,43 @@ def _rail_shows(item: dict) -> dict:
     return dict(item, photos=[p for p in item.get("photos") or [] if p.get("uploaded_url")])
 
 
-def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange) -> int:
-    """Send each planned update as a `followup`, returning how many were sent. Each one owes the
+def _tell_past_enquirers(ctx: ToolContext, change: past_enquirers.ListingChange) -> Sends:
+    """Send each planned update as a `followup`, returning how the round went. Each one owes the
     seller its tell as it commits. Never raises: the listing has already changed."""
-    told = _send_updates(ctx, change).sent
+    sends = _send_updates(ctx, change)
     try:
         ctx.bus.publish(
             "past_enquirers.told",
-            {"item_id": change.item_id, "market": change.market, "told": told},
+            {"item_id": change.item_id, "market": change.market, "told": sends.sent},
         )
     except Exception:
         log.exception("past-enquirer event for %s on %s failed", change.item_id, change.market)
-    return told
+    return sends
 
 
 class Sends(NamedTuple):
-    """How one round of updates went: sent, and held for a later round."""
+    """How one round of updates went: sent, and held for a later round. `told` names the buyers
+    sent one; `not_told` is every other buyer who asked, with why, so the seller can be told who
+    heard and who did not without anyone guessing."""
 
     sent: int
     held: int
+    told: tuple[str, ...] = ()
+    not_told: tuple[past_enquirers.Skipped, ...] = ()
+
+
+class _Round(NamedTuple):
+    """One read of the item's threads and ledger: the updates to send, the buyers who asked and
+    get none, and each thread's buyer."""
+
+    planned: list
+    skipped: list
+    buyers: dict
+
+
+# Why a planned update did not reach its buyer, by send status.
+_NOT_SENT = "the message could not be sent"
+_MAYBE_SENT = "the message may not have reached them"
 
 
 # Send results that leave a thread's update for a later round: nothing reached the buyer yet.
@@ -184,36 +204,65 @@ def _send_updates(
     since `told_since` already heard this change, even if its buyer wrote again; a nudge since
     does not count."""
     sent = held = 0
+    told: list[str] = []
+    not_told: list[past_enquirers.Skipped] = []
     try:
         if not settings.past_enquirer_updates_on(ctx.store):
             return Sends(0, 0)
         price_drop, new_photos = past_enquirers.told_about(change)
         announces = announcement(price_drop=price_drop, new_photos=new_photos)
         with _EDITING:
-            for update in _plan(ctx, change, told_since):
+            first = _plan(ctx, change, told_since)
+            not_told += first.skipped
+            for update in first.planned:
+                buyer = first.buyers[update.thread_id]
                 # The ledger, or another edit's update, can move while earlier sends go out.
-                if update in _plan(ctx, change, told_since):
-                    status = _send_update(ctx, update, announces)
-                    sent += status == "sent"
-                    held += status in _HELD
+                now = _plan(ctx, change, told_since)
+                if update not in now.planned:
+                    not_told += [s for s in now.skipped if s.thread_id == update.thread_id]
+                    continue
+                status = _send_update(ctx, update, announces)
+                if status == "sent":
+                    sent += 1
+                    told.append(buyer)
+                else:
+                    why = _MAYBE_SENT if status == "send_unverified" else _NOT_SENT
+                    not_told.append(past_enquirers.Skipped(update.thread_id, buyer, why))
+                held += status in _HELD
     except Exception:
         log.exception("past-enquirer updates for %s on %s failed", change.item_id, change.market)
         held += 1  # the rest of the round is owed another try
-    return Sends(sent, held)
+    return Sends(sent, held, tuple(told), tuple(not_told))
 
 
 def _plan(
     ctx: ToolContext, change: past_enquirers.ListingChange, told_since: float | None = None
-) -> list:
+) -> _Round:
+    every = ctx.store.item_threads(change.item_id, change.market)
     threads = [
         thread
-        for thread in ctx.store.item_threads(change.item_id, change.market)
+        for thread in every
         if told_since is None
         or thread["last_update_ts"] is None
         or thread["last_update_ts"] < told_since
     ]
     ledger = ctx.store.negotiate_status(change.item_id)["buyers"]
-    return past_enquirers.plan_updates(change, threads, ledger)
+    skipped = past_enquirers.skipped_buyers(change, threads, ledger)
+    if skipped or past_enquirers.told_about(change) != (False, False):
+        # A thread sent this change's update in an earlier round heard it, whatever else holds.
+        kept = {thread["thread_id"] for thread in threads}
+        skipped += [
+            past_enquirers.Skipped(
+                thread["thread_id"], thread["counterpart_handle"], past_enquirers.ALREADY_UPDATED
+            )
+            for thread in every
+            if thread["thread_id"] not in kept and thread["last_inbound_ts"] is not None
+        ]
+    return _Round(
+        planned=past_enquirers.plan_updates(change, threads, ledger),
+        skipped=skipped,
+        buyers={thread["thread_id"]: thread["counterpart_handle"] for thread in every},
+    )
 
 
 def _send_update(
@@ -421,7 +470,10 @@ register(
         "price (say so without naming either number). offers_above_new_price counts standing "
         "offers higher than the new price. buyers_told = how many buyers who asked about it on "
         "carousell.ai were just sent the price drop or new photos; report that number as it is, "
-        "and never describe an update to a buyer as pending or still going out. Buyers on a "
+        "and never describe an update to a buyer as pending or still going out. told names "
+        "them; not_told lists every other buyer who asked there, each with why. Name buyers "
+        "and give reasons only from those two lists, in their words; never guess either. "
+        "Buyers on a "
         "queued marketplace are told once it shows the change, not by this call.",
         input_schema={
             "type": "object",

@@ -11,13 +11,14 @@ from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 from tests.conftest import seed_setting
 
-from sellee import marketplaces
+from sellee import marketplaces, past_enquirers
 from sellee.config import Config
 from sellee.engines.negotiate import NOT_STANDING
 from sellee.past_enquirers import (
     ListingChange,
     format_price,
     plan_updates,
+    skipped_buyers,
     told_about,
 )
 from sellee.store.updates import announcement
@@ -140,6 +141,14 @@ def _plan(store, change: ListingChange):
     )
 
 
+def _skipped(store, change: ListingChange):
+    return skipped_buyers(
+        change,
+        store.item_threads(change.item_id, change.market),
+        store.negotiate_status(change.item_id)["buyers"],
+    )
+
+
 def _may_hear(spec: dict, new_price: float) -> bool:
     """The planner's rules, restated over the generated facts."""
     ledger = spec["ledger"] or {}
@@ -186,9 +195,15 @@ def test_the_planner_picks_exactly_the_buyers_the_rules_allow(
     assert not chosen & decoys
     if not new < old or currency is None:
         assert planned == []  # a rise, an unchanged price, or no currency to name plans nothing
+        assert _skipped(store, change) == []  # and leaves out no one
         return
     assert chosen == {t for t, spec in by_thread.items() if _may_hear(spec, new)}
     assert len(planned) == len(chosen)  # one message per thread
+    # Every other buyer who asked is accounted for, once, with a reason.
+    skipped = _skipped(store, change)
+    asked = {t for t, spec in by_thread.items() if spec["buyer_wrote"]}
+    assert sorted(s.thread_id for s in skipped) == sorted(asked - chosen)
+    assert all(s.reason and s.buyer == "b" for s in skipped)
     drop = f"is now {format_price(new, currency)} (was {format_price(old, currency)})"
     for update in planned:
         assert update.in_msg_id == "m2"
@@ -494,6 +509,33 @@ def test_the_planner_skips_a_thread_that_is_not_this_changes_to_tell(row) -> Non
     assert plan_updates(_change(), [row], {}) == []
 
 
+@pytest.mark.parametrize(
+    ("row", "ledger", "reason"),
+    [
+        (_row(status="held"), {}, past_enquirers.NOT_OPEN),
+        (_row(cursor_last_ts=_T0 - 1), {}, past_enquirers.AWAITING_ANSWER),
+        (_row(last_update_ts=_T0), {}, past_enquirers.ALREADY_UPDATED),
+        (_row(reply_owed_ts=_T0 + 5), {}, past_enquirers.REPLY_OWED),
+        (_row(), {"status": "withdrew"}, past_enquirers.NO_LONGER_BUYING),
+        (_row(), {"status": "active", "highest_offer": 80.0}, past_enquirers.OFFER_MEETS_PRICE),
+    ],
+    ids=["not open", "awaiting answer", "already updated", "reply owed", "withdrew", "offer meets"],
+)
+def test_each_buyer_left_out_is_given_the_reason(row, ledger, reason) -> None:
+    row = {**row, "counterpart_handle": "Ann"}
+    skipped = skipped_buyers(_change(), [row], {row["thread_id"]: ledger} if ledger else {})
+    assert [(s.buyer, s.reason) for s in skipped] == [("Ann", reason)]
+    assert plan_updates(_change(), [row], {row["thread_id"]: ledger} if ledger else {}) == []
+
+
+def test_a_buyer_who_never_wrote_or_is_on_another_listing_is_not_listed_as_left_out() -> None:
+    rows = [
+        {**_row(last_inbound_ts=None, last_inbound_msg_id=None), "counterpart_handle": "x"},
+        {**_row(item_id="i2"), "counterpart_handle": "y"},
+    ]
+    assert skipped_buyers(_change(), rows, {}) == []
+
+
 @pytest.mark.parametrize("status", _SELL_STATUSES)
 def test_only_an_open_conversation_hears_about_a_price_drop(status) -> None:
     hears = status in ("active", "liaising")
@@ -551,7 +593,7 @@ def test_with_updates_off_no_live_change_tells_anyone(
     ctx = make_ctx(TIER_PASS_CHANNEL, pass_id="p1", reply_sink=sink, config=_FAST)
     change = ListingChange(item["id"], market, "Lamp", "SGD", old, new, photo_added=bool(photo))
 
-    told = revise._tell_past_enquirers(ctx, change)
+    told = revise._tell_past_enquirers(ctx, change).sent
 
     # With the setting on, the same thread gets a drop, so only the setting stops it.
     expected = [(thread_id, "followup")] if enabled and new < old else []

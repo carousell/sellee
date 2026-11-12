@@ -57,6 +57,24 @@ class ListingChange:
         )
 
 
+# Why a buyer who asked gets no update, in words the seller can be given as they are.
+NOT_OPEN = "their conversation is closed, held or with you"
+AWAITING_ANSWER = "they are waiting on an answer, which will carry the new price"
+ALREADY_UPDATED = "they were already sent an update since they last wrote"
+REPLY_OWED = "the lower minimum means they are owed a reply on their offer instead"
+NO_LONGER_BUYING = "they passed or withdrew"
+OFFER_MEETS_PRICE = "their offer already meets the new price"
+
+
+@dataclass(frozen=True)
+class Skipped:
+    """A buyer who asked about the item and gets no update, and why."""
+
+    thread_id: str
+    buyer: str
+    reason: str
+
+
 @dataclass(frozen=True)
 class PlannedUpdate:
     """One message for one thread. `in_msg_id` is the buyer message it follows, so sending it
@@ -80,6 +98,23 @@ def plan_updates(
         for thread in threads
         if _eligible(change, thread, ledger.get(thread["thread_id"]))
     ]
+
+
+def skipped_buyers(
+    change: ListingChange, threads: Iterable[Mapping], ledger: Mapping[str, Mapping]
+) -> list[Skipped]:
+    """Every buyer who asked about the item on this marketplace that `plan_updates` leaves out,
+    with why. Empty when the change tells nobody anything, so no buyer was left out."""
+    if _message(change) is None:
+        return []
+    skipped = []
+    for thread in threads:
+        if not _asked(change, thread):
+            continue
+        reason = _skip_reason(change, thread, ledger.get(thread["thread_id"]))
+        if reason is not None:
+            skipped.append(Skipped(thread["thread_id"], thread["counterpart_handle"], reason))
+    return skipped
 
 
 def told_about(change: ListingChange) -> tuple[bool, bool]:
@@ -116,33 +151,44 @@ def _price_shown(change: ListingChange) -> bool:
     return change.price_dropped and bool(_CURRENCY_CODE.fullmatch(change.currency or ""))
 
 
+def _asked(change: ListingChange, thread: Mapping) -> bool:
+    """A buyer who wrote about this item, in a sell thread on the changed marketplace."""
+    return (
+        thread["side"] == "sell"
+        and thread["market"] == change.market
+        and thread["item_id"] == change.item_id
+        and thread["last_inbound_ts"] is not None
+    )
+
+
 def _eligible(change: ListingChange, thread: Mapping, buyer: Mapping | None) -> bool:
-    if thread["side"] != "sell" or thread["market"] != change.market:
-        return False
-    if thread["item_id"] != change.item_id:
-        return False
+    return _asked(change, thread) and _skip_reason(change, thread, buyer) is None
+
+
+def _skip_reason(change: ListingChange, thread: Mapping, buyer: Mapping | None) -> str | None:
+    """Why a buyer who asked gets no update, or None when they get one."""
     if _refused("sell", thread["status"], "followup"):
-        return False  # the blocked-buyer close lands here too: it sets the thread `closed`
+        return NOT_OPEN  # the blocked-buyer close lands here too: it sets the thread `closed`
     last_in = thread["last_inbound_ts"]
-    if last_in is None:
-        return False
     # A buyer still waiting on an answer gets the answer, which carries the new price; a follow-up
     # sent first would mark their message answered.
     if thread["cursor_last_ts"] is None or thread["cursor_last_ts"] < last_in:
-        return False
+        return AWAITING_ANSWER
     # One update per buyer message. Only an earlier update counts: a nudge says nothing new, so it
     # never keeps a price drop from its buyer.
     if thread["last_update_ts"] is not None and thread["last_update_ts"] >= last_in:
-        return False
+        return ALREADY_UPDATED
     # A lowered minimum already owes this buyer a reply, which the reply lane will send.
     if thread["reply_owed_ts"] is not None:
-        return False
+        return REPLY_OWED
     if buyer is None:
-        return True
+        return None
     if buyer.get("status") in NOT_STANDING:
-        return False
+        return NO_LONGER_BUYING
     offer = buyer.get("highest_offer") or 0
-    return not (offer > 0 and change.new_price is not None and offer >= change.new_price)
+    if offer > 0 and change.new_price is not None and offer >= change.new_price:
+        return OFFER_MEETS_PRICE
+    return None
 
 
 def format_price(amount: float | None, currency: str) -> str:

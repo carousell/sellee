@@ -11,7 +11,7 @@ from tests.conftest import seed_setting
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
 import sellee.tools  # noqa: F401  registration
-from sellee import paths
+from sellee import past_enquirers, paths
 from sellee.channel import activity
 from sellee.config import Config
 from sellee.rail import inbox as relay
@@ -344,8 +344,8 @@ def _relay_ctx(make_ctx, store, bus, fake):
     )
 
 
-def _asked(fake, thread_id: str, *, answered: bool = True) -> None:
-    fake.add_thread(thread_id, listing_id="L1")
+def _asked(fake, thread_id: str, *, answered: bool = True, name: str = "Alice") -> None:
+    fake.add_thread(thread_id, listing_id="L1", name=name)
     fake.add_message(thread_id, f"{thread_id}-q", "buyer", "Is the lamp still available?")
     if answered:
         fake.add_message(thread_id, f"{thread_id}-a", "agent", "Yes, it is.")
@@ -355,6 +355,18 @@ def _lamp(store) -> dict:
     item = store.create_item(title="Teak lamp", list_price=95.0, currency="SGD")
     store.record_listing_url(item["id"], "carousell-ai", f"{_WEB}/listing/L1")
     return item
+
+
+def _passes(store, item_id: str, thread_id: str) -> None:
+    with store._db.transaction() as conn:  # noqa: SLF001 — a buyer who already passed
+        conn.execute(
+            "INSERT OR IGNORE INTO negotiations (item_id, state, updated_ts) VALUES (?, 'open', 0)",
+            (item_id,),
+        )
+        conn.execute(
+            "INSERT INTO negotiation_buyers (item_id, thread_id, status) VALUES (?, ?, 'passed')",
+            (item_id, thread_id),
+        )
 
 
 def _updates_sent(fake) -> list:
@@ -442,6 +454,40 @@ def test_a_nudge_since_the_buyer_wrote_does_not_hold_back_a_price_drop(
 
     assert result["buyers_told"] == 1
     assert [c["text"] for c in relay_fake.reply_calls] == ["Still keen?", _DROP]
+
+
+def test_the_result_names_who_was_told_and_why_each_other_buyer_was_not(
+    make_ctx, store, bus, relay_fake
+):
+    """A seller was once told "Bob already heard about the earlier drop" when it was Ann: the
+    result carried a count, so the model guessed who. It names them, and says why the rest were
+    not told."""
+    item = _lamp(store)
+    for thread_id, name in (("ann", "Ann"), ("pat", "Pat"), ("bea", "Bea")):
+        _asked(relay_fake, thread_id, name=name)
+    _asked(relay_fake, "wes", answered=False, name="Wes")
+    relay_fake.block("bea")
+    _read_relay(store, bus, relay_fake)
+    _passes(store, item["id"], "carousell-ai:pat")
+    ctx = _relay_ctx(make_ctx, store, bus, relay_fake)
+    others = {
+        ("Pat", past_enquirers.NO_LONGER_BUYING),
+        ("Bea", past_enquirers.NOT_OPEN),
+        ("Wes", past_enquirers.AWAITING_ANSWER),
+    }
+
+    first = _edit(ctx, item["id"], list_price=80)
+    again = _edit(ctx, item["id"], list_price=70)
+    neither = _edit(ctx, item["id"], description="Solid teak.")
+
+    assert (first["buyers_told"], first["told"]) == (1, ["Ann"])
+    assert {(b["buyer"], b["why"]) for b in first["not_told"]} == others
+    assert (again["buyers_told"], again["told"]) == (0, [])
+    assert {(b["buyer"], b["why"]) for b in again["not_told"]} == others | {
+        ("Ann", past_enquirers.ALREADY_UPDATED)
+    }
+    # An edit no buyer would be told of leaves nobody out.
+    assert (neither["told"], neither["not_told"]) == ([], [])
 
 
 def test_a_rail_price_rise_tells_nobody(make_ctx, store, bus, relay_fake):

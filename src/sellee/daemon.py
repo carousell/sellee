@@ -481,9 +481,14 @@ def reply_sink_for(market: str, *, store, bus, cfg, rail_factory, browser_factor
 
 def past_enquirer_sender(context_factory):
     """The revise lane's send for a settled change: as an edit, through each market's sink."""
-    return lambda change, since: revise_tool._send_updates(
-        context_factory(Session(tier=TIER_PASS_EDIT)), change, told_since=since
-    )
+
+    def send(change, since):
+        sends = revise_tool._send_updates(
+            context_factory(Session(tier=TIER_PASS_EDIT)), change, told_since=since
+        )
+        return sends.sent, sends.held  # the lane tells no model, so it takes no names
+
+    return send
 
 
 def _is_loopback_bind(host: str) -> bool:
