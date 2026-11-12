@@ -39,9 +39,15 @@ def _require_an_offered_question(item: dict | None, question: str) -> None:
     # Only a suggested question goes on the listing; an escalated buyer question stays in the bank.
     offered = questions_by_category().get((item or {}).get("category") or "", [])
     if question.strip() not in offered:
+        if not offered:
+            raise ToolError(
+                "on_listing is only for a question suggested_questions offered for this item, "
+                "and it offered none; bank the answer without it"
+            )
         raise ToolError(
             "on_listing is only for a question suggested_questions offered for this item, word "
-            "for word; bank any other answer without it"
+            f"for word: retry with one of {', '.join(map(repr, offered))}. Bank an answer to "
+            "any other question without it"
         )
 
 

@@ -191,6 +191,19 @@ def test_only_an_offered_question_can_go_on_the_listing(make_ctx, store) -> None
     assert store.qa_search(item["id"]) == []
 
 
+def test_a_reworded_question_is_refused_with_the_questions_to_retry_with(make_ctx, store) -> None:
+    """A model that paraphrased an offered question retries with its exact text."""
+    item, question = _offered(store)
+    entry = {"item_id": item["id"], "question": f"{question} (roughly)", "answer": "Yes"}
+    with pytest.raises(ToolError) as refused:
+        dispatch(
+            "add_qa_entry", {**entry, "source": "seller", "on_listing": True}, make_ctx("attended")
+        )
+    for offered in suggested_questions.questions_by_category()[item["category"]]:
+        assert repr(offered) in str(refused.value)
+    assert "retry" in str(refused.value)
+
+
 def test_an_item_without_a_category_has_no_question_to_put_on_its_listing(make_ctx, store) -> None:
     item = _item(store)  # no category, so suggested_questions offered nothing
     _, question = _offered(store)
