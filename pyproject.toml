@@ -24,7 +24,7 @@ dependencies = [
     "segno>=1.6,<2",
     # Photo conversion: one converter on every platform, rather than an OS tool per platform.
     # pillow-heif is the HEIC decoder Pillow does not ship, and HEIC is what a phone produces.
-    "pillow>=12,<13",
+    "pillow>=12,<14",
     "pillow-heif>=1.5,<2",
     # The Discord Gateway connection (a persistent WebSocket, unlike Telegram's long-poll). RFC
     # 6455 has enough edge cases (fragmentation, ping/pong, close-code negotiation) that a vetted
