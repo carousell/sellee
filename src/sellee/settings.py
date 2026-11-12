@@ -860,9 +860,10 @@ register(
 # --- activity updates ------------------------------------------------------------------------
 #
 # How much of what I did on the seller's listings I tell them unasked: everything (offers I turned
-# down under their minimum, buyers I answered, listings nobody wrote about, a weekly line when
-# nothing else was said), only what needs their answer (those offers, a buyer kept waiting on them,
-# a sale they are closing themselves), or nothing.
+# down under their minimum, buyers I answered, buyers I told of a price drop or new photos,
+# listings nobody wrote about, a weekly line when nothing else was said), only what needs their
+# answer (those offers, a buyer kept waiting on them, a sale they are closing themselves), or
+# nothing.
 # It narrows what is pushed, never what is asked: an escalation, a buyer question only they can
 # answer, a deal to close and the daily check-in on a sale they took over all come whatever this
 # says, and /catchup still shows what I did in the last two days (an older tell is retired untold).
@@ -896,9 +897,10 @@ register(
         render=_render_activity_updates,
         default=ACTIVITY_UPDATES_ALL,
         description="What I tell you unasked about what I did on your listings: all (offers I "
-        "turned down under your minimum, buyers I answered, listings nobody wrote about, and a "
-        "Saturday line in a quiet week), decisions (only what needs your call: those offers, a "
-        "buyer waiting on your answer, a sale you are closing yourself), or off. Escalations, "
+        "turned down under your minimum, buyers I answered, buyers I told of a price drop or "
+        "new photos, listings nobody wrote about, and a Saturday line in a quiet week), "
+        "decisions (only what needs your call: those offers, a buyer waiting on your answer, a "
+        "sale you are closing yourself), or off. Escalations, "
         "buyer questions only you can answer, deals to close and the daily check-in on a sale "
         "you are closing yourself still come whatever this says, and /catchup shows what I did "
         "in the last two days. all | decisions | off.",

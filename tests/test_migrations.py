@@ -80,6 +80,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         ("data", 36),
         ("data", 37),
         ("data", 38),
+        ("data", 39),
         ("events", 1),
     }
     assert _table_exists(data_db, "meta")
@@ -151,6 +152,7 @@ def test_fresh_apply_creates_both_schemas(tmp_path) -> None:
         36,
         37,
         38,
+        39,
     }
     assert {r["version"] for r in events_db.query("SELECT version FROM schema_migrations")} == {1}
 

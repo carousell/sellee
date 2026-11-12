@@ -21,6 +21,7 @@ from sellee.updates import (
     DECISION_OPTIONS,
     UPDATE_MAX_CHARS,
     BuyerAnsweredFacts,
+    BuyersUpdatedFacts,
     OfferDeclinedFacts,
     TellableRecord,
     TellRecord,
@@ -93,6 +94,32 @@ def _answered(
         "item_id": item,
         "thread_id": thread,
         "kind": "buyer_answered",
+        "decision": False,
+        "facts": facts,
+        "created_ts": NOW - age,
+    }
+
+
+def _updated(
+    tell_id: int,
+    item: str,
+    *,
+    buyers=2,
+    price_drop=True,
+    new_photos=False,
+    age=10 * MINUTE,
+) -> TellRecord:
+    facts: BuyersUpdatedFacts = {
+        "buyers": buyers,
+        "price_drop": price_drop,
+        "new_photos": new_photos,
+        "item_title": TITLES[item],
+    }
+    return {
+        "id": tell_id,
+        "item_id": item,
+        "thread_id": None,
+        "kind": "buyers_updated",
         "decision": False,
         "facts": facts,
         "created_ts": NOW - age,
@@ -974,7 +1001,102 @@ def test_a_real_update_never_carries_the_floor(store: Store) -> None:
 
 
 @pytest.mark.parametrize(
-    "shape", [OfferDeclinedFacts, BuyerAnsweredFacts, TellRecord, TellableRecord]
+    "shape",
+    [OfferDeclinedFacts, BuyerAnsweredFacts, BuyersUpdatedFacts, TellRecord, TellableRecord],
 )
 def test_no_shape_the_composer_reads_has_a_place_for_the_floor(shape) -> None:
     assert not any("floor" in key or "minimum" in key for key in shape.__annotations__)
+
+
+# --- buyers told about a change to the listing --------------------------------------------------
+
+
+def test_buyers_told_about_a_price_drop_is_an_fyi_line() -> None:
+    update = _compose([_updated(1, LAMP)])
+    assert update is not None
+    assert update.text == "📣 Arc floor lamp — let 2 buyers who asked know about the price drop."
+    assert update.options == ()
+    assert update.carried_ids == (1,)
+
+
+@pytest.mark.parametrize(
+    ("buyers", "price_drop", "new_photos", "said"),
+    [
+        (1, True, False, "let 1 buyer who asked know about the price drop."),
+        (3, False, True, "let 3 buyers who asked know about the new photos."),
+        (2, True, True, "let 2 buyers who asked know about the price drop and the new photos."),
+    ],
+)
+def test_the_buyers_told_line_names_what_changed(buyers, price_drop, new_photos, said) -> None:
+    tell = _updated(1, LAMP, buyers=buyers, price_drop=price_drop, new_photos=new_photos)
+    assert _text([tell]) == f"📣 Arc floor lamp — {said}"
+
+
+def test_buyers_told_on_one_listing_from_two_marketplaces_are_one_line() -> None:
+    tells = [
+        _updated(1, LAMP, buyers=2),
+        _updated(2, LAMP, buyers=1, price_drop=False, new_photos=True),
+    ]
+    update = _compose(tells)
+    assert update is not None
+    assert update.text == (
+        "📣 Arc floor lamp — let 3 buyers who asked know about the price drop and the new photos."
+    )
+    assert update.carried_ids == (1, 2)
+
+
+def test_buyers_told_join_their_listings_answered_line() -> None:
+    tells = [_answered(1, DESK, thread="fb:d1"), _updated(2, DESK)]
+    assert _text(tells) == (
+        "🗣 IKEA desk — answered a buyer "
+        '("is it still available?" → "Yes, it\'s available…").\n'
+        "   Waiting on them. Also let 2 buyers who asked know about the price drop."
+    )
+
+
+def test_buyers_told_join_their_listings_offer_line_which_keeps_its_buttons() -> None:
+    update = _compose([_offer(1, TREK, 400), _updated(2, TREK, buyers=1)])
+    assert update is not None
+    assert update.text == (
+        "💰 Trek Emonda 54cm — an offer of $400, under your minimum. I said no. "
+        "Also let 1 buyer who asked know about the price drop."
+    )
+    assert update.options == DECISION_OPTIONS
+
+
+def test_buyers_told_are_done_for_the_seller_in_the_sectioned_form() -> None:
+    update = _compose([_updated(1, LAMP, age=7 * HOUR), _offer(2, TREK, 400)])
+    assert update is not None
+    assert update.text.split("\n")[-2:] == [
+        "Done for you:",
+        "📣 Arc floor lamp — let 2 buyers who asked know about the price drop.",
+    ]
+
+
+@pytest.mark.parametrize(
+    "facts",
+    [
+        {"buyers": 0},
+        {"buyers": -1},
+        {"buyers": 2.5},
+        {"buyers": "2"},
+        {"buyers": float("nan")},
+        {"buyers": True},
+        {"price_drop": "yes"},
+        {"new_photos": 1},
+        {"price_drop": False, "new_photos": False},
+        {"item_title": 5},
+    ],
+    ids=str,
+)
+def test_a_buyers_told_tell_that_cannot_be_read_is_retired(facts) -> None:
+    bad = _broken(_updated(9, LAMP), **facts)
+    selection = select_tellable([bad, _offer(1, TREK, 500)], _ctx(), now=NOW)
+    assert [t["id"] for t in selection.tellable] == [1]
+    assert selection.retired_ids == (9,)
+
+
+def test_buyers_told_go_stale_like_any_tell() -> None:
+    selection = select_tellable([_updated(1, LAMP, age=49 * HOUR)], _ctx(), now=NOW)
+    assert selection.tellable == ()
+    assert selection.retired_ids == (1,)

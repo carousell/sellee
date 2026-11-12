@@ -26,8 +26,10 @@ from sellee.store.helpers import (
 )
 from sellee.updates import (
     TELL_BUYER_ANSWERED,
+    TELL_BUYERS_UPDATED,
     TELL_OFFER_DECLINED,
     BuyerAnsweredFacts,
+    BuyersUpdatedFacts,
     OfferDeclinedFacts,
     TellableRecord,
     TellFacts,
@@ -210,6 +212,61 @@ def record_buyer_answered_in_txn(
         kind=TELL_BUYER_ANSWERED,
         decision=False,
         facts=facts,
+        now=now,
+    )
+
+
+def record_buyers_updated_in_txn(
+    conn, *, item_id: str, buyers: int, price_drop: bool, new_photos: bool, now: float
+) -> None:
+    """Owe the seller an FYI that `buyers` who asked about the item were sent its price drop, its
+    new photos or both. Nothing when no buyer was, or neither was told."""
+    if buyers < 1 or not (price_drop or new_photos):
+        return
+    facts: BuyersUpdatedFacts = {
+        "buyers": buyers,
+        "price_drop": price_drop,
+        "new_photos": new_photos,
+        "item_title": _item_title(conn, item_id),
+    }
+    _insert_tell(
+        conn,
+        item_id=item_id,
+        thread_id=None,
+        kind=TELL_BUYERS_UPDATED,
+        decision=False,
+        facts=facts,
+        now=now,
+    )
+
+
+# What a past-enquirer update announced, as `send_intents.announces` holds it.
+_ANNOUNCES_PRICE_DROP = "price_drop"
+_ANNOUNCES_NEW_PHOTOS = "new_photos"
+
+
+def announcement(*, price_drop: bool, new_photos: bool) -> str | None:
+    """The `announces` marker for an update telling its buyer these; None when it tells neither."""
+    told = [
+        name
+        for name, on in ((_ANNOUNCES_PRICE_DROP, price_drop), (_ANNOUNCES_NEW_PHOTOS, new_photos))
+        if on
+    ]
+    return ",".join(told) or None
+
+
+def record_update_sent_in_txn(conn, *, thread_id: str, announces: str, now: float) -> None:
+    """Owe the seller an FYI that the buyer on `thread_id` was sent what `announces` names."""
+    row = conn.execute("SELECT item_id FROM threads WHERE thread_id = ?", (thread_id,)).fetchone()
+    if row is None or row["item_id"] is None:
+        return
+    told = set(announces.split(","))
+    record_buyers_updated_in_txn(
+        conn,
+        item_id=row["item_id"],
+        buyers=1,
+        price_drop=_ANNOUNCES_PRICE_DROP in told,
+        new_photos=_ANNOUNCES_NEW_PHOTOS in told,
         now=now,
     )
 

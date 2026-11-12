@@ -31,6 +31,7 @@ TELL_OFFER_DECLINED = "offer_declined"
 TELL_ASK_WAITING = "ask_waiting"
 TELL_LISTING_QUIET = "listing_quiet"
 TELL_DEAL_CHECKIN = "deal_checkin"
+TELL_BUYERS_UPDATED = "buyers_updated"
 
 
 class OfferDeclinedFacts(TypedDict):
@@ -83,9 +84,24 @@ class DealCheckinFacts(TypedDict):
     item_title: str
 
 
+class BuyersUpdatedFacts(TypedDict):
+    """Buyers who asked about a listing and were sent its price drop or new photos: how many, and
+    which of the two they were told."""
+
+    buyers: int
+    price_drop: bool
+    new_photos: bool
+    item_title: str
+
+
 # What a tell's facts may be. No shape has anywhere to put the floor.
 TellFacts = Union[
-    OfferDeclinedFacts, BuyerAnsweredFacts, AskWaitingFacts, ListingQuietFacts, DealCheckinFacts
+    OfferDeclinedFacts,
+    BuyerAnsweredFacts,
+    AskWaitingFacts,
+    ListingQuietFacts,
+    DealCheckinFacts,
+    BuyersUpdatedFacts,
 ]
 
 
@@ -180,6 +196,7 @@ _EMOJI = {
     TELL_ASK_WAITING: "⏳",
     TELL_LISTING_QUIET: "💤",
     TELL_DEAL_CHECKIN: "🤝",
+    TELL_BUYERS_UPDATED: "📣",
 }
 # The kinds whose line needs the seller: told first, and never told only by a count.
 _NEEDS_YOU_KINDS = frozenset({TELL_OFFER_DECLINED, TELL_ASK_WAITING, TELL_DEAL_CHECKIN})
@@ -195,12 +212,14 @@ _TEXT_FACTS = {
     TELL_ASK_WAITING: ("buyer_handle", "buyer_said", "item_title"),
     TELL_LISTING_QUIET: ("item_title",),
     TELL_DEAL_CHECKIN: ("buyer_handle", "item_title"),
+    TELL_BUYERS_UPDATED: ("item_title",),
 }
 # The numbers each kind's line reads. Each must be a finite number.
 _NUMBER_FACTS = {
     TELL_OFFER_DECLINED: ("amount",),
     TELL_ASK_WAITING: ("asked_ts",),
     TELL_LISTING_QUIET: ("live_since_ts",),
+    TELL_BUYERS_UPDATED: ("buyers",),
 }
 _CONTINUATION = "\n   "
 _SECONDS_PER_HOUR = 3600
@@ -248,7 +267,18 @@ def _is_readable(facts: object, kind: str) -> TypeGuard[TellFacts]:
         return False
     if not all(_is_number(facts.get(name)) for name in _NUMBER_FACTS.get(kind, ())):
         return False
+    if kind == TELL_BUYERS_UPDATED:
+        return _is_buyers_updated(facts)
     return kind != TELL_BUYER_ANSWERED or isinstance(facts.get("first_on_item"), (bool, type(None)))
+
+
+def _is_buyers_updated(facts: dict) -> bool:
+    """A whole count of at least one buyer, told of a price drop, new photos or both."""
+    buyers = facts.get("buyers")
+    flags = (facts.get("price_drop"), facts.get("new_photos"))
+    if not all(isinstance(flag, (bool, type(None))) for flag in flags):
+        return False
+    return isinstance(buyers, int) and buyers >= 1 and any(flags)
 
 
 def _is_number(value: object) -> bool:
@@ -412,8 +442,8 @@ def _section(heading: str, groups: Sequence[_Group], status: _Status) -> tuple[_
 
 
 def _line(group: _Group, status: _Status) -> str:
-    """One listing's line: its offers, then its answered buyers as "Also answered…"; or the line
-    of a tell told on its own."""
+    """One listing's line: its offers, then its answered buyers as "Also answered…", then the
+    buyers told of its price drop or new photos; or the line of a tell told on its own."""
     latest = max(group.tells, key=lambda t: (t["created_ts"], t["id"]))
     title = clip_title(latest["facts"].get("item_title") or "") or "a listing"
     own_line = _OWN_LINES.get(latest["kind"])
@@ -421,12 +451,17 @@ def _line(group: _Group, status: _Status) -> str:
         return f"{_EMOJI[latest['kind']]} {title} — {own_line(latest['facts'], status.now)}"
     offers = group.of_kind(TELL_OFFER_DECLINED)
     answered = group.of_kind(TELL_BUYER_ANSWERED)
-    if not offers:
-        return f"{_EMOJI[TELL_BUYER_ANSWERED]} {title} — {_answered_body(answered, status)}"
-    body = _offers_body(offers, status)
-    if answered:
-        body = f"{body} Also {_answered_body(answered, status)}"
-    return f"{_EMOJI[TELL_OFFER_DECLINED]} {title} — {body}"
+    updated = group.of_kind(TELL_BUYERS_UPDATED)
+    bodies = [
+        (TELL_OFFER_DECLINED, _offers_body(offers, status) if offers else ""),
+        (TELL_BUYER_ANSWERED, _answered_body(answered, status) if answered else ""),
+        (TELL_BUYERS_UPDATED, _updated_body(updated) if updated else ""),
+    ]
+    told = [(kind, body) for kind, body in bodies if body]
+    lead_kind, body = told[0]
+    for _kind, more in told[1:]:
+        body = f"{body} Also {more}"
+    return f"{_EMOJI[lead_kind]} {title} — {body}"
 
 
 def _joined(pieces: Sequence[_Piece]) -> str:
@@ -485,6 +520,18 @@ def _answered_body(tells: Sequence[TellableRecord], status: _Status) -> str:
         return " ".join(filter(None, [f"answered {who}.", said]))
     head = f"answered {who} ({exchange})."
     return f"{head}{_CONTINUATION}{said}" if said else head
+
+
+def _updated_body(tells: Sequence[TellableRecord]) -> str:
+    """The buyers told about this listing's price drop or new photos, summed across marketplaces
+    and edits."""
+    buyers = sum(int(_number(t["facts"].get("buyers"))) for t in tells)
+    changed = [
+        what
+        for flag, what in (("price_drop", "the price drop"), ("new_photos", "the new photos"))
+        if any(t["facts"].get(flag) for t in tells)
+    ]
+    return f"let {_count(buyers, 'buyer')} who asked know about {' and '.join(changed)}."
 
 
 def _where_it_stands(threads: set[str], status: _Status) -> str:

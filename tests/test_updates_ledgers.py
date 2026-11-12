@@ -598,6 +598,124 @@ def test_a_reply_lane_answer_found_later_on_the_page_is_told_once(make_ctx, stor
     assert (tell["facts"]["buyer_said"], tell["facts"]["we_said"]) == ("available?", "Yes!")
 
 
+# --- buyers_updated tells ----------------------------------------------------------------------
+
+
+def _update(store: Store, tid: str, *, price_drop=True, new_photos=False, commit=True) -> str:
+    """Reserve, and unless told otherwise commit, a past-enquirer update on `tid`."""
+    cfg = pacing.resolve(_FAST, quiet_hours=(0, 0))
+    reserved = store.reserve_reply(
+        thread_id=tid,
+        kind="followup",
+        text="The price is now $80 (was $95).",
+        in_msg_id="m1",
+        cfg=cfg,
+        announces=updates_store.announcement(price_drop=price_drop, new_photos=new_photos),
+    )
+    if commit:
+        store.commit_reply(
+            intent_id=reserved["intent_id"],
+            thread_id=tid,
+            in_msg_id="m1",
+            text="The price is now $80 (was $95).",
+            kind="followup",
+        )
+    return reserved["intent_id"]
+
+
+@pytest.mark.parametrize(("price_drop", "new_photos"), [(True, False), (False, True), (True, True)])
+def test_a_committed_update_tells_the_seller_of_one_buyer(
+    store: Store, price_drop, new_photos
+) -> None:
+    item = _item(store, title="Teak lamp")
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="available?", ts=10.0)
+
+    _update(store, "fb:1", price_drop=price_drop, new_photos=new_photos)
+
+    (tell,) = store.untold_tells()
+    assert (tell["kind"], tell["item_id"], tell["thread_id"]) == (
+        "buyers_updated",
+        item["id"],
+        None,
+    )
+    assert tell["facts"] == {
+        "buyers": 1,
+        "price_drop": price_drop,
+        "new_photos": new_photos,
+        "item_title": "Teak lamp",
+    }
+    assert _update_stamp(store, "fb:1") is not None
+
+
+def test_an_update_committed_twice_is_told_once(store: Store) -> None:
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="available?", ts=10.0)
+    intent_id = _update(store, "fb:1")
+    store.commit_reply(
+        intent_id=intent_id, thread_id="fb:1", in_msg_id="m1", text="x", kind="followup"
+    )
+    assert store.settle_intent_from_read(intent_id, msg_id="fb-msg-1") is None
+    assert len(store.untold_tells()) == 1
+
+
+def test_an_update_settled_from_a_read_is_told_once(store: Store) -> None:
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="available?", ts=10.0)
+    intent_id = _update(store, "fb:1", commit=False)
+    assert store.untold_tells() == []
+
+    assert store.settle_intent_from_read(intent_id, msg_id="fb-msg-1") is not None
+    store.commit_reply(
+        intent_id=intent_id, thread_id="fb:1", in_msg_id="m1", text="x", kind="followup"
+    )
+    assert store.settle_intent_from_read(intent_id, msg_id="fb-msg-1") is None
+
+    assert [t["facts"]["buyers"] for t in store.untold_tells()] == [1]
+
+
+def test_an_update_never_sent_tells_nobody(store: Store) -> None:
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="available?", ts=10.0)
+    store.drop_refused_intent(_update(store, "fb:1", commit=False))
+    assert _tell_rows(store) == []
+
+
+def test_an_ordinary_follow_up_is_not_an_update(store: Store) -> None:
+    """Only a follow-up reserved as announcing a change is one; any other nudge is not."""
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="hmm", ts=10.0)
+    _reply(store, "fb:1", "Still keen?", kind="followup")
+    assert _tell_rows(store) == []
+    assert _update_stamp(store, "fb:1") is None
+
+
+def _update_stamp(store: Store, tid: str) -> float | None:
+    return store._db.query(  # noqa: SLF001 — not a thread field the model reads
+        "SELECT last_update_ts FROM threads WHERE thread_id = ?", (tid,)
+    )[0]["last_update_ts"]
+
+
+@pytest.mark.parametrize("tier", ["pass:channel", "attended"])
+def test_a_follow_up_the_model_writes_is_never_an_update(make_ctx, store: Store, tier) -> None:
+    item = _item(store)
+    _sell_thread(store, item["id"], "fb:1")
+    store.record_inbound("fb:1", msg_id="m1", text="hmm", ts=10.0)
+    ctx = make_ctx(tier, reply_sink=_Sink(store), config=_FAST)
+
+    params = {"thread_id": "fb:1", "text": "Price dropped!", "kind": "followup"}
+    assert dispatch("send_reply", params, ctx)["status"] == "sent"
+    assert _tell_rows(store) == []
+
+
+def test_announcing_nothing_marks_no_update() -> None:
+    assert updates_store.announcement(price_drop=False, new_photos=False) is None
+
+
 def _failing_tell_insert(*_args, **_kwargs) -> None:
     raise RuntimeError("tell insert failed")
 
