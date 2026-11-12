@@ -825,6 +825,7 @@ def run_daemon(*, once: bool) -> int:
         config=cfg,
         rail_factory=rail_factory,
         service_hooks=craigslist_account.service_hooks(store),
+        retry_update=revise_tool.retry_update,
     )
     registration_read = mail_stream.SingleFlight(
         lambda: registration.registration_lane(registration_deps)

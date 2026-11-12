@@ -436,7 +436,8 @@ class SendMixin:
         """A market's sends a lane still retries, oldest first, made before `created_before`. One
         the sweep gave up on and asked the seller about is theirs to settle, not the lane's."""
         rows = self._db.query(
-            "SELECT i.intent_id, i.thread_id, i.text, i.kind FROM send_intents i "
+            "SELECT i.intent_id, i.thread_id, i.text, i.kind, i.announces, i.created_ts "
+            "FROM send_intents i "
             "JOIN threads t ON t.thread_id = i.thread_id "
             "WHERE t.market = ? AND i.status IN ('pending', 'sent_unverified') "
             "AND i.created_ts < ? ORDER BY i.created_ts ASC",

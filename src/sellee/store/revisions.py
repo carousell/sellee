@@ -90,7 +90,9 @@ class RevisionsMixin:
         a field the running edit did land is harmless, because an edit is idempotent.
 
         The buyers' change carries too: the oldest owed row's `old_price` is still what that
-        marketplace shows, and a photo any of them added is still new there.
+        marketplace shows, and a photo any of them added is still new there. A row with no
+        `old_price` owes its buyers nothing (an edit made while past-enquirer updates were off),
+        so it carries nothing and nothing before it carries past it.
         """
         changed = sorted({str(name) for name in changed})
         if not changed:
@@ -110,10 +112,10 @@ class RevisionsMixin:
             carried = set(changed)
             for row in owed:
                 carried.update(json.loads(row["changed"]))
-                photo_added = photo_added or bool(row["photo_added"])
-            shown = next((row["old_price"] for row in owed if row["old_price"] is not None), None)
-            if shown is not None:
-                old_price = shown
+            cut = max((i for i, row in enumerate(owed) if row["old_price"] is None), default=-1)
+            if old_price is not None and owed[cut + 1 :]:
+                old_price = owed[cut + 1]["old_price"]
+                photo_added = photo_added or any(row["photo_added"] for row in owed[cut + 1 :])
             if pending:
                 conn.execute(
                     "UPDATE listing_revisions SET status = 'superseded', finished_ts = ? "

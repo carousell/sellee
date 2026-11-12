@@ -15,6 +15,7 @@ from sellee.browser.sink import BrowserReplySink
 from sellee.channel import activity
 from sellee.config import Config
 from sellee.rail.registration_sink import RegistrationReplySink
+from sellee.tools import revise as revise_tool
 from sellee.tools.registry import TIER_PASS_CHANNEL, TIER_PASS_EDIT, ToolError, dispatch
 
 FB_URL = "https://www.facebook.com/marketplace/item/123/"
@@ -871,6 +872,73 @@ def test_an_edit_made_while_updates_were_off_tells_nobody_once_they_are_back_on(
     revise.tell_settled(_lane(store, bus, make_ctx))
     assert sent == []
     assert store.listing_revisions_owing_buyers() == []
+
+
+@pytest.mark.parametrize("claimed", [False, True], ids=["pending", "running"])
+def test_a_drop_made_while_updates_were_off_is_not_revived_by_a_later_edit(
+    store, bus, make_ctx, sent, claimed
+) -> None:
+    """On: 120 to 100. Off: 100 to 80. On again: a title edit. The owed edit must not announce
+    120 to 80, which would carry the drop made while updates were off."""
+    item = _item_on(store, "craigslist")
+    _asked(store, item["id"], "craigslist", 0)
+    ctx = make_ctx(TIER_PASS_CHANNEL, pass_id="p1")
+
+    def edit(fields):
+        dispatch("update_live_listing", {"item_id": item["id"], "fields": fields}, ctx)
+
+    edit({"list_price": 100})
+    if claimed:
+        store.claim_listing_revision()  # mid-drive, so the next edit does not supersede it
+    seed_setting(store, "past_enquirer_updates", False)
+    edit({"list_price": 80})
+    seed_setting(store, "past_enquirer_updates", True)
+    edit({"title": "Dyson V8 Absolute"})
+
+    newest = max(store.list_listing_revisions("pending"), key=lambda r: r["created_ts"])
+    assert (newest["old_price"], newest["new_price"]) != (120.0, 80.0)
+    if claimed:
+        (running,) = store.list_listing_revisions("running")
+        store.finish_listing_revision(running["revision_id"], status="done", accepted={})
+    _settle(store, newest["revision_id"], "done", {"price": "80"})
+    revise.tell_settled(_lane(store, bus, make_ctx))
+    assert sent == []
+
+
+def test_a_price_edited_between_two_sends_stops_the_rest_of_the_round(
+    store, bus, make_ctx, monkeypatch
+) -> None:
+    """The lane holds the edit lock per send, so a seller's edit can land between two buyers; the
+    next buyer must not then be sent the price it replaced."""
+    seed_setting(store, "connected_markets", ["carousell", "fb", "craigslist"])
+    item = _item_on(store, "craigslist")
+    for n in (0, 1):
+        _asked(store, item["id"], "craigslist", n)
+    _drop_to_80(make_ctx, item["id"])
+    (row,) = store.list_listing_revisions("pending")
+    _settle(store, row["revision_id"], "done", {"price": "80"})
+    sent: list = []
+
+    def send_then_edit(self, thread, text, kind, intent_id):
+        sent.append(thread["thread_id"])
+        store.revise_item(item["id"], {"list_price": 70.0})  # the seller edits again
+        return {}
+
+    monkeypatch.setattr(RegistrationReplySink, "send", send_then_edit)
+    rounds: list = []
+    send_updates = revise_tool._send_updates
+    monkeypatch.setattr(
+        revise_tool,
+        "_send_updates",
+        lambda *a, **kw: rounds.append(send_updates(*a, **kw)) or rounds[-1],
+    )
+    deps = _lane(store, bus, make_ctx)
+    revise.tell_settled(deps)
+    assert sent == ["craigslist:t0"]
+    # The buyer left untold is still listed, with why.
+    assert [(s.thread_id, s.reason) for s in rounds[0].not_told] == [
+        ("craigslist:t1", revise_tool._PRICE_MOVED)
+    ]
 
 
 def test_a_price_edited_again_before_the_lane_sends_is_not_announced(

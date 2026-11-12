@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import logging
 import threading
+from collections.abc import Callable
 from typing import NamedTuple
 
 from sellee import marketplaces, past_enquirers, settings
@@ -185,6 +186,7 @@ class _Round(NamedTuple):
 # Why a planned update did not reach its buyer, by send status.
 _NOT_SENT = "the message could not be sent"
 _MAYBE_SENT = "the message may not have reached them"
+_PRICE_MOVED = "the price changed again before it went out"
 
 
 # Send results that leave a thread's update for a later round: nothing reached the buyer yet.
@@ -211,13 +213,19 @@ def _send_updates(
             return Sends(0, 0)
         price_drop, new_photos = past_enquirers.told_about(change)
         announces = announcement(price_drop=price_drop, new_photos=new_photos)
-        with _EDITING:
-            if _superseded(ctx, change):
-                return Sends(0, 0)  # an edit since this change was read: its price is out of date
-            first = _plan(ctx, change, told_since)
-            not_told += first.skipped
-            for update in first.planned:
-                buyer = first.buyers[update.thread_id]
+        first = _plan(ctx, change, told_since)
+        not_told += first.skipped
+        for i, update in enumerate(first.planned):
+            buyer = first.buyers[update.thread_id]
+            # Held per send, not per round, so a seller's edit waits for at most one send.
+            with _EDITING:
+                if _superseded(ctx, change):
+                    # An edit landed since this change was read: its price is out of date.
+                    not_told += [
+                        past_enquirers.Skipped(u.thread_id, first.buyers[u.thread_id], _PRICE_MOVED)
+                        for u in first.planned[i:]
+                    ]
+                    break
                 # The ledger, or another edit's update, can move while earlier sends go out.
                 now = _plan(ctx, change, told_since)
                 if update not in now.planned:
@@ -239,11 +247,46 @@ def _send_updates(
 
 def _superseded(ctx: ToolContext, change: past_enquirers.ListingChange) -> bool:
     """Whether the item no longer has the price `change` would announce. Read under `_EDITING`, so
-    no edit can move it again before the sends go out."""
+    no edit can move it again before the send that follows goes out."""
     if change.new_price is None:
         return False
     item = ctx.store.get_item(change.item_id)
     return item is None or item.get("list_price") != change.new_price
+
+
+def retry_update(store, intent: dict, send: Callable[[], object]) -> bool:
+    """Resend an unsettled past-enquirer update through `send`, only while it is still current: the
+    item unchanged since the update was reserved, and its buyer still one the planner would pick.
+    False means it was not sent, and the caller drops it rather than quote a moved price."""
+    with _EDITING:
+        if not _still_current(store, intent):
+            return False
+        send()
+        return True
+
+
+def _still_current(store, intent: dict) -> bool:
+    thread = store.get_thread(intent["thread_id"], message_cap=0)
+    item = store.get_item(thread["item_id"]) if thread and thread.get("item_id") else None
+    if item is None or item["id"] in store.sold_item_ids():
+        return False
+    if (item.get("updated_ts") or 0) > intent["created_ts"]:
+        return False
+    rows = [
+        t
+        for t in store.item_threads(item["id"], thread["market"])
+        if t["thread_id"] == thread["thread_id"]
+    ]
+    buyer = store.negotiate_status(item["id"])["buyers"].get(thread["thread_id"])
+    now_shown = past_enquirers.ListingChange(
+        item["id"],
+        thread["market"],
+        item["title"],
+        item.get("currency"),
+        None,
+        item.get("list_price"),
+    )
+    return bool(rows) and past_enquirers.still_eligible(now_shown, rows[0], buyer)
 
 
 def _plan(

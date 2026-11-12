@@ -14,14 +14,15 @@ from hypothesis import strategies as st
 from tests.conftest import seed_setting
 from tests.fake_carousell_ai_mcp import FakeRelay, serve
 
-from sellee import daemon, marketplaces
+from sellee import daemon, marketplaces, past_enquirers
 from sellee.config import Config
 from sellee.rail import registration
 from sellee.rail.client import RailClient
 from sellee.rail.registration_sink import RegistrationReplySink, reply_subject
 from sellee.rail.sink import RelayReplySink
 from sellee.store.send import LANE_RETRY_GIVE_UP_SEC, UNSETTLED_EMAIL_ASK
-from sellee.tools.registry import dispatch
+from sellee.tools import revise as revise_tool
+from sellee.tools.registry import TIER_PASS_EDIT, dispatch
 
 _WEB = "https://www.carousell.ai"
 _FIXTURES = Path(__file__).parent / "fixtures" / "craigslist"
@@ -705,3 +706,68 @@ def test_property_a_craigslist_thread_is_always_answered_by_the_registration_sin
     sent = fake.registration_sent[-1]
     assert (sent["to"], sent["client_message_id"]) == (buyer, res["intent_id"])
     assert "\n" not in sent["subject"] and sent["subject"].startswith("Re: ")
+
+
+# --- a past-enquirer update left unsettled ------------------------------------------------------
+
+
+def _stuck_update(make_ctx, store, bus, fake, item) -> str:
+    """The buyer was answered, then a price-drop update to them went unverified."""
+    assert _send(make_ctx, store, bus, fake)["status"] == "sent"
+    store.revise_item(item["id"], {"list_price": 60.0})
+    change = past_enquirers.ListingChange(
+        item["id"], marketplaces.CRAIGSLIST, item["title"], "USD", 80.0, 60.0, listing_url=_POST
+    )
+    fake.registration_script = ["unavailable"] * 4
+    ctx = make_ctx(TIER_PASS_EDIT, config=_FAST)
+    ctx.reply_sink = _factory(store, bus, fake)
+    revise_tool._send_updates(ctx, change)
+    [intent] = store._db.query("SELECT intent_id, status FROM send_intents WHERE kind = 'followup'")
+    assert intent["status"] == "sent_unverified"
+    return intent["intent_id"]
+
+
+def _retried(store, bus, fake) -> None:
+    deps = _deps(store, bus, fake)
+    deps.retry_update = revise_tool.retry_update
+    deps.now = lambda: time.time() + registration.RETRY_SEND_AFTER_SEC + 1
+    registration.registration_lane(deps)
+
+
+def _updates_sent(fake) -> list:
+    return [s["text"] for s in fake.registration_sent if s["text"].startswith("The price")]
+
+
+def test_an_update_still_current_is_retried_under_its_id(make_ctx, store, bus, waiting, item):
+    intent = _stuck_update(make_ctx, store, bus, waiting, item)
+
+    _retried(store, bus, waiting)
+
+    assert _updates_sent(waiting) == ["The price of the Samsung Buds3 is now $60 (was $80)."]
+    assert waiting.registration_sent[-1]["client_message_id"] == intent
+    assert "committed" in _intent_statuses(store) and "sent_unverified" not in _intent_statuses(
+        store
+    )
+
+
+def test_an_update_whose_price_moved_since_is_dropped_not_resent(
+    make_ctx, store, bus, waiting, item
+):
+    _stuck_update(make_ctx, store, bus, waiting, item)
+    store.revise_item(item["id"], {"list_price": 50.0})
+
+    _retried(store, bus, waiting)
+
+    assert _updates_sent(waiting) == []
+    assert _intent_statuses(store) == ["committed"]  # the earlier answer; the update is gone
+
+
+def test_an_update_to_a_buyer_who_wrote_again_is_dropped_not_resent(
+    make_ctx, store, bus, waiting, item
+):
+    _stuck_update(make_ctx, store, bus, waiting, item)
+    waiting.add_mail("m2", **{**_eml("buyer.eml"), "subject": "Re: one more question"})
+
+    _retried(store, bus, waiting)
+
+    assert _updates_sent(waiting) == []

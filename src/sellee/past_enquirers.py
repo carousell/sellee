@@ -161,6 +161,11 @@ def _asked(change: ListingChange, thread: Mapping) -> bool:
     )
 
 
+def still_eligible(change: ListingChange, thread: Mapping, buyer: Mapping | None) -> bool:
+    """Whether the planner would still pick this thread's buyer for `change`, its wording aside."""
+    return _eligible(change, thread, buyer)
+
+
 def _eligible(change: ListingChange, thread: Mapping, buyer: Mapping | None) -> bool:
     return _asked(change, thread) and _skip_reason(change, thread, buyer) is None
 
