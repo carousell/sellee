@@ -192,6 +192,8 @@ def _finish_our_sends(deps: RegistrationDeps, rail) -> None:
         return
     cutoff = deps.now() - RETRY_SEND_AFTER_SEC
     for intent in deps.store.unsettled_intents_on(CRAIGSLIST, created_before=cutoff):
+        if deps.store.is_paused():
+            return  # a pause mid-pass leaves the rest queued for after resume
         thread = deps.store.get_thread(intent["thread_id"], message_cap=0)
 
         def send(thread=thread, intent=intent):

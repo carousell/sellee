@@ -750,6 +750,28 @@ def test_an_update_still_current_is_retried_under_its_id(make_ctx, store, bus, w
     )
 
 
+def test_an_update_waits_out_a_pause_pressed_mid_pass(
+    make_ctx, store, bus, waiting, item, monkeypatch
+):
+    """The seller pauses after the pass began: nothing goes out, and the update is kept."""
+    intent = _stuck_update(make_ctx, store, bus, waiting, item)
+    queued = store.unsettled_intents_on
+
+    def pause_then_list(*args, **kwargs):
+        store.set_paused(True)
+        return queued(*args, **kwargs)
+
+    monkeypatch.setattr(store, "unsettled_intents_on", pause_then_list)
+    _retried(store, bus, waiting)
+    assert _updates_sent(waiting) == []
+    assert "sent_unverified" in _intent_statuses(store)
+
+    monkeypatch.setattr(store, "unsettled_intents_on", queued)
+    store.set_paused(False)
+    _retried(store, bus, waiting)
+    assert waiting.registration_sent[-1]["client_message_id"] == intent
+
+
 def test_an_update_whose_price_moved_since_is_dropped_not_resent(
     make_ctx, store, bus, waiting, item
 ):
