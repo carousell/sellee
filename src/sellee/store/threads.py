@@ -6,10 +6,12 @@ import json
 
 from sellee.db import Database
 from sellee.store.helpers import (
+    _LIVE_OWING_SQL,
     _THREAD_SIDES,
     _TRANSCRIPT_DEFAULT_CAP,
     SCAM_CONFIRMATION,
     ItemNotFound,
+    ItemThread,
     MessageRecord,
     StoreError,
     ThreadNotFound,
@@ -133,6 +135,31 @@ class ThreadsMixin:
         sql += " ORDER BY updated_ts DESC"
         rows = self._db.query(sql, tuple(params))
         return [_thread_from_row(r) for r in rows]
+
+    def item_threads(self, item_id: str, market: str) -> list[ItemThread]:
+        """An item's sell threads on one marketplace, oldest first, each with its newest buyer
+        message and the reply it is owed, read as the reply lane's claim reads it."""
+        rows = self._db.query(
+            "SELECT t.*, m.msg_id AS last_inbound_msg_id, m.ts AS last_inbound_ts, "
+            + _LIVE_OWING_SQL
+            + " AS live_owed_ts FROM threads t "
+            "LEFT JOIN thread_messages m ON m.rowid = ("
+            "SELECT rowid FROM thread_messages WHERE thread_id = t.thread_id AND dir = 'in' "
+            "ORDER BY ts DESC, rowid DESC LIMIT 1) "
+            "WHERE t.item_id = ? AND t.market = ? AND t.side = 'sell' "
+            "ORDER BY t.created_ts, t.thread_id",
+            (item_id, market),
+        )
+        return [
+            {  # type: ignore[typeddict-item]
+                **_thread_from_row(row),
+                "last_inbound_msg_id": row["last_inbound_msg_id"],
+                "last_inbound_ts": row["last_inbound_ts"],
+                "reply_owed_ts": row["live_owed_ts"],
+                "last_update_ts": row["last_update_ts"],
+            }
+            for row in rows
+        ]
 
     def append_thread_message(
         self,

@@ -61,7 +61,8 @@ from sellee.rail import sink as relay_sink
 from sellee.rail.client import RailClient, RailUnprovisioned
 from sellee.scheduler import Scheduler, Task
 from sellee.store import ScopedStore, Store
-from sellee.tools.registry import ToolContext
+from sellee.tools import revise as revise_tool
+from sellee.tools.registry import TIER_PASS_EDIT, Session, ToolContext
 
 log = logging.getLogger(__name__)
 
@@ -478,6 +479,18 @@ def reply_sink_for(market: str, *, store, bus, cfg, rail_factory, browser_factor
     )
 
 
+def past_enquirer_sender(context_factory):
+    """The revise lane's send for a settled change: as an edit, through each market's sink."""
+
+    def send(change, since):
+        sends = revise_tool._send_updates(
+            context_factory(Session(tier=TIER_PASS_EDIT)), change, told_since=since
+        )
+        return sends.sent, sends.held  # the lane tells no model, so it takes no names
+
+    return send
+
+
 def _is_loopback_bind(host: str) -> bool:
     """Whether binding to `host` keeps the socket on this machine."""
     if host == "localhost":
@@ -812,6 +825,7 @@ def run_daemon(*, once: bool) -> int:
         config=cfg,
         rail_factory=rail_factory,
         service_hooks=craigslist_account.service_hooks(store),
+        retry_update=revise_tool.retry_update,
     )
     registration_read = mail_stream.SingleFlight(
         lambda: registration.registration_lane(registration_deps)
@@ -906,7 +920,12 @@ def run_daemon(*, once: bool) -> int:
     # Carry a seller's listing edit out to each browser marketplace, and report each outcome. The
     # rail half already happened inline, in the conversation that asked for it.
     revise_deps = revise.ReviseDeps(
-        store=store, bus=bus, config=cfg, browser_factory=browser_factory, governor=governor
+        store=store,
+        bus=bus,
+        config=cfg,
+        browser_factory=browser_factory,
+        governor=governor,
+        send_updates=past_enquirer_sender(context_factory),
     )
     scheduler.register(
         Task(

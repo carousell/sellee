@@ -16,7 +16,7 @@ from sellee.store.helpers import (
     _new_id,
     _now,
 )
-from sellee.store.updates import record_buyer_answered_in_txn
+from sellee.store.updates import record_buyer_answered_in_txn, record_update_sent_in_txn
 from sellee.store.winback import owing_seen_in_txn, settle_owed_reply_in_txn
 
 # How hard the machine tries before the seller is asked anything. An unsettled send is re-read by
@@ -124,6 +124,7 @@ class SendMixin:
         interactive: bool = False,
         pass_id: str | None = None,
         autonomous: bool = False,
+        announces: str | None = None,
     ) -> dict:
         """Transaction A of the send bracket: pacing reserve + (only on `go`) a durable intent, in
         one transaction; an unpaced market skips the reserve. A wait/quiet/unverified_open verdict
@@ -132,7 +133,8 @@ class SendMixin:
         and, on go, the intent id; the caller performs the sink send outside this transaction.
 
         `autonomous` marks a reply the reply lane wrote on its own, rather than words the seller
-        dictated or sent themselves; only that kind of answer is later news to the seller."""
+        dictated or sent themselves; only that kind of answer is later news to the seller.
+        `announces` marks a past-enquirer update (`updates.announcement`), told once it commits."""
         now = now if now is not None else _now()
         with self._db.transaction() as conn:
             thread = conn.execute(
@@ -160,7 +162,7 @@ class SendMixin:
                     "verdict": "go",
                     "delay_sec": 0.0,
                     "intent_id": self._new_intent_in_txn(
-                        conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
+                        conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous, announces
                     ),
                 }
             cutoff = now - pacing_engine.WINDOW_SECONDS
@@ -185,12 +187,12 @@ class SendMixin:
                 "verdict": "go",
                 "delay_sec": verdict["delay_sec"],
                 "intent_id": self._new_intent_in_txn(
-                    conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
+                    conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous, announces
                 ),
             }
 
     def _new_intent_in_txn(
-        self, conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous
+        self, conn, thread_id, in_msg_id, text, kind, now, pass_id, autonomous, announces
     ) -> str:
         if in_msg_id is None:
             # Fix what this reply answers now, so a commit long after it never claims a message
@@ -201,8 +203,8 @@ class SendMixin:
         conn.execute(
             "INSERT INTO send_intents "
             "(intent_id, thread_id, in_msg_id, text, kind, status, created_ts, autonomous, "
-            " owed_seen_ts) "
-            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?)",
+            " owed_seen_ts, announces) "
+            "VALUES (?, ?, ?, ?, ?, 'pending', ?, ?, ?, ?)",
             (
                 intent_id,
                 thread_id,
@@ -212,6 +214,7 @@ class SendMixin:
                 now,
                 1 if autonomous else 0,
                 owing_seen_in_txn(conn, thread_id, pass_id),
+                announces if kind == "followup" else None,
             ),
         )
         return intent_id
@@ -260,7 +263,8 @@ class SendMixin:
         # finding the same message later adds nothing.
         out_msg_id = msg_id or f"out|{intent_id}"
         intent = conn.execute(
-            "SELECT status, autonomous, owed_seen_ts FROM send_intents WHERE intent_id = ?",
+            "SELECT status, autonomous, owed_seen_ts, announces FROM send_intents "
+            "WHERE intent_id = ?",
             (intent_id,),
         ).fetchone()
         # Only an answer the reply lane wrote on its own is news to the seller, and only the first
@@ -271,6 +275,12 @@ class SendMixin:
             and intent is not None
             and intent["status"] != "committed"
             and bool(intent["autonomous"])
+        )
+        # A past-enquirer update is told the first time it commits, by whichever path finds it.
+        announced = (
+            intent["announces"]
+            if kind == "followup" and intent is not None and intent["status"] != "committed"
+            else None
         )
         conn.execute(
             "INSERT OR IGNORE INTO thread_messages "
@@ -307,6 +317,11 @@ class SendMixin:
                 we_said=text,
                 now=now,
             )
+        if announced:
+            conn.execute(
+                "UPDATE threads SET last_update_ts = ? WHERE thread_id = ?", (now, thread_id)
+            )
+            record_update_sent_in_txn(conn, thread_id=thread_id, announces=announced, now=now)
         return {"msg_id": out_msg_id}
 
     def _cursor_target(
@@ -421,7 +436,8 @@ class SendMixin:
         """A market's sends a lane still retries, oldest first, made before `created_before`. One
         the sweep gave up on and asked the seller about is theirs to settle, not the lane's."""
         rows = self._db.query(
-            "SELECT i.intent_id, i.thread_id, i.text FROM send_intents i "
+            "SELECT i.intent_id, i.thread_id, i.text, i.kind, i.announces, i.created_ts "
+            "FROM send_intents i "
             "JOIN threads t ON t.thread_id = i.thread_id "
             "WHERE t.market = ? AND i.status IN ('pending', 'sent_unverified') "
             "AND i.created_ts < ? ORDER BY i.created_ts ASC",
@@ -522,6 +538,11 @@ class SendMixin:
         failure, because the exception cannot say whether the page took the message."""
         rows = self._db.query("SELECT status FROM send_intents WHERE intent_id = ?", (intent_id,))
         return rows[0]["status"] if rows else None
+
+    def intent_kind(self, intent_id: str) -> str | None:
+        """The kind an intent was sent as (`reply`, `followup`, ...), or None for no such intent."""
+        rows = self._db.query("SELECT kind FROM send_intents WHERE intent_id = ?", (intent_id,))
+        return rows[0]["kind"] if rows else None
 
     def record_manual_reply(self, thread_id: str, text: str, *, handle: str | None = None) -> dict:
         """Journal a reply the seller sent themselves in the marketplace app: an outbound row,

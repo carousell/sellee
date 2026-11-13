@@ -327,6 +327,11 @@ class RevisionRecord(TypedDict):
     pass_id: str | None
     created_ts: float
     finished_ts: float | None
+    # The change a buyer can see, captured at edit time; None where none was recorded.
+    old_price: float | None
+    new_price: float | None
+    photo_added: bool
+    buyers_closed_ts: float | None
 
 
 class FloorAck(TypedDict):
@@ -395,6 +400,17 @@ class ThreadSummary(TypedDict):
     source: str | None
     created_ts: float
     updated_ts: float
+
+
+class ItemThread(ThreadSummary):
+    """A thread from `item_threads`, with its newest buyer message (None when the buyer wrote
+    nothing), when it became owed a reply (None when it is not), and when it was last sent a
+    past-enquirer update (None when it never was)."""
+
+    last_inbound_msg_id: str | None
+    last_inbound_ts: float | None
+    reply_owed_ts: float | None
+    last_update_ts: float | None
 
 
 class ThreadRecord(ThreadSummary):

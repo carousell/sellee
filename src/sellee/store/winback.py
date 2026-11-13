@@ -89,13 +89,22 @@ class WinbackMixin:
 
 
 def reopen_for_floor_change_in_txn(
-    conn, item_id: str, *, old_floor: float | None, new_floor: float, now: float
+    conn,
+    item_id: str,
+    *,
+    old_floor: float | None,
+    new_floor: float,
+    now: float,
+    offered_against: float | None = None,
 ) -> int:
     """Reopen the buyers a floor change from `old_floor` to `new_floor` now closes a deal with,
     returning how many. Nothing when the floor did not go down, or when the item is not open to
     offers (sold, held for a buyer, or in an auction), since no offer under list could be taken
     then. A buyer already reopened and not yet decided again is not reopened twice. A floor that
-    went up instead takes the reopening back from the buyers whose offer it no longer reaches."""
+    went up instead takes the reopening back from the buyers whose offer it no longer reaches.
+
+    `offered_against` is the list price the offers were made under, when a price drop has since
+    moved it; each offer is weighed against that price, as the engine weighed it then."""
     if old_floor is None:
         return 0
     if new_floor > old_floor:
@@ -111,6 +120,8 @@ def reopen_for_floor_change_in_txn(
         return 0
     led = load_ledger_in_txn(conn, item_id)
     list_price, knobs = _pricing(conn, item_id)
+    if offered_against is not None:
+        list_price = offered_against
     reopened = 0
     for row in rows:
         trial = _standing_again(led, row["thread_id"])

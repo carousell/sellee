@@ -41,6 +41,9 @@ class RegistrationDeps:
     rail_factory: Callable
     service_hooks: dict = field(default_factory=lambda: SERVICE_HOOKS)
     now: Callable[[], float] = time.time
+    # Resends a lost past-enquirer update only while it is still current, and answers whether it
+    # did. With None, every lost update is dropped.
+    retry_update: Callable[[object, dict, Callable[[], object]], bool] | None = None
 
 
 def registration_lane(deps: RegistrationDeps) -> None:
@@ -189,9 +192,26 @@ def _finish_our_sends(deps: RegistrationDeps, rail) -> None:
         return
     cutoff = deps.now() - RETRY_SEND_AFTER_SEC
     for intent in deps.store.unsettled_intents_on(CRAIGSLIST, created_before=cutoff):
+        if deps.store.is_paused():
+            return  # a pause mid-pass leaves the rest queued for after resume
         thread = deps.store.get_thread(intent["thread_id"], message_cap=0)
+
+        def send(thread=thread, intent=intent):
+            return send_registration_reply(
+                rail, deps.store, thread, intent["text"], intent["intent_id"]
+            )
+
         try:
-            send_registration_reply(rail, deps.store, thread, intent["text"], intent["intent_id"])
+            # bazaar cannot say whether a lost update went out without sending it, so one that may
+            # quote a moved price, or reach a buyer who has written since, is dropped instead.
+            if intent.get("announces") and not (
+                deps.retry_update and deps.retry_update(deps.store, intent, send)
+            ):
+                log.info("registration update %s no longer current; dropped", intent["intent_id"])
+                deps.store.drop_refused_intent(intent["intent_id"])
+                continue
+            if not intent.get("announces"):
+                send()
         except (RailNetworkError, RailAuthError):
             raise
         except RailError as exc:

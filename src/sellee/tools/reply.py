@@ -109,7 +109,8 @@ def _chasing_a_withdrawn_buyer(store, thread: dict, kind: str, in_msg_id) -> boo
     return not store.answers_since_withdrawal(thread["item_id"], thread["thread_id"], in_msg_id)
 
 
-def _send_reply(ctx: ToolContext, params: dict) -> dict:
+def _send_reply(ctx: ToolContext, params: dict, *, announces: str | None = None) -> dict:
+    """`announces` is set only by the past-enquirer sender, never by the tool's input."""
     # A paused agent acts on nothing — even an attended session's send respects the pause. Refuse
     # before any thread load or reserve so nothing is recorded.
     if ctx.store.is_paused():
@@ -184,13 +185,15 @@ def _send_reply(ctx: ToolContext, params: dict) -> dict:
             return {"status": "in_flight", "delivered": _UNKNOWN, "thread_id": thread_id}
         _SENDING.add(thread_id)
     try:
-        return _reserve_and_send(ctx, params, thread, kind, sink)
+        return _reserve_and_send(ctx, params, thread, kind, sink, announces)
     finally:
         with _SENDING_LOCK:
             _SENDING.discard(thread_id)
 
 
-def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, sink) -> dict:
+def _reserve_and_send(
+    ctx: ToolContext, params: dict, thread: dict, kind: str, sink, announces: str | None = None
+) -> dict:
     cfg = pacing_engine.resolve(
         ctx.config, settings.quiet_window_minutes(ctx.store), now=time.time()
     )
@@ -207,6 +210,7 @@ def _reserve_and_send(ctx: ToolContext, params: dict, thread: dict, kind: str, s
             # The channel pass sends the seller's own words, and the attended session is the
             # seller at their terminal; only the reply lane answers a buyer unprompted.
             autonomous=ctx.session.tier == TIER_PASS_REPLY,
+            announces=announces,
         )
     except StoreError as exc:
         raise ToolError(str(exc)) from exc

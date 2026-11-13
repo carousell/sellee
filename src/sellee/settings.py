@@ -860,9 +860,10 @@ register(
 # --- activity updates ------------------------------------------------------------------------
 #
 # How much of what I did on the seller's listings I tell them unasked: everything (offers I turned
-# down under their minimum, buyers I answered, listings nobody wrote about, a weekly line when
-# nothing else was said), only what needs their answer (those offers, a buyer kept waiting on them,
-# a sale they are closing themselves), or nothing.
+# down under their minimum, buyers I answered, buyers I told of a price drop or new photos,
+# listings nobody wrote about, a weekly line when nothing else was said), only what needs their
+# answer (those offers, a buyer kept waiting on them, a sale they are closing themselves), or
+# nothing.
 # It narrows what is pushed, never what is asked: an escalation, a buyer question only they can
 # answer, a deal to close and the daily check-in on a sale they took over all come whatever this
 # says, and /catchup still shows what I did in the last two days (an older tell is retired untold).
@@ -896,12 +897,50 @@ register(
         render=_render_activity_updates,
         default=ACTIVITY_UPDATES_ALL,
         description="What I tell you unasked about what I did on your listings: all (offers I "
-        "turned down under your minimum, buyers I answered, listings nobody wrote about, and a "
-        "Saturday line in a quiet week), decisions (only what needs your call: those offers, a "
-        "buyer waiting on your answer, a sale you are closing yourself), or off. Escalations, "
+        "turned down under your minimum, buyers I answered, buyers I told of a price drop or "
+        "new photos, listings nobody wrote about, and a Saturday line in a quiet week), "
+        "decisions (only what needs your call: those offers, a buyer waiting on your answer, a "
+        "sale you are closing yourself), or off. Escalations, "
         "buyer questions only you can answer, deals to close and the daily check-in on a sale "
         "you are closing yourself still come whatever this says, and /catchup shows what I did "
         "in the last two days. all | decisions | off.",
         take_effect="applies to the next update; nothing already sent is taken back.",
+    )
+)
+
+
+# --- telling past enquirers ---------------------------------------------------------------------
+# Off is always safe and on is the default, so a change applies immediately with an Undo.
+
+_PAST_ENQUIRER_UPDATES_HELP = "this must be true or false (tell buyers who asked, or not)"
+
+
+def _parse_past_enquirer_updates(raw: object) -> bool:
+    return _parse_bool(raw, _PAST_ENQUIRER_UPDATES_HELP)
+
+
+def past_enquirer_updates_on(store) -> bool:
+    """Whether buyers who asked about an item may be told when it changes, on any marketplace."""
+    return bool(get(store, "past_enquirer_updates"))
+
+
+def _render_past_enquirer_updates(value: object) -> str:
+    if value:
+        return "on — buyers who asked hear when the price drops or new photos are added"
+    return "off — buyers who asked aren't told of price drops or new photos"
+
+
+register(
+    SettingSpec(
+        key="past_enquirer_updates",
+        label="Updates to buyers who asked",
+        parse=_parse_past_enquirer_updates,
+        render=_render_past_enquirer_updates,
+        default=True,
+        description="Whether I tell buyers who already asked about an item when you lower its "
+        "price or add photos, with one short message each, once that marketplace shows the change "
+        "(carousell.ai, Facebook Marketplace, Carousell or Craigslist), and count them in your "
+        "activity updates. Off, I send them no such message. true or false.",
+        take_effect="applies to the next listing change.",
     )
 )

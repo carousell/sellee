@@ -297,6 +297,53 @@ def test_activity_updates_is_on_the_default_card(fresh_store) -> None:
     )
 
 
+# --- past_enquirer_updates -----------------------------------------------------------------------
+
+
+def test_past_enquirer_updates_parse_accepts_booleans_and_words() -> None:
+    spec = settings.get_spec("past_enquirer_updates")
+    assert spec.parse(True) is True
+    assert spec.parse("off") is False
+    assert spec.parse(" No ") is False
+    assert spec.parse("yes") is True
+
+
+@pytest.mark.parametrize("bad", ["sometimes", 1, 0, [], None])
+def test_past_enquirer_updates_parse_rejects_non_booleans(bad) -> None:
+    with pytest.raises(settings.SettingError, match="true or false"):
+        settings.get_spec("past_enquirer_updates").parse(bad)
+
+
+def test_past_enquirer_updates_render_says_which_way_round() -> None:
+    spec = settings.get_spec("past_enquirer_updates")
+    assert spec.render(True) == (
+        "on — buyers who asked hear when the price drops or new photos are added"
+    )
+    assert spec.render(False) == "off — buyers who asked aren't told of price drops or new photos"
+
+
+def test_past_enquirer_updates_defaults_on_and_applies_immediately() -> None:
+    spec = settings.get_spec("past_enquirer_updates")
+    assert spec.default is True
+    assert spec.requires_approval is False  # off is always safe; on is the default
+    assert "past_enquirer_updates" not in settings.CARD_HEADLINE
+
+
+def test_past_enquirer_updates_names_every_marketplace_that_sends_them() -> None:
+    # carousell.ai on its push; the browser markets once their edit settles and shows the change.
+    description = settings.get_spec("past_enquirer_updates").description
+    for market in ("carousell.ai", "Facebook Marketplace", "Carousell", "Craigslist"):
+        assert market in description
+    assert "once that marketplace shows the change" in description
+    assert "lower its" in description and "add photos" in description
+
+
+def test_the_card_shows_past_enquirer_updates_once_turned_off(fresh_store) -> None:
+    seed_setting(fresh_store, "past_enquirer_updates", False)
+    off = "off — buyers who asked aren't told of price drops or new photos"
+    assert f"• Updates to buyers who asked: {off}" in settings.card_lines(fresh_store)
+
+
 # --- read helpers + the minutes boundary ------------------------------------------------------
 
 
@@ -342,7 +389,7 @@ def test_card_lists_headline_at_default(fresh_store) -> None:
         "• Quiet hours: 23:00–08:00",
         "• Watch mode: off — I work in the background",
         "• Activity updates: all — what I did for you, and what needs you",
-        "3 more settings at defaults — ask me about settings.",
+        "4 more settings at defaults — ask me about settings.",
     ]
 
 
@@ -369,7 +416,7 @@ def test_card_promotes_a_changed_non_headline_setting(fresh_store) -> None:
     )
     lines = settings.card_lines(fresh_store)
     assert "• Persona: terse and businesslike" in lines
-    assert "2 more settings at defaults — ask me about settings." in lines
+    assert "3 more settings at defaults — ask me about settings." in lines
 
 
 def test_describe_carries_policy(fresh_store) -> None:
