@@ -68,6 +68,9 @@
       "domains": {
         "*": "www.carousell.ai"
       },
+      "also_hosts": [
+        "www.sellee.ai"
+      ],
       "connector": {
         "type": "mcp"
       },

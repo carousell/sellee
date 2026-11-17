@@ -75,7 +75,7 @@ footer{position:fixed;left:0;right:0;bottom:0;background:var(--panel);
 <script>
 "use strict";
 const $ = (id) => document.getElementById(id);
-let TOKEN = null, THREAD = null, POLL = null, CHECKOUT_BASE = null;
+let TOKEN = null, THREAD = null, POLL = null, CHECKOUT_BASES = [];
 
 function status(text, isErr) {
   const el = $("status");
@@ -114,18 +114,21 @@ function render(messages) {
 
 function withLinks(text) {
   const frag = document.createDocumentFragment();
-  if (!CHECKOUT_BASE) { frag.appendChild(document.createTextNode(text)); return frag; }
-  const prefix = CHECKOUT_BASE + "/checkout/";
+  const prefixes = CHECKOUT_BASES.map((base) => base + "/");
   let rest = text;
   for (;;) {
-    const at = rest.indexOf(prefix);
+    let at = -1;
+    for (const prefix of prefixes) {
+      const i = rest.indexOf(prefix);
+      if (i >= 0 && (at < 0 || i < at)) at = i;
+    }
     if (at < 0) break;
     frag.appendChild(document.createTextNode(rest.slice(0, at)));
     let end = at;
     while (end < rest.length && !/\s/.test(rest[end])) end++;
     const url = rest.slice(at, end);
     const a = document.createElement("a");
-    a.href = url;              // origin already matches the configured checkout base
+    a.href = url;              // origin already matches a configured checkout base
     a.target = "_blank";
     a.rel = "noopener noreferrer";
     a.textContent = url;
@@ -146,7 +149,7 @@ async function api(path, opts) {
 async function loadItems() {
   const body = await api("/control/sim-items?token=" + encodeURIComponent(TOKEN));
   const items = body.items;
-  CHECKOUT_BASE = body.checkout_base || null;
+  CHECKOUT_BASES = Array.isArray(body.checkout_bases) ? body.checkout_bases : [];
   const sel = $("item");
   sel.textContent = "";
   if (!items.length) {

@@ -34,6 +34,7 @@ from urllib.parse import parse_qs, urlparse, urlsplit
 
 from sellee import __version__, buyer_sim, marketplaces, passes
 from sellee.browser import connect as _connect
+from sellee.config import checkout_bases
 from sellee.db import connect_reader
 from sellee.events import event_to_wire, latest_seq, query_events, routine_kinds
 from sellee.paths import PACKAGE_DATA_DIR
@@ -1119,7 +1120,8 @@ class _Handler(BaseHTTPRequestHandler):
         # anchor. Carried here rather than on the shared tail-exchange route, which the event tail
         # also uses and has no business growing a checkout concern.
         base = getattr(self._app.config, "carousell_ai_web_base_url", "") or ""
-        self._send_json(200, {"items": out, "checkout_base": base.rstrip("/")})
+        bases = list(checkout_bases(base)) if base else []
+        self._send_json(200, {"items": out, "checkout_bases": bases})
 
     def _handle_sim_thread(self, parsed) -> None:
         if not buyer_sim.enabled():

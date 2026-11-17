@@ -2,7 +2,7 @@
 
 scam_scan composes the pure engine with store-backed state: it builds the marketplace allowlist
 from the shipped registry, reads the merged signature view (packaged registry ∪ local bank), pulls
-the thread's recent inbound window from the transcript, and passes the config-derived checkout base
+the thread's recent inbound window from the transcript, and passes the config-derived checkout bases
 so the carve-out can never drift. record refuses to bank a real marketplace host as a scam
 signature (anti-poisoning), in code.
 """
@@ -10,6 +10,7 @@ signature (anti-poisoning), in code.
 from __future__ import annotations
 
 from sellee import marketplaces
+from sellee.config import checkout_bases
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.store import StoreError
@@ -33,11 +34,6 @@ _RECORD_KIND_MAP = {
 }
 
 
-def _checkout_base(ctx: ToolContext) -> str:
-    # the web origin, not the API origin: real checkout pages are served on www.carousell.ai
-    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/checkout"
-
-
 def _allowlist():
     return hosts.build_allowlist(marketplaces.all_marketplaces())
 
@@ -55,7 +51,7 @@ def _scam_scan(ctx: ToolContext, params: dict) -> dict:
         history_text=history,
         allowlist=_allowlist(),
         signatures=merged,
-        checkout_base=_checkout_base(ctx),
+        checkout_bases=checkout_bases(ctx.config.carousell_ai_web_base_url),
         registry_ok=registry_ok,
     )
 

@@ -15,6 +15,7 @@ store so a (kind, value) means the same thing on both sides.
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Sequence
 
 from sellee.engines import hosts
 
@@ -117,13 +118,15 @@ def make_id(kind: str, value: str) -> str:
     return "scam-" + hashlib.sha256(seed).hexdigest()[:12]  # an id, not a security hash
 
 
-def classify_links(text: str, allowlist, checkout_base: str, registry_ok: bool = True) -> list:
+def classify_links(
+    text: str, allowlist, checkout_bases: Sequence[str], registry_ok: bool = True
+) -> list:
     """Extract and classify every link in `text`. When the registry could not be read, nothing is
     treated as a marketplace link (fail toward flagging)."""
     out = []
     for raw in hosts.extract_links(text):
         host = hosts.host_of(raw)
-        checkout = hosts.is_checkout_link(raw, checkout_base)
+        checkout = hosts.is_checkout_link(raw, checkout_bases)
         marketplace = registry_ok and hosts.host_is_marketplace(host, allowlist)
         out.append(
             {
@@ -164,14 +167,14 @@ def scan(
     history_text: str = "",
     allowlist,
     signatures: list,
-    checkout_base: str,
+    checkout_bases: Sequence[str],
     registry_ok: bool = True,
 ) -> dict:
     """Score one inbound message. `history_text` is the recent inbound window so a play split
     across messages ("arrange delivery" … then a link) still fires. Returns the verdict dict."""
     window_text = (history_text + "\n" + (text or "")).lower()
-    current_links = classify_links(text or "", allowlist, checkout_base, registry_ok)
-    window_links = classify_links(window_text, allowlist, checkout_base, registry_ok)
+    current_links = classify_links(text or "", allowlist, checkout_bases, registry_ok)
+    window_links = classify_links(window_text, allowlist, checkout_bases, registry_ok)
 
     hits = match_signatures(window_links, window_text, signatures)
     has_offplatform = any(

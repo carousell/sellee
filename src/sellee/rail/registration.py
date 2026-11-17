@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Callable
 
 from sellee import marketplaces, settings
+from sellee.config import checkout_bases
 from sellee.engines import hosts
 from sellee.engines import scam as scam_engine
 from sellee.rail.client import RailAuthError, RailError, RailNetworkError, RailUnprovisioned
@@ -226,6 +227,6 @@ def _scan(deps: RegistrationDeps, text: str, history: list) -> dict:
         history_text="\n".join(history),
         allowlist=hosts.build_allowlist(marketplaces.all_marketplaces()),
         signatures=merged,
-        checkout_base=deps.config.carousell_ai_web_base_url.rstrip("/") + "/checkout",
+        checkout_bases=checkout_bases(deps.config.carousell_ai_web_base_url),
         registry_ok=registry_ok,
     )

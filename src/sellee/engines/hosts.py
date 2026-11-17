@@ -8,8 +8,10 @@ off-platform link in a scam scan (anything that is NOT one).
 The match is boundary-exact: a host matches a marketplace only when it equals the domain or is a
 subdomain of it, so facebook.com.scam.site and carousell-pay.net both fail. The checkout carve-out
 recognises the single inbound link the agent may open — a genuine carousell.ai checkout link —
-keyed on the config-derived base (www.carousell.ai/checkout), rejecting every lookalike
-(userinfo tricks, subdomains, punycode, wrong scheme/port/path).
+keyed on the config-derived checkout bases, rejecting every lookalike (userinfo tricks,
+subdomains, punycode, wrong scheme/port/path). In production there are two:
+www.carousell.ai/checkout and www.sellee.ai/checkout, because carousell.ai's site is served on both
+hosts while it moves to sellee.ai. Anywhere else the configured base is the only one.
 
 Network-free by construction: URLs are parsed with pure string ops, never urllib — an engine must
 never be able to open a socket.
@@ -18,6 +20,7 @@ never be able to open a socket.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 # Cheap/scam-favoured TLDs plus the common ones: a bare token (no scheme, no path) is treated as a
@@ -134,13 +137,13 @@ def host_is_marketplace(host: str, allowlist) -> bool:
 
 
 def build_allowlist(marketplaces: list) -> frozenset:
-    """The set of exact registrable marketplace hosts, from every domains{} value plus any FULL
-    listing_url host. A bare-suffix listing host like 'carousell.' is deliberately ignored — the
-    domains map already enumerates the real regional hosts, and a suffix would wave through a
-    lookalike like carousell.ai.scam.site."""
+    """The set of exact registrable marketplace hosts, from every domains{} value and also_hosts
+    entry plus any FULL listing_url host. A bare-suffix listing host like 'carousell.' is
+    deliberately ignored — the domains map already enumerates the real regional hosts, and a suffix
+    would wave through a lookalike like carousell.ai.scam.site."""
     exact: set = set()
     for entry in marketplaces:
-        for host in (entry.get("domains") or {}).values():
+        for host in [*(entry.get("domains") or {}).values(), *(entry.get("also_hosts") or [])]:
             h = strip_www(str(host).lower().strip())
             if "." in h:
                 exact.add(h)
@@ -187,23 +190,29 @@ def checkout_base_parts(checkout_base: str) -> UrlParts:
     return parse_url(checkout_base)
 
 
-def is_checkout_link(raw: str, checkout_base: str) -> bool:
-    """True only for a genuine carousell.ai checkout link under the config-derived base — the sole
-    inbound link the agent may open. Every lookalike (userinfo, subdomain, punycode, wrong
+def is_checkout_link(raw: str, checkout_bases: Sequence[str]) -> bool:
+    """True only for a genuine carousell.ai checkout link under one of the config-derived bases —
+    the sole inbound link the agent may open. Every lookalike (userinfo, subdomain, punycode, wrong
     scheme/port/path) fails, so a scammer's imitation is never navigable."""
+    if isinstance(checkout_bases, str):
+        # a lone string would be read one character at a time
+        raise TypeError("checkout_bases is a sequence of checkout bases, not one base")
     if "://" not in raw:  # a checkout link is always a full URL
         return False
     p = parse_url(raw)
-    base = checkout_base_parts(checkout_base)
-    if p.scheme != (base.scheme or "https"):
-        return False
     if p.userinfo:  # reject www.carousell.ai@evil.com tricks
-        return False
-    if p.host != base.host:  # EXACT host, not a subdomain or lookalike
         return False
     if p.host.startswith("xn--") or any(ord(c) > 127 for c in p.host):  # no punycode/homoglyphs
         return False
     if p.port not in (None, "443"):
+        return False
+    return any(_under_checkout_base(p, checkout_base_parts(base)) for base in checkout_bases)
+
+
+def _under_checkout_base(p: UrlParts, base: UrlParts) -> bool:
+    if p.scheme != (base.scheme or "https"):
+        return False
+    if p.host != base.host:  # EXACT host, not a subdomain or lookalike
         return False
     prefix = base.path.rstrip("/") + "/"  # require a sale id after /checkout/
     return p.path.startswith(prefix) and len(p.path) > len(prefix)
