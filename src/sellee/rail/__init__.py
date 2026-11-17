@@ -6,3 +6,9 @@ stdlib-only guard's network allowlist.
 """
 
 from __future__ import annotations
+
+from sellee import __version__
+
+# Every request to carousell.ai's API carries this. Cloudflare fronts the API and 403s urllib's
+# default User-Agent, and the version lets its analytics show which releases still call a host.
+USER_AGENT = f"SELLEE-rail/{__version__}"

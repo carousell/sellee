@@ -15,6 +15,7 @@ import threading
 import urllib.error
 import urllib.request
 
+from sellee.rail import USER_AGENT
 from sellee.rail.mail_stream import MailStreamConnection
 
 _DEFAULT_TIMEOUT_SEC = 15.0
@@ -28,7 +29,6 @@ _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
-_CLIENT_UA = "SELLEE-rail/1"
 
 # carousell.ai's item policy, per endpoint for the life of the process. No answer carries its
 # version, so it is read again only on a sign this copy is stale.
@@ -109,7 +109,7 @@ class RailClient:
                 # request otherwise, and the rejection lands after auth so a bad key masks it.
                 "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {self._api_key}",
-                "User-Agent": _CLIENT_UA,
+                "User-Agent": USER_AGENT,
             },
         )
         try:
@@ -256,7 +256,7 @@ class RailClient:
             upload_url,
             data=data,
             method="POST",
-            headers={"Content-Type": content_type, "User-Agent": _CLIENT_UA},
+            headers={"Content-Type": content_type, "User-Agent": USER_AGENT},
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
