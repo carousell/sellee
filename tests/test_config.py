@@ -22,6 +22,8 @@ def test_missing_file_yields_all_defaults(xdg_tmp) -> None:
     assert cfg.log_level == "INFO"
     assert cfg.tick_interval_sec == 5.0
     assert cfg.routine_events_retention_hours == 24
+    assert cfg.carousell_ai_api_base == "https://api.sellee.ai"
+    assert cfg.carousell_ai_web_base_url == "https://www.carousell.ai"
 
 
 def test_values_are_read_from_the_config_path(xdg_tmp) -> None:

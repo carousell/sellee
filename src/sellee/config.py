@@ -85,7 +85,7 @@ class Config:
     # PATH of the job the supervisor installs. Null means the daemon relies on whatever PATH it
     # inherits, which is right when it is started from a shell.
     node_bin_dir: str | None = None
-    carousell_ai_api_base: str = "https://api.carousell.ai"
+    carousell_ai_api_base: str = "https://api.sellee.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"
     # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
     # local fake server; production uses the default.
