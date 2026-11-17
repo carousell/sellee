@@ -8,7 +8,14 @@ import logging
 import pytest
 
 from sellee import paths
-from sellee.config import Config, ConfigError, load
+from sellee.config import (
+    PRODUCTION_WEB_BASES,
+    Config,
+    ConfigError,
+    accepted_web_bases,
+    checkout_bases,
+    load,
+)
 
 
 def _write_config(obj) -> None:
@@ -376,3 +383,41 @@ def test_fast_pacing_with_an_end_time_loads(xdg_tmp) -> None:
     cfg = load()
     assert cfg.pacing_mode == "fast"
     assert cfg.pacing_fast_until == 1893456000.0
+
+
+@pytest.mark.parametrize(
+    "web_base",
+    [
+        "https://www.carousell.ai",
+        "https://www.sellee.ai",
+        "https://WWW.CAROUSELL.AI",
+        "https://www.sellee.ai/",
+    ],
+)
+def test_a_production_web_base_accepts_both_production_bases(web_base) -> None:
+    assert accepted_web_bases(web_base) == PRODUCTION_WEB_BASES
+    assert set(PRODUCTION_WEB_BASES) == {"https://www.carousell.ai", "https://www.sellee.ai"}
+
+
+@pytest.mark.parametrize(
+    "web_base,expected",
+    [
+        (
+            "https://staging.bazaar-web.carouselltech.com",
+            "https://staging.bazaar-web.carouselltech.com",
+        ),
+        ("http://127.0.0.1:9999/", "http://127.0.0.1:9999"),
+        ("https://shop.example.com", "https://shop.example.com"),
+        ("http://www.carousell.ai", "http://www.carousell.ai"),
+    ],
+)
+def test_any_other_web_base_accepts_only_itself(web_base, expected) -> None:
+    assert accepted_web_bases(web_base) == (expected,)
+
+
+def test_checkout_bases_are_the_checkout_page_on_each_accepted_base() -> None:
+    assert checkout_bases("https://www.carousell.ai") == (
+        "https://www.carousell.ai/checkout",
+        "https://www.sellee.ai/checkout",
+    )
+    assert checkout_bases("http://127.0.0.1:9999") == ("http://127.0.0.1:9999/checkout",)

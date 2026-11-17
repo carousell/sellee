@@ -254,6 +254,62 @@ def test_verify_rejects_wrong_base_or_path(fake_rail) -> None:
         _client(base).verify_listing_url(f"{base}/u/chat")
 
 
+class _Page:
+    status = 200
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+
+@pytest.mark.parametrize(
+    "url", ["https://www.carousell.ai/listing/1-lamp", "https://www.sellee.ai/listing/1-lamp"]
+)
+def test_verify_accepts_a_listing_on_either_production_web_host(monkeypatch, url) -> None:
+    fetched = []
+
+    def urlopen(req, timeout):
+        fetched.append(req.full_url)
+        return _Page()
+
+    monkeypatch.setattr("sellee.rail.client.urllib.request.urlopen", urlopen)
+    client = RailClient(
+        api_base="https://api.sellee.ai", api_key="k", web_base_url="https://www.carousell.ai"
+    )
+    client.verify_listing_url(url)
+    assert fetched == [url]
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.sellee.ai.evil.com/listing/1",
+        "https://www.sellee.ai@evil.com/listing/1",
+        "https://sellee.ai/listing/1",
+        "http://www.sellee.ai/listing/1",
+    ],
+)
+def test_verify_rejects_lookalikes_of_the_new_host(monkeypatch, url) -> None:
+    def urlopen(req, timeout):
+        raise AssertionError("a lookalike must be refused before any fetch")
+
+    monkeypatch.setattr("sellee.rail.client.urllib.request.urlopen", urlopen)
+    client = RailClient(
+        api_base="https://api.sellee.ai", api_key="k", web_base_url="https://www.carousell.ai"
+    )
+    with pytest.raises(RailToolError, match="not under"):
+        client.verify_listing_url(url)
+
+
+def test_verify_on_a_staging_base_rejects_production_listings(fake_rail) -> None:
+    _, base = fake_rail
+    for url in ("https://www.carousell.ai/listing/1", "https://www.sellee.ai/listing/1"):
+        with pytest.raises(RailToolError, match="not under"):
+            _client(base).verify_listing_url(url)
+
+
 def test_text_content_helper() -> None:
     result = {
         "content": [

@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import hashlib
 
+from sellee import config
 from sellee.money import to_price_cents
 from sellee.rail import signin
 from sellee.rail.client import (
@@ -90,11 +91,6 @@ def _sale_id(item_id: str, thread_id: str, price) -> str:
 
 def _listing_id(item: dict) -> str:
     return listing_id_from_url((item.get("listing_urls") or {}).get(_MARKET))
-
-
-def _checkout_base(ctx: ToolContext) -> str:
-    # the web origin, not the API origin: real checkout pages are served on www.carousell.ai
-    return ctx.config.carousell_ai_web_base_url.rstrip("/") + "/checkout"
 
 
 def _rail(ctx: ToolContext):
@@ -204,9 +200,9 @@ def mint_checkout_link(
         raise ToolError(str(exc)) from exc
 
     url = (minted.get("checkout_url") or "").strip()
-    base = _checkout_base(ctx)
-    if not url.startswith(base + "/"):
-        # fail closed: a minted link must sit under the config-derived checkout base
+    bases = config.checkout_bases(ctx.config.carousell_ai_web_base_url)
+    if not url.startswith(tuple(base + "/" for base in bases)):
+        # fail closed: a minted link must sit under a config-derived checkout base
         raise ToolError("checkout link did not come from the expected carousell.ai checkout base")
 
     recorded = ctx.store.record_checkout(
