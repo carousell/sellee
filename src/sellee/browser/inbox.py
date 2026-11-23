@@ -79,7 +79,7 @@ UNPLACEABLE_NOTICE = (
 
 UNAVAILABLE_NOTICE = (
     "I can't drive the browser at the moment, so browser marketplaces are paused. "
-    "The carousell.ai side is unaffected. Details: {reason}"
+    "Your Sellee listings are unaffected. Details: {reason}"
 )
 
 # How long the lane sits on a conversation it has just read before moving to the next one.

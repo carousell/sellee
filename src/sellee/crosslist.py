@@ -67,7 +67,7 @@ PUBLISH_MAX_ATTEMPTS = 3
 PUBLISH_RETRY_AFTER_SEC = 30 * 60.0
 
 NO_BROWSER_NOTICE = (
-    "I can't list on {market} because I can't drive a browser here. The carousell.ai listing is "
+    "I can't list on {market} because I can't drive a browser here. The Sellee listing is "
     "unaffected. Details: {reason}"
 )
 PUBLISHED_NOTICE = "{item} is now listed on {market}: {url}"
@@ -81,7 +81,7 @@ REVIEW_CHECK_EVERY_SEC = 30 * 60.0
 REVIEW_WAIT_SEC = 3 * 24 * 3600.0
 FAILED_NOTICE = (
     "I couldn't list {item} on {market}. Everything else about it is fine, including its "
-    "carousell.ai listing. Ask me and I'll have another go at it."
+    "Sellee listing. Ask me and I'll have another go at it."
 )
 
 

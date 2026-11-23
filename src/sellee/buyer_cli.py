@@ -63,8 +63,8 @@ def run(args: argparse.Namespace) -> int:
         return 1
     if not body.get("items"):
         print(
-            "sellee: no item is published on carousell.ai yet, and the checkout link can only be "
-            "minted for one that is. Publish an item first.",
+            "sellee: no item has a Sellee listing yet, and the checkout link can only be "
+            "minted for one that has. Publish an item first.",
             file=sys.stderr,
         )
         return 1

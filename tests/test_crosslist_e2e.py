@@ -275,5 +275,5 @@ def test_a_failed_fan_out_is_one_notice_and_no_second_attempt(
     assert len(texts) == 1
     assert "couldn't list Teak lamp on Carousell" in texts[0]
     assert "Ask me" in texts[0]
-    assert "carousell.ai listing" in texts[0]
+    assert "Sellee listing" in texts[0]
     assert _queued(store) == []

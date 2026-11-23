@@ -118,7 +118,7 @@ def test_the_clock_is_asked_about_only_where_it_can_be_wrong(xdg_tmp, monkeypatc
         "browser",
         "browser server",
         "harness",
-        "carousell.ai key",
+        "Sellee marketplace key",
     ]
 
     monkeypatch.setenv(deployment.MARKER_VAR, deployment.CONTAINER)

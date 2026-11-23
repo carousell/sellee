@@ -552,7 +552,7 @@ def test_a_carousell_ai_scam_is_held_and_its_escalation_names_the_flags(
     )
     assert store.get_escalation(esc["id"])["open_question"] == (
         "This buyer looks like a scam. Is it? "
-        "(flagged by carousell.ai: platform_impersonation, scam_phrase)"
+        "(flagged by the Sellee marketplace: platform_impersonation, scam_phrase)"
     )
 
 
@@ -560,10 +560,13 @@ def test_a_carousell_ai_scam_without_flags_is_named_by_its_risk(make_ctx, store,
     tid, _ = _labelled(store, bus, fake, risk="scam")
 
     prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
-    assert "flagged as a scam by the automatic scan; flagged by carousell.ai as scam]" in prompt
+    assert (
+        "flagged as a scam by the automatic scan; flagged by the Sellee marketplace as scam]"
+        in prompt
+    )
     esc = dispatch("escalate", {"thread_id": tid, "open_question": "Scam?"}, make_ctx("attended"))
     assert store.get_escalation(esc["id"])["open_question"] == (
-        "Scam? (flagged by carousell.ai as scam)"
+        "Scam? (flagged by the Sellee marketplace as scam)"
     )
 
 
@@ -578,10 +581,10 @@ def test_the_escalation_names_carousell_ais_highest_risk_across_the_thread(
 
     prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
     m2 = next(line for line in prompt.splitlines() if "(id m2)" in line)
-    assert m2.endswith("; flagged by carousell.ai as suspicious]")
+    assert m2.endswith("; flagged by the Sellee marketplace as suspicious]")
     esc = dispatch("escalate", {"thread_id": tid, "open_question": "Scam?"}, make_ctx("attended"))
     assert store.get_escalation(esc["id"])["open_question"] == (
-        "Scam? (flagged by carousell.ai as scam)"
+        "Scam? (flagged by the Sellee marketplace as scam)"
     )
 
 
@@ -594,7 +597,8 @@ def test_a_carousell_ai_suspicious_message_is_cautioned_and_still_answered(
     prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
     line = next(line for line in prompt.splitlines() if "(id m1)" in line)
     assert line.endswith(
-        "[flagged as suspicious by the automatic scan; flagged by carousell.ai: off_platform_link]"
+        "[flagged as suspicious by the automatic scan; "
+        "flagged by the Sellee marketplace: off_platform_link]"
     )
     assert _send(make_ctx, store, bus, fake, tid)["status"] == "sent"
 
@@ -610,7 +614,7 @@ def test_an_instruction_to_the_agent_is_still_answered(make_ctx, store, bus, fak
     )
 
     prompt = reply_prompt.build_reply_prompt([store.get_thread(tid)], {})
-    assert "flagged by carousell.ai: instruction_to_agent" in prompt
+    assert "flagged by the Sellee marketplace: instruction_to_agent" in prompt
     assert _send(make_ctx, store, bus, fake, tid)["status"] == "sent"
 
 
@@ -666,4 +670,4 @@ def test_another_markets_message_carries_no_carousell_ai_label(store) -> None:
     [row] = store.get_thread_messages("carousell:7")
     assert (row["carousell_ai_risk"], row["carousell_ai_flags"]) == (None, [])
     prompt = reply_prompt.build_reply_prompt([store.get_thread("carousell:7")], {})
-    assert "carousell.ai" not in prompt
+    assert "Sellee marketplace" not in prompt

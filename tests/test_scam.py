@@ -812,7 +812,9 @@ def test_a_chat_block_asks_the_seller_and_sends_nothing(relay_thread, reason) ->
     assert relay_thread.store.get_thread(relay_thread.thread_id)["status"] == "active"
     notice = _ask_notice(relay_thread, result["notice_id"])
     assert notice["pass_id"] == relay_thread.pass_id  # the ask is this pass's answer
-    assert notice["text"].startswith("Block and report Alice (Carousell.ai · Teak lamp) to ")
+    assert notice["text"].startswith(
+        "Block and report Alice (Sellee · Teak lamp) to the Sellee marketplace "
+    )
     assert f"for {reason}?" in notice["text"]
     assert [label for label, _ in notice["controls"]] == [
         f"🚫 Block Alice: {reason}",

@@ -77,7 +77,7 @@ def test_a_bound_channel_without_adapter_defaults_to_telegram() -> None:
 def test_no_external_marketplaces_is_a_pass_with_the_reason() -> None:
     result = healthcheck.browser_check(enabled=[], blocked="Chrome isn't running", states=[])
     assert result.status == checks.OK
-    assert "carousell.ai only" in result.detail
+    assert "the Sellee marketplace only" in result.detail
 
 
 def test_a_closed_chrome_with_markets_enabled_is_a_note_not_a_fault() -> None:

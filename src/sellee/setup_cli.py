@@ -152,7 +152,7 @@ def _intro_container(ui: Ui) -> None:
     ui.say("")
     ui.say("This will:")
     ui.say("  • record the country you sell in")
-    ui.say("  • set up carousell.ai")
+    ui.say("  • set up your Sellee marketplace account")
     ui.say("  • optionally connect marketplaces and a chat channel (Telegram or Discord)")
     ui.say("  • write the workspace for the terminal session")
     ui.say("")
@@ -479,7 +479,9 @@ def _seller_region(ui: Ui, args, port: int, token: str):
     if basics is None:
         basics = basics_prompt.ask_basics(ui)
     if not basics:
-        ui.warn("No region recorded — carousell.ai setup and the marketplace list are skipped.")
+        ui.warn(
+            "No region recorded — Sellee marketplace setup and the marketplace list are skipped."
+        )
         ui.note("both are completed once a region is set")
         return None
 
@@ -519,7 +521,7 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
 
     if not region:
         return
-    ui.step("Setting up carousell.ai")
+    ui.step("Setting up the Sellee marketplace")
     status = provision.ensure(region, api_base=config.load().carousell_ai_api_base)
     if status.get("status") == "ok":
         link = _mint_signin(str(region).upper(), on_terminal=ui.on_terminal())
@@ -534,7 +536,7 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
             ui.note(notice)
         _offer_signin(ui, link)
         return
-    ui.warn(f"carousell.ai setup did not complete: {status.get('error')}")
+    ui.warn(f"Sellee marketplace setup did not complete: {status.get('error')}")
     ui.note("re-run `sellee provision carousell-ai` when back online")
 
 
@@ -577,12 +579,13 @@ def _offer_signin(ui: Ui, link: str | _NoLink) -> None:
         return
     if link is _NoLink.UNWATCHED:
         ui.note(
-            "run setup in a terminal for your carousell.ai sign-in link; Sellee offers it later too"
+            "run setup in a terminal for your Sellee account sign-in link; "
+            "Sellee offers it later too"
         )
         return
     if link is _NoLink.FAILED:
         # The rail's words stay out of the terminal; the first checkout asks again regardless.
-        ui.warn("could not make your carousell.ai sign-in link — Sellee offers one again later")
+        ui.warn("could not make your Sellee account sign-in link — Sellee offers one again later")
         return
     ui.say(_SIGNIN_OFFER.format(url=link))
     ui.note("the link works for 15 minutes; Sellee offers a fresh one later if it lapses")
@@ -622,7 +625,7 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     available = market_adapters.connectable_markets(region)
     ui.step("Other marketplaces")
     if not available:
-        ui.say("none available in this region yet — carousell.ai only")
+        ui.say("none available in this region yet — the Sellee marketplace only")
         return
 
     ui.say("Sellee can also work the marketplaces below: list to them, read their inbox, answer")
@@ -637,13 +640,13 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
         )
     ]
     if not picked:
-        ui.say("carousell.ai only — change this any time from the /sellee menu")
+        ui.say("the Sellee marketplace only — change this any time from the /sellee menu")
         return
 
     # The setting first: it is what the seller opted into, and it holds even if a sign-in is
     # interrupted — the fan-out re-checks the login every time it publishes anyway.
     if settings_cli.set_setting(port, token, "connected_markets", json.dumps(picked)) != 0:
-        ui.warn("Those marketplaces could not be recorded — carousell.ai only for now.")
+        ui.warn("Those marketplaces could not be recorded — the Sellee marketplace only for now.")
         return
 
     # Claimed for the whole phase, not per sign-in: the survey lane will look at a newly connected
