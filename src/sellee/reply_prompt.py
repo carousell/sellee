@@ -58,7 +58,7 @@ _CLOSING_BOUNDARY = (
 
 
 def carousell_ai_note(risk: str | None, flags: list) -> str:
-    """What carousell.ai flagged, as the seller and the model read it; "" for nothing."""
+    """What the Sellee marketplace flagged, as the seller and the model read it; "" for nothing."""
     if flags:
         return f"flagged by the Sellee marketplace: {', '.join(flags)}"
     return f"flagged by the Sellee marketplace as {risk}" if risk in ("suspicious", "scam") else ""

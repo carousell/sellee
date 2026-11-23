@@ -1,4 +1,4 @@
-"""The relay send: a reply to a carousell.ai email thread, through bazaar's reply_to_thread.
+"""The relay send: a reply to a Sellee email thread, through bazaar's reply_to_thread.
 
 bazaar stores one reply per `client_message_id` and answers once it is stored; its outbox sends
 it from there. The id is the send intent's own, written before the first call, so any failure

@@ -2,7 +2,7 @@
 
 Most marketplaces have no third-party APIs, so the agent interacts with them the way a human would, by controlling a browser. This is the layer that does it. Playwright is required for controlling the browser. Only Chrome browser is supported.
 
-It is an **optional** layer. A agent with no third-party marketplaces will continue posting listings on carousell.ai.
+It is an **optional** layer. An agent with no third-party marketplaces will continue posting listings on Sellee.
 
 See [`ARCHITECTURE.md`](ARCHITECTURE.md) for where this sits in the whole, and
 [`tool-surface-and-passes.md`](tool-surface-and-passes.md) for the *other* browser
@@ -606,7 +606,7 @@ notifications Facebook has actually been seen to send.
 ## The survey: taking over what the seller already had
 
 `browser/survey.py` (the look and the ask) and `browser/adopt.py` (the adoption and the
-carousell.ai publish), on the `market_survey` scheduler task.
+Sellee publish), on the `market_survey` scheduler task.
 
 Signing in used to hand the agent an inbox and an account and nothing else. Everything the seller
 already had listed stayed invisible, because [adoption](#the-read-lane) only creates a thread for a
@@ -648,11 +648,11 @@ after the ask, and by then something on the list may have sold. Carousell says s
 no "sold" text at all — so this check is the only thing between a stale tap and relisting someone's
 sold goods. Unanswered asks also expire after a week, and the tap on an expired one asks again.
 
-**The carousell.ai publish is owed durably** (`rail_state`), because nothing else could recover one:
+**The Sellee publish is owed durably** (`rail_state`), because nothing else could recover one:
 the fan-out needs the rail listing as its *precondition*, and `queue_marketplace_publish` refuses a
 market the seller has not enabled. A publish skipped because another held the one slot stays `owed`.
 It also carries its own origin (`adopt`, not `crosslist`) and reports itself, because the fan-out's
-failure copy asserts a carousell.ai listing already exists — which is exactly what this one lacks.
+failure copy asserts a Sellee listing already exists — which is exactly what this one lacks.
 
 **Failure is bounded and never head-of-line.** `next_adoptable_listing` orders by attempts before
 age, so a listing whose page will not read moves behind every listing that has not been tried; three
@@ -673,7 +673,7 @@ write an item whose row has stopped being `accepted`, so a decline landing while
 being read wins, and leaves no item behind with a publish nobody can recover.
 
 **What the seller sees.** One notice naming what was found, two buttons (`Yes, manage them` /
-`No thanks`), one message per adopted listing as its carousell.ai listing goes up, and one batch
+`No thanks`), one message per adopted listing as its Sellee listing goes up, and one batch
 summary accounting for anything skipped. Nothing is said about a market being signed out or
 unreadable — the read lane already owns that conversation, and this is work the seller never asked
 for. The finer answers ("only the bike", "just answer buyers, don't repost them", "try that one
@@ -696,7 +696,7 @@ with search engines rather than with us, and carries the currency as a code and 
 full size. Two things are checked rather than assumed: the row count is compared against the page's
 own "N Active" tally (the tabs carry no selected state, so a view that is not the active one is
 caught by having a different number of rows), and a listing with no parseable price is dropped and
-counted rather than offered — carousell.ai refuses an item without one. `itemCondition` is ignored
+counted rather than offered — Sellee refuses an item without one. `itemCondition` is ignored
 because Carousell reports `NewCondition` for everything, including a listing whose own page says
 "Lightly used".
 
@@ -708,7 +708,7 @@ It fetches over https only, to a host the registry names in `media_hosts` for th
 follows no redirects (a 302 would undo the host check), caps bytes per file *and* per set on what
 actually arrived rather than on a `Content-Length`, and sniffs every body as a real image. A listing
 whose photographs cannot be brought across is still adopted — buyers write to it and we answer — and
-the seller is told it did not make it onto carousell.ai.
+the seller is told it did not make it onto Sellee.
 
 ## Reconcile
 
@@ -897,10 +897,10 @@ what `publishable_markets(region)` allows.
 Per tick: report settled publishes → queue at most one more.
 
 **Eligibility is a query, not a recipe step.** An item qualifies when it is live on
-carousell.ai, missing from an enabled market, not sold, and never attempted there.
+Sellee, missing from an enabled market, not sold, and never attempted there.
 Reading that off rows is what buys:
 
-- **rail-first as a precondition** — no carousell.ai URL, no fan-out, so it cannot
+- **rail-first as a precondition** — no Sellee URL, no fan-out, so it cannot
   happen out of order;
 - **idempotence** — `record_published_listing_url` writing the URL stops the pair
   qualifying;
@@ -943,7 +943,7 @@ the notice, so a crash mid-sweep neither announces twice nor swallows. Publishes
 hand carry no `crosslist` origin and are not reported.
 
 **The push closes the loop the other way.** The lane's third phase writes each item's
-browser-listing URLs onto its carousell.ai listing (`external_urls`, which the listing
+browser-listing URLs onto its Sellee listing (`external_urls`, which the listing
 page renders to buyers as "Also available on"). A push is owed when the set derived
 from the item's recorded listing URLs differs from what the rail last accepted — the
 `crosslink_pushes` marker table, written only after the rail says yes — so steady state
@@ -979,7 +979,7 @@ API call on our own rail, not visible activity on the seller's marketplace accou
 | `survey.adopt_dropped` | a listing the seller declined (or re-asked about) while it was being adopted |
 | `survey.adopt_failed` | one adoption attempt that failed, with the running count and the reason |
 | `survey.listing_dropped` | a listing given up on for good — sold since the ask, unreadable, or unpublishable |
-| `survey.relist_queued` | an adopted item's carousell.ai publish was queued, with the attempt number |
+| `survey.relist_queued` | an adopted item's Sellee publish was queued, with the attempt number |
 | `survey.relisted` | that publish landed, with the URL |
 | `survey.relist_retry` | it recorded no URL and is owed another go |
 | `survey.relist_failed` | it ran out of attempts and the seller was told |

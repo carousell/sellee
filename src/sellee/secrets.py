@@ -1,7 +1,7 @@
 """Secret files in the config dir — 0600 from creation, atomic replace, values never logged.
 
 Two secrets live here: the attended MCP bearer token (generated at first daemon start) and
-the carousell.ai guest API key (written by provisioning). Values travel via files and HTTP
+the Sellee guest API key (written by provisioning). Values travel via files and HTTP
 headers only — never argv, never stdout, never event payloads. A malformed value (whitespace,
 control characters) is rejected, never sanitized: a mangled secret would only fail later,
 further from the cause.

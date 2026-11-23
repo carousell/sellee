@@ -238,7 +238,7 @@ class TelegramClient:
         for i, chunk in enumerate(chunks):
             # Link previews off, always. Telegram builds a preview card by fetching every
             # URL in the message from its own servers, and much of what this channel carries
-            # is single-use: a Stripe payout-setup link, a carousell.ai sign-in link, a ship
+            # is single-use: a Stripe payout-setup link, a Sellee sign-in link, a ship
             # or confirm magic link. That fetch redeems the link, so the seller taps one that
             # has already been spent and is told it expired. A preview adds nothing to any of
             # these anyway — they are all one-time URLs with nothing to preview.

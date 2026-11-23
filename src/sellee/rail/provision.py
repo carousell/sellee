@@ -1,4 +1,4 @@
-"""carousell.ai guest-key provisioning — zero-LLM, fail-soft, off the pass path.
+"""Sellee guest-key provisioning — zero-LLM, fail-soft, off the pass path.
 
 POST /api/v1/guests {"country": <region>} returns {user_id, country, api_key, notice, currency};
 the key is stored 0600 through secrets.py and never printed. ensure is idempotent (a key already
@@ -112,7 +112,7 @@ def ensure(region: str | None, *, api_base: str, force: bool = False) -> dict:
         "forced": force,
         "user_id": str(payload.get("user_id") or ""),
         "country": payload.get("country") or resolved,
-        # Whether carousell.ai can pay this seller out is the backend's answer, not ours. Empty
+        # Whether Sellee can pay this seller out is the backend's answer, not ours. Empty
         # means there is nothing to tell them.
         "notice": _printable(str(payload.get("notice") or "")),
         "currency": _currency(payload),

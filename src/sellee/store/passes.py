@@ -146,7 +146,7 @@ class PassesMixin:
         return out
 
     def note_pass_refused(self, pass_id: str, message: str) -> None:
-        """Record that carousell.ai's item policy refused this pass's item, in its words. A pass id
+        """Record that Sellee's item policy refused this pass's item, in its words. A pass id
         with no row is ignored."""
         with self._db.transaction() as conn:
             row = conn.execute(

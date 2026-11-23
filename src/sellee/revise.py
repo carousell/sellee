@@ -1,8 +1,9 @@
 """The revise lane: carry a seller's edit out to every browser marketplace, and say how it went.
 
-`update_live_listing` changes the record and carousell.ai in the turn the seller asks, and leaves a
-`listing_revisions` row for each browser marketplace the item is live on. This lane drains those
-rows. It is modelled on the fan-out lane (`crosslist.py`) and keeps its rules for the same reasons:
+`update_live_listing` changes the record and the Sellee listing in the turn the seller asks, and
+leaves a `listing_revisions` row for each browser marketplace the item is live on. This lane drains
+those rows. It is modelled on the fan-out lane (`crosslist.py`) and keeps its rules for the same
+reasons:
 
   * Work is derived from durable rows, so a restart resumes it and nothing depends on a model
     remembering what it started.

@@ -51,7 +51,7 @@ _UNSETTLED = ("queued", "running")
 
 def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
     """Refuse a price the seller approved in another currency: 500 USD on an account pricing in
-    VND goes live as 500 VND. A pre-check ahead of reserve_action; carousell.ai enforces it."""
+    VND goes live as 500 VND. A pre-check ahead of reserve_action; Sellee enforces it."""
     recorded = (item.get("currency") or "").strip().upper()
     if not recorded or not expected:
         # Nothing to contradict, or a seller provisioned before registration answered a code.
@@ -77,7 +77,7 @@ def category_check(ctx: ToolContext, item: dict) -> dict | None:
     """The refusal when the cached item policy refuses the item's category, or None. Fails closed:
     no category or an unreadable policy fails the step rather than let a refused item through."""
     if not item["category"]:
-        # carousell.ai refuses a listing without one; named here so the fix comes with it.
+        # Sellee refuses a listing without one; named here so the fix comes with it.
         raise ToolError(
             "item has no category; Sellee lists nothing without one. Set the item's token "
             "from carousell_ai_item_policy as category with update_item first"
@@ -126,7 +126,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     if item.get("list_price") is None:
         raise ToolError("item has no list price — set one before publishing")
     if item.get("size_bucket") not in SIZE_BUCKETS:
-        # carousell.ai prices shipping from the class and refuses a listing without one. Refused
+        # Sellee prices shipping from the class and refuses a listing without one. Refused
         # here so the message names the tool that sets it, and before any pacing slot is spent.
         raise ToolError(
             "item has no valid parcel size class; set size_bucket "
@@ -139,7 +139,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
     except ValueError as exc:
         raise ToolError(str(exc)) from exc
 
-    # Before the pacing slot: an item carousell.ai will not take is not a publish attempt.
+    # Before the pacing slot: an item Sellee will not take is not a publish attempt.
     refusal = category_check(ctx, item)
     if refusal:
         return refusal

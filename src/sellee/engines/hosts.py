@@ -7,7 +7,7 @@ off-platform link in a scam scan (anything that is NOT one).
 
 The match is boundary-exact: a host matches a marketplace only when it equals the domain or is a
 subdomain of it, so facebook.com.scam.site and carousell-pay.net both fail. The checkout carve-out
-recognises the single inbound link the agent may open — a genuine carousell.ai checkout link —
+recognises the single inbound link the agent may open — a genuine Sellee checkout link —
 keyed on the config-derived checkout bases, rejecting every lookalike (userinfo tricks,
 subdomains, punycode, wrong scheme/port/path). In production there are two:
 www.sellee.ai/checkout and www.carousell.ai/checkout, because links on the carousell.ai host are
@@ -191,7 +191,7 @@ def checkout_base_parts(checkout_base: str) -> UrlParts:
 
 
 def is_checkout_link(raw: str, checkout_bases: Sequence[str]) -> bool:
-    """True only for a genuine carousell.ai checkout link under one of the config-derived bases —
+    """True only for a genuine Sellee checkout link under one of the config-derived bases —
     the sole inbound link the agent may open. Every lookalike (userinfo, subdomain, punycode, wrong
     scheme/port/path) fails, so a scammer's imitation is never navigable."""
     if isinstance(checkout_bases, str):

@@ -83,7 +83,7 @@ def _update_listing(ctx: ToolContext, params: dict) -> dict:
 
 
 def take_down_on_sale(ctx: ToolContext, item_id: str, take_down: list) -> str | None:
-    """Archive the carousell.ai listing a sale left live; None when the sale named none."""
+    """Archive the Sellee listing a sale left live; None when the sale named none."""
     if not any(entry.get("platform") == _MARKET for entry in take_down):
         return None
     try:

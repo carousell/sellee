@@ -94,7 +94,7 @@ their tests:
   code constants). The store's `reserve_action` records at reserve in one
   transaction; the caller sleeps the go-jitter after, never under the lock. Quiet
   hours hold only what we *start* (`REACTIVE_KINDS` — a reply or holding line to a
-  waiting buyer is exempt); the hourly cap holds every kind, except a carousell.ai
+  waiting buyer is exempt); the hourly cap holds every kind, except a Sellee
   email reply (`UNPACED_MARKETS`), which is no browser send and is capped by
   bazaar. The reply lane asks the same question read-only via `peek_action` **before** spawning a pass, so a
   send the engine would refuse never costs a model turn.
@@ -155,12 +155,12 @@ Detail in [`tool-surface-and-passes.md`](tool-surface-and-passes.md):
   safety tools compose the engines with the store; `send_reply` runs the whole
   send bracket (pacing reserve + durable intent in one transaction, the sink send
   outside it, then fold + cursor advance + commit) behind a `ReplySink` seam, which
-  the browser layer fills, and `rail/sink.py` fills for carousell.ai email threads
+  the browser layer fills, and `rail/sink.py` fills for Sellee email threads
   through bazaar's `reply_to_thread`. A killed send is folded by the `stale_intent_sweep`
   scheduler task as unconfirmed + an escalation, never re-sent.
 - **`mcp_proxy.py`** — a stdio↔HTTP shim so stdio-only harnesses reach the same
   server.
-- **`rail/`** — the carousell.ai rail (a stdlib MCP client + guest-key
+- **`rail/`** — the Sellee rail (a stdlib MCP client + guest-key
   provisioning) wrapped behind our tools, off the LLM surface.
 - **`browser/`** — the marketplaces the agent drives in Chrome. See below.
 - **`harness/`** — the harness seam: one internal `PassSpec`, pure per-provider
@@ -190,20 +190,20 @@ runs on with the browser lanes reporting themselves unavailable, rather than eve
 market reading as quiet. Detail in [`browser-layer.md`](browser-layer.md).
 
 **`crosslist.py`** is the fan-out lane above it: the seller names the marketplaces
-they sell on in a setting, and a listing that is live on carousell.ai and missing
+they sell on in a setting, and a listing that is live on Sellee and missing
 from one of them becomes a queued browser publish. Eligibility is a query over
 stored rows rather than a step in a recipe, which is what makes rail-first a
 precondition, the work idempotent, and the backlog free; each outcome is reported
 to the seller by the daemon, read off the row the pass wrote rather than off what
 the pass said about itself. The lane's third phase closes the loop the other way:
-it writes each item's browser-listing URLs onto its carousell.ai listing (rendered
+it writes each item's browser-listing URLs onto its Sellee listing (rendered
 to buyers as "Also available on"), pushing only when the recorded URLs differ from
 what the rail last accepted and retrying silently until it does.
 
 **`revise.py`** is its counterpart for a listing that is already up. When the
 seller asks to change a price, a description, a title or the photos,
 `update_live_listing` writes the item (clamping the confidential floor under a
-lowered price in the same transaction), edits the carousell.ai listing inline, and
+lowered price in the same transaction), edits the Sellee listing inline, and
 leaves one `listing_revisions` row per browser marketplace the item is live on.
 The lane drains those rows one at a time: a market with a driver (Facebook) is
 edited in process by `browser/editor.py`; a market with an edit recipe
@@ -293,7 +293,7 @@ Resolved by `paths.py` from the XDG base directories:
 ~/.cache/sellee/         downloaded release artifacts
 ```
 
-Secrets (the attended MCP token, the carousell.ai guest key, the channel provider's bot
+Secrets (the attended MCP token, the Sellee guest key, the channel provider's bot
 token) are 0600 files in the config dir, never logged or evented. Inbound channel
 media (photo bursts) is downloaded to `share/media/` before any LLM sees it. Per-pass workspaces live under
 `state/passes/<pass_id>/` and are swept on pass end. Tests point the XDG

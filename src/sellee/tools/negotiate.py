@@ -90,7 +90,7 @@ def _confirm_sold(ctx: ToolContext, params: dict) -> dict:
         result = ctx.store.negotiate_confirm_sold(params["item_id"], params["thread_id"])
     except StoreError as exc:
         raise ToolError(str(exc)) from exc
-    # Live: the agent left a sold item's carousell.ai listing up, so the sale archives it itself.
+    # Live: the agent left a sold item's Sellee listing up, so the sale archives it itself.
     rail = listing.take_down_on_sale(ctx, params["item_id"], result.get("take_down") or [])
     if rail is not None:
         result["carousell_ai_take_down"] = rail

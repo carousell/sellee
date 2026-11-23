@@ -4,7 +4,7 @@ Selling normally needs a real buyer on a real marketplace: the inbox lane drives
 conversation, and the reply sink types back into it. That is impossible to rehearse and awkward to
 test against, so this module supplies the two ends of that loop and nothing in between. Everything
 the agent does between them — the reply pass, the model, `negotiate_offer`, the floor gate, minting
-a carousell.ai checkout link — is the real thing, unchanged and unaware it is being rehearsed.
+a Sellee checkout link — is the real thing, unchanged and unaware it is being rehearsed.
 
 Simulated conversations live on their own market, `simbuyer`, and that choice is what keeps them
 apart from real ones. `marketplaces.browser_markets()` does not list it, so the inbox lane never

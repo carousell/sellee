@@ -1,7 +1,7 @@
 """The listings the seller already had, for the conversation to act on.
 
 The ask itself is two buttons and needs no model — but "only the bike and the camera", "just answer
-buyers, don't repost them" and "try that carousell.ai one again" are answers a button cannot carry.
+buyers, don't repost them" and "try that Sellee one again" are answers a button cannot carry.
 These two tools honour them, over exactly the same rows the buttons write.
 
 Neither tool adopts anything itself. They record a decision; the survey lane does the work and
@@ -21,7 +21,7 @@ from sellee.tools.registry import (
     register,
 )
 
-# What the seller may say about a set of listings. `retry` re-arms a carousell.ai publish that ran
+# What the seller may say about a set of listings. `retry` re-arms a Sellee publish that ran
 # out of attempts — the door the failure notice promises.
 _DECISIONS = ("manage", "decline", "retry")
 _MANAGE_MODES = ("inbox", "relist")

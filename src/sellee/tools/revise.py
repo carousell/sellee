@@ -8,7 +8,7 @@ whole change, in the order it has to happen:
   1. refuse what must not be edited — a sold item, a paused agent, a deal already in flight;
   2. write the record, with the floor clamped under the new price in the same transaction;
   3. queue every browser marketplace the item is live on, for the revise lane to drive;
-  4. push carousell.ai inline — one call on our own rail, so it either worked or it did not.
+  4. push the Sellee listing inline — one call on our own rail, so it either worked or it did not.
 
 The record is written before the rail is called, which inverts the take-down's rail-first order on
 purpose. A take-down that recorded first could leave a live listing nothing watches; an edit that
@@ -82,8 +82,8 @@ def _update_live_listing(ctx: ToolContext, params: dict) -> dict:
 
     # The browser markets are queued before the rail is called: queueing is local bookkeeping and
     # can fail, a rail push is public and cannot be taken back. In this order a failure here
-    # leaves no marketplace changed; in the other it left carousell.ai edited and the seller told
-    # "internal error".
+    # leaves no marketplace changed; in the other it left the Sellee listing edited and the seller
+    # told "internal error".
     markets: dict = {}
     for market, url in sorted(item["listing_urls"].items()):
         if market == _RAIL or not url or marketplaces.connector_type(market) != "browser":
@@ -137,7 +137,7 @@ def _carry_uploads(item: dict, fields: dict) -> dict:
 
 
 def _push_rail(ctx: ToolContext, item: dict, changed: list) -> dict:
-    """Push the change to the carousell.ai listing, answering how it went.
+    """Push the change to the Sellee listing, answering how it went.
 
     No pacing reserve: a rail call is one API call on our own marketplace, not activity a buyer or
     the marketplace sees on the seller's account — the cross-link push takes none for the same

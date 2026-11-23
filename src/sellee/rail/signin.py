@@ -1,4 +1,4 @@
-"""The seller's carousell.ai sign-in link: email, then the ship-from ZIP that lets buyers pay.
+"""The seller's Sellee sign-in link: email, then the ship-from ZIP that lets buyers pay.
 One mint for every caller, so each refuses the same links, since the URL hands over the account."""
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 from sellee import config
 from sellee.rail.client import RailError, RailToolError
 
-# carousell.ai takes payments for sellers in the United States only, so only they need the sign-in.
+# Sellee takes payments for sellers in the United States only, so only they need the sign-in.
 CHECKOUT_REGION = "US"
 
 # The rail's refusal for an account that is past sign-in. A result, not a failure.
@@ -14,7 +14,7 @@ _ALREADY_A_SELLER = "already a seller"
 
 
 class OffBaseSigninLink(RailError):
-    """The rail answered with a link that is not on the carousell.ai sign-in page."""
+    """The rail answered with a link that is not on the Sellee sign-in page."""
 
 
 def mint_signin_url(rail, web_base_url: str) -> str | None:

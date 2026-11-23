@@ -1094,7 +1094,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _handle_sim_items(self, parsed) -> None:
         """The items a simulated buyer could plausibly enquire about.
 
-        Only items already published on carousell.ai: the checkout tool refuses anything else, so
+        Only items already published on Sellee: the checkout tool refuses anything else, so
         offering the rest would just be a way to reach a confusing refusal.
         """
         if not buyer_sim.enabled():

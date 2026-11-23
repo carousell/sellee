@@ -218,7 +218,7 @@ def mcp_token_path() -> Path:
 
 
 def carousell_ai_api_key_path() -> Path:
-    """The provisioned carousell.ai guest API key (a 0600 secret file)."""
+    """The provisioned Sellee guest API key (a 0600 secret file)."""
     return config_dir() / "carousell_ai_api_key"
 
 

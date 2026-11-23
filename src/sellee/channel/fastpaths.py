@@ -399,7 +399,7 @@ def _signin_markets(store) -> list:
     browser adapter for.
 
     Every marketplace we could drive for this seller, connected or not — offering only what is
-    already on would make the command useless for setting a new marketplace up. carousell.ai is
+    already on would make the command useless for setting a new marketplace up. Sellee is
     excluded: it is reached with an API key, so there is no window to open.
     """
     return market_adapters.connectable_markets(store.seller_region())

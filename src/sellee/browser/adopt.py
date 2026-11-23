@@ -1,4 +1,4 @@
-"""Turning a yes into items, and getting those items onto carousell.ai.
+"""Turning a yes into items, and getting those items onto Sellee.
 
 Phases two and three of the survey lane (`browser/survey.py` holds the first and the copy). One
 listing per tick: a page read plus a set of photographs.
@@ -10,7 +10,7 @@ Three things here are load-bearing:
     have sold; the marketplace says so only in its structured data.
   * The item and its marketplace URL are written together by one store call. Apart, a crash between
     them leaves an item no conversation can match, and a retry makes a second.
-  * The carousell.ai publish is owed durably: it is skipped when another publish holds the one
+  * The Sellee publish is owed durably: it is skipped when another publish holds the one
     slot, and nothing else could pick it back up. The row remembers; this phase settles it and
     tells the seller.
 """
@@ -40,10 +40,10 @@ log = logging.getLogger(__name__)
 
 # Attempts per listing before it is retired. Every attempt is a page read.
 ADOPT_MAX_ATTEMPTS = 3
-# carousell.ai publish attempts per listing — a publish is minutes of work and a real token bill.
+# Sellee publish attempts per listing — a publish is minutes of work and a real token bill.
 RAIL_MAX_ATTEMPTS = 3
 
-# Not the fan-out's origin: its failure copy assumes the item already has a carousell.ai listing,
+# Not the fan-out's origin: its failure copy assumes the item already has a Sellee listing,
 # which this one does not. Our own origin means that sweep closes the row as owing nothing, and
 # this phase reports.
 ORIGIN = "adopt"
@@ -247,7 +247,7 @@ def _adopt_one(deps, row: dict, adapter) -> None:
     price = detail.get("price")
     currency = _currency_for(deps.store, detail)
     if not price or not currency:
-        # carousell.ai refuses an item without both.
+        # Sellee refuses an item without both.
         _fail(deps, row, "the listing page shows no usable price")
         return
 
@@ -358,7 +358,7 @@ def _summarise_if_drained(deps, market: str) -> None:
     )
 
 
-# --- phase three: the carousell.ai publish an adopted listing is owed ------------------------
+# --- phase three: the Sellee publish an adopted listing is owed ------------------------
 
 
 def rail_publish_phase(deps) -> None:
@@ -370,7 +370,7 @@ def rail_publish_phase(deps) -> None:
 
 
 def _publish_would_be_allowed(deps) -> bool:
-    """Whether a carousell.ai publish could actually get through right now.
+    """Whether a Sellee publish could actually get through right now.
 
     Checked before queueing: quiet hours and the hourly cap refuse a publish without it being the
     listing's fault, and a pass queued into one spends its attempt and looks exactly like a failure.
@@ -445,7 +445,7 @@ def _settle_failed(deps, row, title: str) -> None:
 
 
 def _settle_refused(deps, row, title: str, message: str) -> None:
-    """Settle a publish carousell.ai's item policy refuses, once and in its words: a retry would be
+    """Settle a publish Sellee's item policy refuses, once and in its words: a retry would be
     refused the same way."""
     deps.store.set_rail_publish_state(
         row["market"],
@@ -474,7 +474,7 @@ def _category_refusal(deps, item: dict) -> str | None:
 
 
 def _enqueue_owed(deps) -> None:
-    """Start one owed carousell.ai publish, if the single publish slot is free.
+    """Start one owed Sellee publish, if the single publish slot is free.
 
     Held rather than dropped when it is not: passes run one at a time, and queueing a second only
     lengthens the wait. The row stays owed — the entire reason it is a column.

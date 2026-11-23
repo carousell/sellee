@@ -288,7 +288,7 @@ LOGIN_JS = """() => {
 # Two facts make this safe to adopt from, and both are checked rather than assumed: the row count is
 # compared against the page's own "N Active" tally (sold listings hide behind tabs with no selected
 # state), and a listing with no parseable price is dropped and counted rather than offered —
-# carousell.ai refuses an item without one.
+# Sellee refuses an item without one.
 #
 # Returns `{listings: [...], active_count, dropped, unreadable, truncated}` or `{error: …}`. An
 # empty list means "you have nothing listed" — the answer that stops the asking — so a page that
