@@ -13,12 +13,10 @@ import urllib.error
 import urllib.request
 
 from sellee import countries, secrets
+from sellee.rail import USER_AGENT
 
 _GUESTS_PATH = "/api/v1/guests"
 _DEFAULT_TIMEOUT_SEC = 10.0
-# Cloudflare fronts api.carousell.ai and 403s urllib's default UA; send an honest, version-
-# stamped one so the guests POST isn't blocked. No secret in it.
-_USER_AGENT = "SELLEE/1"
 
 
 class ProvisionError(Exception):
@@ -64,7 +62,7 @@ def request_guest_key(region: str, *, api_base: str, timeout_sec: float = _DEFAU
         headers={
             "Content-Type": "application/json",
             "Accept": "application/json",
-            "User-Agent": _USER_AGENT,
+            "User-Agent": USER_AGENT,
         },
     )
     try:

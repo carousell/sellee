@@ -100,7 +100,7 @@ def test_recording_does_not_advance_the_cursor(store):
 # --- the routes -------------------------------------------------------------------------------
 
 
-def _server(bus, store):
+def _server(bus, store, config=None):
     def context_factory(session):
         return ToolContext(
             session=session,
@@ -118,6 +118,7 @@ def _server(bus, store):
         events_db_path=bus.store.db.path,
         context_factory=context_factory,
         attended_token=_ATTENDED,
+        config=config,
     )
     server.start()
     return server
@@ -218,6 +219,21 @@ def test_the_page_is_served_when_enabled(bus, store, enabled, xdg_tmp):
     assert b"buyer simulator" in body
     # The page must never be handed a token in its own URL; it trades a one-shot ticket instead.
     assert b"tail-exchange" in body
+
+
+def test_the_page_is_given_every_checkout_base(bus, store, enabled, xdg_tmp):
+    """The page makes a checkout link clickable only under one of these, so a production config
+    hands it both production hosts."""
+    server = _server(bus, store, config=Config())
+    try:
+        status, raw = _get(server, f"/control/sim-items?token={_ATTENDED}")
+    finally:
+        server.stop()
+    assert status == 200
+    assert json.loads(raw)["checkout_bases"] == [
+        "https://www.carousell.ai/checkout",
+        "https://www.sellee.ai/checkout",
+    ]
 
 
 def test_inbound_route_requires_an_item_and_text(bus, store, enabled, xdg_tmp):

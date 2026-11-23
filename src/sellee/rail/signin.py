@@ -3,6 +3,7 @@ One mint for every caller, so each refuses the same links, since the URL hands o
 
 from __future__ import annotations
 
+from sellee import config
 from sellee.rail.client import RailError, RailToolError
 
 # carousell.ai takes payments for sellers in the United States only, so only they need the sign-in.
@@ -16,10 +17,6 @@ class OffBaseSigninLink(RailError):
     """The rail answered with a link that is not on the carousell.ai sign-in page."""
 
 
-def _signin_base(web_base_url: str) -> str:
-    return web_base_url.rstrip("/") + "/signin"
-
-
 def mint_signin_url(rail, web_base_url: str) -> str | None:
     """A fresh sign-in link for the account `rail` holds the key to, or None once it is a seller.
     Raises RailError for anything else, OffBaseSigninLink included."""
@@ -31,10 +28,10 @@ def mint_signin_url(rail, web_base_url: str) -> str | None:
         raise
     raw = minted.get("promotion_url")
     url = raw.strip() if isinstance(raw, str) else ""
-    base = _signin_base(web_base_url)
+    bases = [web_base + "/signin" for web_base in config.accepted_web_bases(web_base_url)]
     # Exact base or a real `?`/`/` boundary, as one unbroken run of printable characters: a bare
     # prefix would also accept `/signinfoo`, and a control character could forge a terminal line.
-    on_base = url == base or url.startswith((base + "?", base + "/"))
+    on_base = any(url == base or url.startswith((base + "?", base + "/")) for base in bases)
     if not on_base or not url.isprintable() or any(ch.isspace() for ch in url):
         raise OffBaseSigninLink(
             "sign-in link did not come from the expected carousell.ai sign-in base"

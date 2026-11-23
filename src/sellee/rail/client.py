@@ -3,8 +3,8 @@
 We are the client here (unidirectional): POST JSON-RPC to <api_base>/mcp with the guest key as a
 bearer token, initialize, then tools/call. The API key travels only in the Authorization header —
 never in argv, never logged. Failures are typed (auth / network / tool) so callers can respond
-precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit under
-<web_base_url>/listing/ and return HTTP 200 right now, or nothing is recorded.
+precisely. verify_listing_url is the fail-closed gate: a recorded URL must sit under /listing/ on
+an accepted web base and return HTTP 200 right now, or nothing is recorded.
 """
 
 from __future__ import annotations
@@ -15,6 +15,8 @@ import threading
 import urllib.error
 import urllib.request
 
+from sellee import config
+from sellee.rail import USER_AGENT
 from sellee.rail.mail_stream import MailStreamConnection
 
 _DEFAULT_TIMEOUT_SEC = 15.0
@@ -28,7 +30,6 @@ _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
-_CLIENT_UA = "SELLEE-rail/1"
 
 # carousell.ai's item policy, per endpoint for the life of the process. No answer carries its
 # version, so it is read again only on a sign this copy is stale.
@@ -91,6 +92,7 @@ class RailClient:
         self._endpoint = self._api_base + "/mcp"
         self._api_key = api_key
         self._web_base_url = web_base_url.rstrip("/")
+        self._accepted_web_bases = config.accepted_web_bases(web_base_url)
         self._timeout = timeout_sec
         self._next_id = 0
 
@@ -109,7 +111,7 @@ class RailClient:
                 # request otherwise, and the rejection lands after auth so a bad key masks it.
                 "Accept": "application/json, text/event-stream",
                 "Authorization": f"Bearer {self._api_key}",
-                "User-Agent": _CLIENT_UA,
+                "User-Agent": USER_AGENT,
             },
         )
         try:
@@ -256,7 +258,7 @@ class RailClient:
             upload_url,
             data=data,
             method="POST",
-            headers={"Content-Type": content_type, "User-Agent": _CLIENT_UA},
+            headers={"Content-Type": content_type, "User-Agent": USER_AGENT},
         )
         try:
             with urllib.request.urlopen(req, timeout=self._timeout) as resp:
@@ -405,12 +407,13 @@ class RailClient:
         return {"sent_at": result["sent_at"]}
 
     def verify_listing_url(self, url: str) -> None:
-        """Fail-closed live check: the URL must sit under <web_base_url>/listing/ and return HTTP
-        200 right now (urllib follows the id->slug 301). Raises RailToolError otherwise."""
+        """Fail-closed live check: the URL must sit under /listing/ on an accepted web base and
+        return HTTP 200 right now (urllib follows the id->slug 301). Raises RailToolError
+        otherwise."""
         url = (url or "").strip()
-        prefix = self._web_base_url + _LISTING_PATH
-        if not url.startswith(prefix):
-            raise RailToolError(f"listing url is not under {prefix!r}")
+        prefixes = tuple(base + _LISTING_PATH for base in self._accepted_web_bases)
+        if not url.startswith(prefixes):
+            raise RailToolError(f"listing url is not under {' or '.join(map(repr, prefixes))}")
         req = urllib.request.Request(url, headers={"User-Agent": _BROWSER_UA})
         try:
             with urllib.request.urlopen(req, timeout=_VERIFY_TIMEOUT_SEC) as resp:

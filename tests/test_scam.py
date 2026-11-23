@@ -40,7 +40,7 @@ from sellee.tools.registry import (
     tools_for_tier,
 )
 
-BASE = "https://www.carousell.ai/checkout"
+BASES = ("https://www.carousell.ai/checkout", "https://www.sellee.ai/checkout")
 
 
 def _allowlist():
@@ -57,7 +57,7 @@ def test_combo_forces_scam() -> None:
         "I'll arrange the courier, click https://fastpay-sg.top/claim to receive the money",
         allowlist=_allowlist(),
         signatures=[],
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert r["verdict"] == "scam"
     assert {"offplatform_link", "delivery_arrangement_phrase", "receive_money_phrase"} <= set(
@@ -70,7 +70,7 @@ def test_lone_offplatform_link_is_suspicious_not_scam() -> None:
         "check this out https://randomsite.top/deal",
         allowlist=_allowlist(),
         signatures=[],
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert r["verdict"] == "suspicious"
 
@@ -80,7 +80,7 @@ def test_genuine_marketplace_link_is_clean() -> None:
         "here it is https://www.facebook.com/marketplace/item/12345",
         allowlist=_allowlist(),
         signatures=[],
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert r["verdict"] == "clean"
 
@@ -91,7 +91,7 @@ def test_split_play_fires_via_history_window() -> None:
         history_text="Great, I'll arrange the courier for pickup",
         allowlist=_allowlist(),
         signatures=[],
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert r["verdict"] == "scam"  # delivery phrase in history + off-platform link now
 
@@ -101,10 +101,25 @@ def test_lookalike_checkout_flags_scam() -> None:
         "pay at https://api.carousell.ai.scam.site/checkout/x to receive the money",
         allowlist=_allowlist(),
         signatures=[],
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert r["links"][0]["checkout_link"] is False
     assert r["verdict"] == "scam"
+
+
+def test_checkout_links_on_either_production_host_are_not_off_platform() -> None:
+    for url in (
+        "https://www.carousell.ai/checkout/abc123",
+        "https://www.sellee.ai/checkout/abc123",
+    ):
+        r = scam.scan(
+            f"here is the checkout link {url}",
+            allowlist=_allowlist(),
+            signatures=[],
+            checkout_bases=BASES,
+        )
+        assert r["links"][0]["checkout_link"] is True, url
+        assert r["verdict"] == "clean", url
 
 
 def test_playbook_signature_needs_min_signals() -> None:
@@ -118,13 +133,13 @@ def test_playbook_signature_needs_min_signals() -> None:
         }
     ]
     one = scam.scan(
-        "please arrange the delivery", allowlist=_allowlist(), signatures=sigs, checkout_base=BASE
+        "please arrange the delivery", allowlist=_allowlist(), signatures=sigs, checkout_bases=BASES
     )
     two = scam.scan(
         "i'll arrange the delivery, click the link",
         allowlist=_allowlist(),
         signatures=sigs,
-        checkout_base=BASE,
+        checkout_bases=BASES,
     )
     assert "sig-x" not in one["bank_hits"]
     assert "sig-x" in two["bank_hits"]

@@ -15,6 +15,8 @@ import urllib.request
 from collections.abc import Callable, Iterable, Iterator
 from typing import Literal, Protocol
 
+from sellee.rail import USER_AGENT
+
 log = logging.getLogger(__name__)
 
 Kind = Literal["relay", "registration"]
@@ -30,7 +32,6 @@ FIRST_WAIT_MAX_SEC = 30.0
 WAIT_CAP_SEC = 60.0
 # No stream, or a key bazaar refuses: retry as often as the timed read runs, not every minute.
 UNAVAILABLE_WAIT_SEC = 300.0
-_CLIENT_UA = "SELLEE-rail/1"
 
 
 class StreamMissing(Exception):
@@ -103,7 +104,7 @@ class MailStreamConnection:
             headers={
                 "Accept": "text/event-stream",
                 "Authorization": f"Bearer {self._api_key}",
-                "User-Agent": _CLIENT_UA,
+                "User-Agent": USER_AGENT,
             },
         )
         resp = self._conn.getresponse()

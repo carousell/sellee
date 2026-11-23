@@ -8,7 +8,7 @@ import pytest
 from sellee import marketplaces
 from sellee.engines import hosts
 
-BASE = "https://www.carousell.ai/checkout"
+BASES = ("https://www.carousell.ai/checkout", "https://www.sellee.ai/checkout")
 
 
 @pytest.fixture
@@ -30,33 +30,43 @@ def test_marketplace_match_is_boundary_exact(allowlist) -> None:
     assert not hosts.host_is_marketplace("", allowlist)
 
 
+@pytest.mark.parametrize("host", ["carousell.ai", "sellee.ai"])
 @pytest.mark.parametrize(
     "url,expected",
     [
-        ("https://www.carousell.ai/checkout/abc123", True),
-        ("https://www.carousell.ai/checkout/abc123?listing_id=xyz", True),
-        ("https://www.carousell.ai@evil.com/checkout/x", False),  # userinfo trick
-        ("https://www.carousell.ai.scam.site/checkout/x", False),  # subdomain lookalike
-        ("https://carousell.ai/checkout/x", False),  # bare apex host, not www.
-        ("http://www.carousell.ai/checkout/x", False),  # not https
+        ("https://www.{host}/checkout/abc123", True),
+        ("https://www.{host}/checkout/abc123?listing_id=xyz", True),
+        ("https://www.{host}@evil.com/checkout/x", False),  # userinfo trick
+        ("https://www.{host}.scam.site/checkout/x", False),  # subdomain lookalike
+        ("https://{host}/checkout/x", False),  # bare apex host, not www.
+        ("http://www.{host}/checkout/x", False),  # not https
         ("https://xn--carousel-x.ai/checkout/x", False),  # punycode
-        ("https://www.carousell.ai/pay/x", False),  # wrong path
-        ("https://www.carousell.ai/checkout/", False),  # no sale id
-        ("https://www.carousell.ai:8080/checkout/x", False),  # odd port
+        ("https://www.{host}/pay/x", False),  # wrong path
+        ("https://www.{host}/checkout/", False),  # no sale id
+        ("https://www.{host}:8080/checkout/x", False),  # odd port
     ],
 )
-def test_checkout_carveout(url, expected) -> None:
-    assert hosts.is_checkout_link(url, BASE) is expected
+def test_checkout_carveout(url, expected, host) -> None:
+    assert hosts.is_checkout_link(url.format(host=host), BASES) is expected
 
 
 def test_checkout_base_is_config_derived() -> None:
     # keys on the configured base host exactly — nothing is hardcoded to a carousell.ai shape
-    assert hosts.is_checkout_link(
-        "https://shop.example.com/checkout/x", "https://shop.example.com/checkout"
-    )
-    assert not hosts.is_checkout_link(
-        "https://www.carousell.ai/checkout/x", "https://shop.example.com/checkout"
-    )
+    shop = ("https://shop.example.com/checkout",)
+    assert hosts.is_checkout_link("https://shop.example.com/checkout/x", shop)
+    assert not hosts.is_checkout_link("https://www.carousell.ai/checkout/x", shop)
+    assert not hosts.is_checkout_link("https://www.sellee.ai/checkout/x", shop)
+
+
+def test_a_lone_checkout_base_string_is_refused() -> None:
+    with pytest.raises(TypeError):
+        hosts.is_checkout_link("https://www.carousell.ai/checkout/x", BASES[0])
+
+
+def test_allowlist_has_both_production_web_hosts(allowlist) -> None:
+    assert {"carousell.ai", "sellee.ai"} <= allowlist
+    assert hosts.host_is_marketplace("www.sellee.ai", allowlist)
+    assert not hosts.host_is_marketplace("www.sellee.ai.scam.site", allowlist)
 
 
 def test_extract_links_scheme_bare_and_dedup() -> None:

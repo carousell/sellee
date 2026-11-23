@@ -11,6 +11,7 @@ import time
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
+from sellee import __version__
 from sellee.rail import mail_stream
 from sellee.rail.client import RailClient
 from sellee.rail.mail_stream import (
@@ -310,6 +311,7 @@ class _Bazaar(http.server.BaseHTTPRequestHandler):
     served: threading.Event
 
     def do_GET(self):
+        self.user_agents.append(self.headers.get("User-Agent"))
         if self.status != 200:
             self.send_response(self.status)
             self.send_header("Content-Length", "0")
@@ -339,6 +341,7 @@ def _serve(frames, *, status=200, hold=False, chunked=False):
             "chunked": chunked,
             "hold": threading.Event(),
             "served": threading.Event(),
+            "user_agents": [],
             "protocol_version": "HTTP/1.1" if chunked else "HTTP/1.0",
             "log_message": lambda *a: None,
         },
@@ -372,6 +375,15 @@ def test_the_client_reads_bazaars_events_and_skips_keep_alives():
             assert events == [("ready", None), ("ring", "registration"), ("ring", "relay")]
         finally:
             server.shutdown()
+
+
+def test_the_stream_names_the_release_in_its_user_agent():
+    server, client, handler = _serve(_FRAMES)
+    try:
+        list(client.open_mail_stream().events())
+        assert handler.user_agents == [f"SELLEE-rail/{__version__}"]
+    finally:
+        server.shutdown()
 
 
 def test_a_bazaar_without_the_route_is_no_stream():

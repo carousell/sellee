@@ -54,6 +54,26 @@ POLICED_PAGES_PER_HOUR_CEILING = 60
 POLICED_PAGES_PER_DAY_CEILING = 400
 
 
+# Production's web bases. Both serve carousell.ai's pages, and its checkout, sign-in and listing
+# links may be on either. Remove the carousell.ai entry when the carousell.ai hosts retire.
+PRODUCTION_WEB_BASES = ("https://www.carousell.ai", "https://www.sellee.ai")
+
+
+def accepted_web_bases(web_base: str) -> tuple[str, ...]:
+    """The web bases a carousell.ai link may sit under: both production bases when `web_base` is
+    one of them, else `web_base` alone. A staging or local base matches only itself."""
+    base = web_base.rstrip("/")
+    if base.lower() in PRODUCTION_WEB_BASES:
+        return PRODUCTION_WEB_BASES
+    return (base,)
+
+
+def checkout_bases(web_base: str) -> tuple[str, ...]:
+    """carousell.ai's checkout page under each accepted web base. The web origin, not the API
+    origin: checkout pages are served on the web host."""
+    return tuple(base + "/checkout" for base in accepted_web_bases(web_base))
+
+
 class ConfigError(Exception):
     """A config value is present but invalid. Raised at startup; never sanitized away."""
 
@@ -85,7 +105,7 @@ class Config:
     # PATH of the job the supervisor installs. Null means the daemon relies on whatever PATH it
     # inherits, which is right when it is started from a shell.
     node_bin_dir: str | None = None
-    carousell_ai_api_base: str = "https://api.carousell.ai"
+    carousell_ai_api_base: str = "https://api.sellee.ai"
     carousell_ai_web_base_url: str = "https://www.carousell.ai"
     # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
     # local fake server; production uses the default.

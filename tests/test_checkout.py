@@ -170,6 +170,64 @@ def test_foreign_url_base_rejected(make_ctx, store) -> None:
     assert store._db.query("SELECT COUNT(*) AS n FROM checkouts")[0]["n"] == 0  # nothing recorded
 
 
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.carousell.ai/checkout/abc123?listing_id=L1",
+        "https://www.sellee.ai/checkout/abc123?listing_id=L1",
+    ],
+)
+def test_checkout_link_on_either_production_web_host_is_accepted(make_ctx, store, url) -> None:
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    result = dispatch(
+        "carousell_ai_create_checkout_link",
+        {"item_id": item["id"], "thread_id": "fb:1", "agreed_price": 90.0},
+        _ctx(make_ctx, FakeRail(url=url)),
+    )
+    assert result == {"checkout_url": url}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.sellee.ai.evil.com/checkout/x",
+        "https://www.sellee.ai@evil.com/checkout/x",
+        "https://sellee.ai/checkout/x",
+        "http://www.sellee.ai/checkout/x",
+        "https://www.sellee.ai/checkoutx/x",
+    ],
+)
+def test_checkout_link_lookalikes_of_the_new_host_are_rejected(make_ctx, store, url) -> None:
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    with pytest.raises(ToolError, match="checkout base"):
+        dispatch(
+            "carousell_ai_create_checkout_link",
+            {"item_id": item["id"], "thread_id": "fb:1", "agreed_price": 90.0},
+            _ctx(make_ctx, FakeRail(url=url)),
+        )
+
+
+def test_a_staging_web_base_accepts_only_its_own_checkout_links(make_ctx, store) -> None:
+    staging = Config(carousell_ai_web_base_url="https://staging.example.com")
+    item = _published_item(store, list_price=100.0, floor=60.0)
+    args = {"item_id": item["id"], "thread_id": "fb:1", "agreed_price": 90.0}
+    for production in (_URL, "https://www.sellee.ai/checkout/abc123"):
+        rail = FakeRail(url=production)
+        with pytest.raises(ToolError, match="checkout base"):
+            dispatch(
+                "carousell_ai_create_checkout_link",
+                args,
+                make_ctx(TIER_ATTENDED, rail_factory=lambda rail=rail: rail, config=staging),
+            )
+    own = FakeRail(url="https://staging.example.com/checkout/abc123")
+    result = dispatch(
+        "carousell_ai_create_checkout_link",
+        args,
+        make_ctx(TIER_ATTENDED, rail_factory=lambda: own, config=staging),
+    )
+    assert result == {"checkout_url": "https://staging.example.com/checkout/abc123"}
+
+
 def test_checkout_base_is_the_web_origin_not_the_api_origin(make_ctx, store) -> None:
     """Real checkout pages are served on the web origin; a link on the API origin (the old,
     wrong base — only the coming-soon demo ever minted there) must be rejected."""
@@ -307,6 +365,43 @@ def test_signin_link_off_the_configured_web_base_is_rejected(make_ctx, store) ->
     rogue = FakeSigninRail(url="https://evil.example/signin?promote=tok")
     with pytest.raises(ToolError, match="sign-in base"):
         _signin(make_ctx, rogue)
+
+
+def test_signin_link_on_either_production_web_host_is_accepted(make_ctx, store) -> None:
+    for url in (_SIGNIN_URL, "https://www.sellee.ai/signin?flow=guest-promotion&promote=tok"):
+        assert _signin(make_ctx, FakeSigninRail(url=url)) == {"signin_url": url}
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://www.sellee.ai.evil.com/signin?promote=tok",
+        "https://www.sellee.ai@evil.com/signin?promote=tok",
+        "https://sellee.ai/signin?promote=tok",
+        "https://www.sellee.ai/signinfoo?promote=tok",
+    ],
+)
+def test_signin_link_lookalikes_of_the_new_host_are_rejected(make_ctx, store, url) -> None:
+    with pytest.raises(ToolError, match="sign-in base"):
+        _signin(make_ctx, FakeSigninRail(url=url))
+
+
+def test_a_staging_web_base_accepts_only_its_own_signin_links(make_ctx, store) -> None:
+    staging = Config(carousell_ai_web_base_url="https://staging.example.com")
+
+    def signin(url):
+        rail = FakeSigninRail(url=url)
+        return dispatch(
+            "carousell_ai_create_signin_link",
+            {},
+            make_ctx(TIER_PASS_CHANNEL, rail_factory=lambda: rail, config=staging),
+        )
+
+    for production in (_SIGNIN_URL, "https://www.sellee.ai/signin?promote=tok"):
+        with pytest.raises(ToolError, match="sign-in base"):
+            signin(production)
+    own = "https://staging.example.com/signin?promote=tok"
+    assert signin(own) == {"signin_url": own}
 
 
 def test_signin_link_on_the_wrong_path_is_rejected(make_ctx, store) -> None:

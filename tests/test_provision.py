@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 import pytest
 
-from sellee import paths, secrets
+from sellee import __version__, paths, secrets
 from sellee.rail import provision
 
 
@@ -21,6 +21,7 @@ class _GuestsHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length)) if length else {}
         self.server.last_country = body.get("country")
+        self.server.last_user_agent = self.headers.get("User-Agent")
         self.server.hits += 1
         if self.server.raw_response is not None:
             # A body that is not JSON at all — what a proxy's HTML error page looks like.
@@ -41,6 +42,7 @@ def guests_server():
     server.raw_response = None
     server.hits = 0
     server.last_country = None
+    server.last_user_agent = None
     # a short accept-loop poll: shutdown() waits for the next wake, and the stdlib default of
     # 0.5s would be paid by every test taking this fixture
     threading.Thread(target=server.serve_forever, args=(0.02,), daemon=True).start()
@@ -230,3 +232,9 @@ def test_a_refusal_without_a_body_still_names_the_status(xdg_tmp, guests_server)
 
     assert status["status"] != "ok"
     assert "503" in status["error"]
+
+
+def test_provisioning_names_the_release_in_its_user_agent(xdg_tmp, guests_server) -> None:
+    server, base = guests_server
+    provision.ensure("sg", api_base=base)
+    assert server.last_user_agent == f"SELLEE-rail/{__version__}"
