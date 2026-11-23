@@ -32,17 +32,17 @@ def _check_category(ctx: ToolContext, token) -> None:
         raise ToolError("category must be a token string from carousell_ai_item_policy")
     try:
         if ctx.rail_factory is None:
-            raise RailError("carousell.ai is not available here")
+            raise RailError("the Sellee rail is not available here")
         rail = ctx.rail_factory()
         group = rail.item_policy_category(token)
     except RailError as exc:
         raise ToolError(
-            f"carousell.ai's item policy can't be read right now ({exc}), so the category can't "
+            f"Sellee's item policy can't be read right now ({exc}), so the category can't "
             "be checked; leave it out and set it with update_item later"
         ) from exc
     if group is None:
         raise ToolError(
-            f"category {token!r} is not in carousell.ai's item policy: carousell_ai_item_policy "
+            f"category {token!r} is not in Sellee's item policy: carousell_ai_item_policy "
             f"lists every token, and {rail.item_policy_url()} explains each"
         )
 
@@ -94,9 +94,9 @@ register(
         name="create_item",
         description="Create a draft item; the server assigns its id. Photos are paths already "
         "inside the media store — from a channel photo message, or from import_photos. "
-        "size_bucket is the parcel size class carousell.ai ships by — one of s, m, l, xl — and a "
+        "size_bucket is the parcel size class Sellee ships by — one of s, m, l, xl — and a "
         "listing cannot be published without it, so set it here when you can judge it. "
-        "category is the item's token in carousell.ai's item policy, from "
+        "category is the item's token in Sellee's item policy, from "
         "carousell_ai_item_policy; any other value is refused, and a listing cannot be published "
         "without one.",
         input_schema={
@@ -127,7 +127,7 @@ register(
         name="update_item",
         description="Update a draft item's fields (title, description, condition, list_price, "
         "currency, photos, size_bucket, category, and draft<->ready status). Photos are paths "
-        "already inside the media store. size_bucket is the parcel size class carousell.ai ships "
+        "already inside the media store. size_bucket is the parcel size class Sellee ships "
         "by — one of s, m, l, xl — and a listing cannot be published without it. category is a "
         "token from carousell_ai_item_policy; it cannot be cleared, and a listing cannot be "
         "published without it. "

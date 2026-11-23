@@ -99,9 +99,9 @@ register(
     ToolSpec(
         name="decide_discovered_listings",
         description="Record what the seller wants done with listings they already had on a "
-        "marketplace. 'manage' takes them over — 'relist' also puts them on carousell.ai, 'inbox' "
+        "marketplace. 'manage' takes them over — 'relist' also puts them on Sellee, 'inbox' "
         "only answers buyers on them where they are. 'decline' leaves them alone. 'retry' has "
-        "another go at a carousell.ai listing that failed. Omit listing_ids to mean everything "
+        "another go at a Sellee listing that failed. Omit listing_ids to mean everything "
         "still waiting. The work happens in the background and reports itself, so tell them it has "
         "started — never that a listing is up.",
         input_schema={

@@ -59,7 +59,7 @@ def _require_a_currency_the_seller_prices_in(expected: str, item: dict) -> None:
         return
     if recorded != expected:
         raise ToolError(
-            f"this item is priced in {recorded}, but carousell.ai prices your listings in "
+            f"this item is priced in {recorded}, but Sellee prices your listings in "
             f"{expected} — {item['list_price']} would go live as {item['list_price']} {expected}, "
             f"a different amount of money. Re-price the item in {expected} before publishing"
         )
@@ -79,7 +79,7 @@ def category_check(ctx: ToolContext, item: dict) -> dict | None:
     if not item["category"]:
         # carousell.ai refuses a listing without one; named here so the fix comes with it.
         raise ToolError(
-            "item has no category; carousell.ai lists nothing without one. Set the item's token "
+            "item has no category; Sellee lists nothing without one. Set the item's token "
             "from carousell_ai_item_policy as category with update_item first"
         )
     try:
@@ -187,12 +187,12 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         args["media"] = {"urls": media}
 
     if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
+        raise ToolError("the Sellee rail is not available in this session")
     try:
         rail = ctx.rail_factory()
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
     try:
@@ -205,7 +205,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
         return _refused(ctx, str(exc))
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
     except Exception as exc:  # RailError subclasses carry caller-safe, secret-free messages
         raise ToolError(str(exc)) from exc
@@ -223,7 +223,7 @@ def _publish(ctx: ToolContext, params: dict) -> dict:
 register(
     ToolSpec(
         name="carousell_ai_publish_listing",
-        description="Publish an item as a live carousell.ai listing and record its verified URL. "
+        description="Publish an item as a live Sellee listing and record its verified URL. "
         "Idempotent: an already-published item returns its existing URL. A fresh publish may also "
         "return signin_offer, a line for the seller to send as written after the live URL.",
         input_schema={
@@ -325,7 +325,7 @@ def _queue_marketplace_publish(ctx: ToolContext, params: dict) -> dict:
             "url": urls[market],
         }
     if not urls.get(_MARKET):
-        raise ToolError("item is not published on carousell.ai")
+        raise ToolError("item has no Sellee listing")
     if item_id in ctx.store.sold_item_ids():
         return {"status": "sold", "item_id": item_id, "market": market}
 

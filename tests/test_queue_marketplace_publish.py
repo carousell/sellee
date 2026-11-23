@@ -151,7 +151,7 @@ def test_an_item_not_on_the_rail_is_refused(make_ctx, store) -> None:
     seed_setting(store, "connected_markets", ["carousell"])
     item = store.create_item(title="Teak lamp", list_price=80.0, currency="SGD")
 
-    with pytest.raises(ToolError, match="not published on carousell.ai"):
+    with pytest.raises(ToolError, match="has no Sellee listing"):
         _call(_ctx(make_ctx), item["id"])
     assert store.publish_pass_index() == []
 

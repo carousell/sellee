@@ -33,7 +33,5 @@ def mint_signin_url(rail, web_base_url: str) -> str | None:
     # prefix would also accept `/signinfoo`, and a control character could forge a terminal line.
     on_base = any(url == base or url.startswith((base + "?", base + "/")) for base in bases)
     if not on_base or not url.isprintable() or any(ch.isspace() for ch in url):
-        raise OffBaseSigninLink(
-            "sign-in link did not come from the expected carousell.ai sign-in base"
-        )
+        raise OffBaseSigninLink("sign-in link did not come from the expected Sellee sign-in base")
     return url

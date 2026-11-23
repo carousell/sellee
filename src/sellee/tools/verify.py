@@ -57,12 +57,12 @@ def verify_market_url(ctx: ToolContext, market: str, url: str, region: str | Non
 
 def _verify_carousell_ai_live(ctx: ToolContext, market: str, url: str) -> dict:
     if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
+        raise ToolError("the Sellee rail is not available in this session")
     try:
         rail = ctx.rail_factory()
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
     try:
         rail.verify_listing_url(url)

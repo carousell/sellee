@@ -642,7 +642,7 @@ def test_a_publish_that_recorded_no_url_is_retried_then_reported_honestly(
 
 _POLICY_URL = "https://www.carousell.ai/item-policy"
 _REFUSAL = (
-    "Items in “Weapons, ammunition, and accessories” can’t be listed on carousell.ai. "
+    "Items in “Weapons, ammunition, and accessories” can’t be listed on Sellee. "
     f"See {_POLICY_URL} for what can be listed."
 )
 _GROUPS = {

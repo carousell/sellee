@@ -202,14 +202,14 @@ def test_the_category_check_reads_only_the_cached_policy() -> None:
         client = RailClient(api_base=base, api_key="k", web_base_url="https://www.carousell.ai")
         answers = [category_refusal(client, t) for t in ("weapons", "too_big_to_ship", None)]
         answers.append(category_refusal(client, "electronics"))
-        with pytest.raises(RailToolError, match="'crafts' is no longer in carousell.ai's item"):
+        with pytest.raises(RailToolError, match="'crafts' is no longer in Sellee's item"):
             category_refusal(client, "crafts")
     finally:
         shutdown()
     assert answers == [
-        "Items in “Weapons” can’t be listed on carousell.ai. "
+        "Items in “Weapons” can’t be listed on Sellee. "
         "See https://www.carousell.ai/item-policy for what can be listed.",
-        "Items in “Too Big To Ship” can’t be listed on carousell.ai yet. "
+        "Items in “Too Big To Ship” can’t be listed on Sellee yet. "
         "See https://www.carousell.ai/item-policy for what can be listed.",
         None,
         None,
