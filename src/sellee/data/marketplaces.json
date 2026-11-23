@@ -62,14 +62,14 @@
       "display_name": "Carousell.ai",
       "listing_flow": "listing-flow",
       "listing_url": {
-        "host": "www.carousell.ai",
+        "host": "www.sellee.ai",
         "path": "/listing/"
       },
       "domains": {
-        "*": "www.carousell.ai"
+        "*": "www.sellee.ai"
       },
       "also_hosts": [
-        "www.sellee.ai"
+        "www.carousell.ai"
       ],
       "connector": {
         "type": "mcp"

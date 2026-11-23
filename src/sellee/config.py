@@ -54,9 +54,9 @@ POLICED_PAGES_PER_HOUR_CEILING = 60
 POLICED_PAGES_PER_DAY_CEILING = 400
 
 
-# Production's web bases. Both serve carousell.ai's pages, and its checkout, sign-in and listing
-# links may be on either. Remove the carousell.ai entry when the carousell.ai hosts retire.
-PRODUCTION_WEB_BASES = ("https://www.carousell.ai", "https://www.sellee.ai")
+# Production's web bases. www.sellee.ai is the site; links on www.carousell.ai are still accepted.
+# Remove the carousell.ai entry when the carousell.ai hosts retire.
+PRODUCTION_WEB_BASES = ("https://www.sellee.ai", "https://www.carousell.ai")
 
 
 def accepted_web_bases(web_base: str) -> tuple[str, ...]:
@@ -106,7 +106,7 @@ class Config:
     # inherits, which is right when it is started from a shell.
     node_bin_dir: str | None = None
     carousell_ai_api_base: str = "https://api.sellee.ai"
-    carousell_ai_web_base_url: str = "https://www.carousell.ai"
+    carousell_ai_web_base_url: str = "https://www.sellee.ai"
     # The Telegram Bot API base. Overridable so the channel tests point the real transport at a
     # local fake server; production uses the default.
     telegram_api_base: str = "https://api.telegram.org"
