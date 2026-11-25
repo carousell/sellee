@@ -58,12 +58,12 @@ def _update_listing(ctx: ToolContext, params: dict) -> dict:
         return {"status": "not_listed", "item_id": item_id}
 
     if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
+        raise ToolError("the Sellee rail is not available in this session")
     try:
         rail = ctx.rail_factory()
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
     try:
@@ -119,7 +119,7 @@ def manual_take_downs(store, item_id: str) -> list:
 register(
     ToolSpec(
         name="carousell_ai_update_listing",
-        description="Take an item's carousell.ai listing down once it has sold elsewhere (status "
+        description="Take an item's Sellee listing down once it has sold elsewhere (status "
         "archived + the URL dropped from the item). Any listing on a browser marketplace is "
         "reported back and queued for the seller to close by hand.",
         input_schema={

@@ -24,7 +24,7 @@ permits replying to a flagged thread.
 **Never engage a suspected scammer and never open their link.** No reply — not even a holding
 line: a reply tells them a live human or agent is on the account and worth working. The links this
 agent ever *sends* are exactly two, each from its own tool and to its own audience: a checkout link
-freshly returned by `carousell_ai_create_checkout_link`, to a buyer; and a carousell.ai sign-in
+freshly returned by `carousell_ai_create_checkout_link`, to a buyer; and a Sellee sign-in
 link, freshly minted by `carousell_ai_create_signin_link` or carried in the `signin_offer` of
 `carousell_ai_publish_listing`, to the seller on their own channel — never in a buyer thread. The
 only links it ever *follows* are marketplace URLs that `verify_listing_url` has verified.
@@ -52,8 +52,8 @@ Nothing is sent to the counterpart at any step.
 - Never record a scam signature on your own judgement; only the seller's explicit confirmation does
   that, and it happens on their channel.
 
-On carousell.ai, the seller's *Scam* answer to the confirmation blocks and reports the buyer to
-carousell.ai, and carousell.ai may warn other sellers about them. Code does it when the seller
+On Sellee, the seller's *Scam* answer to the confirmation blocks and reports the buyer to
+Sellee, and Sellee may warn other sellers about them. Code does it when the seller
 answers; you never report on your own. On other markets, reporting the account is the seller's to do
 in the marketplace's own app; if they ask, say so plainly.
 

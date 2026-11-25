@@ -1,10 +1,10 @@
 ---
-description: Photo in, live listing out — the carousell.ai listing flow end to end
+description: Photo in, live listing out — the Sellee listing flow end to end
 ---
 
 # Listing flow
 
-Turning what the seller sends you into a live carousell.ai listing. One draft at a time per
+Turning what the seller sends you into a live Sellee listing. One draft at a time per
 conversation: if the recent conversation already has a draft in progress, resume it — never start a
 second one for the same thing.
 
@@ -45,7 +45,7 @@ never quietly "fix" their number.
 Send one message with the title, the price, and a one-line condition summary, and wait for an
 explicit go-ahead. No listing goes live on an assumption.
 
-**Say where it's going, too.** Every listing goes on carousell.ai. If the seller's `connected_markets`
+**Say where it's going, too.** Every listing goes on Sellee. If the seller's `connected_markets`
 setting names other marketplaces, name them here as well — they were maybe set weeks ago, and
 "listing this" should never turn out to mean more places than they had in mind. If the setting is
 empty, say nothing about it.
@@ -54,7 +54,7 @@ empty, say nothing about it.
 Craigslist means accepting its terms of use for this post: craigslist.org/about/terms.of.use". The
 seller's ✅ List it is their acceptance, so posting can go through Craigslist's own terms step.
 
-**Give it a box size for shipping.** carousell.ai prices shipping from a size class, so every
+**Give it a box size for shipping.** Sellee prices shipping from a size class, so every
 listing needs one — publishing refuses an item without one. Pick it from the photos, the title and
 whatever the seller said — judge the box it would pack into, not the weight:
 
@@ -68,7 +68,7 @@ When two classes both look possible, pick the larger. Your pick goes on the draf
 one line — "Box size for shipping: about a shoebox (M)". The seller's answer wins over yours: if
 they name a different one, write it with `update_item` before publishing.
 
-**Give it a category.** It is required: carousell.ai files every item under one category of its
+**Give it a category.** It is required: Sellee files every item under one category of its
 item policy and lists nothing without one, and some categories it does not take.
 `carousell_ai_item_policy` lists them, each with what it covers, its exceptions, and its tier:
 `allowed`, `not_yet` or `never`. Pick the one that honestly describes the item, from the photos and
@@ -80,9 +80,9 @@ with `update_item` before the photos go up; both publish steps stop without it.
   `home_and_decor` would be accepted; the policy decides what it refuses, you don't.
 - **An exception is not in the category that lists it.** `weapons` excepts kitchen knives, so a
   chef's knife goes under the allowed category it belongs to, `home_and_decor`, not `weapons`.
-- **When two fit, ask the seller** what it is rather than picking the one carousell.ai takes.
-- **If the category is `not_yet` or `never`,** say so in the confirmation, plainly — "carousell.ai
-  doesn't take weapons" — instead of offering to list it.
+- **When two fit, ask the seller** what it is rather than picking the one Sellee takes.
+- **If the category is `not_yet` or `never`,** say so in the confirmation, plainly — "Sellee doesn't
+  take weapons" — instead of offering to list it.
 
 **Ask for their floor in the same message.** The floor is the lowest they would accept, and it is
 what lets you negotiate a later offer on your own instead of going back to them for every one. Ask
@@ -110,13 +110,13 @@ list price, work the same here as anywhere — seller-comms owns both, under "No
 
 `carousell_ai_upload_photos` first when the item has photos, then `carousell_ai_publish_listing`.
 Report the live URL the tool returns — never a URL you composed. If the upload comes back with
-`photos_skipped`, carousell.ai is not taking photos right now: publish anyway, and tell the seller the
+`photos_skipped`, Sellee is not taking photos right now: publish anyway, and tell the seller the
 listing is up without its photos.
 
 If the publish also returns `signin_offer`, send that line as written, in the same message and after
 the live URL. What follows from it is seller-comms' — "The one-time sign-in".
 
-If either step returns `refused`, carousell.ai won't take the item, and nothing was listed. Tell
+If either step returns `refused`, Sellee won't take the item, and nothing was listed. Tell
 the seller in plain words, using the `message` (it names the policy group and links the policy),
 and that the item stays a draft. That answer is final: don't retry, and don't change the
 category or the wording to get it through.
@@ -127,7 +127,7 @@ live when it isn't.
 
 **The other marketplaces are not your job.** If `connected_markets` names any, tell the seller they
 follow in the background and that you'll send each link as it goes up — then stop. Publishing there
-is the daemon's work, it starts on its own once the carousell.ai listing exists, and it reports each
+is the daemon's work, it starts on its own once the Sellee listing exists, and it reports each
 result itself. Never trigger it as part of listing something.
 
 The one exception is a seller asking you to try one again after it failed — the background attempt

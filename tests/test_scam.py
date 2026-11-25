@@ -220,7 +220,7 @@ def test_shared_is_no_longer_a_signature_status(store) -> None:
 
 def test_the_scam_guard_says_a_carousell_ai_scam_is_reported() -> None:
     text = " ".join(skills.load("scam-guard").split())
-    assert "blocks and reports the buyer to carousell.ai" in text
+    assert "blocks and reports the buyer to Sellee" in text
     assert "no tool here files a report" not in text
     assert "nothing you record travels" not in text.lower()
 
@@ -560,7 +560,7 @@ def test_another_markets_confirmation_is_not_answered_here(store, make_ctx) -> N
     )
     store.escalate("fb:1", open_question="Scam?", kind=SCAM_CONFIRMATION)
 
-    with pytest.raises(ToolError, match="carousell.ai"):
+    with pytest.raises(ToolError, match="Sellee"):
         dispatch(
             "answer_scam_confirmation",
             {"thread_id": "fb:1", "answer": "not_scam"},
@@ -679,7 +679,7 @@ def test_another_markets_scam_confirmation_is_unchanged(store, make_ctx) -> None
 
     [esc] = store.list_open_escalations()
     assert (esc["kind"], esc["options"]) == (None, options)
-    with pytest.raises(ToolError, match="carousell.ai"):
+    with pytest.raises(ToolError, match="Sellee"):
         dispatch(
             "answer_scam_confirmation",
             {"thread_id": "fb:1", "answer": "scam"},
@@ -771,7 +771,7 @@ def test_a_block_carousell_ai_did_not_confirm_changes_nothing(relay_thread) -> N
 def test_another_markets_buyer_is_not_blocked_here(store, make_ctx) -> None:
     _sell_thread(store)
 
-    with pytest.raises(ToolError, match="carousell.ai"):
+    with pytest.raises(ToolError, match="Sellee"):
         dispatch(
             "carousell_ai_block_buyer",
             {"thread_id": "fb:1", "reason": "spam"},

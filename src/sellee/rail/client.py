@@ -119,7 +119,7 @@ class RailClient:
                 raw = resp.read().decode("utf-8")
         except urllib.error.HTTPError as exc:
             if exc.code in (401, 403):
-                raise RailAuthError("carousell.ai rejected the guest key") from exc
+                raise RailAuthError("Sellee rejected the guest key") from exc
             raise RailNetworkError(f"rail returned HTTP {exc.code}", status=exc.code) from exc
         except (urllib.error.URLError, OSError) as exc:
             raise RailNetworkError(f"rail unreachable: {type(exc).__name__}") from exc
@@ -443,14 +443,14 @@ def category_refusal(rail, token: str | None) -> str | None:
     group = rail.item_policy_category(token)
     if group is None:
         raise RailToolError(
-            f"category {token!r} is no longer in carousell.ai's item policy; give the item one "
+            f"category {token!r} is no longer in Sellee's item policy; give the item one "
             "carousell_ai_item_policy lists with update_item"
         )
     if group["tier"] == "allowed":
         return None
     yet = " yet" if group["tier"] == "not_yet" else ""
     return (
-        f"Items in “{group['title']}” can’t be listed on carousell.ai{yet}. "
+        f"Items in “{group['title']}” can’t be listed on Sellee{yet}. "
         f"See {rail.item_policy_url()} for what can be listed."
     )
 

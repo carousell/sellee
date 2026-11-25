@@ -49,12 +49,12 @@ _MARKET = "carousell-ai"
 _GUEST_GATE_CLAUSE = "belongs to a guest account"
 
 _GUEST_GATE_SELLER_GUIDANCE = (
-    "the seller hasn't done their one-time carousell.ai sign-in yet, so checkout links are "
+    "the seller hasn't done their one-time Sellee sign-in yet, so checkout links are "
     "refused. Mint a sign-in link with carousell_ai_create_signin_link and send it to the seller "
     "with a one-line why; once they say they've signed in, call this tool again"
 )
 _GUEST_GATE_REPLY_GUIDANCE = (
-    "the seller hasn't completed a one-time carousell.ai sign-in, so no checkout link can be "
+    "the seller hasn't completed a one-time Sellee sign-in, so no checkout link can be "
     "minted yet. Post the buyer a neutral holding line — never mention the seller or their "
     "account — then escalate to the seller asking them to sign in; the seller's own channel "
     "handles the link"
@@ -64,17 +64,17 @@ _GUEST_GATE_REPLY_GUIDANCE = (
 _SHIP_FROM_GATE_CLAUSE = "has not set where they ship from"
 
 _SHIP_FROM_GATE_SELLER_GUIDANCE = (
-    "the seller hasn't added the ZIP code they ship from on carousell.ai, so checkout links are "
-    "refused. Mint a link with carousell_ai_create_signin_link and send it to the seller with a "
-    "one-line why; it takes them to the ZIP question. If it returns already_signed_in instead, "
-    "ask them to add the ZIP in their carousell.ai account under Shipping. Once they say it's "
-    "done, call this tool again"
+    "the seller hasn't added the ZIP code they ship from in their Sellee account, so checkout "
+    "links are refused. Mint a link with carousell_ai_create_signin_link and send it to the "
+    "seller with a one-line why; it takes them to the ZIP question. If it returns "
+    "already_signed_in instead, ask them to add the ZIP in their Sellee account under Shipping. "
+    "Once they say it's done, call this tool again"
 )
 _SHIP_FROM_GATE_REPLY_GUIDANCE = (
-    "the seller hasn't added the ZIP code they ship from on carousell.ai, so no checkout link can "
-    "be minted yet. Post the buyer a neutral holding line — never mention the seller or their "
-    "account — then escalate to the seller asking them to add it; the seller's own channel "
-    "handles the link"
+    "the seller hasn't added the ZIP code they ship from in their Sellee account, so no checkout "
+    "link can be minted yet. Post the buyer a neutral holding line — never mention the seller or "
+    "their account — then escalate to the seller asking them to add it; the seller's own "
+    "channel handles the link"
 )
 
 _WITHDRAWN_SELLER_GUIDANCE = "this buyer backed out — tell the seller and offer who is next instead"
@@ -95,12 +95,12 @@ def _listing_id(item: dict) -> str:
 
 def _rail(ctx: ToolContext):
     if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
+        raise ToolError("the Sellee rail is not available in this session")
     try:
         return ctx.rail_factory()
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
 
@@ -177,7 +177,7 @@ def mint_checkout_link(
     listing_id = _listing_id(item)
     if not listing_id:
         raise ToolError(
-            "item is not published on carousell.ai — publish it first with "
+            "item has no Sellee listing — publish it first with "
             "carousell_ai_publish_listing, then create the checkout link"
         )
 
@@ -203,7 +203,7 @@ def mint_checkout_link(
     bases = config.checkout_bases(ctx.config.carousell_ai_web_base_url)
     if not url.startswith(tuple(base + "/" for base in bases)):
         # fail closed: a minted link must sit under a config-derived checkout base
-        raise ToolError("checkout link did not come from the expected carousell.ai checkout base")
+        raise ToolError("checkout link did not come from the expected Sellee checkout base")
 
     recorded = ctx.store.record_checkout(
         sale_id=sale_id,
@@ -219,7 +219,7 @@ def mint_checkout_link(
 register(
     ToolSpec(
         name="carousell_ai_create_checkout_link",
-        description="Mint (or return the already-issued) carousell.ai checkout link for a "
+        description="Mint (or return the already-issued) Sellee checkout link for a "
         "finalised deal. Floor-gated and idempotent; an unpublished item returns not_published.",
         input_schema={
             "type": "object",
@@ -258,7 +258,7 @@ def _create_signin_link(ctx: ToolContext, params: dict) -> dict:
 register(
     ToolSpec(
         name="carousell_ai_create_signin_link",
-        description="Mint a fresh carousell.ai sign-in link for the seller's one-time setup (their "
+        description="Mint a fresh Sellee sign-in link for the seller's one-time setup (their "
         "email, then the ZIP code they ship from) — required before checkout links can be created. "
         "Send it to the seller on their own channel ONLY (never to a buyer, never into a listing "
         "or note). The link expires in about 15 minutes; mint a fresh one any time. Returns "

@@ -142,7 +142,7 @@ register(
     ToolSpec(
         name="get_status",
         description="Report daemon health: version, pid, uptime, heartbeat freshness, "
-        "whether the carousell.ai rail is provisioned, and the pass queue depth.",
+        "whether the Sellee rail is provisioned, and the pass queue depth.",
         input_schema=_NO_PARAMS,
         handler=_get_status,
         tiers=frozenset({TIER_PASS_CHANNEL, TIER_ATTENDED}),
@@ -182,18 +182,18 @@ register(
 def _item_policy(ctx: ToolContext, params: dict) -> dict:
     try:
         if ctx.rail_factory is None:
-            raise RailError("carousell.ai is not available here")
+            raise RailError("the Sellee rail is not available here")
         rail = ctx.rail_factory()
         policy = rail.item_policy()
     except RailError as exc:
-        raise ToolError(f"carousell.ai's item policy can't be read right now ({exc})") from exc
+        raise ToolError(f"Sellee's item policy can't be read right now ({exc})") from exc
     return dict(policy, page=rail.item_policy_url())
 
 
 register(
     ToolSpec(
         name="carousell_ai_item_policy",
-        description="carousell.ai's item policy: every category token an item can carry, with its "
+        description="Sellee's item policy: every category token an item can carry, with its "
         "title, what it covers, what it excepts, and its tier — allowed, not_yet (not taken yet) "
         "or never.",
         input_schema=_NO_PARAMS,

@@ -688,7 +688,7 @@ def validated_size_bucket(value: object) -> str:
     if bucket not in SIZE_BUCKETS:
         raise StoreError(
             f"size_bucket must be one of {', '.join(SIZE_BUCKETS)} — the parcel size class "
-            "carousell.ai prices shipping from"
+            "Sellee prices shipping from"
         )
     return bucket  # type: ignore[return-value]
 

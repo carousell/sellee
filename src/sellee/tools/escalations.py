@@ -26,7 +26,7 @@ from sellee.tools.registry import (
 
 # A failed call can still have landed (a timeout after bazaar committed), so claim no outcome.
 _NOT_CONFIRMED = (
-    "carousell.ai did not confirm the block and report; the ask stays open, and tapping Scam "
+    "Sellee did not confirm the block and report; the ask stays open, and tapping Scam "
     "again sends it again, which is safe even if the first one landed"
 )
 
@@ -104,7 +104,7 @@ def _answer_scam_confirmation(ctx: ToolContext, params: dict) -> dict:
         raise ToolError(f"no thread with id {thread_id!r}")
     if thread["market"] != marketplaces.RAIL:
         raise ToolError(
-            "only a carousell.ai scam confirmation is answered here; on other markets release "
+            "only a Sellee scam confirmation is answered here; on other markets release "
             "the thread with release_thread"
         )
     if params["answer"] == "scam":
@@ -118,7 +118,7 @@ def _block_and_report(ctx: ToolContext, thread_id: str) -> dict:
         raise ToolError(f"thread {thread_id!r} has no scam confirmation open")
     try:
         if ctx.rail_factory is None:
-            raise RailUnprovisioned("no carousell.ai connection")
+            raise RailUnprovisioned("no Sellee connection")
         ctx.rail_factory().block_buyer(thread_id.split(":", 1)[1], "scam")
     except RailError:
         # No retry queue: the ask stays open, so the seller's next tap sends it again.
@@ -223,11 +223,11 @@ register(
 register(
     ToolSpec(
         name="answer_scam_confirmation",
-        description="The seller's answer to a carousell.ai scam confirmation (an escalation of "
+        description="The seller's answer to a Sellee scam confirmation (an escalation of "
         "kind scam_confirmation). not_scam resolves it, lowers the thread's scam verdicts to "
         "suspicious so replies are no longer refused, and restores the thread's status; "
-        "scam blocks and reports the buyer to carousell.ai once, then resolves it and closes "
-        "the thread; if carousell.ai cannot be reached it returns report_failed and changes "
+        "scam blocks and reports the buyer to Sellee once, then resolves it and closes "
+        "the thread; if Sellee cannot be reached it returns report_failed and changes "
         "nothing, and a later scam answer sends it again. keep_held resolves it and keeps the "
         "thread held. Refuses, changing nothing, when no confirmation is open.",
         input_schema={

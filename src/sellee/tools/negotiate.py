@@ -399,7 +399,7 @@ register(
 register(
     ToolSpec(
         name="negotiate_confirm_sold",
-        description="Mark an item sold to a thread. Archives its carousell.ai listing itself "
+        description="Mark an item sold to a thread. Archives its Sellee listing itself "
         "(carousell_ai_take_down says how that went); returns the other-market take-down list "
         "and the threads to close.",
         input_schema=_CONFIRM_SOLD_SCHEMA,

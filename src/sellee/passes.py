@@ -101,7 +101,7 @@ def publish_prompt(
     composer_url: str | None = None,
 ) -> str:
     where = (
-        "to carousell.ai, following the listing flow's publish step"
+        "to Sellee, following the listing flow's publish step"
         if market == DEFAULT_PUBLISH_MARKET
         else f"to {marketplaces.display_name(market)} in the browser, following its listing recipe"
     )

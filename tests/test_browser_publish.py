@@ -47,7 +47,7 @@ def _browser_command():
 
 def test_the_rail_publish_carries_the_rail_recipe() -> None:
     spec = _spec()
-    assert "carousell.ai" in spec.prompt
+    assert "Sellee" in spec.prompt
     assert "Carousell's own composer" not in (spec.append_system_prompt or "")
 
 
@@ -65,7 +65,7 @@ def test_the_recipe_comes_from_the_registry_not_a_branch() -> None:
 
 def test_the_prompt_names_the_market_it_is_publishing_to() -> None:
     assert "Carousell" in passes.publish_prompt("item_1", "carousell")
-    assert "carousell.ai" in passes.publish_prompt("item_1", "carousell-ai")
+    assert "Sellee" in passes.publish_prompt("item_1", "carousell-ai")
 
 
 # --- who gets a browser -------------------------------------------------------------------------

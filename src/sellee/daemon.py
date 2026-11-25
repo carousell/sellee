@@ -585,7 +585,7 @@ def run_daemon(*, once: bool) -> int:
     def rail_factory():
         key = secrets.read_carousell_ai_api_key()
         if not key:
-            raise RailUnprovisioned("carousell.ai is not provisioned")
+            raise RailUnprovisioned("the Sellee rail is not provisioned")
         return RailClient(
             api_base=cfg.carousell_ai_api_base,
             api_key=key,

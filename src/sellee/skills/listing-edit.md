@@ -33,7 +33,7 @@ Say these in the same message when they apply, because they change the decision:
 
 The result has one status per marketplace. Report each one as it is, never one "done":
 
-- `updated` — carousell.ai shows it now.
+- `updated` — the Sellee listing shows it now.
 - `queued` — a browser marketplace is being changed in the background. Say it has started and that
   they'll get a message when it lands. **Never say it has changed.** The message comes on its own.
 - `not_connected` / `manual` — it will not change by itself. Give them the link and say what to

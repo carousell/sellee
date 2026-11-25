@@ -435,9 +435,9 @@ _GROUPS = {
     },
 }
 _REFUSALS = {
-    "weapons": "Items in “Weapons, ammunition, and accessories” can’t be listed on carousell.ai. "
+    "weapons": "Items in “Weapons, ammunition, and accessories” can’t be listed on Sellee. "
     f"See {_URL} for what can be listed.",
-    "too_big_to_ship": "Items in “Too big to ship” can’t be listed on carousell.ai yet. "
+    "too_big_to_ship": "Items in “Too big to ship” can’t be listed on Sellee yet. "
     f"See {_URL} for what can be listed.",
 }
 
@@ -565,7 +565,7 @@ def test_a_category_the_policy_no_longer_lists_fails_the_step(make_ctx, store, x
     ctx = make_ctx(TIER_PASS_PUBLISH, rail_factory=lambda: rail)
     item = _item(store, category="crafts", photos=[_stored_photo("c.jpg")])
 
-    with pytest.raises(ToolError, match="'crafts' is no longer in carousell.ai's item policy"):
+    with pytest.raises(ToolError, match="'crafts' is no longer in Sellee's item policy"):
         dispatch(tool, {"item_id": item["id"]}, ctx)
 
     assert rail.uploads == []

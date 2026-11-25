@@ -145,7 +145,7 @@ def _push_rail(ctx: ToolContext, item: dict, changed: list) -> dict:
     """
     listing_id = listing_id_from_url(item["listing_urls"].get(_RAIL))
     if not listing_id:
-        return {"status": "failed", "reason": "the recorded carousell.ai URL names no listing"}
+        return {"status": "failed", "reason": "the recorded Sellee URL names no listing"}
     args: dict = {}
     if "title" in changed:
         args["title"] = item["title"]
@@ -269,8 +269,8 @@ register(
         "description, list_price, photos (photos is the whole new set, as paths). Currency and "
         "condition cannot be changed on a live listing. Refuses a sold item, a paused agent, and a "
         "price change while a deal is in flight. The result has one status per marketplace: "
-        "updated = carousell.ai shows it now; queued = a browser marketplace will be changed in "
-        "the background and the seller gets a separate message when it lands or fails — say it "
+        "updated = the Sellee listing shows it now; queued = a browser marketplace will be changed "
+        "in the background and the seller gets a separate message when it lands or fails — say it "
         "has started, NEVER that it is done; not_connected / manual = it will not change by "
         "itself, so give the seller the url to change it there by hand; failed = say what failed, "
         "in the reason's words. floor_lowered = the seller's private floor moved down to the new "

@@ -106,12 +106,12 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
         return {"count": len(photos), "already_uploaded": True}
 
     if ctx.rail_factory is None:
-        raise ToolError("the carousell.ai rail is not available in this session")
+        raise ToolError("the Sellee rail is not available in this session")
     try:
         rail = ctx.rail_factory()
     except RailUnprovisioned as exc:
         raise ToolError(
-            "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+            "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
         ) from exc
 
     try:
@@ -130,7 +130,7 @@ def _upload_photos(ctx: ToolContext, params: dict) -> dict:
                 uploaded.append(rail.upload_photo(data, content_type))
             except RailUnprovisioned as exc:
                 raise ToolError(
-                    "carousell.ai is not provisioned — run `sellee provision carousell-ai`"
+                    "the Sellee rail is not provisioned — run `sellee provision carousell-ai`"
                 ) from exc
             except Exception as exc:  # RailError messages are caller-safe and secret-free
                 raise ToolError(f"photo upload failed: {exc}") from exc
@@ -180,7 +180,7 @@ register(
 register(
     ToolSpec(
         name="carousell_ai_upload_photos",
-        description="Upload an item's photos to carousell.ai so a listing can show them. Call "
+        description="Upload an item's photos to Sellee so a listing can show them. Call "
         "this before carousell_ai_publish_listing. All-or-nothing: either every photo uploads or "
         "none is recorded. Idempotent — an item whose photos are already uploaded is a no-op.",
         input_schema={
