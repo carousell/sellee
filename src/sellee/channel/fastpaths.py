@@ -637,7 +637,7 @@ def _connections_lines(store) -> list:
     """
     markets = market_adapters.connectable_markets(store.seller_region())
     if not markets:
-        return ["• Marketplaces: carousell.ai only — there are no others I can work yet"]
+        return ["• Marketplaces: the Sellee marketplace only — there are no others I can work yet"]
     connected = set(settings.connected_markets(store))
     lines = ["Marketplaces I can work for you:"]
     for market in markets:

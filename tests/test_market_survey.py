@@ -633,7 +633,7 @@ def test_a_publish_that_recorded_no_url_is_retried_then_reported_honestly(
     failure = [n["text"] for n in store.list_queued_notices() if "couldn't get" in n["text"]]
     assert len(failure) == 1
     assert "only on Carousell" in failure[0]
-    assert "including its carousell.ai listing" not in failure[0]
+    assert "including its Sellee listing" not in failure[0]
 
     # And the door back the notice promises actually works.
     assert store.decide_discovered_listings(_MARKET, decision="retry") == 1
@@ -687,7 +687,7 @@ def _categorised(store, item_id, category) -> dict:
 
 
 def _refusal_notice(title: str) -> str:
-    return f"Carousell.ai won't take {title}, so it stays only on Carousell. {_REFUSAL}"
+    return f"The Sellee marketplace won't take {title}, so it stays only on Carousell. {_REFUSAL}"
 
 
 def test_an_adopted_listing_in_a_refused_category_is_reported_once_and_never_queued(
@@ -1223,7 +1223,7 @@ def test_the_ask_never_offers_to_relist_somewhere_it_already_is(store, bus) -> N
 
     text = store.list_queued_notices()[0]["text"]
 
-    assert "list them on Carousell.ai too" in text
+    assert "list them on Sellee too" in text
     assert "and Carousell too" not in text
 
 

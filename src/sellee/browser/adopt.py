@@ -57,7 +57,9 @@ RAIL_FAILED_NOTICE = (
     "I couldn't get {title} onto {rail}, so for now it's only on {name}. I'm still answering "
     "buyers on it. Ask me and I'll have another go."
 )
-RAIL_REFUSED_NOTICE = "{rail} won't take {title}, so it stays only on {name}. {message}"
+RAIL_REFUSED_NOTICE = (
+    "The {rail} marketplace won't take {title}, so it stays only on {name}. {message}"
+)
 SUMMARY_NOTICE = "Done with your {name} listings: {parts}."
 
 # The page one adoption costs: the listing's own.

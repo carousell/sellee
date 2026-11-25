@@ -351,7 +351,7 @@ def test_a_failure_names_the_retry_and_reassures_about_the_rail(store, bus, enab
     _burn_attempts(store, bus, status="error", cls="error")
 
     crosslist.report_settled(_deps(store, bus))
-    assert any("carousell.ai listing" in t for t in _notices(store))
+    assert any("Sellee listing" in t for t in _notices(store))
 
 
 def test_a_running_publish_is_not_reported_yet(store, bus, enabled) -> None:

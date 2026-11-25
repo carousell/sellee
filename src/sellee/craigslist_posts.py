@@ -36,11 +36,11 @@ REPOST_NOTICE = (
 )
 FLAGGED_NOTICE = (
     'Craigslist took down your "{title}" post after it was flagged. I\'ve tried the categories '
-    "that fit, so I won't post it there again. Its carousell.ai listing is unaffected."
+    "that fit, so I won't post it there again. Its Sellee listing is unaffected."
 )
 GONE_NOTICE = (
     'Your Craigslist post for "{title}" is no longer up, so I\'ve stopped using it. Its '
-    "carousell.ai listing is unaffected."
+    "Sellee listing is unaffected."
 )
 
 

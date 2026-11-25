@@ -244,7 +244,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     provision = sub.add_parser("provision", help="provision an external rail")
     prsub = provision.add_subparsers(dest="provision_command", required=True)
-    prov_ai = prsub.add_parser("carousell-ai", help="obtain the carousell.ai guest API key")
+    prov_ai = prsub.add_parser("carousell-ai", help="obtain the Sellee marketplace guest API key")
     prov_ai.add_argument("--region", default=None, help="two-letter region code (e.g. US)")
 
     sub.add_parser("mcp-proxy", help="stdio<->HTTP MCP forwarder for stdio-only harnesses")

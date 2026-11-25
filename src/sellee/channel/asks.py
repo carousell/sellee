@@ -82,7 +82,7 @@ def block_options(reason: str, handle: str) -> tuple:
 def block_question(reason: str, handle: str, reference: str) -> str:
     about = f" ({reference})" if reference else ""
     return (
-        f"{_BLOCK_QUESTION_LEAD}{handle}{about} to carousell.ai for {reason}? carousell.ai will "
+        f"{_BLOCK_QUESTION_LEAD}{handle}{about} to the Sellee marketplace for {reason}? It will "
         "drop their mail to you."
     )
 

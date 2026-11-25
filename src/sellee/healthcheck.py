@@ -101,7 +101,7 @@ def browser_check(*, enabled, blocked: str, states, blocked_fix: str = "") -> ch
     the agent's next browser turn.
     """
     if not enabled:
-        return checks.ok("browser", "no external marketplaces — carousell.ai only")
+        return checks.ok("browser", "no external marketplaces — the Sellee marketplace only")
     if blocked:
         return checks.warn(
             "browser",
@@ -172,10 +172,10 @@ def clock_check(*, zone: str, delta_minutes) -> checks.Check:
 
 def rail_key_check(*, present: bool) -> checks.Check:
     if present:
-        return checks.ok("carousell.ai key", "present")
+        return checks.ok("Sellee marketplace key", "present")
     return checks.fail(
-        "carousell.ai key",
-        "missing — I can't list on carousell.ai without it",
+        "Sellee marketplace key",
+        "missing — I can't list on the Sellee marketplace without it",
         "sellee provision carousell-ai --region <XX>",
     )
 
@@ -315,7 +315,7 @@ def run_checks(platform=None) -> list:
         checks.fail_open("browser", lambda: _browser_probe(cfg)),
         checks.fail_open("browser server", lambda: _browser_server_probe(cfg)),
         checks.fail_open("harness", lambda: _harness_probe(cfg)),
-        checks.fail_open("carousell.ai key", _rail_key_probe),
+        checks.fail_open("Sellee marketplace key", _rail_key_probe),
     ]
     if deployment.is_container():
         results.append(checks.fail_open("clock", lambda: _clock_probe(cfg)))

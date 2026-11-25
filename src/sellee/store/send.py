@@ -64,8 +64,8 @@ UNCHECKED_SEND_CONTEXT = (
 UNCONFIRMED_SEND_OPTIONS = ("✅ It's there", "🚫 Nothing there")
 # An email reply the lane gave up retrying: there is no conversation the seller can open to check.
 UNSETTLED_EMAIL_ASK = (
-    "I've been trying to email this buyer my reply for a day, but carousell.ai never confirmed it "
-    "went out, so I've stopped. Should I write to them again?"
+    "I've been trying to email this buyer my reply for a day, but the Sellee marketplace never "
+    "confirmed it went out, so I've stopped. Should I write to them again?"
 )
 UNSETTLED_EMAIL_CONTEXT = (
     "An email reply was retried under its own id for a day and bazaar never answered that it was "

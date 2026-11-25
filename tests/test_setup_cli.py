@@ -842,7 +842,9 @@ def test_a_us_seller_is_sent_to_add_their_email_and_zip(world, monkeypatch, caps
     assert _OFFER in out
     assert "15 minutes" in out
     assert (
-        out.index("Setting up carousell.ai") < out.index(_OFFER) < out.index("Other marketplaces")
+        out.index("Setting up the Sellee marketplace")
+        < out.index(_OFFER)
+        < out.index("Other marketplaces")
     )
     assert "nothing to sign in to" not in out
     assert "ready — always enabled for listing" in out
@@ -894,7 +896,7 @@ def test_a_link_that_could_forge_a_terminal_line_is_never_printed(
     out = capsys.readouterr().out
     assert "Add your ZIP" not in out
     assert "forged" not in out
-    assert "warn: could not make your carousell.ai sign-in link" in out
+    assert "warn: could not make your Sellee account sign-in link" in out
 
 
 def test_a_re_run_for_a_seller_already_signed_in_sends_no_link(world, monkeypatch, capsys) -> None:
@@ -920,7 +922,7 @@ def test_a_link_off_the_sign_in_page_is_never_printed(world, monkeypatch, capsys
 
     out = capsys.readouterr().out
     assert "evil.example" not in out
-    assert "warn: could not make your carousell.ai sign-in link" in out
+    assert "warn: could not make your Sellee account sign-in link" in out
 
 
 _MINTS = st.one_of(
@@ -975,7 +977,7 @@ def test_any_mint_outcome_leaves_setup_whole_and_prints_only_a_safe_link(
     # Any mint but "already a seller" that printed no link says so.
     signed_in = isinstance(outcome, RailToolError) and "already a seller" in str(outcome)
     if calls and not signed_in and "Add your ZIP" not in out:
-        assert "warn: could not make your carousell.ai sign-in link" in out
+        assert "warn: could not make your Sellee account sign-in link" in out
 
 
 # --- marketplaces --------------------------------------------------------------------------------
@@ -1009,7 +1011,7 @@ def test_skipping_the_marketplace_offer_enables_nothing(world, monkeypatch, caps
 
     assert world.calls["settings"] == {}
     assert world.calls["markets"] == []
-    assert "carousell.ai only" in capsys.readouterr().out
+    assert "the Sellee marketplace only" in capsys.readouterr().out
 
 
 def test_skip_markets_never_offers(world) -> None:

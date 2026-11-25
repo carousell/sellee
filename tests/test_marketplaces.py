@@ -38,7 +38,7 @@ def test_resolve_unknown_market_is_none() -> None:
 
 
 def test_display_name_known_and_fallback() -> None:
-    assert marketplaces.display_name("carousell-ai") == "Carousell.ai"
+    assert marketplaces.display_name("carousell-ai") == "Sellee"
     assert marketplaces.display_name("nope") == "nope"  # fail-open to the id
 
 

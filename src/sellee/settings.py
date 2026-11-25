@@ -654,7 +654,7 @@ def _market_names(markets) -> str:
 def _connected_help() -> str:
     drivable = market_adapters.drivable_markets()
     if not drivable:
-        return "no other marketplaces are supported yet — carousell.ai only"
+        return "no other marketplaces are supported yet — the Sellee marketplace only"
     return f"the marketplaces I can work are {_market_names(drivable)}"
 
 
@@ -708,13 +708,13 @@ def _check_connected_markets(value: object, store) -> None:
         )
     raise SettingError(
         f"{_market_names(unavailable)} isn't available for {where}, and no other "
-        "marketplace is either yet — carousell.ai only"
+        "marketplace is either yet — the Sellee marketplace only"
     )
 
 
 def _render_connected_markets(value: object) -> str:
     if not value:
-        return "none — carousell.ai only"
+        return "none — the Sellee marketplace only"
     return ", ".join(marketplaces.display_name(market) for market in value)
 
 
@@ -753,9 +753,9 @@ register(
         parse=_parse_connected_markets,
         render=_render_connected_markets,
         default=[],
-        description="Marketplaces I work as well as carousell.ai. On a connected one I read your "
-        "inbox, answer buyers, and — where I have a way to post there — list your items and send "
-        "the link over. Empty means carousell.ai only.",
+        description="Marketplaces I work as well as the Sellee marketplace. On a connected one I "
+        "read your inbox, answer buyers, and — where I have a way to post there — list your items "
+        "and send the link over. Empty means the Sellee marketplace only.",
         take_effect="applies from now on: I start on a market you add and stop on one you remove, "
         "including work already queued.",
         requires_approval=True,

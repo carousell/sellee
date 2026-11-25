@@ -66,7 +66,7 @@ def test_crosslist_parse_canonicalizes() -> None:
 
 def test_crosslist_render() -> None:
     spec = settings.get_spec("connected_markets")
-    assert spec.render([]) == "none — carousell.ai only"
+    assert spec.render([]) == "none — the Sellee marketplace only"
     assert spec.render(["carousell"]) == "Carousell"
 
 

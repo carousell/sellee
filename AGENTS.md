@@ -241,6 +241,12 @@ context, so a reference it cannot resolve is worse than nothing. Two more:
   to refuse, when to ask. If you find yourself writing "first call X, then Y, then
   record Z", the tool surface is missing a tool.
 
+## The marketplace is called Sellee
+
+Copy names Sellee, never carousell.ai. Page links are built from the configured
+web base. carousell.ai is accepted as a host only in `PRODUCTION_WEB_BASES` and
+the rail's `also_hosts`. `tests/guard/test_brand_names_sellee.py` enforces it.
+
 ## Version control
 
 Commit in logical units, each building and passing tests on
