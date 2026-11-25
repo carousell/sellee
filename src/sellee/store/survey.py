@@ -16,7 +16,7 @@ this module:
     row never gets published.
 
 Everything else is bookkeeping the lane reads back — including `rail_state`, the durable record that
-a carousell.ai publish is still owed. Nothing else could recover one, so a publish skipped because
+a Sellee publish is still owed. Nothing else could recover one, so a publish skipped because
 the slot was busy is remembered here or it is lost.
 """
 
@@ -62,12 +62,12 @@ LISTING_ADOPTED = "adopted"
 LISTING_FAILED = "failed"
 
 # What the seller asked us to do with an accepted listing: answer buyers on it, or also put it on
-# carousell.ai.
+# Sellee.
 MANAGE_INBOX = "inbox"
 MANAGE_RELIST = "relist"
 MANAGE_MODES = (MANAGE_INBOX, MANAGE_RELIST)
 
-# The carousell.ai publish an adopted listing is owed: queued behind the one slot, in flight,
+# The Sellee publish an adopted listing is owed: queued behind the one slot, in flight,
 # landed, or given up on after its retries.
 RAIL_OWED = "owed"
 RAIL_QUEUED = "queued"
@@ -327,7 +327,7 @@ class SurveyMixin:
         stopped when it did not. A yes reaches only pending rows, because re-deciding an adoption
         already under way would double-queue it.
 
-        `retry` re-arms a carousell.ai publish that failed, so it applies to adopted rows, not
+        `retry` re-arms a Sellee publish that failed, so it applies to adopted rows, not
         pending ones.
         """
         if decision == "retry":
@@ -350,7 +350,7 @@ class SurveyMixin:
             return conn.execute(sql, tuple(params)).rowcount
 
     def _retry_rail_publish(self, market: str, listing_ids: list | None) -> int:
-        """Re-arm the carousell.ai publish for adopted listings whose attempts ran out."""
+        """Re-arm the Sellee publish for adopted listings whose attempts ran out."""
         sql = (
             "UPDATE discovered_listings SET rail_state = 'owed', rail_attempts = 0, "
             "rail_pass_id = NULL WHERE market = ? AND status = 'adopted' AND rail_state = 'failed'"
@@ -443,7 +443,7 @@ class SurveyMixin:
         listing only, and the read lane could never join this market's buyers to it, which is the
         whole point of merging them.
 
-        `rail_owed` marks that a carousell.ai publish is still owed; it is written here because
+        `rail_owed` marks that a Sellee publish is still owed; it is written here because
         nothing downstream could derive it — an item with no rail URL is indistinguishable from one
         the seller only ever wanted answered.
 
@@ -514,10 +514,10 @@ class SurveyMixin:
             raise StoreError(f"item {item_id!r} vanished during adoption")
         return _item_from_row(rows[0])
 
-    # --- the carousell.ai publish an adopted listing is owed ------------------------------------
+    # --- the Sellee publish an adopted listing is owed ------------------------------------
 
     def listings_owed_rail_publish(self) -> list[DiscoveredListing]:
-        """Adopted listings still owed a carousell.ai publish, oldest first."""
+        """Adopted listings still owed a Sellee publish, oldest first."""
         rows = self._db.query(
             "SELECT * FROM discovered_listings WHERE rail_state = 'owed' "
             "ORDER BY adopted_ts ASC, listing_id ASC"
@@ -525,7 +525,7 @@ class SurveyMixin:
         return [_listing_from_row(r) for r in rows]
 
     def listings_awaiting_rail_publish(self) -> list[DiscoveredListing]:
-        """Adopted listings whose carousell.ai publish is in flight — what the lane watches."""
+        """Adopted listings whose Sellee publish is in flight — what the lane watches."""
         rows = self._db.query(
             "SELECT * FROM discovered_listings WHERE rail_state = 'queued' "
             "ORDER BY adopted_ts ASC, listing_id ASC"
@@ -533,7 +533,7 @@ class SurveyMixin:
         return [_listing_from_row(r) for r in rows]
 
     def set_rail_publish_queued(self, market: str, listing_id: str, pass_id: str) -> None:
-        """Record that this listing's carousell.ai publish is in flight, and count the attempt."""
+        """Record that this listing's Sellee publish is in flight, and count the attempt."""
         with self._db.transaction() as conn:
             conn.execute(
                 "UPDATE discovered_listings SET rail_state = 'queued', rail_pass_id = ?, "
@@ -544,7 +544,7 @@ class SurveyMixin:
     def set_rail_publish_state(
         self, market: str, listing_id: str, state: str, *, notice_text: str | None = None
     ) -> None:
-        """Settle a carousell.ai publish — landed, owed another go, or given up on — and tell the
+        """Settle a Sellee publish — landed, owed another go, or given up on — and tell the
         seller in the same transaction when there is something to tell them.
 
         The notice belongs in here for the reason it does at discovery: the state change is what

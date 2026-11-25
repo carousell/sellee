@@ -10,7 +10,7 @@ The whole design rests on one fact: adoption is just item rows. An item carrying
 ask, and an item, and no new path beyond that.
 
 Four phases, each deriving its work from durable rows: this module holds the first (read and ask);
-`browser/adopt.py` holds the other two (turn a yes into items, get them onto carousell.ai). The
+`browser/adopt.py` holds the other two (turn a yes into items, get them onto Sellee). The
 seller's answer arrives in between, from a button on the notice queued here or from the tools.
 
 The ask happens once per market — the survey row's primary key, not a flag anyone sets. The one
@@ -91,7 +91,7 @@ class SurveyDeps:
     # The daemon's one page-load governor (browser/governor.py); None paces nothing.
     governor: object = None
     now: Callable[[], float] = time.time
-    # Screens an adopted listing before its carousell.ai publish is queued; None skips the screen.
+    # Screens an adopted listing before its Sellee publish is queued; None skips the screen.
     rail_factory: Callable[[], object] | None = None
 
 
@@ -349,7 +349,7 @@ def _listings(count: int) -> str:
 def relist_targets(store, market: str) -> str:
     """Where a yes would put these listings, named rather than implied.
 
-    carousell.ai always, plus whatever else the seller has switched on — so the button never
+    Sellee always, plus whatever else the seller has switched on — so the button never
     promises more than it does. The marketplace they came from is never named: these listings are
     already there, and the fan-out will not put them there either.
     """

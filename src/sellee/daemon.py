@@ -798,7 +798,7 @@ def run_daemon(*, once: bool) -> int:
         )
     )
 
-    # Read carousell.ai email threads through the rail. Token-free and off the browser, so it
+    # Read Sellee email threads through the rail. Token-free and off the browser, so it
     # neither waits on Chrome nor counts against a marketplace's pacing.
     relay_deps = relay_inbox.RelayDeps(store=store, bus=bus, config=cfg, rail_factory=rail_factory)
     relay_read = mail_stream.SingleFlight(lambda: relay_inbox.relay_lane(relay_deps))
@@ -885,7 +885,7 @@ def run_daemon(*, once: bool) -> int:
             func=lambda: inbox.reply_lane(store=store, bus=bus, config=cfg),
         )
     )
-    # List what is on carousell.ai everywhere else the seller sells, and report each outcome. Driven
+    # List what is on Sellee everywhere else the seller sells, and report each outcome. Driven
     # off stored rows, so rail-first is a precondition rather than a step a recipe could skip.
     crosslist_deps = crosslist.CrosslistDeps(
         store=store,

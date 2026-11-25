@@ -75,7 +75,7 @@ UNSETTLED_EMAIL_CONTEXT = (
 UNSETTLED_EMAIL_OPTIONS = ("✉️ Write again", "🙅 Leave it")
 
 # Markets whose replies are not browser sends, so the reply cap has nothing to guard; bazaar caps
-# carousell.ai and registration replies itself.
+# Sellee and registration replies itself.
 UNPACED_MARKETS = frozenset({marketplaces.RAIL, marketplaces.CRAIGSLIST})
 
 # Every status meaning "we still do not know whether the buyer got this". `pending` never got past

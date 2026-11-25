@@ -1,4 +1,4 @@
-"""The relay lane: carousell.ai email threads read through the rail into ordinary sell threads.
+"""The relay lane: Sellee email threads read through the rail into ordinary sell threads.
 
 Each tick pages list_threads from the stored cursor and reads every thread it names in full. Rows
 are deduped on bazaar's message id, so the cursor is stored only after they commit and a repeat
@@ -138,7 +138,7 @@ def _record_messages(deps: RelayDeps, thread_id: str, messages: list) -> None:
             last_buyer = (message["id"], ts)
         if message["id"] not in known and (author == "buyer" or author in _OWN_AUTHORS):
             inbound = author == "buyer"
-            # carousell.ai's label is read once, here, and can only raise our own verdict.
+            # Sellee's label is read once, here, and can only raise our own verdict.
             risk = (message.get("risk") or None) if inbound else None
             verdict = None
             if inbound:
@@ -223,7 +223,7 @@ def _finish_our_sends(deps: RelayDeps, rail) -> None:
 
 
 def _item_for(items, listing_id: str) -> str | None:
-    """The one item published to this carousell.ai listing, or None."""
+    """The one item published to this Sellee listing, or None."""
     matches = [
         item["id"]
         for item in items

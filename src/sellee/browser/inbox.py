@@ -49,8 +49,8 @@ log = logging.getLogger(__name__)
 _ACTIVE_STATUSES = ("active", "liaising", "agreed")
 
 # Pass types that drive the browser, and so must not overlap the lane's reads.
-# Every edit pass is browser work: carousell.ai is edited inline by the tool, so an edit only ever
-# becomes a pass for a browser marketplace.
+# Every edit pass is browser work: a Sellee listing is edited inline by the tool, so an edit only
+# ever becomes a pass for a browser marketplace.
 _BROWSER_PASS_TYPES = ("reply", "publish", "edit")
 
 # How many signed-out reads in a row stop a market that polices automation. That block has no

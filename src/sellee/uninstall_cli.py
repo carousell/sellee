@@ -6,7 +6,7 @@ between its own fences. Anything sharing a name that we did not write is left al
 because the alternative — deleting a stranger's file that happened to match — is unrecoverable.
 
 `--preserve-data` keeps the database, the photos and the browser profile, and *also* keeps the
-config directory's secrets. That pairing is not an oversight: the carousell.ai key is the rail
+config directory's secrets. That pairing is not an oversight: the Sellee key is the rail
 identity every listing was created under, so a database kept without it is a set of listings
 nobody can act on again.
 """

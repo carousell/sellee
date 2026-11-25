@@ -3,7 +3,7 @@
 A rehearsal surface, not a product one. It opens a page where the seller plays a buyer against
 their own agent: the messages they type are written to a `simbuyer:` thread the same way the
 browser inbox writes a real conversation, and everything the agent does in reply — the reply pass,
-the model, the floor gate, minting a carousell.ai checkout link — is the real thing.
+the model, the floor gate, minting a Sellee checkout link — is the real thing.
 
 The daemon serves the page only when it was started with SELLEE_BUYER_SIM set, so the failure this
 command most needs to explain well is a daemon that has it unset.

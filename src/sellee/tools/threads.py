@@ -50,7 +50,7 @@ def _rail_thread(ctx: ToolContext, thread_id: str) -> dict:
 
 
 def _send_block(ctx: ToolContext, thread_id: str, reason: str, not_confirmed: str) -> dict:
-    """One block_buyer; the thread closes only once carousell.ai confirms it."""
+    """One block_buyer; the thread closes only once Sellee confirms it."""
     try:
         if ctx.rail_factory is None:
             raise RailUnprovisioned("no Sellee connection")

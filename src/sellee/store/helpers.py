@@ -32,7 +32,7 @@ _ITEM_WRITABLE = (
     "photos",
 )
 _ITEM_STATUSES = ("draft", "ready")
-# The parcel size classes carousell.ai ships by, in its own spelling. A listing is created with
+# The parcel size classes Sellee ships by, in its own spelling. A listing is created with
 # one and its shipping is priced from it, so this is a closed set rather than a free-form note.
 SIZE_BUCKETS = ("s", "m", "l", "xl")
 # What a live listing actually shows a buyer, and so what may be changed on one that is already
@@ -41,7 +41,7 @@ SIZE_BUCKETS = ("s", "m", "l", "xl")
 #   * status — bookkeeping; no marketplace renders it.
 #   * size_bucket, category — what the listing was published with. Changing either here would
 #     change the record and not the listing.
-#   * currency — carousell.ai's update verb has no currency argument at all (it is fixed at
+#   * currency — Sellee's update verb has no currency argument at all (it is fixed at
 #     create), so the change could not be pushed anywhere it matters. It would also strand the
 #     stored floor, which snapshots its currency and is compared unit-blind: re-reading that
 #     number in a new unit is inventing a price the seller never gave.
@@ -355,7 +355,7 @@ class FloorRecord(TypedDict):
 
 class MessageRecord(TypedDict):
     """One transcript row. scam_verdict is the daemon's pre-scan of marketplace inbound, None
-    otherwise; the carousell_ai_* fields hold carousell.ai's own label on its buyer messages."""
+    otherwise; the carousell_ai_* fields hold Sellee's own label on its buyer messages."""
 
     msg_id: str
     dir: str

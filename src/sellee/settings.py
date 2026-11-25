@@ -636,8 +636,8 @@ register(
 
 # --- which marketplaces the agent works ------------------------------------------------------
 #
-# The marketplaces the seller has connected *besides* carousell.ai. The rail is not a member —
-# every listing goes there by the flow itself. Empty (the default) means carousell.ai alone.
+# The marketplaces the seller has connected *besides* Sellee. The rail is not a member —
+# every listing goes there by the flow itself. Empty (the default) means Sellee alone.
 #
 # This list is the switch for everything the agent does on a marketplace — reading the inbox,
 # answering buyers, surveying, signing in — not only publishing. Every consumer reads it at its

@@ -9,7 +9,7 @@ from sellee.installer.ui import Ui
 
 
 def ask_basics(ui: Ui):
-    """Ask which country outright, taking any of them: what carousell.ai can pay out is the
+    """Ask which country outright, taking any of them: what Sellee can pay out is the
     backend's answer, so a list here would be the agent deciding something it does not know."""
     if not ui.interactive:
         return None

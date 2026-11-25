@@ -512,7 +512,7 @@ def _basics_from_flag(args) -> dict:
 
 
 def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
-    """Get the carousell.ai guest key. Quiet on success, and never fatal.
+    """Get the Sellee guest key. Quiet on success, and never fatal.
 
     A provisioning hiccup is a network problem, not an install problem: everything except the
     rail works without it, and the key can be obtained later. Saying so beats stopping.
@@ -530,7 +530,7 @@ def _provision_rail(ui: Ui, region, port: int, token: str) -> None:
         else:
             ui.say("ready — always enabled for listing")
         _record_currency(ui, port, token, str(status.get("currency") or ""))
-        # Whether carousell.ai can pay this seller out is the backend's answer, printed as given.
+        # Whether Sellee can pay this seller out is the backend's answer, printed as given.
         notice = str(status.get("notice") or "")
         if notice:
             ui.note(notice)
@@ -610,7 +610,7 @@ def _connect_markets(ui: Ui, args, port: int, token: str, region) -> None:
     """Offer the marketplaces this seller could list on, and sign in to the ones they pick.
 
     This step *is* the opt-in: what they choose here becomes the setting every lane reads.
-    carousell.ai is never in the list — it is the rail every listing goes on, with nothing to sign
+    Sellee is never in the list — it is the rail every listing goes on, with nothing to sign
     in to.
 
     Offered on `connectable_markets` rather than on `publishable_markets`: connecting also means

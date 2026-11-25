@@ -66,7 +66,7 @@ def _escalate(ctx: ToolContext, params: dict) -> dict:
 
 
 def _holds_a_scam(store, thread_id: str) -> bool:
-    """Whether a carousell.ai thread has a buyer message whose merged verdict is `scam`."""
+    """Whether a Sellee thread has a buyer message whose merged verdict is `scam`."""
     thread = store.get_thread(thread_id, message_cap=0)
     if thread is None or thread["market"] != marketplaces.RAIL:
         return False
@@ -74,7 +74,7 @@ def _holds_a_scam(store, thread_id: str) -> bool:
 
 
 def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
-    """Raise when a carousell.ai thread's open ask is a scam confirmation, which only
+    """Raise when a Sellee thread's open ask is a scam confirmation, which only
     answer_scam_confirmation settles, so the reply gate is cleared with it."""
     thread = store.get_thread(thread_id, message_cap=0)
     if thread is None or thread["market"] != marketplaces.RAIL:
@@ -87,7 +87,7 @@ def refuse_answering_a_scam_confirmation(store, thread_id: str) -> None:
 
 
 def _carousell_ai_label(store, thread_id: str) -> tuple:
-    """carousell.ai's highest risk on the buyer's messages in this thread, and every relay flag
+    """Sellee's highest risk on the buyer's messages in this thread, and every relay flag
     it put on them, in order."""
     inbound = [row for row in store.get_thread_messages(thread_id) if row["dir"] == "in"]
     risk = "clean"

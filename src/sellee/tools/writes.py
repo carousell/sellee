@@ -22,8 +22,8 @@ _CANNOT_CLEAR = "category cannot be cleared; give the item's token from carousel
 
 
 def _check_category(ctx: ToolContext, token) -> None:
-    """Refuse a category token unless carousell.ai's item policy lists it. An empty one is refused
-    rather than clearing it: carousell.ai lists nothing without a category."""
+    """Refuse a category token unless Sellee's item policy lists it. An empty one is refused
+    rather than clearing it: Sellee lists nothing without a category."""
     if token is None:
         return
     if token == "":

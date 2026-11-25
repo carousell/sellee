@@ -1,4 +1,4 @@
-"""Minimal stdlib MCP client for the carousell.ai rail, plus the live listing-URL verify.
+"""Minimal stdlib MCP client for the Sellee rail, plus the live listing-URL verify.
 
 We are the client here (unidirectional): POST JSON-RPC to <api_base>/mcp with the guest key as a
 bearer token, initialize, then tools/call. The API key travels only in the Authorization header —
@@ -24,20 +24,20 @@ _DEFAULT_TIMEOUT_SEC = 15.0
 REPORT_REASONS = ("scam", "spam", "abuse", "other")
 _VERIFY_TIMEOUT_SEC = 5.0
 _LISTING_PATH = "/listing/"
-# carousell.ai sits behind Cloudflare, which 403s the default urllib User-Agent. A plain browser
+# Sellee sits behind Cloudflare, which 403s the default urllib User-Agent. A plain browser
 # UA is accepted for the read-only, no-auth verify GET.
 _BROWSER_UA = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/125.0 Safari/537.36"
 )
 
-# carousell.ai's item policy, per endpoint for the life of the process. No answer carries its
+# Sellee's item policy, per endpoint for the life of the process. No answer carries its
 # version, so it is read again only on a sign this copy is stale.
 _POLICY_LOCK = threading.RLock()
 _POLICIES: dict = {}
 _POLICY_TIERS = ("allowed", "not_yet", "never")
 _POLICY_PATH = "/item-policy"
-# How carousell.ai refuses a category its policy does not list, which means ours is out of date.
+# How Sellee refuses a category its policy does not list, which means ours is out of date.
 _UNKNOWN_CATEGORY = "is not a category the item policy lists"
 # The only mark of an item policy refusal: bazaar appends it to the tool error's text.
 _POLICY_REFUSED = "(code: item_policy_refused)"
@@ -50,7 +50,7 @@ class RailError(Exception):
 
 
 class RailUnprovisioned(RailError):
-    """No carousell.ai API key is present — provisioning must run first."""
+    """No Sellee API key is present — provisioning must run first."""
 
 
 class RailAuthError(RailError):
@@ -75,7 +75,7 @@ class RailToolRefused(RailToolError):
 
 
 class RailPolicyRefused(RailToolRefused):
-    """carousell.ai's item policy refused the item. The message names its category, for the
+    """Sellee's item policy refused the item. The message names its category, for the
     seller."""
 
 
@@ -183,7 +183,7 @@ class RailClient:
         raise RailToolError(f"{name} returned no usable content")
 
     def item_policy(self) -> dict:
-        """carousell.ai's item policy as {version, categories}, each category a served group with
+        """Sellee's item policy as {version, categories}, each category a served group with
         its tier: allowed, not_yet or never."""
         with _POLICY_LOCK:
             cached = _POLICIES.get(self._endpoint) or self._read_item_policy()
@@ -207,7 +207,7 @@ class RailClient:
             return group
 
     def item_policy_url(self) -> str:
-        """The page where carousell.ai explains its item policy to people."""
+        """The page where Sellee explains its item policy to people."""
         return self._web_base_url + _POLICY_PATH
 
     def _read_item_policy(self) -> dict:
@@ -436,7 +436,7 @@ def listing_id_from_url(url) -> str:
 
 
 def category_refusal(rail, token: str | None) -> str | None:
-    """carousell.ai's refusal of an item in this category, in bazaar's words, or None when it takes
+    """Sellee's refusal of an item in this category, in bazaar's words, or None when it takes
     it. Reads the cached policy; raises RailToolError for a token the policy no longer lists."""
     if not token:
         return None

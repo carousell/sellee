@@ -12,8 +12,8 @@
   The same DOM rule as the tail page, and for a stronger reason: every string this page renders
   was written by the agent or echoed back from the store, so text reaches the DOM only as
   textContent. The single exception is a checkout link, which is turned into an anchor only after
-  its origin is checked against this daemon's own carousell.ai base — a URL the agent produced is
-  still a URL a model produced.
+  its origin is checked against this daemon's own Sellee web base — a URL the agent produced
+  is still a URL a model produced.
 -->
 <style>
 :root{
@@ -85,7 +85,7 @@ function status(text, isErr) {
 
 // Every string here was written by the agent or round-tripped through the store, so it is set as
 // textContent. A checkout link is the one thing promoted to an anchor, and only when its origin
-// matches this daemon's configured carousell.ai base.
+// matches this daemon's configured Sellee web base.
 function render(messages) {
   const log = $("log");
   log.textContent = "";

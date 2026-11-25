@@ -151,7 +151,7 @@ def _check_then_upload(ctx: ToolContext, params: dict) -> dict:
     item = ctx.store.get_item(params["item_id"])
     if item is None:
         raise ToolError(f"no item with id {params['item_id']!r}")
-    # An item already on carousell.ai is not refused here: a refusal would read as never listed.
+    # An item already on Sellee is not refused here: a refusal would read as never listed.
     refusal = None if item["listing_urls"].get(marketplaces.RAIL) else category_check(ctx, item)
     if refusal:
         return refusal

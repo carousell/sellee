@@ -46,7 +46,7 @@ MAX_OPTIONS = 4
 # rows by, so a label that passes here is one the renderer can seat.
 MAX_OPTION_LABEL_COLS = 24
 
-# A carousell.ai scam confirmation's two answers, set in code for answer_scam_confirmation.
+# A Sellee scam confirmation's two answers, set in code for answer_scam_confirmation.
 CAROUSELL_AI_SCAM_OPTIONS = ("👍 Not a scam — resume", "🛑 Scam — block, report")
 
 # A block ask's ref names its buyer and reason; only code writes it (send_message refuses it).

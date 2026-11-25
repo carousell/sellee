@@ -1,6 +1,6 @@
 """The fan-out lane: list an item everywhere the seller sells, and say how it went.
 
-A listing goes on carousell.ai first — the flow that talks to the seller does that itself, in the
+A listing goes on Sellee first — the flow that talks to the seller does that itself, in the
 conversation where they approved it. Everywhere else is this lane's work: it looks for items that
 are live on the rail and missing from a marketplace the seller has enabled, and queues a browser
 publish for one of them.
@@ -24,7 +24,7 @@ Two rules keep it from being expensive or surprising:
     went live once with nobody told.
 
 The lane's third phase pushes the cross-links back the other way: an item listed on both the rail
-and a browser marketplace gets the browser listing's URL written onto its carousell.ai listing,
+and a browser marketplace gets the browser listing's URL written onto its Sellee listing,
 where the listing page renders it to buyers. Unlike the enqueue phase, the push is not held by
 quiet hours and takes no pacing reserve — it is one cheap API call on our own rail, not visible
 activity on the seller's marketplace account — and unlike a publish attempt it retries freely,

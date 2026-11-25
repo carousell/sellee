@@ -81,7 +81,7 @@ uniformly:
 Tool-level failures come back as `tools/call` results with `isError`, not
 transport errors; only malformed/unknown JSON-RPC is a protocol error.
 
-The **carousell.ai rail** (`rail/`) is wrapped behind tools and never appears on
+The **Sellee rail** (`rail/`) is wrapped behind tools and never appears on
 the LLM surface: a stdlib MCP client over `urllib` (the guest key travels only in
 the Authorization header), a fail-closed live listing-URL verify, and guest-key
 provisioning. `mcp_proxy.py` is a stdio↔HTTP forwarder so a stdio-only harness
@@ -149,7 +149,7 @@ runner:
 | `channel` | `pass:channel` — the broad seller-conversation set (items, photos, floors, threads, negotiate, checkout, `carousell_ai_create_signin_link`, escalations, settings, the Q&A bank, `carousell_ai_update_listing`, `update_live_listing`, `queue_marketplace_publish`, `send_message`, …) | conventions, voice-and-style, seller-comms, listing-flow, listing-edit | yes | no | full |
 
 `carousell_ai_create_signin_link` — which mints the seller's one-time
-carousell.ai sign-in URL, the thing standing between a guest account and any
+Sellee sign-in URL, the thing standing between a guest account and any
 checkout link — is deliberately absent from `reply`. That URL grants ownership of
 the seller's account, including the live API key, so a buyer-facing pass must
 structurally be unable to hold it; when the gate fires there, the pass holds the

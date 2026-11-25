@@ -60,7 +60,7 @@ PRODUCTION_WEB_BASES = ("https://www.sellee.ai", "https://www.carousell.ai")
 
 
 def accepted_web_bases(web_base: str) -> tuple[str, ...]:
-    """The web bases a carousell.ai link may sit under: both production bases when `web_base` is
+    """The web bases a Sellee link may sit under: both production bases when `web_base` is
     one of them, else `web_base` alone. A staging or local base matches only itself."""
     base = web_base.rstrip("/")
     if base.lower() in PRODUCTION_WEB_BASES:
@@ -69,7 +69,7 @@ def accepted_web_bases(web_base: str) -> tuple[str, ...]:
 
 
 def checkout_bases(web_base: str) -> tuple[str, ...]:
-    """carousell.ai's checkout page under each accepted web base. The web origin, not the API
+    """Sellee's checkout page under each accepted web base. The web origin, not the API
     origin: checkout pages are served on the web host."""
     return tuple(base + "/checkout" for base in accepted_web_bases(web_base))
 
