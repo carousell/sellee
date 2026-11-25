@@ -10,8 +10,8 @@ subdomain of it, so facebook.com.scam.site and carousell-pay.net both fail. The 
 recognises the single inbound link the agent may open — a genuine carousell.ai checkout link —
 keyed on the config-derived checkout bases, rejecting every lookalike (userinfo tricks,
 subdomains, punycode, wrong scheme/port/path). In production there are two:
-www.carousell.ai/checkout and www.sellee.ai/checkout, because carousell.ai's site is served on both
-hosts while it moves to sellee.ai. Anywhere else the configured base is the only one.
+www.sellee.ai/checkout and www.carousell.ai/checkout, because links on the carousell.ai host are
+still accepted until it retires. Anywhere else the configured base is the only one.
 
 Network-free by construction: URLs are parsed with pure string ops, never urllib — an engine must
 never be able to open a socket.
@@ -186,7 +186,7 @@ def defang(raw: str) -> str:
 
 
 def checkout_base_parts(checkout_base: str) -> UrlParts:
-    """Parse the config-derived checkout base (e.g. https://www.carousell.ai/checkout)."""
+    """Parse the config-derived checkout base (e.g. https://www.sellee.ai/checkout)."""
     return parse_url(checkout_base)
 
 
@@ -200,7 +200,7 @@ def is_checkout_link(raw: str, checkout_bases: Sequence[str]) -> bool:
     if "://" not in raw:  # a checkout link is always a full URL
         return False
     p = parse_url(raw)
-    if p.userinfo:  # reject www.carousell.ai@evil.com tricks
+    if p.userinfo:  # reject www.sellee.ai@evil.com tricks
         return False
     if p.host.startswith("xn--") or any(ord(c) > 127 for c in p.host):  # no punycode/homoglyphs
         return False

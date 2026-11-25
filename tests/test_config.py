@@ -30,7 +30,7 @@ def test_missing_file_yields_all_defaults(xdg_tmp) -> None:
     assert cfg.tick_interval_sec == 5.0
     assert cfg.routine_events_retention_hours == 24
     assert cfg.carousell_ai_api_base == "https://api.sellee.ai"
-    assert cfg.carousell_ai_web_base_url == "https://www.carousell.ai"
+    assert cfg.carousell_ai_web_base_url == "https://www.sellee.ai"
 
 
 def test_values_are_read_from_the_config_path(xdg_tmp) -> None:
@@ -396,7 +396,7 @@ def test_fast_pacing_with_an_end_time_loads(xdg_tmp) -> None:
 )
 def test_a_production_web_base_accepts_both_production_bases(web_base) -> None:
     assert accepted_web_bases(web_base) == PRODUCTION_WEB_BASES
-    assert set(PRODUCTION_WEB_BASES) == {"https://www.carousell.ai", "https://www.sellee.ai"}
+    assert PRODUCTION_WEB_BASES == ("https://www.sellee.ai", "https://www.carousell.ai")
 
 
 @pytest.mark.parametrize(
@@ -417,7 +417,7 @@ def test_any_other_web_base_accepts_only_itself(web_base, expected) -> None:
 
 def test_checkout_bases_are_the_checkout_page_on_each_accepted_base() -> None:
     assert checkout_bases("https://www.carousell.ai") == (
-        "https://www.carousell.ai/checkout",
         "https://www.sellee.ai/checkout",
+        "https://www.carousell.ai/checkout",
     )
     assert checkout_bases("http://127.0.0.1:9999") == ("http://127.0.0.1:9999/checkout",)

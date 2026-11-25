@@ -9,6 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import pytest
 
 from sellee import __version__
+from sellee.config import Config
 from sellee.rail.client import (
     RailAuthError,
     RailClient,
@@ -280,6 +281,21 @@ def test_verify_accepts_a_listing_on_either_production_web_host(monkeypatch, url
     )
     client.verify_listing_url(url)
     assert fetched == [url]
+
+
+def test_the_default_config_builds_pages_on_sellee_ai_and_still_accepts_carousell_ai(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr("sellee.rail.client.urllib.request.urlopen", lambda req, timeout: _Page())
+    cfg = Config()
+    client = RailClient(
+        api_base=cfg.carousell_ai_api_base,
+        api_key="k",
+        web_base_url=cfg.carousell_ai_web_base_url,
+    )
+    assert client.item_policy_url() == "https://www.sellee.ai/item-policy"
+    assert client.listing_url("L1") == "https://www.sellee.ai/listing/L1"
+    client.verify_listing_url("https://www.carousell.ai/listing/1-lamp")
 
 
 @pytest.mark.parametrize(

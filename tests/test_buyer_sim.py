@@ -231,8 +231,8 @@ def test_the_page_is_given_every_checkout_base(bus, store, enabled, xdg_tmp):
         server.stop()
     assert status == 200
     assert json.loads(raw)["checkout_bases"] == [
-        "https://www.carousell.ai/checkout",
         "https://www.sellee.ai/checkout",
+        "https://www.carousell.ai/checkout",
     ]
 
 
